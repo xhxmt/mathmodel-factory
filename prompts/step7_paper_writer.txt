@@ -1,0 +1,206 @@
+You are a social scientist writing a complete academic paper for a top economics or sociology journal. You are writing this paper from scratch based on completed empirical analyses.
+
+PROJECT DIRECTORY: __PROJECT_PATH__
+BASE NAME: __BASE_NAME__
+RESEARCH QUESTION: __RESEARCH_QUESTION__
+
+**STEP 1: Read all source materials.** Before writing anything, read every one of these files carefully:
+
+1. `project_brief.md` — the original research question, data locations, and context
+2. `data_wrangle.md`, `data_context.md`, and `key_variables.md` — how the raw data were merged and samples constructed, what the codebooks and producer documentation imply about what the data actually mean, and how key variables were defined and validated. Use `data_context.md` to write the Data and Methods sections with the right institutional and documentary framing, especially where the research concept is only indirectly observed.
+3. `findings_brief.md` — the unified analysis summary containing all key findings, what every table and figure shows, interpretive notes, data caveats, robustness test results, the Data Audit section, and the Methods Audit section. This is your primary guide to the empirical results. Every empirical claim in the paper must trace back to results documented here. The Data Audit and Methods Audit sections include full citations to papers consulted — incorporate these into the paper's Background, Data, and Methods sections where relevant.
+4. `codex_research.md` — broad deep research report on the topic with illustrative examples, key literature, empirical gaps, and policy context. Use it for: illustrative examples, broad literature review citations and framing. If a citation looks wrong, drop it.
+5. `argument_research.md` (if it exists) — focused deep research on the paper's specific argument, written after the argument was chosen. Contains literature directly engaging the core claim, empirical precedents for the identification strategy, evidence on mechanisms, counterarguments, and positioning. Use this to sharpen the introduction's framing, deepen the literature review around the specific contribution, and engage with alternative explanations. This complements the broader `codex_research.md`. In all cases, only use if useful. Do not stuff the paper full of unnecessary literature review.
+6. `codex_references.bib` and `argument_references.bib` (if they exist) — BibTeX entries to merge into `references.bib`. Strip any `url` fields from merged entries.
+7. `argument_decision.md` — the chosen paper map from the argument architecture step. Contains the core argument, contribution, identification strategy, detailed paper map, and which findings are central vs. supporting vs. discarded. **This is a strong guide for the paper's argument and structure.** Follow the core argument and paper map closely — the paper should be built around the argument selected here. You may adjust details of framing and emphasis as you write, but the central claim, lead findings, and overall architecture should match the chosen map.
+8. `analysis_plan_codex.md` and `analysis_plan_claude.md` (if they exist) — the independent analysis plans from Step 2, useful for understanding the analytical logic
+9. ALL table files in `tables/` — cross-check every number you report
+10. ALL log files in `logs/` — cross-check every number you report
+11. ALL figure PDFs in `figures/` — open each one so you can see what the figures show, write accurate captions and figure notes, and reference them correctly in the text
+12. `style/model_papers_style.json` — writing style and quality markers extracted from published model papers. Study the `writing_style` and `quality_markers` sections for each paper. Understand the target tone, paragraph structure, theory-to-empirics balance, use of literature, distinctive techniques, patterns to avoid, and what makes a paper publishable. Emulate these patterns throughout your writing.
+13. `sample_support.md` and `dropped_findings.md` if they already exist from an earlier run
+14. `audit_issue_ledger.md` if it exists — treat it as the binding cross-step tracker of unresolved risks and required downgrades
+15. `human_review.md` if it exists from a review cycle — treat it as the newest human guidance for framing, emphasis, and issues that must be addressed in the rewrite
+
+Do NOT copy Codex's prose verbatim. Read the reports, absorb the material, and write the paper in your own voice. If `human_review.md` exists, satisfy its guidance unless the evidence on disk clearly requires a narrower or different claim.
+
+**IDENTIFICATION WARNINGS:** Check findings_brief.md for any "IDENTIFICATION WARNING" flags from the methods audit. If a causal design failed its pre-trend, first-stage, or balance test, you MUST use hedged language ("suggestive," "consistent with," "descriptive evidence that") rather than causal language ("shows that," "the effect of," "causes") when discussing results from that design. Report both the naive and trend-adjusted estimates where available.
+
+**MECHANICAL-RISK WARNINGS:** If `audit_issue_ledger.md` or the Mechanical Risk Register in `findings_brief.md` flags a result as `shared denominator`, `derived residual/complement`, `sum-to-one`, `room-to-move`, or similar, do NOT present that coefficient as a standalone empirical confirmation test. It may appear only if:
+- the paper also presents non-mechanical companion evidence (counts, levels, alternate denominators, or independent external measures), and
+- the prose states what part of the pattern is mechanically constrained versus substantively informative.
+
+If the ledger says a claim must be downgraded, dropped, or kept out of the headline contribution, follow that instruction unless a later step explicitly resolves the issue.
+
+**STEP 1A: Build support and guardrail artifacts before drafting prose.**
+
+Before writing the paper, create `sample_support.md`. This is mandatory and must become the canonical sample/reference artifact for later review steps. It must include:
+- `## Universe And Raw Coverage`
+- `## Match Stages` (if there is no match stage, say N/A explicitly)
+- `## Main Estimating Samples`
+- `## Treatment Support And Effective Clusters`
+- `## Key Subgroup Shares And Treatment Alignment`
+- `## Headline Findings To Sample Map`
+- `## Disclosure Requirements For The Paper`
+
+Be quantitative. If the main estimating sample is materially smaller than the raw panel or universe, list each narrowing step with counts or percentages. If any headline result depends on a special subsample, thin treatment support, or a treatment-target mismatch, say so explicitly.
+
+Also create or refresh `dropped_findings.md`. Start from the `Findings to Discard` section in `argument_decision.md`, then add any additional results that are empirically real but too weak, too off-argument, too sample-specific, or too mechanistically speculative to belong in the paper's core claim set. For each item record:
+- the result or claim
+- the source table/figure/do-file if available
+- why it is excluded
+- whether it is banned from the Introduction, Discussion, and Conclusion (default: yes)
+
+Later steps may only reintroduce a discarded finding if a later review explicitly clears it and the evidence supports the upgrade. Do NOT draft prose until both files exist and are substantive.
+
+If `audit_issue_ledger.md` does not yet exist, reconstruct a minimal version from `proposal_audit.md`, the Data Audit and Methods Audit sections of `findings_brief.md`, and `argument_decision.md` before drafting. Any unresolved `BLOCKING` issue must either be reflected honestly in the paper's framing or kept out of the core claim set.
+
+**STEP 2: Write the paper.** Write the full paper in `__BASE_NAME___paper.tex` EXCEPT the abstract. Do NOT write the abstract — leave the placeholder text exactly as shown below. The abstract will be written later by a fresh-eyes reader in Step 14; writing it now defeats that purpose. Total word count must be at least 8,000 words. Use this LaTeX document structure:
+
+```latex
+\documentclass[letterpaper,12pt,leqno]{article}
+\usepackage{style/paper}
+
+\hypersetup{pdftitle={PAPER TITLE HERE}}
+
+\title{PAPER TITLE HERE}
+
+\author{Paper Factory}
+
+\date{\today}
+
+\begin{document}
+\begin{titlepage}
+\maketitle
+
+\begin{abstract}
+ABSTRACT PLACEHOLDER — DO NOT REPLACE. Will be written by a fresh-eyes reader in Step 14.
+\end{abstract}
+Keywords: Keyword One $|$ Keyword Two $|$ Keyword Three
+\end{titlepage}
+```
+
+**Section requirements:**
+
+**Introduction** (~1,500 words):
+- Open with clear statement of the theoretical question and stakes of the paper. By the end of the first paragraph, the reader should know what the current state of understanding of the paper's topic is.
+- The second paragraph should state the paper's core argument at a conceptual level. State the paper's argument — what the paper claims, not just what it studies. The argument should be expressible in 3–4 sentences.
+- Do NOT say the argument is "surprising in several ways" or enumerate multiple dimensions of surprise. Instead, build the argument carefully, then focus the contribution statement on its most important audience — the specific scholarly debate or practical community whose understanding this paper changes. Frame it as an intervention in existing debates, not as filling a gap.
+- Often a well-chosen illustrative example makes the research question concrete and vivid. **CRITICAL: Never fabricate examples, quotes, vignettes, or composite portraits.** Every illustrative example must come from a real, citable source. First check whether the data itself contains usable examples. If not, use a WebSearch to find a real news article, court case, government report, or other published source. Cite the source. If you cannot find a suitable real example, no problem; don't include it.
+- Preview the empirical strategy and key findings in qualitative terms. Do NOT enumerate every finding with specific numbers in the introduction. Describe the broad shape of what the evidence shows.
+- Conclude the introduction with the big picture takeaway of the argument.
+- The introduction should read as a sustained argument, not as a summary of the paper's contents. A reader who stops after the introduction should understand what the paper claims and why it matters, not just what it does.
+
+**Background** (~2,000 words):
+- Title this section something substantive/conceptual, not just 'background'.
+- This is the place to develop the conceptual argument that will be assessed in the empirical analysis.
+- Do NOT write a literature review organized by subfield or tradition (e.g., one subsection on populism, another on professions, another on credentialism). Instead, organize the background around the paper's own argument. Each paragraph or subsection should advance one step of the argument, citing prior work as evidence, foils, or building blocks along the way.
+- Prior research should be used architecturally: each citation cluster motivates a mechanism, an alternative explanation, or a testable contrast.
+- Do NOT write about "literatures" as such; write about the world and ideas, and support claims with prior work.
+- The conceptual argument and findings MUST align tightly. If they don't, change the argument to match what you actually found.
+- The theory proposed in the paper should be presented in contrast to alternative approaches when relevant.
+- Often a conceptual tikz diagram can be helpful for focusing the reader on the mechanics of the argument
+
+**Data** (~1,000 words):
+- Describe data sources, sample construction, key variables
+- Use `data_context.md` when explaining the producer, reporting regime, questionnaire/filing logic, or institutional meaning of the main data. Do not describe a measure more strongly than the documentation supports.
+- Use `sample_support.md` as the authoritative source for the universe, matched sample, main estimating sample, treated clusters, subgroup shares, and any sample-path caveats. Do not make the reader infer these from scattered table notes.
+- **CRITICAL: Data provenance.** Any external data that was downloaded during the analysis (election results, Census/ACS demographics, geographic crosswalks, price indices, policy databases, etc.) must be footnoted in the Data section with the exact source and provenance: the repository or agency name, the specific URL or dataset identifier, the date accessed, and the version or vintage if applicable. Do not describe downloaded data vaguely (e.g., "county-level election results from a public repository"). Instead, give the precise citation (e.g., "County-level presidential election returns from the MIT Election Data and Science Lab, Harvard Dataverse, doi:10.7910/DVN/VOQCHQ, accessed March 2026"). This applies to every external dataset, not just the primary data.
+- Include a summary statistics table
+- Reference descriptive figures
+
+**Methods** (~800 words):
+- Describe the empirical strategy clearly
+- Justify identification assumptions
+- Discuss potential threats
+- Use `data_context.md` to disclose any producer-side rules, reporting thresholds, redesigns, or documentation caveats that affect interpretation of the design.
+- If the main estimating sample differs materially from the raw universe, if treatment support is thin, or if a headline result relies on a special subsample, disclose that cleanly using `sample_support.md` rather than burying it.
+
+**Results** (~1,750 words):
+- Present main findings systematically
+- Each set of results should be linked back to the paper's overall argument. Do not just describe what the tables show — explain what each finding means for the claim the paper is making.
+- **CRITICAL**: Every number you report in the text must be checked TWICE against the actual tables and figures. Read the log files or table files and verify each number before writing it. If a number doesn't match, fix it.
+- Reference all tables and figures by label
+- Discuss economic/substantive magnitude, not just statistical significance
+
+**Robustness checks** (~500 words):
+- Briefly discuss robustness checks, referencing back to the main results they test and to the appendix section that includes the actual tables and figures here and a more thorough discussion
+- Note the specific objection or counter-argument that each robustness test addresses
+
+**Discussion** (~800 words):
+- Interpret the results and connect to broader literature and theory
+- When a potential counterargument exists, confront it directly with evidence rather than listing it as a limitation. The Discussion should strengthen the argument, not qualify it.
+- A brief paragraph at the very end acknowledging the most important remaining limitations is fine, but keep it short and do not let it undermine the paper's claims. The dominant tone should be confident interpretation, not hedging.
+- Do NOT resurrect findings banned in `dropped_findings.md`. If a result was discarded as tempting-but-weak, keep it out of the Discussion unless later steps explicitly clear it.
+
+**Conclusion** (~500 words):
+- Summarize contributions
+- Policy implications if relevant
+- Future directions
+- Do NOT mention discarded findings in the Conclusion.
+
+**Appendix** (after bibliography):
+- The paper MUST include an appendix. Material that is not necessary for the average reader to follow the main argument belongs here, not in the body.
+- **Robustness results**: All robustness checks and alternative specifications go in the appendix. The body should mention that robustness tests were conducted and briefly summarize the takeaway (e.g., "Results are robust to alternative specifications; see Appendix Table A3"), but the actual tables and detailed discussion belong in the appendix.
+- **Background results**: Supplementary descriptive analyses, additional heterogeneity breakdowns, or secondary findings that support but are not central to the main story go in the appendix.
+- **Detailed data/methods background**: Extended variable definitions, detailed sample construction steps, additional summary statistics, or methodological derivations that would slow down the body of the paper for a general reader belong in the appendix.
+- Include an appendix table or subsection built from `sample_support.md` whenever the sample path, treated clusters, subgroup alignment, or match rates are not obvious from the main text.
+- The appendix should be organized with its own numbered tables (Table A1, A2, ...) and figures (Figure A1, A2, ...) using labels like `tab:a1`, `fig:a1`. Use `\setcounter{table}{0}\renewcommand{\thetable}{A\arabic{table}}` and the same for figures at the start of the appendix.
+- The body of the paper should be streamlined for the main argument. When in doubt about whether something belongs in the body or appendix, put it in the appendix and reference it from the body.
+
+**LaTeX formatting for figures:**
+```latex
+\begin{figure}[tbp]
+\includegraphics[width=0.85\textwidth]{figures/FILENAME.pdf}
+\caption{Short Descriptive Caption.}
+\label{fig:label}
+\note{Detailed explanation of figure contents, data sources, sample restrictions, and interpretation.}
+\end{figure}
+```
+
+**LaTeX formatting for tables (via \input):**
+```latex
+\begin{table}[tbp]
+\caption{Table Title}
+\label{tab:label}
+\input{tables/FILENAME.tex}
+\note{Standard errors in parentheses. * p<0.05, ** p<0.01, *** p<0.001.}
+\end{table}
+```
+If the esttab output already includes `\begin{table}` with a caption, do not wrap it in another table environment.
+
+**Citations**: Use natbib — `\citet{}` for in-text, `\citep{}` for parenthetical, `\citealp{}` for no parentheses. End the document with:
+```latex
+\bibliographystyle{bib/bibliography}
+\bibliography{references}
+
+\clearpage
+\appendix
+\section{Appendix}
+% Robustness results, background analyses, detailed data/methods material here.
+% NOTE: Table/figure counter reset to A1, A2, ... is handled automatically by paper.sty
+% via \AfterEndEnvironment{thebibliography}. Do NOT add manual \setcounter resets here.
+\end{document}
+```
+
+**Bibliography** — generate `references.bib`:
+- Use ONLY references you are confident actually exist (real authors, real journals, approximately correct years)
+- Include foundational works and recent contributions
+- **CRITICAL: Do NOT use the `url` field in any BibTeX entry.** The `bibliography.bst` file has a bug that causes fatal errors when a `url` field is present. Simply omit the `url` field from every entry. Use correct entry types (`@book` for books, `@techreport` for working papers and reports, `@misc` for legislation, `@article` for journal articles). Every entry must have at minimum: `author`, `title`, and `year`, plus type-specific required fields (`journal` for `@article`, `publisher` for `@book`, `institution` for `@techreport`).
+
+**STEP 3: Verify incorporation checklist** before compiling:
+- [ ] At least one illustrative example from `codex_research.md` is cited in the Introduction
+- [ ] At least 5 references from `codex_references.bib` are cited in the paper
+- [ ] Policy/legislation specifics from `codex_research.md` appear in the Conclusion (with cite keys, not vague "several states" language)
+- [ ] The research report's empirical gaps are referenced when positioning the paper's contribution
+- [ ] Every key finding from `findings_brief.md` is discussed in the paper
+- [ ] `sample_support.md` exists and the paper reflects its sample path, treated-cluster counts, and subgroup-alignment facts where relevant
+- [ ] `dropped_findings.md` exists and none of its banned items resurface in the Introduction, Discussion, or Conclusion
+- [ ] `audit_issue_ledger.md` exists and no unresolved `BLOCKING` issue is being presented as if it were already cured
+If any box is unchecked, go back and add the missing material.
+
+**STEP 4: Compile the PDF.**
+```bash
+"__FACTORY__/compile_paper.sh" "__PROJECT_PATH__" "__BASE_NAME__"
+```
+After compilation, check for bibtex errors: `bibtex __BASE_NAME___paper 2>&1 | grep -c "error message"`. If there are errors, the most common cause is a `url` field in a BibTeX entry — remove it. Also check for undefined citations: `grep "Citation.*undefined" __BASE_NAME___paper.log`. Fix any issues and recompile until it builds cleanly.

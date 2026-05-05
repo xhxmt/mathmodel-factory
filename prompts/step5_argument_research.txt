@@ -1,0 +1,28 @@
+You are a research assistant for a social science paper. An earlier research agent produced a broad literature review on the paper's topic. Since then, a specific argument has been chosen for the paper. Your job is to do focused, deep research on the SPECIFIC ARGUMENT — not the broad topic.
+
+Read argument_decision.md — this contains the chosen core argument, contribution, identification strategy, and paper map. Read codex_research.md for the broad research that was already done — do not duplicate it. Read data_wrangle.md and key_variables.md for how the data were built and variables constructed.
+
+Your report should be tightly focused on what the paper actually argues, not the general topic. Write your report to argument_research.md. Also write a BibTeX file called argument_references.bib.
+
+THE REPORT SHOULD CONTAIN:
+
+1. LITERATURE DIRECTLY ENGAGING THE CORE CLAIM: Find 15-25 academic papers that speak directly to the paper's specific argument — not just the broad topic. These are papers a reviewer would expect to see cited. For each:
+   - Full citation (authors, year, title, journal/publisher)
+   - BibTeX cite key (authorYEAR format)
+   - 6-7 sentence summary
+   - How it relates to THIS paper's specific argument (supports, contradicts, extends, provides a mechanism, uses a similar method)
+   Skip papers already covered well in codex_research.md unless they need deeper treatment given the chosen argument.
+
+2. EMPIRICAL PRECEDENTS FOR THE IDENTIFICATION STRATEGY: Find papers that use the same or closely related identification strategy as the one chosen in argument_decision.md. How did they handle threats to identification? What debates exist about the strategy's validity? What best practices have emerged?
+
+3. EVIDENCE ON THE MECHANISMS: The argument likely proposes specific mechanisms. What does the existing literature say about these mechanisms? Is there direct evidence for or against them?
+
+4. COUNTERARGUMENTS AND ALTERNATIVE EXPLANATIONS: What would a skeptical reviewer say? Find papers or theoretical arguments that support alternative explanations for the paper's main finding. The paper needs to engage with these.
+
+5. CONTEXT FOR THE CONTRIBUTION: Given the specific argument chosen, what exactly is new? How does this advance beyond the closest existing papers? Be precise — "we are the first to..." claims need to be verified against actual literature.
+
+6. FRAMING AND POSITIONING: Find 2-3 recent high-profile papers (last 3-5 years) in AJS, ASR, QJE, ASQ, Management Science, that this paper could position itself in conversation with. These are papers the introduction might open by citing to establish the paper's intellectual neighborhood.
+
+Be thorough. Cite real sources only. When uncertain about a citation detail, say so rather than guessing. Format the report in clean markdown.
+
+IMPORTANT: In the BibTeX entries, do NOT include url fields. The bibliography style crashes on url fields. Use correct entry types (@article, @book, @techreport, @misc) with standard fields only (author, title, year, journal, volume, pages, publisher, institution, note, doi — but NOT url).

@@ -1,0 +1,53 @@
+You are using some comments to improve a social science research paper.
+
+FIRST: Archive the current do files before making any changes: mkdir -p do/archive/pre_step10 && cp do/*.do do/archive/pre_step10/
+
+Read review_comments.md for the reviewer's comments. Read human_review.md if it exists and treat it as the highest-priority human guidance for this review cycle. Read __BASE_NAME___paper.tex (the full paper). Read findings_brief.md for context on the research question and all findings. Read data_wrangle.md and key_variables.md for how the data were built and variables constructed. Read analysis_guide.md for figure style, do file conventions, and Stata path. Read `sample_support.md`, `dropped_findings.md`, `proposal_audit.md`, `code_review.md`, and `audit_issue_ledger.md` if they exist. Read all do files in do/, log files in logs/, and table files in tables/. Read final_review.md if it exists. Only treat a `VERDICT: REOPEN_STEP10_TEXT` or `VERDICT: REOPEN_STEP10_ANALYSIS` line in final_review.md as the highest-priority input for this rerun when the file `.step11_reopen_to_step10` exists, meaning this rerun was triggered by the current cycle's Step 11 reopen.
+
+Address the review systematically:
+
+0. REVISION MODE: If `.step11_reopen_to_step10` exists and final_review.md says `VERDICT: REOPEN_STEP10_TEXT`, make the minimum paper-local changes needed to resolve the blocking issues using existing outputs already on disk. Do NOT turn a text reopen into a broad second-wave rewrite. If `.step11_reopen_to_step10` exists and final_review.md says `VERDICT: REOPEN_STEP10_ANALYSIS`, run only the smallest additional analyses needed to resolve the blocking issues. Do not use the reopen as a chance to broaden the paper.
+
+0.5. RESOLUTION LEDGER: Before revising the paper, classify every substantive issue or request in `review_comments.md` and `human_review.md` (if present), plus every OPEN or blocking row in `audit_issue_ledger.md`, plus every blocking issue in `final_review.md` if `.step11_reopen_to_step10` exists, into exactly one of these dispositions:
+- `FIX`: the evidence is already strong enough and the issue can be resolved by correcting prose, presentation, sample disclosure, or existing analysis usage
+- `DOWNGRADE`: the claim should remain in the paper only in narrower or more hedged form
+- `DROP`: the claim/result should be removed from the paper's core presentation
+- `NEW_ANALYSIS`: the issue requires additional analysis or validation work
+
+Use this ledger to drive the revision. Do not leave reviewer concerns as unclassified free text.
+
+If `audit_issue_ledger.md` contains a blocking mechanical/compositional issue (shared denominator, derived residual/complement, room-to-move gradient, or similar), do not treat it as resolved unless you either:
+- add genuinely independent evidence beyond the identity, or
+- narrow the paper so the claim no longer overreads that result.
+
+1. NEW ANALYSES: Run any additional analyses the review identified. Edit existing do files where the new analysis extends existing work, or create new numbered do files for genuinely new analyses. Run them, move logs to logs/, save tables to tables/ and figures to figures/.
+
+2. BE JUDICIOUS: If new robustness tests show that a claim in the paper is not strongly supported, drop that claim and attendant analyses, rather than keeping a bunch of confusing results in the paper.
+
+3. HAND-CODED VALIDATION: If the reviewer requests validation of text measures, dictionaries, or classifications, you can perform it computationally. Draw a stratified random sample of the underlying materials (e.g., 100–500 review texts or resumes or jobs postings or whatever), read each one, code whether it matches the concept the measure claims to capture, and report precision, recall, and inter-rater-style agreement. This is compute-intensive but legitimate — treat it as a normal analysis task.
+
+4. REWRITE: Edit __BASE_NAME___paper.tex to strengthen weak sections flagged by the review. Add discussion of new results. When the reviewer raises a counterargument or concern, do not merely acknowledge it as a limitation — run additional analysis to confront and resolve it, then revise the text to show the concern has been addressed. The paper should not accumulate caveats; it should accumulate evidence. When a result set turns out not to be robust, lean toward dropping it entirely rather than hedging the prose to keep it in. A clean paper with fewer, solid results is stronger than a wishy-washy paper that tries to retain everything.
+
+5. DISCARDED-FINDINGS GUARDRAIL: Treat `dropped_findings.md` as binding unless a later review explicitly clears a finding and the evidence supports the change. Do not let a tempting discarded result creep back into the Introduction, Discussion, or Conclusion just because it sounds interesting. If you reintroduce a previously discarded finding, record that explicitly in both `dropped_findings.md` and `revision_summary.md`, along with the evidence that now justifies it.
+
+6. EDITS: When editing __BASE_NAME___paper.tex, do not include any explicit discussion of addressing reviews or comparing earlier and later versions of the paper. Edit very sparingly, particularly in the introduction. Only change introduction language if you absolutely have to. Any caveats or limitations should only go in the Discussion section. Revise only the flagged spans or the directly adjacent sentences needed to keep the argument coherent. Prefer deleting or narrowing a weak claim to spreading hedged language across the paper. Prefer one precise robustness paragraph to broad narrative reframing.
+
+7. CHECK ALIGNMENT: Ensure the conceptual argument and findings still align tightly after revisions.
+
+8. UPDATE findings_brief.md: Append a section documenting any new analyses added and their results.
+
+9. UPDATE sample_support.md if any analysis, sample definition, treated-cluster count, or subgroup-alignment fact changed.
+
+10. UPDATE dropped_findings.md if any claim/result was newly dropped, newly downgraded out of the core claim set, or explicitly reinstated.
+
+11. UPDATE audit_issue_ledger.md: Keep every prior row. For each issue addressed in this pass, update `Status` to one of `RESOLVED`, `REFRAMED`, `DROPPED`, or keep it `OPEN`. Do not silently remove unresolved issues. Add new rows for newly discovered problems.
+
+12. WRITE revision_summary.md: Save a short revision memo to `revision_summary.md` that includes:
+   - a markdown table with one row for every substantive issue/request in `review_comments.md` and `human_review.md` (if present), plus every OPEN or blocking issue in `audit_issue_ledger.md`, plus every blocking issue in `final_review.md` if `.step11_reopen_to_step10` exists, with columns:
+     `Issue | Source | Disposition (FIX/DOWNGRADE/DROP/NEW_ANALYSIS) | Action Taken | Files Changed | Outcome`
+   - which do files or scripts were edited or added
+   - which sections of `__BASE_NAME___paper.tex` were revised
+   - confirmation that `findings_brief.md`, `sample_support.md`, `dropped_findings.md`, and `audit_issue_ledger.md` were updated as needed
+   - if this was a Step 11 reopen, which blocking issues from `final_review.md` were resolved and how
+
+The resolution table is mandatory. Every substantive review issue and every open/blocking ledger issue must appear in it, even if multiple issues were handled together or one was found already resolved.

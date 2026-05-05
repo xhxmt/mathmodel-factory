@@ -1,0 +1,40 @@
+You are doing a final quality check on a social science paper. This step is Gate 2: Estimand and Claim-Validity QA. Read the ENTIRE file `__BASE_NAME___paper.tex` in the project directory `__PROJECT_PATH__`. Read `data_wrangle.md` and `key_variables.md` for how the data were built and variables constructed. Also read all table files in `tables/`, open all figure PDFs in `figures/`, and read Stata log files in `logs/`. Also read `proposal_audit.md`, `code_review.md`, `review_comments.md`, `revision_summary.md`, `sample_support.md`, `dropped_findings.md`, and `audit_issue_ledger.md` if they exist.
+
+Perform these checks and write your findings to `final_review.md`:
+1. Does every number reported in the text match its source in the tables/logs?
+2. Did Gate 1 actually clear replication/number QA, or are there unresolved code-paper mismatches still live from `code_review.md` or `audit_issue_ledger.md`?
+3. Does the conceptual argument align with the findings?
+4. Are any headline claims still mechanically exposed because of shared denominators, derived residual/complement variables, sum-to-one identities, room-to-move gradients, or other issues already raised in `proposal_audit.md`, `review_comments.md`, or `audit_issue_ledger.md`?
+5. Are there any remaining weak points, unclear passages, or inconsistencies?
+6. Count the figures — are there at least 5?
+7. Is the appendix well-organized? Are robustness results and background material properly placed there rather than cluttering the body?
+8. Any other issues?
+
+At the very top of `final_review.md`, write exactly one verdict line:
+- `VERDICT: PASS_WITH_DIRECT_FIXES`
+- `VERDICT: REOPEN_STEP10_TEXT`
+- `VERDICT: REOPEN_STEP10_ANALYSIS`
+
+Use `PASS_WITH_DIRECT_FIXES` only if all blocking issues can be fixed directly in this pass, or if only non-blocking suggestions remain. Use `REOPEN_STEP10_TEXT` if unresolved blocking issues can be fixed by a targeted paper-only revision using existing outputs already on disk. Use `REOPEN_STEP10_ANALYSIS` if any unresolved blocking issue requires new analyses, regenerated tables/figures, or do-file/data changes.
+
+Gate 2 pass rule: do NOT issue `PASS_WITH_DIRECT_FIXES` while `audit_issue_ledger.md` still contains unresolved `BLOCKING` rows, or while a major conceptual issue raised earlier has disappeared from later review documents without an explicit resolution. Matching numbers is necessary but not sufficient for a pass.
+
+After completing the review, fix every problem you can resolve directly at this stage. This includes correcting misreported numbers in `__BASE_NAME___paper.tex` to match the source tables/logs, fixing incorrect table/figure references, tightening unclear or inconsistent prose, and making straightforward editorial improvements to appendix/body placement or cross-references when no new analysis is required.
+
+Do NOT rerun analyses, edit do files, or change underlying empirical results at this step. Do NOT make broad structural rewrites. Limit direct edits to the smallest span needed to correct the issue. Freeze the Introduction and Background unless the problem is explicitly located there. If a claim is unsupported, prefer deleting or narrowing that specific claim rather than softening the entire section. If an issue would require new regressions, regenerated tables/figures, or upstream data/code changes, leave the paper unchanged on that point and document it clearly as unresolved in `final_review.md`.
+
+In `final_review.md`, distinguish between:
+- Gate 1 status (replication/number QA)
+- open conceptual risks carried forward from earlier audits
+- issues you fixed directly in the paper
+- blocking issues requiring Step 10 text-only revision
+- blocking issues requiring Step 10 analysis revision
+- non-blocking suggestions
+
+Also create or update `audit_issue_ledger.md` with one row for every unresolved or newly discovered issue using the columns:
+
+`Issue ID | First Raised In | Category | Severity | Blocking Until | Status | Notes`
+
+At this step, any blocking issue that remains unresolved should stay `OPEN` with notes pointing to the exact reopen path. Any issue you resolve directly here should be updated to `RESOLVED` or `REFRAMED`. Do not silently delete rows.
+
+Save both `final_review.md`, the updated `audit_issue_ledger.md`, and the updated `__BASE_NAME___paper.tex` in the project directory.

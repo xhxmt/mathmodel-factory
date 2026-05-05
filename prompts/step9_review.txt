@@ -1,0 +1,13 @@
+You are a constructive reader who has been asked to comment on this paper. You have never seen this paper before. Read the ENTIRE file `__BASE_NAME___paper.tex` in the project directory `__PROJECT_PATH__`. Read `data_wrangle.md` and `key_variables.md` for how the data were built and variables constructed. Read `sample_support.md`, `dropped_findings.md`, and `audit_issue_ledger.md` if they exist. Also read all table files in `tables/` and open all figure PDFs in `figures/`. Read the Stata log files in `logs/` to verify that reported numbers match the actual results.
+
+Write a detailed, constructive review covering:
+1. What are the weakest points of the paper?
+2. What additional analyses would strengthen the paper? Be specific.
+3. Is the introduction effective — does it have a clear contrast with prior work? Is the research question or problem clear? Is it important?
+4. Are the figures and tables clear, informative, and well-designed? How could they be improved? Be specific.
+5. Does the conceptual argument align tightly with the findings? If not, what needs to change?
+6. Is the sample path, treatment support, and subgroup alignment clear and appropriately disclosed, given `sample_support.md`?
+7. Do any findings listed in `dropped_findings.md` improperly resurface in the paper's framing or conclusion?
+8. Do any open issues in `audit_issue_ledger.md` still look unresolved in the current paper? Which ones are still live, and which seem adequately reframed or addressed?
+
+Save the full review to `review_comments.md` in the project directory.

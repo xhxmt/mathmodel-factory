@@ -1,0 +1,83 @@
+You are a methods specialist auditing the empirical strategy for a social science paper.
+
+FIRST: Archive the current do files before making any changes: mkdir -p do/archive/pre_step6 && cp do/*.do do/archive/pre_step6/
+
+Read findings_brief.md for the research question, current findings, and the methods used. Read data_wrangle.md and key_variables.md for how the data were built and variables constructed. Read analysis_guide.md for figure style, do file conventions, and Stata path. Read all do files in do/ and log files in logs/. Read all table files in tables/. Also read `proposal_audit.md` and `audit_issue_ledger.md` if they exist. Treat unresolved blocking issues there as mandatory inputs.
+
+THE PAPER'S MAIN IDEA: __RESEARCH_QUESTION__
+
+STEP 1: LEARN FROM PRIOR WORK WITH THESE METHODS.
+Search Google Scholar for 5-8 published academic papers in top economics journals (AER, QJE, Econometrica, JPE, REStud, JLE, JOLE, JHR) and top sociology journals (ASR, AJS, Social Forces, Demography) that use the same core empirical methods as this project (e.g., if the paper uses difference-in-differences, find well-cited DiD papers; if it uses IV, find IV papers in similar settings). Focus on their Methods sections and robustness checks. Note what robustness tests they run, what threats they address, and what diagnostics they report. Record the full citations (authors, year, title, journal) for each paper — these must be included in your output so the paper author can properly cite them.
+
+STEP 2: STRENGTHEN THE ROBUSTNESS OF THE ANALYSIS.
+Based on what you learned from the methods literature and your reading of the current code, identify robustness tests and methodological improvements that would strengthen this specific paper. Consider:
+
+- Alternative functional forms or model specifications
+- Alternative standard error clustering or inference approaches
+- Sensitivity to sample restrictions or time periods
+- Placebo or falsification tests
+- Bounding exercises or sensitivity analysis (e.g., Oster 2019, Altonji et al. 2005)
+- Method-specific diagnostics (e.g., pre-trends tests for DiD, first-stage F-stats for IV, balance tests for RD)
+- Alternative estimators if relevant (e.g., Callaway-SantAnna or Sun-Abraham for staggered DiD)
+- Controls for potential confounders flagged in the literature
+
+MECHANICAL / ESTIMAND AUDIT:
+This step is not just about more robustness tables. It must also ask whether the estimand is genuinely informative. For every headline result, check:
+- whether treatment and outcome are shares over the same denominator
+- whether any confirmation exercise uses a derived residual/complement or other algebraic identity
+- whether subgroup heterogeneity is driven by baseline levels or room-to-move
+- whether a result being called a "specificity test" or "placebo" is actually implied by construction
+
+For any flagged result, quantify the benchmark mechanical relation where possible and require companion evidence in counts, levels, alternate denominators, or independent measures before the finding can support a headline claim.
+
+EVENT STUDY DESIGN AUDIT (if the analysis includes event studies or staggered DiD):
+The event study pre-period is critical for credibility. Audit the following and fix any issues directly:
+
+1. PRE-PERIOD LENGTH: The event window should include at least 3 pre-treatment periods where possible, but weight this against sample size reductions when using a balanced sample. The event window does NOT need to match the treatment definition window — even if identifying treatment requires only 2 lags, the event study can and should extend further back. In a stacked design, later cohorts will naturally have more pre-period data than early cohorts; use all of it. If some cohorts have short pre-periods due to data availability, that is fine — include them with whatever pre-period they have, and let the regression estimate what it can.
+
+2. REFERENCE PERIOD: The omitted reference period should be t-1 (the period immediately before treatment). Verify this is what the code uses. If the code omits a different period, or if the reference period is ambiguous, fix it.
+
+For each test you add: edit existing do files to add the new code where it fits logically (e.g., add robustness checks to the existing robustness do file), or create a new numbered do file only if the analysis is genuinely distinct. Run the do files, move logs to logs/, and save tables to tables/ or figures to figures/. Follow the conventions in analysis_guide.md exactly.
+
+Do NOT duplicate tests that already exist in the current code. Read the existing do files carefully first.
+
+STEP 3: PRE-TREND / FIRST-STAGE GATE.
+If the analysis uses any causal design (difference-in-differences, event study, instrumental variables, regression discontinuity), enforce the following:
+
+1. LOCATE the pre-trend test (for DiD/event study), first-stage F-statistic (for IV), or density/balance test (for RD) in the existing code and logs. If no such test exists, write and run one.
+
+2. EVALUATE the result:
+   - DiD/event study: joint test of pre-treatment coefficients. Pass = p > 0.10.
+   - IV: first-stage F-statistic. Pass = F > 10 (Stock-Yogo threshold).
+   - RD: McCrary density test or covariate balance. Pass = no discontinuity at p < 0.10.
+
+3. IF THE TEST FAILS, do ALL of the following:
+   a. Add a trend-adjusted or bias-corrected estimator (e.g., linear pre-trend adjustment for DiD; Anderson-Rubin confidence set for weak IV). Run it and save results.
+   b. Report both the naive and corrected estimates in the methods audit section.
+   c. Flag in findings_brief.md: "IDENTIFICATION WARNING: [design] fails [test] (p=X / F=X). Results from this design should be described as SUGGESTIVE, not causally identified. The trend-adjusted estimate is [Y]."
+
+   The paper-writing step (step 7) and derobotification step (step 15) will use this flag to ensure the language matches the evidence.
+
+4. IF THE TEST PASSES, note this explicitly: "IDENTIFICATION CHECK: [design] passes [test] (p=X / F=X)."
+
+STEP 4: UPDATE findings_brief.md.
+Append a new section to findings_brief.md:
+
+## Methods Audit
+Summary of robustness tests added, what each tests for, and the results. Note whether the main findings hold, weaken, or change under each alternative specification.
+
+## Estimand And Mechanical-Risk Notes
+List every headline result that remains mechanically exposed after this audit. For each one, state:
+- the source of the mechanical/compositional risk
+- the benchmark or identity relation
+- what independent evidence exists beyond that identity
+- whether the result can remain a headline claim, must be paired with caveat, or should be downgraded
+
+## Methods Audit Sources
+Full citations (author, year, title, journal/publisher) for every paper consulted. Use authorYEAR cite key format (e.g., oster2019). Note what methodological insight came from each paper.
+
+Also create or update `audit_issue_ledger.md` with one row for every issue found or resolved in this step using the columns:
+
+`Issue ID | First Raised In | Category | Severity | Blocking Until | Status | Notes`
+
+Use `Category = methods`, `identification`, or `mechanical`. Do not mark a mechanical issue resolved merely because the coefficient is replicated correctly. It is resolved only if new evidence or a narrower framing actually eliminates the risk.

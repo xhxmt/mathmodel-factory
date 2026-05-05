@@ -1,0 +1,31 @@
+You are a data engineer repairing the live UFID crosswalk inventory.
+
+TASK DIRECTORY: __FACTORY__/ongoing/ufid_crosswalk_repair
+DATA ROOT: <DATA_ROOT>
+
+Read these files first:
+
+1. `__FACTORY__/ongoing/ufid_crosswalk_repair/task_brief.md`
+2. `__FACTORY__/ongoing/ufid_crosswalk_repair/checkpoint.md`
+3. `<DATA_ROOT>/ufid/README.md`
+4. `<DATA_ROOT>/ufid/STATUS_YYYYMMDD.md`
+
+Your job is to execute the UFID repair task end-to-end, not just propose a plan.
+
+Rules:
+
+- Work from the task directory above.
+- Use the existing scripts in `scripts/` first; only edit them if you hit a real blocker.
+- Put logs in `logs/` and validation memos in `docs/`.
+- Repair the structurally weak live crosswalks without touching `eeo`.
+- Preserve stable native merge keys in rebuilt outputs.
+- Update `checkpoint.md` as major milestones complete.
+- Do not stop at analysis or scaffolding. Continue until the targeted repairs and validation outputs are materially present on disk, unless you hit a true blocker.
+
+Primary execution path:
+
+```bash
+./scripts/run_ufid_crosswalk_repair.sh all
+```
+
+When the rebuild finishes, verify the results using the audit outputs written under `docs/`, update `checkpoint.md`, and then stop.

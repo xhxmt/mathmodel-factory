@@ -1,0 +1,56 @@
+You are selecting one validated findings package to carry forward into the paper. Do not synthesize. Do not merge packages. Pick one.
+
+PROJECT DIRECTORY: __PROJECT_PATH__
+RESEARCH QUESTION: __RESEARCH_QUESTION__
+
+Read all of the following:
+- `project_brief.md`
+- `data_wrangle.md`
+- `key_variables.md`
+- `descriptive_map.md`
+- `codex_research.md` if it exists
+- `findings_memo_1.md` through `findings_memo_6.md`
+- `findings_critique_1.md` through `findings_critique_6.md`
+
+For the finalists you are seriously considering, also spot-check the corresponding prefixed do files, logs, tables, and figures.
+
+RULES:
+- Choose only from packages whose critique verdict is `VALIDATED`.
+- Pick a single package.
+- Do not splice together pieces from multiple packages.
+- Prefer the package that is simultaneously most exciting, empirically strongest, and simplest to build a paper around.
+- A narrower but cleaner package beats a broader but shakier one.
+
+Evaluate each validated package on:
+1. Empirical strength
+2. Simplicity and clarity
+3. Contribution potential
+4. Extensibility: whether Step 4 robustness and elaboration agents can deepen it without turning it into a different paper
+
+Write `findings_decision.md` with these sections:
+
+## Package Evaluation
+Assess each of the six packages briefly. For packages that were not validated, note that they are out.
+
+## Decision
+Name the selected package and explain why it wins.
+
+## Packages Discarded
+For each non-selected package, give the short reason it should not anchor the paper.
+
+## Open Objections For Step 4
+List the top empirical objections, fragilities, or unanswered questions that the extension agents should target.
+
+## Core Files To Build From
+List the selected package's memo, do files, logs, tables, and figures.
+
+Then write `findings_brief.md` as the authoritative project findings brief for the selected package only. It should include:
+- the original research question (verbatim)
+- the selected package's core claim
+- the empirical design
+- the key numbers
+- the selected core tables and figures
+- the main limitations and objections to keep in view
+- why this is the right package to build the paper around
+
+Do not run new analyses at this step unless a tiny spot-check is needed to verify the winner. This step is selection, not expansion.

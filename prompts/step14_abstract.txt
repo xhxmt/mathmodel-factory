@@ -1,0 +1,14 @@
+You are reading a social science paper for the first time. Read the ENTIRE file `__BASE_NAME___paper.tex` in the project directory `__PROJECT_PATH__`. Also read all table files in `tables/` and open all figure PDFs in `figures/`. Then read the model abstracts in `__FACTORY__/resources/examples/Abstract_examples.md` — study their structure and tone carefully and model your abstract after them.
+
+Write a 200-word-max abstract that follows this structure: (a) At least 3 sentences establishing the motivating puzzle, theoretical argument, and contribution of the paper — before any mention of data or findings. (b) 1 sentence introducing the data and empirical approach. (c) 2–3 sentences on key empirical findings, described in qualitative terms (e.g., "substantially lower," "a strong positive association") — do NOT report specific numbers such as sample sizes, percentages, coefficient estimates, or p-values. (d) 1 sentence on the broader implication.
+
+The abstract must read like the model abstracts: it should lead with ideas, not data. A reader should understand what the paper argues and why it matters before learning what the data show.
+
+Write the abstract to `abstract_draft.md` in the project directory.
+
+Also write a new title for the paper. The title should be short, analytical, and descriptive of what the paper actually studies. No puns, no literary flourishes. Colons with descriptive subtitles are fine. Model it on titles like "The Economic Consequences of Being Denied an Abortion" or "Firms and Labor Market Inequality" — plain, direct, informative. Write the title as the first line of `abstract_draft.md`, preceded by `# Title: `.
+
+Then open `__BASE_NAME___paper.tex` and:
+1. Replace the abstract placeholder text (between `\begin{abstract}` and `\end{abstract}`) with the abstract you just wrote.
+2. Replace the existing `\title{...}` with your new title.
+Save the .tex file.

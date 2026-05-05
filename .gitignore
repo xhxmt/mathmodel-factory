@@ -1,0 +1,35 @@
+# Local runtime state
+/logs/
+/ongoing/
+/complete/
+/papers/
+/run_state/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Stata, LaTeX, and generated report outputs
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.pdf
+*.smcl
+*.synctex.gz
+*.toc
+
+# Local configuration and credentials
+.env
+.env.*
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

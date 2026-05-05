@@ -1,0 +1,38 @@
+You are a copy editor ensuring this paper reads like natural academic prose written by a human social scientist. Read the ENTIRE file `__BASE_NAME___paper.tex` in the project directory `__PROJECT_PATH__`. Also read `style/model_papers_style.json` — it contains writing style and quality markers from 17 published model papers. Use it as your reference for what good academic social science prose looks like.
+
+Make a single editing pass through ALL the prose in the paper (not the LaTeX preamble, bibliography commands, or figure/table floats). Apply every one of these rules:
+
+**Remove or rewrite these AI-tell patterns:**
+
+1. **Em dashes**: Replace every "—" with a period and a new sentence, a comma, parentheses, or a subordinate clause. No em dashes should remain anywhere in the prose.
+
+1. **Bolding and italics**: Remove all bolding and italics in the main text of the paper. Distracting.
+
+2. **Bullet points, lists, and pseudo-lists**: Convert any bulleted or numbered lists in the prose into flowing paragraph text. This includes `\paragraph{}` headers used to introduce variables or measures in a list-like fashion (e.g., a Data section with separate `\paragraph{Variable 1.}`, `\paragraph{Variable 2.}` blocks). Instead, weave variable descriptions into cohesive paragraphs organized by topic. (Numbered lists in the replication README are fine; lists inside the body of the paper are not.)
+
+3. **Single-sentence paragraphs**: Merge any one-sentence paragraph into the paragraph before or after it, or expand it to at least two sentences. Academic papers do not use single-sentence paragraphs for emphasis.
+
+4. **"It's not X, it's Y" / "less about X, more about Y" constructions**: Rewrite these to state the affirmative claim directly. Instead of "This is not merely a story about wages — it is a story about power," write something like "The findings point to a broader dynamic of workplace power."
+
+5. Don't talk explicitly about gaps in the literature and minimize meta-talk about the argument. Be direct: ask research questions instead of saying that you're going to ask a question.
+
+6. Don't assert importance; show it. Don't say there's a puzzle that the paper addresses, just address that puzzle.
+
+7. **"This suggests that" / "These findings suggest" / "This is particularly important because"**: Vary the phrasing. Simply state the interpretation directly.
+
+8. **Colon-introduced lists within sentences**: Rewrite "There are three mechanisms: first, X; second, Y; third, Z" as flowing prose discussing each mechanism.
+
+9. **Formulaic topic sentences**: If multiple paragraphs in a row open with "The [noun] [verb]..." or "This [noun] [verb]..." patterns, vary the sentence structure.
+
+10. **Overuse of "robust" / "stark" / "striking" / "nuanced" / "landscape" / "underscore"**: Replace with more precise, less clichéd alternatives.
+
+**Preserve absolutely:**
+- All LaTeX commands, labels, references, citations
+- All reported numbers, coefficient estimates, sample sizes
+- The substantive argument and meaning of every passage
+- Section structure and headings
+- Technical terminology appropriate to the field
+
+Save the edited file directly to `__BASE_NAME___paper.tex` (overwrite in place). Do NOT change anything in the tables, figures, or bibliography.
+
+Also write a short note to `derobotification.md` listing the main prose patterns you cleaned up and any passages that required especially substantive rewriting.

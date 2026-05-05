@@ -1,0 +1,482 @@
+[
+  {
+    "title": "Between-Firm Inequality and Informal Social Relations",
+    "writing_style": {
+      "tone": "Formally sociological but empirically pragmatic: theory-forward, careful about scope, and explicit about inferential limits.",
+      "paragraph_structure": "Long, argument-driven paragraphs typically begin with a claim, connect it to prior literature, then narrow to a concrete prediction or empirical implication. Sections frequently end with transition sentences that set up the next empirical step.",
+      "theory_to_empirics_ratio": "Roughly 35:65 (theory/conceptual framing vs data, methods, results, decomposition, and robustness).",
+      "use_of_literature": "Literature is used architecturally, not decoratively: each citation cluster motivates a mechanism or alternative explanation. The paper triangulates across economic sociology, labor economics, organizational behavior, and industrial relations, then converts those traditions into testable contrasts.",
+      "distinctive_features": [
+        "Frequent explicit signposting and sequencing (e.g., \"First ... Second ... Finally\") to make inferential logic auditable.",
+        "Short interpretive pivots after dense argumentation, including concise claims like \"where you work matters.\"",
+        "Systematic paired contrasts in sentence structure (formal vs informal organization; premiums vs penalties; vertical vs horizontal ties).",
+        "Self-critique is integrated into core prose, including direct caveats such as \"These are strong assumptions\" before proceeding to robustness tests.",
+        "Methodological transparency appears in main text, not hidden in appendices: dictionary construction, validation metrics, and selection diagnostics are all foregrounded."
+      ],
+      "avoids": [
+        "Avoids overclaiming causality; repeatedly states design limits and labels checks as imperfect",
+        "Avoids black-box text analysis by presenting dictionary logic and validation details",
+        "Avoids reducing all social cohesion to a single construct; keeps concept boundaries explicit",
+        "Avoids purely correlational storytelling by organizing evidence around specific threats to inference",
+        "Avoids stylistic inflation; prose is dense but controlled, with minimal rhetorical excess"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines strong theory construction with unusual measurement execution: it translates rich organizational concepts into scalable indicators, validates those indicators across multiple diagnostics, and links them to a central inequality debate with transparent model progression. Its contribution is both substantive (a new account of firm pay inequality) and methodological (a replicable approach to using review text for labor-market sociology). The argument is publishable because it is cumulative at every stage: conceptual typology, operationalization, baseline associations, stricter designs, macro decomposition, and explicit limitation analysis.",
+      "weakest_aspect": "Causal identification remains the most vulnerable point. The authors are clear that no exogenous instrument for social relations is available, so the design relies on conditional ignorability, high-dimensional controls, and stress tests rather than a clean quasi-experimental estimator. The reliance on self-reported review text also leaves residual concern that strategic discourse or unobserved reporting norms could still bias magnitudes.",
+      "strongest_aspect": "The strongest aspect is the coherence between theory and empirics: each relational construct has a distinct mechanism, a distinct measurement strategy, and a distinct empirical signature (including opposite-signed effects). The paper also excels at intellectual positioning: it does not discard existing formal-organization/product-market accounts, but shows how informal social structure explains nontrivial residual variation they leave behind."
+    }
+  },
+  {
+    "title": "Consolidated Advantage: New Organizational Dynamics of Wage Inequality",
+    "writing_style": {
+      "tone": "Formal, theoretically ambitious, and empirically restrained; claims are assertive but repeatedly bounded by data limitations.",
+      "paragraph_structure": "Paragraphs are medium-to-long and highly structured: topic sentence stating the claim, brief mechanism elaboration tied to literature, concrete example, then transition sentence. The prose alternates abstraction and grounded examples (e.g., hedge fund analyst vs administrative assistant; clinics, trucking, schools).",
+      "theory_to_empirics_ratio": "Roughly 1:3 (about 6 pages conceptual/theoretical framing vs about 18 pages methods, results, robustness, and discussion).",
+      "use_of_literature": "Integrative across economic sociology, labor economics, organizational theory, and stratification. Prior work is used as a scaffold for mechanisms, then explicitly re-sorted into what explains variance vs what explains covariance; citations support argument moves rather than functioning as standalone lit-review blocks.",
+      "distinctive_features": [
+        "High-precision contrast framing: \"not by occupation or workplace inequality alone, but by this increased consolidation.\"",
+        "Definition via operational language: \"more workers are employed in jobs that match premiums.\"",
+        "Explicit roadmap sentences: \"we first document... and then we evaluate...\"",
+        "Frequent mechanism + example pairing in single paragraph units (e.g., outsourced janitors, deskilled hospitals, rising top teams).",
+        "Quantified argumentative cadence: \"accounts for almost two-thirds,\" then narrower percentages by channel.",
+        "Strong closing aphoristic synthesis: \"Organizations either consolidate or disorder inequalities.\""
+      ],
+      "avoids": [
+        "Overstating causal certainty from descriptive decompositions",
+        "Method-first exposition detached from theory",
+        "Excessive notation density in the main narrative",
+        "Normative or rhetorical overreach",
+        "Fragmented bullet-heavy prose in the body text"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper tightly couples a new theoretical lens (consolidation) to a measurement strategy uniquely enabled by rare occupation-by-workplace data, then demonstrates explanatory leverage with transparent decomposition math, interpretable counterfactual channels, and unusually thorough robustness checks. Its strongest publishable feature is coherence: conceptual claim, empirical design, and mechanism diagnostics all target the same estimand (occupation-workplace covariance).",
+      "weakest_aspect": "Mechanism attribution remains descriptive rather than causally identified; channel counterfactuals rely on fixing observed components and cannot fully resolve simultaneity, unobserved worker composition, or endogenous organizational change.",
+      "strongest_aspect": "The combination of conceptual originality and disciplined empirical partitioning: the paper does not just report that inequality rose, it shows where in the joint occupation-workplace structure the increase came from and why conventional single-axis explanations miss most of it."
+    }
+  },
+  {
+    "title": "Corporate Minimum Wages and Working Poverty",
+    "writing_style": {
+      "tone": "Formal empirical social-science prose, but unusually accessible and policy-facing; technically explicit without being mathematically dense.",
+      "paragraph_structure": "Typical paragraphs run about 5-10 sentences and follow a stable architecture: motivating question -> conceptual tension -> data/design move -> main quantitative result -> limitation/qualification. The paper frequently uses contrastive pivots (\"Yet...\", \"However...\", \"In contrast...\") to structure argument pressure tests.",
+      "theory_to_empirics_ratio": "Roughly 1:4 to 1:5 in main text (about 3-4 pages conceptual framing/discussion versus about 14-15 pages data, methods, and results); appendix is heavily empirical/robustness oriented.",
+      "use_of_literature": "The literature review is integrative rather than encyclopedic: it identifies two disconnected traditions (employer wage-setting and poverty research), names specific measurement/data constraints in each, and positions the paper as a bridge. Citations are used as design justifications (e.g., spillovers, DiD estimators, poverty-measure conventions) rather than ornamental background.",
+      "distinctive_features": [
+        "Strong rhetorical signposting through direct questions and immediate answers (e.g., \"Do employers achieve these reductions in poverty by simply hiring non-poor workers?\").",
+        "Mechanism-first empirics: potential invalidating channels are introduced before estimates and then empirically audited.",
+        "Quantified interpretation language that converts coefficients into substantive stakes (\"closes a majority of the Black-white wage gap\", \"70% of the gender wage gap\").",
+        "Explicit caveat framing in discussion (three numbered caveats in prose form) that preserves contribution while bounding external validity.",
+        "Consistent movement between micro detail and macro implication: firm-level wage bins -> household poverty -> policy design implications."
+      ],
+      "avoids": [
+        "Overclaiming causal certainty beyond design limits; uncertainty is foregrounded repeatedly.",
+        "Long theoretical abstraction or formal modeling detached from data.",
+        "Excessive jargon density; technical terms are present but usually translated into plain implications.",
+        "Bullet-pointed argumentation in the manuscript body; the argument is carried by tightly linked narrative paragraphs."
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines a rare data contribution (first use of PSID employer identifiers for this question) with a clean empirical design that is legible to multiple audiences and a disciplined mechanism audit that anticipates major critiques. The argument is architected as a sequence of falsifiable checks rather than a single headline estimate, and the authors repeatedly verify that their interpretation survives alternative controls, comparison groups, and measurement choices. Substantively, it upgrades the conversation from \"do wages rise?\" to \"does household poverty fall, through which channels, and with what trade-offs?\".",
+      "weakest_aspect": "External validity and residual endogeneity remain the most vulnerable points: treatment is voluntary (not random), the treated sample is relatively small (333 for wages; 237 for poverty), and only 62% of hourly worker-years are employer-matched, with analysis limited to heads/spouses. The paper addresses these limitations transparently, but inference still depends on parallel-trends and selection assumptions that cannot be fully proven.",
+      "strongest_aspect": "The strongest aspect is the integration of novel linked data with a methodologically plural identification strategy that keeps re-testing the same claim from different angles (event-study dynamics, competitor controls, worker FE, composition/entry-exit diagnostics, and adjustment-margin checks). This produces a high-credibility contribution: employer policy shocks are shown to matter for poverty, not only pay, while openly documenting the accompanying trade-offs (especially work intensification and hiring shifts)."
+    }
+  },
+  {
+    "title": "The Decline of Low-wage Jobs",
+    "writing_style": {
+      "tone": "Formal and analytic, but rhetorically vivid and accessible for a methods-heavy paper.",
+      "paragraph_structure": "Mostly medium-to-long paragraphs that begin with a claim, introduce a mechanism, and close with a quantified implication; frequent transitional prompts and explicit signposting across sections.",
+      "theory_to_empirics_ratio": "Roughly 1:2 in the main body (about 6-9 pages of theoretical framing/mechanisms versus about 16-18 pages of data, methods, and empirical decomposition).",
+      "use_of_literature": "Integrative across sociology and economics: literature is used to build competing mechanism hypotheses (not just citation coverage), then each hypothesis is evaluated with a matched empirical test. Classic theories (imprinting, ecological selection, monopsony, fissuring, AKM-style firm effects) are linked directly to estimands.",
+      "distinctive_features": [
+        "Frequent rhetorical questions to structure argument flow: \"How was this transformation achieved?\" and \"So how were two-thirds of low-wage workers lifted above $15 per hour in less than a decade?\"",
+        "High-density interpretive sentences that convert estimates into conceptual claims: \"Wages rose at the bottom not one bankruptcy at a time, but largely through pay increases among incumbent establishments.\"",
+        "Memorable endpoint framing in conclusion: \"a shrinking bottom is rising up toward a stagnant middle.\"",
+        "Consistent mechanism labels reused across theory, method, and results sections, which tightens conceptual coherence."
+      ],
+      "avoids": [
+        "Avoids claiming a single exogenous causal shock explains the entire pattern.",
+        "Avoids burying methods in appendices; methods are embedded next to each results block.",
+        "Avoids overreliance on one dataset by systematically triangulating OEWS with CPS and QCEW.",
+        "Avoids bullet-point prose in the paper itself; argument is carried through tightly linked narrative paragraphs."
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines a major real-world shift (collapse in sub-$15 work) with a clear theoretical reframe and unusually strong data architecture (restricted OEWS plus matched QCEW plus CPS validation). Its main value is mechanism discrimination: it does not just document compression, it allocates the compression across within-job, workplace, occupation, entry/exit, and incumbent channels with transparent formulas and interpretable magnitudes. The writing keeps analytical precision while translating decomposition outputs into substantive organizational claims.",
+      "weakest_aspect": "Ultimate causal drivers remain underidentified. The design cleanly decomposes where change occurred but cannot fully separate why incumbents raised wages (minimum wages, labor scarcity, pricing power, productivity, strategic shifts), and the authors explicitly note this unresolved puzzle and data need (financial microdata).",
+      "strongest_aspect": "The strongest aspect is the cumulative evidence that incumbent low- and middle-paying employers of low-wage occupations drove most gains. This finding survives multiple decompositions and directly challenges a creative-destruction account of inequality decline, giving the paper a clear, non-obvious intellectual payoff."
+    }
+  },
+  {
+    "title": "Are decredentialed jobs a route to upward mobility?",
+    "writing_style": {
+      "tone": "Formal but highly accessible: policy-relevant, empirically disciplined, and explicit about uncertainty.",
+      "paragraph_structure": "Typically medium-length analytic paragraphs that follow a consistent progression: setup sentence, empirical evidence sentence(s), interpretation, then caveat or transition. The prose uses frequent signposting and question-led openings to orient the reader.",
+      "theory_to_empirics_ratio": "Roughly 35:65 in the main narrative (theory/problem framing versus methods/results/mechanism tests), with substantial supplementary empirics in the appendix.",
+      "use_of_literature": "Integrates sociology, labor economics, and policy/practitioner sources to motivate mechanisms and external relevance. Prior work is used to define what is known, identify the missing empirical link (postings-to-hires-to-outcomes), and justify methodological choices (CEM, staggered DiD estimators).",
+      "distinctive_features": [
+        "Rhetorical question architecture to drive argument flow: \"So who reaps these benefits?\"; \"So, how often does this happen?\"; \"Why would employers change policy but not practice?\"",
+        "Calibrated causal language that avoids overreach: \"Note that this does not mean that decredentialing per se raises earnings\"",
+        "High-information effect translation that aids interpretability: \"12 log points\" paired with \"$6,000 per year\" and benchmarked against the college premium",
+        "Transparent limits statement embedded in core argument rather than buried in appendix: \"Ultimately, our data are limited in adjudicating these different possibilities\"",
+        "Strong bridge sentence connecting intellectual domains: \"Scholars of social mobility often treat education and organizations as separate dimensions of stratification\""
+      ],
+      "avoids": [
+        "Avoids heavy formal-theory notation beyond one compact model statement",
+        "Avoids black-box method exposition by naming estimator choices and why they are needed",
+        "Avoids triumphalist causal claims; repeatedly marks what the design can and cannot identify",
+        "Avoids jargon-saturated prose and long literature dumps detached from the empirical question",
+        "Avoids bullet-heavy argumentative shortcuts in the manuscript itself; relies on paragraph logic"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines a genuinely novel data linkage (near-universe job postings matched to administrative worker-employer records), a transparent quasi-experimental design tailored to staggered treatment timing, and a theory-informed mechanism architecture that explains both success (large durable mobility gains) and implementation failure (limited employer follow-through). It demonstrates rare balance between policy salience, methodological rigor, and disciplined interpretation, including explicit falsification-oriented checks and boundary statements.",
+      "weakest_aspect": "The central mobility estimate relies on worker-level comparability rather than job-level equivalence, so residual selection into better jobs remains a live concern despite matching and pre-trend evidence. The authors acknowledge this directly, but it still limits strong claims about the pure causal effect of requirement removal itself versus broader selection into higher-quality opportunities.",
+      "strongest_aspect": "The strongest element is the integrated argument-evidence stack: a clear conceptual claim, an appropriate identification strategy, durable long-run outcome evidence, and mechanism tests that explain why an apparently promising policy produces limited aggregate change. The paper is especially strong in converting statistical output into substantively meaningful magnitudes while preserving analytic caution."
+    }
+  },
+  {
+    "title": "\"Descended from Immigrants and Revolutionists\": How Family History Shapes Immigration Policy Making",
+    "writing_style": {
+      "tone": "Formal, analytically precise, and accessible to interdisciplinary readers (economics + political science) without sacrificing technical rigor.",
+      "paragraph_structure": "Mostly long analytic paragraphs (often 8-14 sentences) with clear topic-sentence claims, causal caveats, and explicit transition logic; common sequencing devices include \"First... Second... Third... Finally...\" and \"To summarize...\" paragraphs that consolidate inference.",
+      "theory_to_empirics_ratio": "Roughly 1:3 (about 25-30% conceptual/theoretical framing and mechanism argument, 70-75% empirical design, estimation, and robustness).",
+      "use_of_literature": "Dense but targeted citation strategy: literature is used to motivate puzzles, benchmark mechanisms, justify data/method choices, and position contributions. The paper explicitly enumerates \"four distinct contributions\" and ties each to a named literature stream.",
+      "distinctive_features": [
+        "Strong causal signposting in prose (e.g., \"we distinguish between the possible explanations in four ways\").",
+        "Balanced confidence and caution via sentence pairs like \"we find the most support\" but also \"we cannot distinguish between these possibilities fully.\"",
+        "Careful interpretation of nulls and precision limits (e.g., landmark-RDD underpower caveat).",
+        "Memorable framing through historically grounded phrases (\"nation of immigrants\", \"descended from immigrants and revolutionists\").",
+        "Mechanism sections integrate quantitative tests with interpretive text analysis (frames, emotional affect, tf-idf phrases)."
+      ],
+      "avoids": [
+        "Overclaiming causal certainty in mechanisms",
+        "Heavy formal modeling that would crowd out substantive interpretation",
+        "A single-design dependence (it avoids relying only on one estimator)",
+        "Rhetorical polemic; even normative topics are handled with analytic restraint",
+        "Bullet-point style exposition in the paper body (arguments are developed in prose)"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines an unusually rich historical data contribution (linking MCs to complete-count censuses and family ancestry) with a layered identification architecture that repeatedly stress-tests the same claim across outcomes and designs. It demonstrates methodological triangulation (OLS controls, RDD, sensitivity analysis, placebo domains, within-member targeting interactions) and mechanism discrimination rather than post-hoc storytelling. It also contributes conceptually by showing how intergenerational identity can shape elite policy-making, not just public opinion, and by clarifying when broad immigrant identity gives way to narrower origin-based boundaries.",
+      "weakest_aspect": "Mechanism identification remains suggestive rather than definitive: evidence for in-group identity is strong but still partly inferential, and the RDD relies on surname-based ancestry imputation for losing candidates, which introduces nontrivial measurement error and potential classification noise.",
+      "strongest_aspect": "The strongest feature is the convergence of results across fundamentally different empirical lenses: the core effect appears in landmark votes, full bill samples, speech tone, close-election quasi-experiments, and targeted-policy heterogeneity tests, while many alternative explanations are directly probed and narrowed."
+    }
+  },
+  {
+    "title": "The Diffusion of New Technologies",
+    "writing_style": {
+      "tone": "Formal, precise, and accessible for a top-journal empirical article.",
+      "paragraph_structure": "Paragraphs are tightly structured: motivation sentence, measurement or specification sentence, numeric finding sentence, and interpretation sentence. Section openers are explicit and functional.",
+      "theory_to_empirics_ratio": "Roughly 20:80 in favor of empirics.",
+      "use_of_literature": "Prior work is used as targeted scaffolding. Citations motivate specific hypotheses and mechanisms, then the paper maps findings back to those debates (diffusion, skill-bias, automation, and agglomeration) rather than citing broadly for signaling.",
+      "distinctive_features": [
+        "Strong signposting with stepwise sequencing such as The first step, Second, and Finally",
+        "Consistent use of reusable conceptual labels such as region broadening, pioneer advantage, and skill broadening",
+        "Equation-linked prose that defines variables before interpretation",
+        "Frequent translation from coefficients to policy-relevant time horizons",
+        "Balanced claim style using caveats such as at face value and out of sample",
+        "Memorable sentence forms such as Two patterns stand out and Taken together, this evidence suggests"
+      ],
+      "avoids": [
+        "Overstating causal certainty",
+        "Undefined jargon and opaque terminology",
+        "Detaching theory from observed evidence",
+        "Fragmented result reporting",
+        "Black-box text methods without validation",
+        "Bulleted exposition in core narrative sections"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "Publishability comes from the combination of a new scalable measurement pipeline, high external relevance, coherent stylized facts across multiple domains, mechanism-focused decomposition, and unusually thorough robustness diagnostics. The paper also integrates innovation, labor, and regional inequality debates into one empirically tractable design.",
+      "weakest_aspect": "The most vulnerable aspect is causal interpretation. Core event-time and pioneer-status estimates are highly informative but remain observational, and mechanism splits are correlational rather than quasi-experimental adjudication.",
+      "strongest_aspect": "The strongest aspect is evidentiary architecture: a transparent, reproducible text-to-data system that generates economically important regularities and demonstrates their stability under many alternative constructions."
+    }
+  },
+  {
+    "title": "Economic Outcomes of Strikers in an Era of Weak Unions",
+    "writing_style": {
+      "tone": "Formally empirical but unusually readable for a labor-economics paper: historically grounded, method-forward, and restrained in causal rhetoric.",
+      "paragraph_structure": "Typical paragraphs are medium-long (often 6-10 sentences) and follow a stable template: claim sentence, institutional or literature context, estimation detail, then interpretation. Methods paragraphs often end with explicit design choices and variable construction, while interpretation paragraphs end with bounded inference rather than rhetorical flourish.",
+      "theory_to_empirics_ratio": "Roughly 1:4 (about 20% theory framing/discussion, 80% data, identification, and robustness).",
+      "use_of_literature": "Literature is used as scaffolding for each move, not as a detached review. Classic strike theory (Hicks, Kennan, Card, Cramton and Tracy) is put in direct dialogue with modern inequality and labor-relations evidence, and citations are used to motivate design decisions (for example why 1982 is a focal cutoff) and to bound interpretation.",
+      "distinctive_features": [
+        "Strong signposting sentences that state contribution before detail, e.g., \"Our key innovation is that several large labor market surveys include understudied questions...\"",
+        "Explicitly modest theory claim-making, e.g., \"we focus on documenting these empirical patterns rather than providing a full model of strike behavior\"",
+        "Frequent contrastive sentence structure (pre-1982 vs post-1981) that keeps the central comparison cognitively salient.",
+        "Integrates institutional narrative and econometric evidence in the same paragraph, rather than isolating history in a separate background section.",
+        "Uses concrete, memorable framing language sparingly but effectively (for example quotes like \"an empty gun\" and \"every strike ends in disaster\" to mark the stakes).",
+        "Inference language is bounded and technical (e.g., \"the 95% confidence intervals reject wage increases above 2%-3%\"), which signals rigor.",
+        "Method exposition is transparent about estimand shifts (worker-level outcomes versus bargaining-unit outcomes), a high-quality trait often missing in applied papers."
+      ],
+      "avoids": [
+        "Avoids overstated causal certainty when identification is limited by selection concerns",
+        "Avoids theory-heavy formalism disconnected from measurement",
+        "Avoids bloated equation-first exposition without institutional context",
+        "Avoids bullet-pointed argumentation; prose remains journal-standard narrative",
+        "Avoids jargon stacking without definition (terms are introduced with empirical meaning)",
+        "Avoids treating robustness checks as appendix-only afterthoughts; they are integrated into the main argument flow"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "Publishable quality comes from high-value triangulation across complementary data architectures (PSID, SIPP, CPS, FMCS-BNA contracts), a clear historically anchored breakpoint hypothesis, and careful design transparency about estimands and limitations. The paper pairs a simple central empirical contrast with deep robustness architecture (event studies, balanced windows, stayers, nonemployment recoding, composition controls, progressively stringent FE models). It also contributes conceptually by connecting strike incidence decline to decline in strike returns, creating a stronger explanation of union-power erosion than count-based strike narratives alone.",
+      "weakest_aspect": "The most vulnerable element is residual selection into strikes in the post-PATCO era: even with fixed effects and pretrend checks, the paper cannot fully separate a fall in causal strike effectiveness from a compositional shift toward strikes launched under especially adverse bargaining shocks. The contract-settlement exercise is also constrained by partial FMCS-BNA overlap, which limits external validity and could underrepresent smaller or less visible bargaining episodes.",
+      "strongest_aspect": "The strongest aspect is the coherent empirical architecture that shows the same regime shift across multiple outcomes and datasets while being explicit about estimand boundaries. The PSID event-study evidence around strike timing, combined with the pre-1982 interaction logic and the repeated null findings for post-1981 gains, gives a compelling and durable core result. The paper is especially strong in how it converts an institutional-historical claim into testable, transparent, and well-bounded empirical evidence."
+    }
+  },
+  {
+    "title": "The Fall of the Labor Share and the Rise of Superstar Firms",
+    "writing_style": {
+      "tone": "Formal, analytically precise, and empirically disciplined; confident in patterns but explicit about identification limits.",
+      "paragraph_structure": "Mostly medium-to-long paragraphs with a clear internal progression: claim -> method/specification -> key estimate -> interpretation -> caveat. Section openings often orient the reader with roadmap sentences before technical detail.",
+      "theory_to_empirics_ratio": "Roughly 1:5 in main text (compact theory section plus extensive empirical sections), with formal theory and measurement detail offloaded to appendices.",
+      "use_of_literature": "The paper actively arbitrates among competing explanations (capital deepening, trade, institutions, market power) and uses citations to position each mechanism, not just to decorate background. Prior work is treated as alternative hypotheses to be confronted with differentiating predictions.",
+      "distinctive_features": [
+        "Strong rhetorical scaffolding through numbered claims, including the phrase 'we establish seven facts'",
+        "Recurring mechanism label 'winner takes most' that keeps theory and empirics tightly aligned",
+        "Explicit roadmap sentence pattern ('the article proceeds as follows') that improves navigability",
+        "Disciplined epistemic language: evidence is described as consistent, robust, or suggestive rather than definitively causal"
+      ],
+      "avoids": [
+        "Overstating causal identification from observational industry trends",
+        "Opaque single-specification empirics without sensitivity checks",
+        "Methodological black-boxing; key equations and decomposition logic are made explicit",
+        "Excessive rhetorical flourish; prose remains argument-driven and evidence-led"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines a novel and testable theoretical claim with unusually rich microdata and a comprehensive empirical battery that triangulates the same mechanism from multiple angles. Its strongest publishability feature is architectural coherence: theory generates concrete predictions, each prediction is operationalized, and results are repeatedly stress-tested across definitions, sectors, and countries. The contribution is cumulative and integrative rather than dependent on a single fragile estimate.",
+      "weakest_aspect": "The core concentration-labor-share link is mostly correlational, so interpretation depends on plausibility arguments and robustness rather than a clean exogenous shock design in the main tests. Endogeneity of concentration and measurement limits outside manufacturing remain the most vulnerable points.",
+      "strongest_aspect": "The decomposition evidence that declining aggregate labor share is dominated by between-firm reallocation, combined with parallel markup and concentration patterns, is the most compelling part. It directly matches the paper's mechanism and is reinforced by consistent cross-sector and cross-country fact patterns."
+    }
+  },
+  {
+    "title": "Job Turf or Variety: Task Structure as a Source of Organizational Inequality",
+    "writing_style": {
+      "tone": "Formally sociological but unusually accessible for a theory-heavy empirical paper: concept-forward, argumentative, and explicit about identification risks.",
+      "paragraph_structure": "Paragraphs are medium-to-long and internally structured with a claim-first sentence, mechanism elaboration, and citation-backed triangulation. Transitions are explicit and pedagogical (e.g., \"There are two key limitations...\", \"To move past these problems...\", \"In this section, I test...\").",
+      "theory_to_empirics_ratio": "Roughly 1:2.5 in main text (about 8-9 pages theory framing vs about 20+ pages data, methods, results, and robustness).",
+      "use_of_literature": "The literature strategy is synthetic and adversarial-in-constructive form: it takes market accounts and hierarchy-based structuralist accounts seriously, identifies specific shortcomings, and then positions task-structure theory as a bridge across organizational sociology, labor economics, and bargaining theory. Citations are used to motivate mechanisms, not just decorate claims.",
+      "distinctive_features": [
+        "Defines paired concepts with crisp contrastive language: \"task structure\" versus \"task content.\"",
+        "Uses concrete cross-status examples (janitor vs breast surgeon, assembly worker vs plant electrician) to prove conceptual independence from skill level.",
+        "Employs concise hypothesis syntax and recurrence, making empirical tests feel deductive rather than exploratory.",
+        "Characteristic sentence architecture uses contrastive pivots: \"I start neither from job structure and hierarchy nor from task content and markets.\"",
+        "Recurrent, memorable thesis phrasing reinforces portability: \"task structure pay effects are local but not fixed in a formal hierarchy.\"",
+        "Method narration is procedural and transparent: \"To test the hypotheses above, I proceeded in several steps.\""
+      ],
+      "avoids": [
+        "Avoids black-box econometric exposition; equations are sparse and tied to substantive interpretation.",
+        "Avoids overclaiming from a single design by layering fixed effects, IV, and boundary tests.",
+        "Avoids jargon accumulation without definition; key constructs are named, distinguished, and repeatedly re-anchored.",
+        "Avoids bullet-heavy prose in the manuscript itself, maintaining conventional paragraph argumentation."
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "Publishability comes from tight theory-identification alignment: the paper introduces a genuinely new construct pair (job turf/task variety), derives testable interdependent hypotheses, and directly operationalizes those constructs with rare linked worker-employer task panel data. The empirical strategy is not a single regression but a credibility stack (validation of measures, sequential fixed-effects tightening, IV for time-varying selection, mechanism-consistent productivity tests, heterogeneity and boundary-condition analyses). Presentation quality is high because every major table/figure corresponds to a clear inferential purpose in the argument.",
+      "weakest_aspect": "External validity and measurement granularity are the most vulnerable points. Task categories are broad administrative codes from a distinctive setting (labor unions), and some estimated \"task structure\" movement may still reflect unobserved within-category task-content shifts. The author acknowledges this directly, but generalization to non-union and non-office settings remains partly inferential rather than demonstrated.",
+      "strongest_aspect": "The strongest aspect is the paper's integration of conceptual innovation with disciplined empirical execution. It turns an abstract theoretical claim about coworker interdependence into measurable objects, demonstrates the interdependence first (coworker variety -> focal turf), and then shows wage consequences under demanding within-job, within-market comparisons. That sequential logic makes the contribution intellectually cumulative rather than merely correlational."
+    }
+  },
+  {
+    "title": "Labor in the Boardroom",
+    "writing_style": {
+      "tone": "Highly formal and technical, but unusually transparent for top-field empirical work: policy-motivated opening, legal-institutional precision, and careful hedging on interpretation.",
+      "paragraph_structure": "Paragraphs are typically medium-long and follow a stable logic: claim sentence, institutional/economic rationale, concrete evidence, then quantitative interpretation with confidence intervals or benchmarks. Section transitions are explicit and roadmap-driven, reducing ambiguity about why each empirical test appears where it does.",
+      "theory_to_empirics_ratio": "Roughly 30:70 (theory/institutional framing and mechanism logic vs empirical implementation and tests).",
+      "use_of_literature": "Prior work is engaged as a set of competing predictions and external benchmarks, not just citation coverage. The authors compare their identified bounds to magnitudes from union and bargaining literatures, relate findings to hold-up and cooperative-governance theories, and repeatedly situate their contribution relative to German codetermination studies using other designs.",
+      "distinctive_features": [
+        "Frequent high-discipline signposting (e.g., framing with \"A fundamental question\" and then mapping each section to a mechanism).",
+        "Interpretive restraint language such as \"if anything\" when estimates are imprecise or weakly signed.",
+        "Null-result strengthening via explicit \"rule out\" bounds and benchmark comparisons to known effect sizes.",
+        "Consistent design triangulation (difference, DiD, RD) presented as convergent evidence rather than specification fishing.",
+        "Mechanism-first sequencing: wages, then pie size/investment, then rent sharing, then nonwage and heterogeneity checks.",
+        "Dense but controlled legal-institutional exposition that makes assignment rules auditable by the reader."
+      ],
+      "avoids": [
+        "Overclaiming causal generality beyond the institutional margin actually identified",
+        "Purely descriptive storytelling without design validation",
+        "Results dumping without coefficient interpretation or uncertainty discussion",
+        "Polemic or normative rhetoric about codetermination",
+        "Bullet-point argumentation in main text; instead uses continuous, logically linked prose"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines a rare, legally sharp quasi-experiment with unusually comprehensive linked administrative data and a full identification-defense package (manipulation, selection, attrition, intervention checks). Its major scientific strength is turning an expectedly contentious null result into a mechanism-resolved conclusion by quantifying what large effects are excluded and directly testing canonical counter-mechanisms (especially hold-up and rent-sharing shifts).",
+      "weakest_aspect": "External validity remains the most vulnerable point: the identified margin is minority board representation in Germany’s dual-board system with coexisting institutions (works councils, sectoral bargaining), and the analysis is ITT with limited direct valuation/dividend outcomes. Some mechanism outcomes (especially productivity/scale in RD forms) are noisier, so the strongest inferences rely on difference/DiD and wage-premium precision rather than every individual mechanism estimate.",
+      "strongest_aspect": "The strongest aspect is the coherence between argument and evidence: legal assignment rules, multiple quasi-experimental estimators, high-powered wage-premium outcomes, and mechanism tests all point in the same direction. The paper demonstrates a high standard for publishing policy-relevant null effects by combining tight bounds, explicit falsification attempts, and intellectually honest caveats."
+    }
+  },
+  {
+    "title": "Manufacturing Revolutions: Industrial Policy and Industrialization in South Korea",
+    "writing_style": {
+      "tone": "Formal, methodologically explicit, and historically grounded; assertive about findings but unusually transparent about limits.",
+      "paragraph_structure": "Typically medium-to-long analytical paragraphs that open with a claim, supply institutional/econometric detail, and end with interpretation. Section-level flow is highly signposted with numbered subpoints, and paragraphs often sequence logic using transitions like \"First\", \"Second\", \"Third\", and \"I now turn to...\".",
+      "theory_to_empirics_ratio": "Roughly 1:10 to 1:12 in main text (about 2 pages of explicit conceptual theory versus roughly two dozen pages of empirical design/results/mechanisms/spillovers discussion).",
+      "use_of_literature": "Dense and strategic: classic development theory, East Asian debates, modern causal-inference methods, and trade/network literatures are integrated into each stage (motivation, identification, mechanism tests, interpretation). The paper positions itself against prior correlational skepticism and explains precisely what its design adds.",
+      "distinctive_features": [
+        "Memorable rhetorical openings paired with technical follow-through, e.g., \"Miracles by nature are mysterious.\"",
+        "Frequent methodological self-qualification, e.g., \"History is not a clean laboratory\" and explicit statements that findings are not final.",
+        "Clear counterfactual language: repeated use of \"counterfactual\", \"common-trend assumption\", and ATT framing.",
+        "Multi-level evidence architecture: institution -> reduced form -> estimator robustness -> mechanism probes -> network propagation.",
+        "Careful temporal interpretation: distinguishes policy-period effects from post-policy maturation effects rather than collapsing all post years."
+      ],
+      "avoids": [
+        "Overclaiming causal certainty despite strong quasi-experimental design",
+        "Purely descriptive narrative without explicit estimands",
+        "Single-metric success stories (uses multidimensional development outcomes instead)",
+        "Jargon-heavy abstraction without institutional grounding",
+        "Bullet-pointed exposition in the paper body (keeps conventional academic prose structure)"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines a high-stakes substantive question with rare historical data construction, a clearly articulated causal design, multiple modern identification/robustness layers, and mechanism/spillover evidence that aligns with the conceptual framework. It is especially strong in temporal logic (during vs after policy), estimator triangulation (TWFE, DRDID, DDD), and translating econometric output into industrial-development meaning.",
+      "weakest_aspect": "The most vulnerable point is residual endogeneity of targeting and broader policy bundling: even with pre-trend diagnostics and robustness checks, full separation of HCI targeting from concurrent state capacity shifts, geopolitical pressures, and unobserved sector-specific shocks remains difficult. Mechanism evidence on learning is largely reduced-form/correlational and constrained by microdata availability after 1979.",
+      "strongest_aspect": "The strongest aspect is the integrated evidence design: a coherent theoretical claim is tested with newly assembled data, dynamic event-study patterns, robust ATT estimators, cross-country placebo comparisons, and IO-network spillover analysis that all point in the same direction. This consistency across methods and outcome domains substantially raises confidence in the central contribution."
+    }
+  },
+  {
+    "title": "The Politicization of Wage Setting",
+    "writing_style": {
+      "tone": "Formally academic but unusually readable; high-density argumentation without heavy jargon, with clear causal language carefully hedged where identification is weaker.",
+      "paragraph_structure": "Typical paragraphs are medium-to-long analytical blocks (often 120-220 words) with a stable internal logic: opening claim sentence, conceptual rationale, empirical or citation support, then a forward-link to the next test. The paper favors paragraph-level signposting over sub-bullets, preserving narrative flow.",
+      "theory_to_empirics_ratio": "Roughly 1:3 (about 8 pages of conceptual framing/theory including introduction vs about 24 pages of data, methods, results, and experiment before references).",
+      "use_of_literature": "Literature is used as active scaffolding, not just citation padding. The paper juxtaposes classic organizational conflict theory (e.g., Crozier, Dalton, Tilly lineage) with current political-behavior and corporate-politics work, then positions its contribution as a bridge. Citations are integrated inline at claim points and often used to motivate specific identification threats or mechanism expectations.",
+      "distinctive_features": [
+        "Strong rhetorical signposting through triads and staged logic: e.g., \"Partisan coalitions contesting pay setting have three implications...\" followed by directly matched empirical tests.",
+        "Frequent synthesis phrases that discipline interpretation: \"Taken together, these results demonstrate a politicization of wage-setting...\" and \"Where does this leave us?\"",
+        "Concrete anchoring of abstract claims with recognizable firm examples (e.g., IKEA/Wayfair vs Tractor Supply/Ace Hardware) before moving back to fixed-effects models.",
+        "Balanced assertiveness: the paper makes strong claims but openly labels limitations, e.g., \"we cannot establish the same degree of certainty for the role of ideology.\"",
+        "Sentence-level contrastive style that sharpens contribution, e.g., \"These deviations are not the traditional distortions of organizational conflict and control...\" then introduces the new mechanism."
+      ],
+      "avoids": [
+        "Avoids overreliance on formal modeling; only one compact equation is used to clarify the experimental estimator.",
+        "Avoids black-box empiricism; each model expansion is substantively justified before estimation.",
+        "Avoids inflated causal language in observational sections; caveats are explicit and repeated.",
+        "Avoids list-heavy or bullet-point exposition inside the manuscript body, keeping a continuous argumentative narrative.",
+        "Avoids purely ideological interpretation by systematically testing coalition and cue-responsiveness channels."
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "Publishability comes from the combination of (1) a clearly novel dataset architecture (LinkedIn manager histories + voter files + Glassdoor wages at scale), (2) a theory that genuinely integrates previously separate literatures (organizational coalitions and partisan behavior), (3) mechanism-rich empirical testing rather than a single headline correlation, and (4) a mixed-method design where an experiment directly probes the key causal micro-foundation (co-partisan wage favoritism). The paper also demonstrates good scientific hygiene: explicit threat enumeration, targeted robustness checks, alternative outcomes, and transparent limits.",
+      "weakest_aspect": "The most vulnerable component is causal interpretation of the observational Democrat manager wage premium as ideological redistribution rather than correlated organizational culture or selection. The authors handle this seriously, but partisanship measurement error, partial panel attrition, and remaining unobserved firm culture still leave room for alternative explanations in the non-experimental portion. The experiment strengthens causal claims for co-partisan favoritism, but its hypothetical big-box assignment setting may not fully map onto real compensation committees.",
+      "strongest_aspect": "The strongest aspect is the coherence between theory and evidence: each theoretical pillar (realignment, coalition power, affective in-group bias, external party cueing) is translated into a concrete empirical test with interpretable effect sizes. The paper’s intellectual contribution is not just finding that politics matters in firms, but showing how and for whom it matters, while quantifying macro relevance (e.g., estimated contribution to hourly wage growth)."
+    }
+  },
+  {
+    "title": "Rapid wage growth at the bottom has offset rising US inequality",
+    "writing_style": {
+      "tone": "Formal but highly readable empirical prose: assertive about findings, cautious about causal and temporal scope.",
+      "paragraph_structure": "Typical paragraph: 1) framing claim/problem, 2) concrete empirical test or design choice, 3) quantified result, 4) bounded interpretation. Paragraphs are medium length and rarely digress; most include explicit transition clauses tying back to the central puzzle.",
+      "theory_to_empirics_ratio": "Roughly 20:80 in the main article (conceptual framing vs evidence and method), with most added pages in the SI devoted to robustness and decomposition mechanics.",
+      "use_of_literature": "Prior work is used as structured scaffolding, not decoration: each major explanation (skill bias, unions, firm effects, minimum wages, tight labor markets) is introduced with canonical citations, then directly tested or partially falsified. The paper positions itself as a revision to expected trajectories derived from that literature rather than a rejection of it.",
+      "distinctive_features": [
+        "High-clarity signposting and argumentative pacing, e.g., 'A natural prediction from this research is that inequality will continue to rise.' followed by a direct counter-question.",
+        "Frequent contrastive pivots: 'On the other hand...' and 'By contrast...' to separate stylized facts from mechanisms.",
+        "Triadic evidence sequencing language ('First... Second... Third...') when validating across data architectures.",
+        "Careful non-contradiction framing: 'Note that this is not inconsistent with the finding that minimum wages increase low-wage workers' earnings.'",
+        "Strong boundary statements that prevent overreach, e.g., 'does not yet guarantee a durable shift toward broadly shared economic growth.'",
+        "Sentence-level compression of inference: 'These analyses suggest...' and 'Overall, these results... are consistent...' to keep interpretation cumulative."
+      ],
+      "avoids": [
+        "Formal-model exposition disconnected from empirical tests",
+        "Single-dataset inference without cross-source replication",
+        "Unqualified causal language for observational mechanism tests",
+        "Jargon-heavy abstraction without operational definitions",
+        "Overstating permanence of a cyclical, period-specific pattern"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper is publishable because it combines an important macro-level revisionist finding with unusually strong evidentiary triangulation: eight data sources, multiple inequality metrics, explicit robustness to top-coding and income definitions, and mechanism decomposition that distinguishes composition, occupation, workplace, unemployment, and minimum-wage channels. Its contribution is cumulative and adjudicative: it does not just document a trend break, it shows which dominant explanations survive and which fail to account for that break. The writing also aligns tightly with the empirical design, making the inferential boundaries legible to a broad audience.",
+      "weakest_aspect": "The most vulnerable point is causal attribution for the mechanism layer, especially the unemployment channel: local labor-market tightening is plausibly endogenous to unobserved local dynamics, and the counterfactual design is rich but not quasi-experimental. As a result, the mechanism claims are persuasive associationally but less definitive than the descriptive trend claims.",
+      "strongest_aspect": "The strongest aspect is the architecture of evidence around a single high-stakes claim: convergent replication across heterogeneous data systems plus targeted falsification of alternative explanations. The paper's best intellectual move is showing that inequality stabilization can coexist with persistent structural inequality drivers, yielding a nuanced 'offset' theory rather than a simplistic reversal narrative."
+    }
+  },
+  {
+    "title": "The Unequal Gains from Product Innovations: Evidence from the U.S. Retail Sector",
+    "writing_style": {
+      "tone": "Formal and technically precise, but unusually direct and readable for top-tier empirical economics.",
+      "paragraph_structure": "Typical paragraphs are medium-to-long and follow a disciplined sequence: claim, measurement setup, numeric estimate with uncertainty, and interpretation/transition. Many paragraphs begin with signpost sentences ('First...', 'Next...', 'Finally...') and end by previewing the next inferential step.",
+      "theory_to_empirics_ratio": "Roughly 30:70 in main text (conceptual and mechanism framing versus measurement, estimation, and robustness).",
+      "use_of_literature": "The literature is engaged as active contrast, not ritual citation. The paper positions itself between innovation-inequality and inflation-inequality literatures, names concrete predecessors, and specifies exactly what is extended (for example, moving from documenting inflation gaps to identifying directed innovation as a mechanism). Citations are paired with direct empirical tests of those competing interpretations.",
+      "distinctive_features": [
+        "High-density quantitative prose with standard errors in-line (e.g., repeated 'std. err.' reporting in the argument, not just tables).",
+        "Recurring causal-language templates that enforce logic flow: 'To address this issue, I use...', 'The key identification condition...', 'The overall message is very similar...'.",
+        "Structured hypothesis statements using numbered causal steps: '(i)... (ii)... (iii)...'.",
+        "Transparent objection handling via explicit caveat sentences: 'A potential concern...' followed immediately by a targeted robustness design.",
+        "Frequent plain-language intuition bridges around equations: 'Intuitively...' and 'Conceptually...' appear before or after formal expressions.",
+        "Section architecture is didactic and stable: measure -> validate -> decompose -> identify -> calibrate."
+      ],
+      "avoids": [
+        "Overly abstract theorem-driven exposition disconnected from data",
+        "Causal overstatement without discussing exclusion assumptions",
+        "Decorative jargon or unexplained notation",
+        "Bullet-pointed argumentation in main prose",
+        "Reliance on a single price-index definition",
+        "Hiding robustness in appendices without summarizing core conclusions in text"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines a clear and original mechanism, unusually rich microdata, careful inflation measurement, and a credible quasi-experimental design that directly targets endogeneity concerns. It does not stop at documenting heterogeneity; it identifies a mechanism (demand-directed entry and procompetitive pricing), then quantifies aggregate relevance via calibration with transparent accounting against observed benchmarks. The contribution is intellectually integrative: innovation theory, industrial organization mechanism, inequality measurement, and policy implications are all linked in one empirically disciplined arc.",
+      "weakest_aspect": "The most vulnerable point is the exclusion assumption in the shift-share design: demographic changes may still correlate with latent product-specific demand/supply shocks in ways fixed effects cannot fully absorb. Additional limitations are acknowledged but real: homothetic group assumptions, UPC-level quality assumptions, and scanner-sector coverage. These do not invalidate the results, but they delimit causal and external-validity scope.",
+      "strongest_aspect": "The strongest feature is the end-to-end coherence of the evidence pipeline. The paper moves from descriptive inequality facts to mechanism-consistent stylized facts, then to IV-based causal estimates, then to a calibration showing that estimated effects can explain a large share of the observed inflation gap. Few papers connect measurement rigor, identification, mechanism testing, and quantitative decomposition this tightly."
+    }
+  },
+  {
+    "title": "Values and Inequality: Prosocial Jobs and the College Wage Premium",
+    "writing_style": {
+      "tone": "Formally sociological but highly legible and empirically direct; conceptually ambitious without rhetorical inflation.",
+      "paragraph_structure": "Mostly medium-to-long analytic paragraphs that follow claim -> literature positioning -> implication. Frequent signposting sentences orient the reader before technical detail (e.g., 'There are two key challenges to testing these ideas'). Method and robustness sections are modular, each ending with a clear inferential takeaway.",
+      "theory_to_empirics_ratio": "Roughly 1:3 (about 25-30% theory/framing and 70-75% data, models, robustness, and mechanism tests).",
+      "use_of_literature": "The literature is used as scaffolding for contradictions and synthesis, not as citation stacking. The paper juxtaposes macro-inequality work, job-values sociology, and CSR/organizational research, then specifies where it departs ('We start instead from the perspective...'). Citations are dense but functional: each cluster motivates a concrete inferential move.",
+      "distinctive_features": [
+        "Strong rhetorical precision through staged caveats: 'we do not take a strong position on employers' motives' and 'we do not see prosocial compensating differentials as an alternative explanation'.",
+        "Consistent micro-to-macro framing: coefficient-level results are repeatedly translated into implications for the aggregate college premium.",
+        "High transparency about data limitations (pay posting selection, representativeness, matching noise) followed immediately by empirical checks.",
+        "Mechanism triangulation across different data-generating processes (postings, worker surveys, resumes, experiment), culminating in an explicit theory-evidence map (Figure 5).",
+        "Sentence-level style frequently uses clear causal verbs and directional claims ('allows reduced pay', 'offsets inequality', 'persists conditional on')."
+      ],
+      "avoids": [
+        "Avoids overstating causality from a single model; repeatedly labels supplementary analyses as support rather than definitive proof.",
+        "Avoids jargon-heavy formalism despite technical modeling choices.",
+        "Avoids bullet-list exposition in the paper itself; arguments are prose-driven with explicit transitions.",
+        "Avoids presenting robustness as an appendix dump; robustness is integrated into the main argument flow."
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper is publishable because it pairs a novel theoretical inversion (prosocial discourse can compress, not just mask, inequality) with unusually careful empirical triangulation and transparent inferential boundaries. The identification effort is stronger than typical observational CSR studies: exact skill-set comparisons within occupation, layered fixed effects, alternate wage sources, and panel-switch designs all point in the same direction. The manuscript also contributes a reusable measurement strategy for prosocial job framing and quantifies macro relevance rather than stopping at micro preferences.",
+      "weakest_aspect": "The most vulnerable point is residual endogeneity in prosocial framing even within rich fixed effects, plus uncertainty about whether posted rhetoric maps to lived job meaning. The authors acknowledge they cannot distinguish fully between authentic prosocial work and strategic signaling, and that unresolved rhetoric-reality gap could affect interpretation of long-run welfare implications.",
+      "strongest_aspect": "The strongest aspect is the integration of theory, measurement, and multi-source evidence into one coherent mechanism test. Few papers connect an explicit sociological theory of value heterogeneity to labor-market-scale wage formation this cleanly while also quantifying aggregate inequality consequences and stress-testing key threats."
+    }
+  },
+  {
+    "title": "Wage Stagnation and the Decline of Standardized Pay Rates, 1974-1991",
+    "writing_style": {
+      "tone": "Formal, empirically disciplined, and historically grounded; assertive on findings but careful about causal scope.",
+      "paragraph_structure": "Paragraphs are medium-to-long and usually follow a three-step structure: claim sentence, evidentiary development (often with citations or quantitative magnitudes), then interpretive bridge to the next section. Section intros often preview why the next empirical move is needed for identification.",
+      "theory_to_empirics_ratio": "Roughly 35:65 (conceptual and historical framing concentrated in introduction/background; bulk of pages devoted to empirical design, estimates, heterogeneity, and robustness).",
+      "use_of_literature": "Literature is used as structured scaffolding: contract theory and personnel economics define competing channels, labor institutions and inequality work define macro context, and historical industrial-relations sources justify institutional mechanisms. Citations are integrated into argument flow rather than separated into standalone lit-review blocks.",
+      "distinctive_features": [
+        "Frequent causal-calibration phrasing, including \"proximate, not ultimate, causal role\" to bound claims.",
+        "Strong synthesis transitions such as \"Taken together, our findings document\" before moving from estimates to contribution.",
+        "Forward-signposting lines like \"We next consider potential mechanisms\" that keep logic cumulative.",
+        "Consistent alternation between economy-wide stakes and establishment-level micro evidence.",
+        "Uses definitional discipline (standardized vs nonstandardized) and keeps terminology stable across sections and tables."
+      ],
+      "avoids": [
+        "Overclaiming causal certainty despite observational data",
+        "Methodological novelty for its own sake; techniques remain standard and interpretable",
+        "Equation-heavy exposition (only core equations are formalized)",
+        "Jargon inflation and abstract theorizing detached from measurable constructs",
+        "Bulletized storytelling inside the paper body; prose carries the argument"
+      ]
+    },
+    "quality_markers": {
+      "what_makes_this_publishable": "The paper combines a rare and policy-relevant dataset (establishment-by-occupation wage structure plus pay-setting method over 1974-1991) with a coherent multi-level argument linking organizational rules to macro wage stagnation. Its empirical strategy is transparent and cumulative: layered fixed effects, event-time evidence, decomposition bounds, mechanism tests, and explicit robustness on weighting/coding choices. The contribution is intellectually integrative: it bridges labor economics, organizational sociology, and industrial relations while preserving tractable identification and calibrated claims.",
+      "weakest_aspect": "Causal interpretation still relies on selection-on-observables plus fixed effects in a repeated-cross-section panel with imperfect resampling; time-varying confounders tied to switching decisions cannot be fully eliminated. Effect magnitudes are also sensitive to specification choice (especially cross-sectional vs within-establishment designs), which the paper is transparent about but which leaves the total contribution-to-stagnation estimate as a bounded range rather than a point estimate.",
+      "strongest_aspect": "The strongest aspect is the triangulation of mechanism and timing: the sharp event-time wage break at pay-rule switch, the downward widening concentrated at wage floors, stronger effects in previously high-paying firms, and union-contingent heterogeneity all align with one coherent bargaining-power-through-pay-rules account. Few papers combine this level of institutional specificity with broad historical wage relevance."
+    }
+  }
+]

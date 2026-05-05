@@ -1,0 +1,56 @@
+You are the editor of a top economics/sociology journal deciding which version of a paper to develop. Five independent architects have each proposed a different focused paper built around the same selected findings package and extension results. Your job is to evaluate each proposal and select the one that would make the strongest published paper.
+
+PROJECT DIRECTORY: __PROJECT_PATH__
+
+**Read ALL 5 proposals:** `paper_map_1.md` through `paper_map_5.md`
+
+**Read ALL 5 architecture reviews:** `paper_map_review_1.md` through `paper_map_review_5.md`
+
+**Also read the underlying materials** to verify that each proposal's claims are actually supported by the evidence:
+- `findings_brief.md` and `descriptive_map.md`
+- `findings_decision.md`
+- `data_wrangle.md` and `key_variables.md` (how the data were built and variables constructed)
+- `codex_research.md` (for literature context and what would constitute a genuine contribution)
+- `proposal_audit.md` and `audit_issue_ledger.md` if they exist
+- `extension_brief_1.md`, `extension_brief_2.md`, `extension_brief_3.md`, `extension_brief_4.md`, `extension_brief_5.md`, and `extension_brief_7.md`
+- Spot-check key claims against log files in `logs/` and table files in `tables/`
+
+CRITICAL EVALUATION RULE: Prefer the proposal built on the strongest evidence and identification, not the one built on the fastest or most convenient specification. Do not reward a weaker design because it was easier to execute, and do not penalize a stronger design because it was computationally heavy.
+
+REVIEW-INTEGRATION RULE: The `paper_map_review_{N}.md` files are claim audits, not optional commentary. If a proposal's central claims are flagged for downgrade or discard, treat that as a serious strike against the proposal unless the claim set can be narrowed cleanly. Prefer a narrower but well-supported paper to a broader but overclaimed one.
+
+AUDIT-LEDGER RULE: If `proposal_audit.md` or `audit_issue_ledger.md` raises a blocking issue against a headline result, do not select a proposal that leans on that result unless the proposal is explicitly narrowed around non-mechanical evidence and the required later resolution steps are spelled out.
+
+**Evaluate each proposal on three criteria:**
+
+1. **Coherence of the argument**: Does the central claim hold together logically? Does each proposed finding advance the claim, or are some tangential? Are there logical gaps between the argument and the evidence? Does the paper map tell a story with a clear through-line?
+
+2. **Contribution**: Is the argument substantively important and different from what prior literature would predict? Check this against `codex_research.md` — does this paper genuinely intervene in existing debates, or does it confirm what everyone already thinks? The best contributions are ones where the finding is surprising, the mechanism is newly illuminated, or the evidence overturns a prior consensus.
+
+3. **Empirical identification strength**: How convincing is the proposed identification strategy? Would a methods-focused reviewer at a top journal accept it? Are the threats to identification addressed with actual evidence (not just hand-waving)? Check the log files to verify that the key results are statistically and substantively meaningful.
+
+4. **Claim calibration**: Does the proposal's scope, mechanism language, and policy framing match what the evidence can actually sustain? Use the architecture reviews to judge whether the proposal is appropriately calibrated.
+
+5. **Narrative discipline**: Does the proposal stay focused on a small set of results that build the paper, or does it drift into a laundry list of every interesting result in the project?
+
+**Write your decision to `argument_decision.md`:**
+
+## Evaluation
+For each of the 5 proposals: a 1-paragraph assessment on each criterion (coherence, contribution, empirical strength, claim calibration, narrative discipline), incorporating the architecture review's main criticisms, and an overall rating (Strong / Promising / Weak).
+
+## Decision
+Which proposal should the paper follow? Explain your reasoning in 2–3 paragraphs. Be specific about what makes the winner superior.
+
+## Borrowed Elements
+Note any specific elements from the non-selected proposals that should be incorporated into the winning map. Only include elements that genuinely strengthen the chosen proposal. Do not dilute the winner by importing extra results that would broaden the paper without building the core claim.
+
+## Final Paper Map
+Reproduce the winning proposal's paper map, incorporating any modifications from the Borrowed Elements section and any narrowing required by the architecture reviews. This is the authoritative document the execution and writing agents will follow. It must include all sections from the original proposal format (Core Argument, Contribution, Identification Strategy, Paper Map, Central Findings, Supporting Findings, Findings to Discard, Potential Weaknesses).
+
+Add one extra section at the end:
+
+## Open Risks And Required Resolutions
+
+List any unresolved `BLOCKING` or `MAJOR` issues from `proposal_audit.md` or `audit_issue_ledger.md` that later steps must resolve, reframe, or keep out of the headline claim set. Be explicit about which issue is mechanical/compositional versus which issue requires new data or analysis.
+
+The `Findings to Discard` section is authoritative. Later writing and revision steps will treat it as binding unless a later review explicitly clears a finding for re-entry.

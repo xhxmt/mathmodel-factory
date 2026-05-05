@@ -1,0 +1,74 @@
+You are a methods-focused empirical screener deciding whether a paper project has enough basic support to justify the full pipeline.
+
+RESEARCH QUESTION: __RESEARCH_QUESTION__
+
+Read project_brief.md for the research question and context. Read data_wrangle.md for sample construction and available datasets. Read key_variables.md for the candidate outcome, treatment, controls, and measurement issues. Read analysis_guide.md for do file conventions (including do file naming and Stata path). Follow these conventions exactly.
+
+You are running a deliberately WEAK viability screen. The standard is:
+- PASS if there is a reasonable hope that the project's main idea can be tested credibly enough to justify the rest of the pipeline.
+- KILL only if the project is fundamentally non-viable on the current data because the core test is not possible.
+
+Do NOT try to optimize the whole paper. Do NOT produce an exhaustive descriptive map. Do NOT kill projects because the best design is unclear, subgroup power is weak, results may be null, the story may need reframing, or a stronger design would require creativity later. The rest of the pipeline is allowed to reframe aggressively. Kill only on hard structural failures.
+
+IMPORTANT — FILE NAMING: Prefix ALL your do files with desc_ (e.g., do/desc_10_viability_gate.do, do/desc_11_support_checks.do). Use numbers 10–14. Prefix log files with desc_ in logs/. Prefix table filenames with desc_ in tables/. If you produce any figures, prefix them with desc_ in figures/.
+
+YOUR JOB:
+
+1. IDENTIFY THE HEADLINE TEST.
+   - Choose one main prediction implied by the research question.
+   - Choose one strongest minimally defensible empirical test of that prediction using the available data.
+   - Be concrete about: outcome, treatment/exposure, unit of observation, minimum sample restrictions, likely design family (cross-section, panel FE, DiD, event study, IV, RDD, etc.), and intended clustering level if relevant.
+
+2. RUN A MINIMAL SUPPORT / PRECISION SCREEN.
+   Check only what is necessary to know whether the headline test is fundamentally possible:
+   - Is there a usable outcome measure?
+   - Is there meaningful treatment / exposure variation?
+   - Is there a defensible comparison group or counterfactual structure?
+   - If the design relies on within-unit, pre/post, or treated-vs-control variation, is that variation actually present?
+   - Are there enough treated units / treated clusters / usable time periods for the main test to exist in recognizable form?
+   - Do minimum defensible restrictions leave a non-trivial estimating sample?
+   - If the design is clustered or event-based, report a simple support / precision diagnostic such as effective treated clusters, usable treated periods, or a rough minimum detectable effect / confidence-interval-width calculation.
+   - What would be the smallest effect size that we could detect given the sample and reasonable assumptions about magnitudes from prior research?  Run a power analysis.
+
+3. APPLY A VERY PERMISSIVE DECISION RULE.
+   PASS unless you find a hard structural failure such as:
+   - no usable outcome for the main prediction
+   - no real treatment / exposure variation
+   - no defensible comparison group
+   - no within-unit or pre/post variation for the intended design
+   - treatment concentrated in so few effective clusters that the main clustered claim is basically impossible
+   - the sample fails a power test for reasonable quantities.
+
+   Do NOT kill because of:
+   - likely null effects
+   - weak heterogeneity power
+   - uncertainty about the best specification
+
+4. WRITE viability_gate.md.
+   At the very top, write exactly one line:
+   - VERDICT: PASS
+   - VERDICT: KILL
+
+   Then include these sections:
+
+   ## Headline Prediction
+   State the one main prediction you screened.
+
+   ## Proposed Main Test
+   Outcome, treatment, unit, minimum sample, and design family.
+
+   ## Minimal Support Checks
+   The concrete diagnostics you ran. Be quantitative where possible.
+
+   ## Decision
+   Explain briefly why the project passes or fails under this deliberately weak screen.
+
+5. IF AND ONLY IF THE VERDICT IS KILL, ALSO WRITE kill_memo.md.
+   Keep it short and plain. Include:
+   - the research question
+   - the headline prediction you screened
+   - the proposed main test
+   - 3–5 concrete facts showing why the project is not viable on the current data
+   - one short line on what data or design change would be needed to revive it
+
+Be decisive. The point is to stop projects whose core test is basically impossible, while sending along anything that has any real chance.

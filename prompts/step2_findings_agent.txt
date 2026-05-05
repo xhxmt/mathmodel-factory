@@ -1,0 +1,72 @@
+You are building one candidate findings package for a social science paper. Your job is not to map the whole project. Your job is to surface one focused, paper-worthy empirical package that is simple, strong, and interesting.
+
+RESEARCH QUESTION: __RESEARCH_QUESTION__
+PROJECT DIRECTORY: __PROJECT_PATH__
+FINDINGS STREAM: __STREAM_ID__
+FILE PREFIX: __STREAM_PREFIX___
+
+Read these files before doing any analysis:
+- `project_brief.md`
+- `analysis_guide.md`
+- `data_wrangle.md`
+- `data_context.md` if it exists
+- `key_variables.md`
+- `descriptive_map.md`
+- `codex_research.md` if it exists
+- `findings_critique___STREAM_ID__.md` if it exists
+
+If `findings_critique___STREAM_ID__.md` exists and its verdict is `REVISE`, treat that critique as binding for this rerun. Fix the fatal problems it identifies, likely by taking a new approach.
+
+MANDATE:
+- Build exactly one focused empirical package.
+- Produce only 1-2 core tables and 3-4 core figures, plus the do files and logs needed to generate them.
+- Aim for the best version of the analysis on three dimensions at once: empirically strongest, simplest analysis, and substantively most interesting.
+
+CRITICAL SUBSTANTIVE RULE:
+Do not choose a weaker design just because it runs faster. Do not shrink the sample, simplify fixed effects, or use a convenience specification merely to save compute time. If the strongest design is slower, keep the design and solve the runtime problem through execution choices.
+
+FILE-NAMING RULE:
+Prefix every artifact you create with `__STREAM_PREFIX___`.
+- Do files: `do/__STREAM_PREFIX___01_core.do`
+- Logs: `logs/__STREAM_PREFIX___01_core.log`
+- Figures: `figures/__STREAM_PREFIX___main.pdf`
+- Tables: `tables/__STREAM_PREFIX___main.tex`
+
+WORKFLOW:
+1. Read the descriptive and data-construction materials first. Ground the package in what the data can really support, including any documentary or institutional caveats flagged in `data_context.md`.
+2. Decide on one core claim and one core empirical design.
+3. Build the smallest analysis set that can carry that claim cleanly.
+4. Run the code and verify the numbers from logs and tables.
+5. Write the memo.
+
+Your package should answer:
+- What is the claim?
+- What exact evidence carries it?
+- Why is this the strongest, cleanest version available in the current data?
+- What is the obvious empirical objection?
+- Why is the package still worth carrying into the next stage?
+
+Write `findings_memo___STREAM_ID__.md` with these sections:
+
+## Headline Finding
+State the claim in 2-3 sentences.
+
+## Why This Package
+Explain why this is the strongest simple package you found.
+
+## Empirical Design
+Describe the design, sample, and specification. Be specific.
+
+## Core Evidence
+List the 1-2 core tables and 3-4 core figures. For each, report the key numbers and what it shows.
+
+## Main Vulnerabilities
+List the most serious immediate empirical weaknesses a critic will raise.
+
+## Contribution
+Explain why the package is interesting relative to the literature or prior expectations.
+
+## Files Produced
+List every do file, log, figure, and table you produced.
+
+Do not create a broad findings brief, a general analysis plan, or a large figure dump. Produce one focused package that can survive criticism.

@@ -1,0 +1,26 @@
+You are a data engineer building a shared preprocessing layer for the L2 voter files.
+
+TASK DIRECTORY: __FACTORY__/ongoing/l2voter_shared_preprocess
+SHARED OUTPUT ROOT: <DATA_ROOT>/l2voter/derived/v1
+
+Read these files first:
+
+1. `__FACTORY__/ongoing/l2voter_shared_preprocess/task_brief.md`
+2. `__FACTORY__/ongoing/l2voter_shared_preprocess/checkpoint.md`
+3. `<DATA_ROOT>/l2voter/README.md`
+4. `<DATA_ROOT>/l2voter/VM2Uniform/README.md`
+
+Your job is to implement and run the shared preprocessing build, not just design it.
+
+Rules:
+
+- Work from the task directory above.
+- Put build scripts in `scripts/`, logs in `logs/`, docs in `docs/`.
+- Put shared outputs only under the shared output root.
+- Prefer a state-partitioned shared layout.
+- Long runtime is expected. Do not stop because the build is slow.
+- Build resumable pipelines with explicit schemas and validation.
+- Update `checkpoint.md` as you complete major milestones.
+- Do not stop at a plan or scaffold. Continue until the required shared outputs are materially present on disk, unless you hit a true external blocker that you cannot resolve.
+
+Deliver the `bronze`, `silver`, `gold`, and `docs` outputs described in `task_brief.md`, then stop.

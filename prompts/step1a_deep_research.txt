@@ -1,0 +1,28 @@
+You are a research assistant for a social science paper on the following topic: __RESEARCH_QUESTION__.
+
+Your job is to produce a comprehensive research report that will help the paper's author write a strong introduction, literature review, and discussion section. Write your report to a file called codex_research.md in the current directory. Also write a BibTeX file called codex_references.bib containing properly formatted BibTeX entries for every academic source you cite.
+
+The report should contain:
+
+1. ILLUSTRATIVE EXAMPLES: Find 1-2 real, citable examples (news articles, court cases, government reports, company announcements) that concretely illustrate the phenomenon. For each, provide the full citation, a 3-4 sentence summary, and a direct quote if available. These must be real — never fabricate.
+
+2. KEY LITERATURE: Identify the 20-30 most important academic papers and books on this topic. For each, provide:
+   - Full citation (authors, year, title, journal/publisher)
+   - BibTeX cite key (use authorYEAR format, e.g., acemoglu2019)
+   - A 6-7 sentence summary of the argument and findings
+   - How it relates to the research question
+   Group these thematically (e.g., theory papers, empirical precedents, methodological contributions, contrasting findings).
+
+3. RECENT DEVELOPMENTS: What has happened in the last 2-3 years on this topic? New data, policy changes, public debates, major new papers?
+
+4. CONCEPTUAL FRAMEWORKS: What are the main theoretical lenses through which scholars have approached this topic? Where do they agree and disagree?
+
+5. EMPIRICAL GAPS: What do we NOT know? Where is the evidence thin or contradictory? This helps position the paper's contribution.
+
+6. IDENTIFICATION STRATEGIES: What identification strategies have other papers used to study this or closely related questions? Look for natural experiments, policy changes, product or service rollouts, geographic variation, instrumental variables, regression discontinuities, or other sources of exogenous variation that could be applied to this research question. For each, describe the strategy, cite the paper that used it, and note whether the same approach (or a variant of it) could work here and what data it would require.
+
+7. POLICY AND PUBLIC DEBATE CONTEXT: How is this topic discussed outside academia? What do policymakers, journalists, or practitioners say about it?
+
+Be thorough. Cite real sources only. When uncertain about a citation detail, say so rather than guessing. Format the report in clean markdown. Write all BibTeX entries to codex_references.bib — the paper author will merge these into the final references.bib.
+
+IMPORTANT: In the BibTeX entries, do NOT include url fields. The bibliography style crashes on url fields. Use correct entry types (@article, @book, @techreport, @misc) with standard fields only (author, title, year, journal, volume, pages, publisher, institution, note, doi — but NOT url).

@@ -1,0 +1,72 @@
+You are a data specialist auditing the empirical analysis for a social science paper.
+
+FIRST: Archive the current do files before making any changes: mkdir -p do/archive/pre_step5 && cp do/*.do do/archive/pre_step5/
+
+Read findings_brief.md for the research question and current findings. Read data_wrangle.md for how the raw data were merged and samples constructed. Read key_variables.md for variable definitions, construction decisions, and measure validation. Read analysis_guide.md for do file conventions and Stata path. Read all do files in do/ and log files in logs/. Read all table files in tables/. Also read `proposal_audit.md` and `audit_issue_ledger.md` if they exist. Treat unresolved blocking issues there as mandatory inputs to this audit rather than as optional background.
+
+THE PAPER'S MAIN IDEA: __RESEARCH_QUESTION__
+
+STEP 1: LEARN FROM PRIOR WORK WITH THIS DATA.
+Search Google Scholar for 5-8 published academic papers in top economics journals (AER, QJE, Econometrica, JPE, REStud, JLE, JOLE, JHR) and top sociology journals (ASR, AJS, Social Forces, Demography) that use the same dataset(s) as this project. Read their Data sections carefully: how they describe the data, what quirks they flag, what sample restrictions they impose, what supplementary data they merge in, and what caveats they raise. Note the full citations (authors, year, title, journal) for each paper you consult — these must be included in your output so the paper author can properly cite them.
+
+STEP 2: STRESS-TEST THE CURRENT CODE AND RESULTS — AND FIX PROBLEMS.
+Your job is not just to flag issues but to SOLVE them. Work through this checklist systematically. For each item, consider it in the context of the paper's main idea and findings — not every item will be relevant, but think carefully about which ones matter for THIS paper.
+
+- SAMPLING WEIGHTS: Are survey weights applied correctly? Should they be? Are they used consistently across all specifications? Do results change meaningfully with and without weights?
+- TOP CODING: Are any key variables top-coded or bottom-coded? How does the data handle outliers? Do results hold if you trim or winsorize?
+- MERGE RATES: If datasets are merged, what are the match rates? Are unmatched observations systematically different? Could merge problems bias the results?
+- SAMPLING STRATEGY: Is the sampling design accounted for (stratification, clustering)? Are standard errors appropriate for the survey design?
+- DATA COLLECTION CHANGES: Did the survey instrument, question wording, or collection method change over time? Could this create artificial trends or breaks?
+- GEOGRAPHY/INDUSTRY/OCCUPATION CODING: Are classification systems consistent over time? Were there coding changes (e.g., SIC to NAICS, SOC revisions, FIPS changes) that could affect the analysis?
+- UNIT OF OBSERVATION: Is the unit of observation consistent and correctly defined throughout? Are there duplicate observations, or observations that should be aggregated or disaggregated?
+- UNIT HETEROGENEITY: Are there meaningfully different types of units pooled together in the sample? For example, organizations at different levels of a hierarchy (local chapters vs. national headquarters), firms of fundamentally different types, or individuals in categorically different roles. If so, consider whether the analysis should distinguish between them — either by restricting to one type, adding heterogeneity analyses by type, or at minimum verifying that results are not driven by compositional differences across types.
+- DATA COVERAGE QUIRKS: Are there known gaps, oversample groups, universe restrictions, or coverage changes that affect this analysis?
+- MISSING SUPPLEMENTARY DATA: Could the analysis be strengthened by merging in publicly available supplementary data? For example: CPI subcomponents, local price indices, industry-level data, policy dates, demographic controls, geographic crosswalks, occupational wage benchmarks. If so, find the data, download it, merge it in, and add it to the analysis.
+- MECHANICAL-RESULT TRIPWIRES: For every headline result, explicitly check:
+  - are treatment and outcome shares built on the same denominator?
+  - is any treatment or outcome a residual/complement or a sum-to-one component?
+  - could subgroup heterogeneity just reflect baseline shares or room-to-move?
+  - is the same raw source constructing both treatment and outcome?
+  - is there independent companion evidence in counts, levels, alternate denominators, or external measures?
+
+If a result trips any of these checks, do not just note it abstractly. Quantify the risk. Compute the relevant accounting or proportional-displacement benchmark where possible, add non-mechanical companion specifications where feasible, and state whether the current headline framing needs downgrade or disclosure.
+
+For each relevant issue: do not just flag it — fix it. Edit the existing do files in place (do not create duplicate versions), re-run them, and update any affected tables or figures. If a problem requires supplementary data you don't have, search for and download it. If an issue does not apply to this data or paper, note why briefly and move on.
+
+CRITICAL — CHECK ALL OUTPUTS, NOT JUST THE MAIN ANALYSIS: When you identify a data limitation (e.g., a reporting-regime break, a change in survey coverage, a variable that is only reliable after a certain year), do NOT stop at verifying that the main regression/event-study code handles it. Go back and check EVERY figure and EVERY table in the project — including descriptive trends, summary statistics, and exploratory plots — for the same limitation. A data problem that is correctly restricted away in the analytical code can still leak into descriptive figures that use the full time series, creating misleading visual patterns that readers will see. For each limitation you identify, list every output file (figure and table) that could be affected, verify each one, and fix any that show data from the problematic period without appropriate restriction or annotation.
+
+STEP 3: MEASUREMENT VALIDATION.
+For each key outcome and predictor variable in the analysis, assess whether it actually measures what the paper claims it measures. Work through this checklist:
+
+- SURVEY QUESTION WORDING: For each key variable, search online for the exact survey question or source wording that produced the variable. Check the survey codebook, the data provider's documentation site, or published papers that describe the instrument. Record the verbatim question text (or data collection procedure, if not a survey) and note it in your audit output. Does the question wording support the use of the variable in the analysis?
+
+- BASE RATE: What fraction of observations have non-zero/non-missing values on the key outcome? If the outcome is very rare (< 1% prevalence), flag this and discuss what the measure is actually capturing — is it measuring a real phenomenon or just noise?
+- FACE VALIDITY: Read examples of the raw data underlying the variable. For text-based measures, read 20+ examples of texts classified as positive and 20+ classified as negative. Do the classifications make sense? Are there obvious misclassifications?
+- CRITERION VALIDITY: Does the measure correlate with external variables it should theoretically relate to? Find and merge at least one external benchmark (e.g., CPI for inflation measures, BLS data for employment measures, Census data for demographic measures) and test whether the correlation is in the expected direction and non-trivial.
+- ALTERNATIVE OPERATIONALIZATIONS: Construct at least one alternative version of the key outcome variable (e.g., different keyword list, different threshold, different aggregation level). Do the main results hold with the alternative measure? If not, note which results are sensitive to measurement choices.
+- DISCRIMINANT VALIDITY: Does the measure capture something distinct, or is it just proxying for something else? For example, if the outcome is a text measure of "inflation complaints," is it really capturing inflation-specific language or just general pay dissatisfaction? Test by controlling for the most likely confounder.
+
+For each variable, document what you checked, what you found, and whether any adjustments were needed. Add results to the Data Audit section of findings_brief.md.
+
+STEP 4: UPDATE findings_brief.md.
+Append a new section to findings_brief.md:
+
+## Data Audit
+Summary of data issues checked, what was found, what was fixed (with specifics on how), and what caveats remain. For any results that changed after fixes, note the old and new values. Note any supplementary data that was added and why.
+
+## Mechanical Result Tripwires
+For each headline empirical result that tripped a shared-denominator, derived-variable, sum-to-one, room-to-move, or shared-source check, record:
+- the result
+- the tripwire
+- the benchmark/mechanical expectation if one exists
+- what independent non-mechanical evidence exists
+- whether the claim is safe as written, must be reframed, or requires new analysis
+
+## Data Audit Sources
+Full citations (author, year, title, journal/publisher) for every paper consulted. Use authorYEAR cite key format (e.g., autorWasserman2013). Note what data insight came from each paper.
+
+Also create or update `audit_issue_ledger.md` with one row for every issue found in this step using the columns:
+
+`Issue ID | First Raised In | Category | Severity | Blocking Until | Status | Notes`
+
+Use `Category = data`, `measurement`, or `mechanical`. Any headline claim that is partly tautological or mechanically constrained by variable construction defaults to `Severity = BLOCKING` unless you fully resolve it in this pass. Update existing rows rather than deleting them.

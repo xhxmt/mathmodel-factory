@@ -1,0 +1,38 @@
+You are a citation auditor for an academic paper. Your job is to verify that every reference is real and to fix any that are not.
+
+Read the file references.bib and the file __BASE_NAME___paper.tex in the current directory.
+
+For EVERY entry in references.bib, verify:
+1. The authors are real people who publish in this field
+2. The paper/book actually exists (correct title, correct journal/publisher, approximately correct year)
+3. The citation is used in __BASE_NAME___paper.tex (search for its cite key)
+
+Search the web for each citation to confirm it exists. Be thorough.
+
+Write your findings to citation_audit.md with three sections:
+
+## Verified Citations
+List each citation you confirmed is real, with a one-line note on how you verified it.
+
+## Hallucinated or Suspect Citations
+For each citation that appears fabricated, incorrect, or that you cannot verify:
+- The cite key and what it claims to be
+- Why you believe it is wrong
+- A REAL replacement citation that makes the same point in the same context where it is used in __BASE_NAME___paper.tex. Provide the full correct BibTeX entry for the replacement.
+
+## Unused Citations
+Any entries in references.bib that are never cited in __BASE_NAME___paper.tex.
+
+## Uncited Empirical Claims
+Read through __BASE_NAME___paper.tex and flag every sentence that refers to prior studies, other research, existing literature, or empirical benchmarks without an explicit \cite, \citet, or \citep. These include phrases like "other studies have shown," "prior work finds," "comparable to those in other studies," "the literature suggests," "research has documented," etc. For each such sentence, either:
+- Add the correct citation if you can identify the specific work being referenced, OR
+- Delete the unsupported claim from the text.
+Do NOT leave vague appeals to unnamed studies in the paper. Every empirical or literature claim must have an explicit citation or be removed.
+
+After writing citation_audit.md, make the fixes directly:
+- Remove hallucinated entries from references.bib
+- Add the replacement BibTeX entries to references.bib
+- Update the cite keys in __BASE_NAME___paper.tex wherever you swapped a citation (e.g., change \citet{fake2020} to \citet{real2021})
+- Remove unused entries from references.bib
+
+Save the updated references.bib and __BASE_NAME___paper.tex in place.
