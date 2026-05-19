@@ -7,6 +7,7 @@ PAPER_STY="$FACTORY/resources/style/paper.sty"
 BIB_BST="$FACTORY/resources/bib/bibliography.bst"
 STYLE_JSON="$FACTORY/resources/style/model_papers_style.json"
 ANALYSIS_GUIDE="$FACTORY/analysis_guide.md"
+MODELING_GUIDE="$FACTORY/modeling_guide.md"
 PAUSE_MARKER=".paused"
 KILL_MARKER=".killed"
 
@@ -291,6 +292,7 @@ if [[ "${1:-}" == "new" ]]; then
     cp "$BIB_BST" "$FACTORY/ongoing/$BASE_NAME/bib/"
     cp "$STYLE_JSON" "$FACTORY/ongoing/$BASE_NAME/style/"
     cp "$ANALYSIS_GUIDE" "$FACTORY/ongoing/$BASE_NAME/"
+    [[ -f "$MODELING_GUIDE" ]] && cp "$MODELING_GUIDE" "$FACTORY/ongoing/$BASE_NAME/"
     touch "$FACTORY/ongoing/$BASE_NAME/references.bib"
 
     cat > "$FACTORY/ongoing/$BASE_NAME/checkpoint.md" <<EOF

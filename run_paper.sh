@@ -1241,14 +1241,20 @@ NOTE FROM THE RESEARCHER: $note"
                 local desc_pids
                 desc_pids=$(pgrep -P "${pids[$i]}" 2>/dev/null || true)
                 # Walk the full tree (children, grandchildren, etc.)
-                # Look for srun (stata via stata_submit.sh) or stata itself
+                # Look for srun (stata via stata_submit.sh) or stata itself,
+                # plus modeling-factory solvers (matlab/gurobi/cplex/scip/ipopt/octave).
                 local frontier="$desc_pids"
                 while [[ -n "$frontier" ]]; do
                     local next_frontier=""
                     for dpid in $frontier; do
                         local pname
                         pname=$(ps -p "$dpid" -o comm= 2>/dev/null || true)
-                        if [[ "$pname" == srun || "$pname" == stata* || "$pname" == python* || "$pname" == Rscript || "$pname" == R || "$pname" == julia ]]; then
+                        if [[ "$pname" == srun || "$pname" == stata* || "$pname" == python* \
+                              || "$pname" == Rscript || "$pname" == R || "$pname" == julia \
+                              || "$pname" == matlab* || "$pname" == MATLAB* \
+                              || "$pname" == gurobi_cl || "$pname" == cplex* \
+                              || "$pname" == scip* || "$pname" == ipopt* \
+                              || "$pname" == octave* ]]; then
                             has_work=true
                         fi
                         local grandkids
@@ -1259,7 +1265,7 @@ NOTE FROM THE RESEARCHER: $note"
                 done
 
                 if $has_work; then
-                    log "   Codex ${labels[$i]} trace stale but srun/stata/python/R running — not hung"
+                    log "   Codex ${labels[$i]} trace stale but a solver child (stata/python/matlab/gurobi/...) is running — not hung"
                 else
                     log "   Codex ${labels[$i]} hung (stale ${hang_timeout}s, no work processes) — killing"
                     kill "${pids[$i]}" 2>/dev/null || true
