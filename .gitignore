@@ -26,6 +26,7 @@ __pycache__/
 # Local configuration and credentials
 .env
 .env.*
+.claude/settings.local.json
 
 # Editor and OS files
 .DS_Store
