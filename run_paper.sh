@@ -15,7 +15,11 @@ set -euo pipefail
 #   ./run_paper.sh --status <dir>             One-line status summary
 # ─────────────────────────────────────────────────────────────────────
 
-FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Honor FACTORY passed via env (set by the snapshot re-exec below) so
+# the per-job snapshot copy still resolves to the real factory root for
+# $FACTORY/prompts/*, $FACTORY/scripts/*, etc.  Fall back to deriving
+# from BASH_SOURCE for direct invocations.
+FACTORY="${FACTORY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 SKILL="$FACTORY/STEPS.md"
 MAX_RETRIES=5
 REGISTRY="$FACTORY/run_state/process_registry"
@@ -404,7 +408,7 @@ if [[ -z "${RUN_PAPER_SNAPSHOT:-}" ]]; then
     mkdir -p "$SNAPSHOT_DIR"
     if cp "$FACTORY/run_paper.sh" "$SNAPSHOT_PATH"; then
         chmod +x "$SNAPSHOT_PATH" 2>/dev/null || true
-        exec env RUN_PAPER_SNAPSHOT=1 "$SNAPSHOT_PATH" "$PROJECT"
+        exec env RUN_PAPER_SNAPSHOT=1 FACTORY="$FACTORY" "$SNAPSHOT_PATH" "$PROJECT"
     fi
 fi
 
@@ -1035,7 +1039,132 @@ NOTE FROM THE RESEARCHER: $note"
     return 0
 }
 
-# Run a Claude worker (Claude IS the agent, not a monitor).
+# Run a single agy (Antigravity CLI / Gemini) worker with shell-level hang
+# detection.
+# Usage: run_agy <prompt_file> <timeout_secs> [hang_timeout_secs]
+# Returns: 0=success, 1=timeout/error, 2=hung(killed)
+#
+# agy differs from codex in three ways the rest of this file cares about:
+#  1. The CLI has no --model / --reasoning-effort knobs — auth is OAuth via
+#     ~/.gemini/antigravity-cli/antigravity-oauth-token; model is whatever
+#     Gemini Pro tier is bound to that token.
+#  2. There is no per-session trace file we can poll (codex writes to
+#     ~/.codex/sessions/.../*.jsonl) — so hang detection watches the
+#     redirected stdout log file's mtime instead.  The same long-job
+#     whitelist (real children: python/julia/matlab/...) applies.
+#  3. agy's internal --print-timeout defaults to 5m and would otherwise abort
+#     long agent runs prematurely.  We forward our outer timeout to it.
+#
+# NOTE: the rendered prompt is passed as an argv string.  Linux ARG_MAX is
+# ~128KB on amd64, large enough for current prompts (step 0 is ~3.5KB
+# rendered) but watch out for step 4/7-style prompts that pull in many
+# files.
+run_agy() {
+    local prompt_file="$1" timeout="$2" hang_timeout="${3:-3600}"
+    local rendered
+    rendered=$(render_prompt "$prompt_file")
+    local note
+    note=$(get_user_note "$NEXT")
+    [[ -n "$note" ]] && rendered="$rendered
+
+NOTE FROM THE RESEARCHER: $note"
+    rendered=$(prepend_agent_key "$(agent_key_from_prompt_file "$prompt_file")" "$rendered")
+
+    local agy_log="$PROJECT/logs/step_${NEXT}_agy_${prompt_file%.txt}_$(date +%Y%m%d_%H%M%S).log"
+
+    log "   Agy: $prompt_file (timeout ${timeout}s)"
+
+    # Pad agy's --print-timeout slightly under the outer 'timeout' wrapper
+    # so the outer wrapper is the authoritative kill, but never below 60s.
+    local agy_inner=$(( timeout - 30 ))
+    (( agy_inner < 60 )) && agy_inner=$timeout
+
+    ( cd "$PROJECT" && timeout --kill-after=120 "$timeout" \
+        agy \
+          --print "$rendered" \
+          --add-dir "$PROJECT" \
+          --add-dir "$FACTORY" \
+          --dangerously-skip-permissions \
+          --print-timeout "${agy_inner}s" \
+    ) > "$agy_log" 2>&1 &
+    local agy_pid=$!
+
+    sleep 5
+    local last_mtime
+    last_mtime=$(_mtime "$agy_log")
+    local stale_since
+    stale_since=$(date +%s)
+
+    while kill -0 "$agy_pid" 2>/dev/null; do
+        sleep "$MONITOR_SLEEP"
+        echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
+
+        local mt
+        mt=$(_mtime "$agy_log")
+        if (( mt > last_mtime )); then
+            last_mtime=$mt
+            stale_since=$(date +%s)
+        fi
+
+        local now
+        now=$(date +%s)
+        if (( now - stale_since > hang_timeout )); then
+            local children
+            children=$(pgrep -P "$agy_pid" 2>/dev/null | wc -l)
+            if (( children > 0 )); then
+                log "   Agy log stale ${hang_timeout}s but has $children child processes — not hung"
+            else
+                log "   Agy log stale for ${hang_timeout}s — killing (hung)"
+                kill "$agy_pid" 2>/dev/null || true
+                wait "$agy_pid" 2>/dev/null || true
+                return 2
+            fi
+        fi
+    done
+
+    wait "$agy_pid"
+    local ec=$?
+    case "$ec" in
+        0)   log "   Agy $prompt_file exited OK" ;;
+        124) log "   Agy $prompt_file TIMEOUT" ; return 1 ;;
+        *)   log "   Agy $prompt_file exit code $ec" ; return 1 ;;
+    esac
+    return 0
+}
+
+# Backup wrappers: try the named worker only after a sibling has failed.
+run_agy_backup() {
+    local prompt_file="$1" timeout="$2" hang_timeout="${3:-3600}"
+    log "   Sibling failed for $prompt_file — trying Agy backup"
+    run_agy "$prompt_file" "$timeout" "$hang_timeout"
+}
+
+# Agy primary, Codex fallback.  Matches run_codex_then_claude's pattern:
+# if Agy exits cleanly OR its artifacts already verify, skip the fallback.
+run_agy_then_codex() {
+    local prompt_file="$1" timeout="$2" hang_timeout="${3:-3600}"
+    if run_agy "$prompt_file" "$timeout" "$hang_timeout"; then
+        return 0
+    fi
+    if verify_step "$NEXT"; then
+        log "   Agy exited nonzero but step $NEXT artifacts verify — skipping Codex backup"
+        return 0
+    fi
+    run_codex "$prompt_file" "$timeout" "$hang_timeout"
+}
+
+# Agy primary, Claude fallback (claude_fallback runs Claude's own tools).
+run_agy_then_claude() {
+    local prompt_file="$1" timeout="$2" hang_timeout="${3:-3600}"
+    if run_agy "$prompt_file" "$timeout" "$hang_timeout"; then
+        return 0
+    fi
+    if verify_step "$NEXT"; then
+        log "   Agy exited nonzero but step $NEXT artifacts verify — skipping Claude fallback"
+        return 0
+    fi
+    run_claude_fallback "$NEXT"
+}
 # Usage: run_claude_worker <prompt_file_or_literal> <timeout_secs> [is_literal]
 # When is_literal is "literal", first arg is treated as the prompt text directly.
 run_claude_worker() {
