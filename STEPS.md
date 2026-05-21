@@ -1,168 +1,177 @@
-# Local Paper Skill
+# Modeling Factory Workflow
 
-This is the local-computer version of the paper factory. Use local binaries and the helper scripts in this directory. Do not use Slurm, `sbatch`, `srun`, `sacct`, or `module load`.
+This is the math-modeling-competition adaptation of the local paper factory (CUMCM 国赛 / 美赛 MCM-ICM / 华为杯). Original social-science version preserved at `STEPS_original.md`.
 
 ## Local Infrastructure
 
-- Factory root: this `local_factory/` directory
+- Factory root: this repository
 - Project directories: `ongoing/{base}/` while running, `complete/{base}/` after delivery
-- Local Stata wrapper: `../../stata_submit.sh` from within a project directory
+- Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi — set `--type` and `--max-time`)
+- MinerU PDF → Markdown converter: `../../scripts/mineru_parse.py` (requires `MINERU_TOKEN` in repo `.env`)
+- Method library: `../../method_library/` (AHP / TOPSIS / MILP / ARIMA / ODE seed; agents MAY only cite methods already registered here)
 - Local compile helper: `../../compile_paper.sh "$(pwd)" {base}`
 - Prompt templates: `prompts/step*.txt`
+- Stata wrapper (`../../stata_submit.sh`) is retained for cross-mode compatibility but is **not** used in this workflow.
 
 ## General Rules
 
-- Run each step with a fresh agent context.
-- Follow `analysis_guide.md` in the project directory for Stata usage, figure style, file layout, and esttab conventions.
-- Keep raw artifacts under `data/raw/`, rebuildable staged outputs under `data/intermediate/`, and analysis-ready datasets under `data/final/` unless the project already uses a legacy `analysis/` hierarchy.
+- Run each step in a fresh agent context (no continuation across steps).
+- Follow `modeling_guide.md` in the project directory for solver invocation, project layout, math notation, LaTeX section list, figure palette, code reproducibility, and table formatting. If both `modeling_guide.md` and the legacy `analysis_guide.md` are present, **modeling_guide.md wins**.
+- Project layout: `problem/` (题目原文 + 解析产物), `data/{raw,intermediate,final}/`, `models/<id>/` (按候选建模流分子目录), `scripts/`, `figures/`, `tables/`, `results/<subproblem>/`, `logs/`, `paper/` (LaTeX source).
 - Update `checkpoint.md` after every verified step.
-- Maintain `audit_issue_ledger.md` as the canonical cross-step issue tracker once it is first created in Step 4. Later audit, review, revision, and final-review steps must update statuses in place rather than silently dropping concerns.
+- `audit_issue_ledger.md` is created at Step 4 and is the cross-step issue tracker. Audit, review, revision, and final-review steps must update statuses in place rather than silently dropping concerns. Issues tagged `PROTECTED` (creative claims worth defending) MUST NOT be deleted or downgraded by later steps.
+- All numerical results in the paper must trace back to a logged solver run in `logs/` or `results/`.
+- Time budget for the entire workflow: target 74 hours (CUMCM 国赛 standard, 周四 18:00 → 周日 20:00). Each step's prompt carries a time-budget recommendation derived from `problem/feasibility_constraints.md`.
 - Never stop at a plan or scaffold if the step requires concrete outputs on disk.
 
-## Setup
+## Setup (step −1 → 0)
 
-For a new project:
-- Read the research question from `checkpoint.md`.
-- Locate the relevant `.dta` files or other source data.
-- Write `project_brief.md` with the research question, data locations, project path, and any relevant context.
-- Do not begin Step 1 until setup is complete.
+Implemented by `prompts/step0_problem_parsing.txt`. Triggered automatically by `run_paper.sh` when the seeded `__RESEARCH_QUESTION__` is an absolute path to a PDF or `.md` file (modeling-mode detection in `is_modeling_input()`).
+
+Produce in `problem/`:
+- `source.md` — competition problem statement, as Markdown (auto-converted via `mineru_parse.py` if input was a PDF)
+- `source.mineru/` — sidecar with `layout.json`, `content_list.json`, `images/`
+- `problem_brief.md` — authoritative restatement, sub-problem decomposition, dependencies, scoring tendency
+- `terminology_table.md` — ambiguous-term → precise-definition table (≥ 5 entries)
+- `data_inventory.md` — supplied attachments + missing data + suggested external sources
+- `feasibility_constraints.md` — 74-hour time budget allocation, solver-time caps, submission-format hard constraints
+- `candidate_methods.md` — recommended methods cited from `method_library/`, with method ↔ sub-problem mapping
+
+Stop after the 6 files exist and `checkpoint.md` reads `Last completed step: 0`.
 
 ## Step Outputs
 
-### Step 1: Research and Data Foundations
-
-Complete these substeps before Step 2:
-- 1A deep research: `codex_research.md`, `codex_references.bib`
-- 1B data wrangling: `data_wrangle.md` and analysis-ready datasets in `data/final/` or the legacy equivalent
-- 1B.5 data context: `data_context.md`
-- 1C key variables: `key_variables.md`
-- 1D viability gate: `viability_gate.md`; if verdict is `KILL`, also write `kill_memo.md` and stop
-- 1E descriptive map: `descriptive_map.md`
-
-### Step 2: Parallel Findings Packages
+### Step 1: Background Research + Method Pre-selection
 
 Produce:
-- `findings_memo_1.md` through `findings_memo_6.md`
-- `findings_critique_1.md` through `findings_critique_6.md`
-- six validated focused findings packages, each with its own prefixed do files, logs, tables, and figures
+- `research_brief.md` — literature / industry references relevant to the problem domain and chosen method families; cite real sources with full attribution. Do not fabricate.
+- `viable_streams.md` — concrete list of N (typically 3–5) candidate modeling streams, each with: method family (from `method_library/`), expected sub-problem coverage, data-feasibility note, time-budget estimate
+- `viability_gate.md` — verdict on each candidate stream after data and time-budget reality check. Top line:
+  - `VERDICT: PROCEED` (≥ 2 streams pass) — continue to Step 2
+  - `VERDICT: KILL` (no stream is feasible) — also write `kill_memo.md` explaining why, then stop. Factory short-circuits to step 16 cleanup.
 
-Run six parallel findings streams. Each stream should build one focused candidate package with only 1-2 core tables and 1-2 core figures, not a broad project map. As each memo finishes, send it to a critic. Findings and criticism should loop until each package either validates cleanly or is clearly not worth carrying forward. Ground the packages in `data_context.md`, `data_wrangle.md`, `key_variables.md`, and `descriptive_map.md`.
+Read `problem/*.md` and `method_library/README.md` first. Reference real, citable sources only.
 
-### Step 3: Findings Package Selection
+### Step 2: Parallel Modeling Proposals
 
-Produce:
-- `findings_decision.md`
-- `findings_brief.md`
+For each stream `N` ∈ {1..N} that passed Step 1's viability gate, produce:
+- `m{N}_spec.md` — full modeling specification: assumptions, decision variables, objective, constraints, solver choice
+- `m{N}_demo_result.{json,csv,log}` — small-scale demonstration solve (toy data or sub-sample) confirming the formulation is implementable
+- `m{N}_critique.md` — critic agent's review, looping with the spec until it ends with `VERDICT: VALIDATED` or `VERDICT: ABANDONED`
 
-Choose one validated Step 2 package to carry forward. Do not synthesize across packages and do not merge pieces from multiple packages. The selected package becomes the authoritative `findings_brief.md`; the others are discarded.
+A stream is **ready** when `m{N}_spec.md` ≥ 30 lines AND a `m{N}_demo_result.*` file exists. A stream is **validated** when `m{N}_critique.md` starts with `VERDICT: VALIDATED`. Streams may run in parallel; abandoned streams produce a `m{N}_critique.md` ending with `VERDICT: ABANDONED` and a short reason — they are NOT deleted (informs Step 3 trade-off discussion).
 
-### Step 4: Extensions and Argument Architecture
-
-Produce:
-- `extension_brief_1.md`, `extension_brief_2.md`, `extension_brief_3.md`, `extension_brief_4.md`, `extension_brief_5.md`, `extension_brief_6.md`, and `extension_brief_7.md`
-- `paper_map_1.md` through `paper_map_5.md`
-- `paper_map_review_1.md` through `paper_map_review_5.md`
-- `proposal_audit.md`
-- `audit_issue_ledger.md`
-- `argument_decision.md`
-- updated unified analysis outputs, figures, tables, and `findings_brief.md`
-
-Run seven parallel extension agents to stress-test and elaborate the selected Step 3 package. The extension mandates are: identification, supplementary data, heterogeneity, primary robustness, objection robustness, descriptive support, and one open-ended moonshot. Then run five argument architects in parallel, each proposing one focused paper around the same selected package.
-
-After the architects:
-- run one architecture review for each `paper_map_{N}.md`
-- run the proposal auditor to trace the data build and populate `proposal_audit.md` plus `audit_issue_ledger.md`
-- run the decider to choose the winning paper map and write `argument_decision.md`
-- run the executor to rebuild a single coherent analysis package that follows the chosen map and updates `findings_brief.md`
-
-### Step 5: Data Audit and Argument Research
+### Step 3: Method Selection (human intervention point)
 
 Produce:
-- Data Audit section appended to `findings_brief.md`
-- `argument_research.md` when useful
-- updated `audit_issue_ledger.md`
+- `method_decision.md` — one validated stream promoted to primary, one validated stream optionally promoted to auxiliary/contrast; rationale grounded in `m{N}_critique.md` files and `problem/feasibility_constraints.md`
+- `chosen_method.md` — symbolic-link-style summary: which `m{N}_*` files are now load-bearing for Step 4+
 
-### Step 6: Methods Audit
+**Human gate**: if `human_review.md` exists in the project root and contains a `## Step 3 decision:` section, that decision is authoritative. Otherwise the decider agent picks the validated stream with the best innovation × feasibility product (not pure feasibility — evaluators expect creativity).
 
-Produce:
-- Methods Audit section appended to `findings_brief.md`
-- updated `audit_issue_ledger.md`
-
-### Step 7: Paper Draft
+### Step 4: Full Model Construction
 
 Produce:
-- `{base}_paper.tex`
-- at least 5 figures and the supporting tables/logs/do files
-- `sample_support.md`
-- `dropped_findings.md`
+- `model.md` — promoted from `m{primary}_spec.md` and expanded: full math formulation, derivations, edge cases, sub-problem coupling
+- `symbol_table.md` — every variable / parameter / set used anywhere in the model, with type + units + range. Required by `modeling_guide.md` and CUMCM submission rules.
+- `assumption_ledger.md` — assumption clearing-house. Each entry: `id | statement | source (题目/团队) | impact-if-violated | status`. This file becomes the cross-step `audit_issue_ledger.md`-style tracker for the rest of the workflow.
+- `models/<id>/` — runnable code for the primary model + sanity-check tests (e.g., `pytest` for Python streams). One subdir per stream actually being implemented (typically primary + auxiliary).
 
-Leave the abstract placeholder in place.
-
-### Step 8: Code Review (Gate 1: Replication And Number QA)
+### Step 5: Full Solve
 
 Produce:
-- `code_review.md`
-- updated `audit_issue_ledger.md`
+- `results/<subproblem>/{values.json,plots.pdf,solver.log}` — one subdirectory per sub-problem identified in `problem/problem_brief.md`
+- `solve_log.md` — per-run table: solver, runtime, MIP-gap or convergence indicator, output files
 
-Fix code, tables, figures, and paper text where needed. Step 8 is the hard replication/number-consistency gate. It should close code-paper mismatches and number errors, but it does not clear conceptual or estimand risks merely because the arithmetic matches.
+Every solver invocation MUST go through `../../solver_submit.sh` with explicit `--max-time` (rough target: ≤ 2 hours per single run, with the bulk of the 74-hour budget reserved for ranges-of-parameters and sensitivity in Step 6). Independent sub-problem solves should run in parallel.
 
-### Step 9: Constructive Review
-
-Produce:
-- `review_comments.md`
-
-### Step 10: Revision
+### Step 6: Sensitivity + Robustness
 
 Produce:
-- revised `{base}_paper.tex`
-- `revision_summary.md`
-- updated supporting files such as `findings_brief.md`, `sample_support.md`, and `dropped_findings.md` as needed
-- updated `audit_issue_ledger.md`
+- `sensitivity_report.md` — parameter perturbations, assumption-relaxation impacts, scenario comparison
+- `figures/sensitivity_*.{pdf,png}` — required: at least one tornado / one-at-a-time figure AND one scenario-comparison figure
+- updated `assumption_ledger.md` — flag any assumption whose perturbation changes the qualitative answer
 
-### Step 11: Final Review (Gate 2: Estimand And Claim-Validity QA)
+CUMCM evaluators expect sensitivity. Missing it is a known scoring trap (also recorded in `problem/feasibility_constraints.md` § 已识别的硬性扣分项).
 
-Produce:
-- `final_review.md`
-- updated `audit_issue_ledger.md`
-
-Use one verdict line at the top:
-- `VERDICT: PASS_WITH_DIRECT_FIXES`
-- `VERDICT: REOPEN_STEP10_TEXT`
-- `VERDICT: REOPEN_STEP10_ANALYSIS`
-
-If a reopen verdict is issued, Step 10 runs once more, then Step 11 is repeated. Step 11 cannot pass while `audit_issue_ledger.md` still contains unresolved blocking issues or while earlier conceptual audit concerns have disappeared without an explicit resolution path.
-
-### Step 12: Citation Audit
+### Step 7: Model Evaluation
 
 Produce:
-- `citation_audit.md`
-- corrected `references.bib`
-- corrected `{base}_paper.tex`
+- `evaluation.md` — strengths, weaknesses, generalization potential, comparison with auxiliary stream (if selected) and discarded streams from Step 2
 
-### Step 13: Table Formatting
+### Step 8: Visualization Polish
 
 Produce:
-- cleaned table `.tex` files
-- any re-generated figures needed for legend placement
-- `table_formatting.md`
+- regenerated `figures/*.{pdf,png}` conforming to `modeling_guide.md` color palette, typography, and self-contained-caption rule
+- `visualization_log.md` — figure inventory: file, what it shows, which sub-problem it supports, caption draft
 
-### Step 14: Abstract
+Each figure must read independently of the paper text (caption tells the full story). Independent step rather than merged with Step 5–6 because CUMCM scoring weights figure quality heavily.
 
-Produce:
-- `abstract_draft.md`
-- a final title inserted into `{base}_paper.tex`
-
-### Step 15: De-robotification
+### Step 9: Paper Draft
 
 Produce:
-- `derobotification.md`
-- final prose edits in `{base}_paper.tex`
+- `{base}_paper.tex` — full LaTeX draft containing the canonical CUMCM sections per `modeling_guide.md` (摘要 / 问题重述 / 问题分析 / 模型假设 / 符号说明 / 模型建立 / 模型求解 / 灵敏度分析 / 模型评价 / 参考文献 / 附录)
+- Leave `ABSTRACT_PLACEHOLDER` literal at the abstract location — filled in Step 14
 
-### Step 16: Delivery
+Pull content from: `problem/`, `model.md`, `symbol_table.md`, `assumption_ledger.md`, `results/`, `sensitivity_report.md`, `evaluation.md`, `visualization_log.md`. Cite via `references.bib`.
+
+### Step 10: Gate 1 — Numerical & Code Consistency Check
 
 Produce:
-- compiled `{base}_paper.pdf`
-- copy of the final PDF in `papers/`
-- cleanup of rebuildable intermediate data
+- `code_review.md` — every numerical value cited in the paper must be traceable to a file in `logs/` or `results/`. List discrepancies and fixes.
+- updated `assumption_ledger.md`
+- corrected `{base}_paper.tex` if discrepancies found
+
+Hard replication / number-consistency gate. Does NOT clear conceptual or modeling-validity risks merely because the arithmetic matches — that is Step 13 (Gate 2).
+
+### Step 11: Constructive Review
+
+Produce:
+- `review_comments.md` — issue-level review covering: model correctness, assumption realism, solver convergence, sensitivity coverage, writing clarity, figure/table quality. Each issue gets a severity (BLOCKING / MAJOR / MINOR) and a recommended fix.
+- updated `assumption_ledger.md` — new issues appended, existing issues whose status changed updated. Issues marked `PROTECTED` MUST NOT be deleted.
+
+### Step 12: Revision
+
+Produce:
+- revised `{base}_paper.tex` and any supporting files (`model.md`, `figures/`, `tables/`, `results/`)
+- `revision_summary.md` — per-issue: how it was addressed, what file changed, what number/figure was updated
+- updated `assumption_ledger.md` — every BLOCKING and MAJOR issue from Step 11 must be either resolved or explicitly justified
+- archive of pre-revision draft at `paper/archive/pre_step12/`
+
+### Step 13: Gate 2 — Judge Simulation
+
+Produce:
+- `judge_evaluation.md` — three independent judge agents grade the paper against the CUMCM official rubric. Each judge writes: 6 dimension scores (建模合理性 20% / 求解正确性 20% / 创新性 20% / 写作清晰度 15% / 结果说服力 15% / 灵敏度分析 10%), per-dimension comments, top-3 improvement suggestions. Aggregate score + per-dimension mean reported at top.
+- One verdict line at the very top:
+  - `VERDICT: PASS` (aggregate ≥ threshold, no BLOCKING gaps) — continue to Step 14
+  - `VERDICT: REOPEN_STEP12_TEXT` (writing / formatting issues only — rewind to Step 12 once, gated by `.step13_reopened_once`)
+  - `VERDICT: REOPEN_STEP12_MODEL` (substantive modeling / solving issues — rewind to Step 12 once, may cascade rerun of Step 5/6 outputs)
+
+Modeled on the original Step 11 reopen-gate; allowed at most once.
+
+### Step 14: Abstract (human intervention point)
+
+Produce:
+- `abstract_draft.md` — strict four-paragraph CUMCM format: 问题理解 / 方法 / 结果 / 亮点
+- `ABSTRACT_PLACEHOLDER` in `{base}_paper.tex` replaced with the final abstract
+
+**Human gate**: abstract carries disproportionate weight in CUMCM scoring. If `human_review.md` contains a `## Step 14 abstract:` section, that text overrides the agent draft. Otherwise the agent proposes and a critic loop produces ≥ 2 candidate drafts before picking one.
+
+### Step 15: Citation Audit + Table Formatting + De-robotification
+
+Single-step polish bundle (formerly three separate steps in the social-science version). Produce:
+- `citation_audit.md` — every `\cite{}` resolves to a real `references.bib` entry; remove any phantom citations
+- cleaned table `.tex` files (booktabs, `esttab ... booktabs fragment nomtitles label compress nonotes` where applicable; LaTeX owns the table environment)
+- `derobotification.md` — list of prose smells removed (e.g., "首先...其次...最后" laundry lists, hedge stacking, redundant restatements)
+- final-prose `{base}_paper.tex`
+
+### Step 16: Compile + Appendix + Package
+
+Produce:
+- compiled `{base}_paper.pdf` (via `../../compile_paper.sh`)
+- code appendix integrated as `paper/appendix_code.tex` or `\inputminted{}` chunks
+- `papers/{base}_paper.pdf` — copy delivered to the factory's papers/ dir
+- `papers/{base}_submission.zip` — submission bundle (PDF + code + selected data, matching `problem/feasibility_constraints.md` § 提交格式硬约束)
+- `scripts/cleanup_project_artifacts.py` invoked to prune rebuildable intermediates
 
 After delivery, the runner moves the project from `ongoing/` to `complete/`.
