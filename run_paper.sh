@@ -53,11 +53,35 @@ _kill_process_tree() {
 project_setup_complete() {
     local P="$1"
     local cp_step=""
-    [[ -f "$P/project_brief.md" ]] || return 1
     [[ -f "$P/checkpoint.md" ]] || return 1
+    # Modeling-mode setup: produces a structured problem/ directory.
+    # Social-mode setup: produces project_brief.md at the project root.
+    if [[ -f "$P/problem/problem_brief.md" ]]; then
+        :
+    elif [[ -f "$P/project_brief.md" ]]; then
+        :
+    else
+        return 1
+    fi
     cp_step=$(grep "Last completed step" "$P/checkpoint.md" 2>/dev/null \
         | grep -oP -- '-?\d+' | head -1 || true)
     [[ "$cp_step" == "0" ]]
+}
+
+# Is this project a math-modeling project (Modeling Factory) rather than the
+# original social-science Paper Factory?  Two signals:
+#   1. The seeded research-question is an absolute path to a PDF / MD (i.e. a
+#      competition problem file passed to `launch_agents.sh new`).
+#   2. The project directory already contains problem/source.md (e.g. from a
+#      previous setup pass or a manual seed).
+is_modeling_input() {
+    local P="$1" Q="$2"
+    [[ -f "$P/problem/source.md" ]] && return 0
+    case "$Q" in
+        /*.pdf|/*.PDF|/*.md|/*.MD)
+            [[ -f "$Q" ]] && return 0 ;;
+    esac
+    return 1
 }
 
 analysis_ready_dirs() {
@@ -327,8 +351,9 @@ infer_step() {
             && echo 1 && return
     fi
 
-    # 0: project set up (project_brief.md exists)
-    [[ -f "$P/project_brief.md" ]] && echo 0 && return
+    # 0: project set up — either modeling-mode (problem/problem_brief.md)
+    # or social-mode (project_brief.md) artifacts present.
+    [[ -f "$P/problem/problem_brief.md" || -f "$P/project_brief.md" ]] && echo 0 && return
 
     # -1: nothing yet
     echo -1
@@ -641,7 +666,23 @@ if (( STEP < 0 )); then
     log "New project — running setup (prerequisites)"
     SETUP_LOG="$PROJECT/logs/step_setup_$(date +%Y%m%d_%H%M%S).log"
 
-    SETUP_PROMPT="Read the paper skill instructions at $SKILL.
+    if is_modeling_input "$PROJECT" "$QUESTION"; then
+        log "Modeling-mode setup — using prompts/step0_problem_parsing.txt"
+        # Inline render: render_prompt() is defined later in the file (after
+        # this setup block) so we substitute placeholders directly here.
+        # The step0 prompt is self-contained — it explicitly overrides
+        # analysis_guide.md with modeling_guide.md — so we deliberately skip
+        # the social-science common_prompt_preamble.
+        _q_escaped="${QUESTION//&/\\&}"
+        SETUP_PROMPT=$(sed \
+            -e "s|__PROJECT_PATH__|$PROJECT|g" \
+            -e "s|__RESEARCH_QUESTION__|$_q_escaped|g" \
+            -e "s|__BASE_NAME__|$BASE|g" \
+            -e "s|__FACTORY__|$FACTORY|g" \
+            "$FACTORY/prompts/step0_problem_parsing.txt")
+    else
+        log "Social-mode setup — using legacy inline prompt"
+        SETUP_PROMPT="Read the paper skill instructions at $SKILL.
 
 Set up the project at $PROJECT for the following research question:
 $QUESTION
@@ -656,9 +697,10 @@ question, and update checkpoint.md to Last completed step: 0.
 
 Do NOT proceed to Step 1 — stop after setup is complete."
 
-    SETUP_PROMPT="$SETUP_PROMPT
+        SETUP_PROMPT="$SETUP_PROMPT
 
 Do not inspect, reference, reuse, or mention completed projects unless the human researcher explicitly points you to one. Work only from the current project directory, the source data, and shared infrastructure."
+    fi
 
     set +e
     (

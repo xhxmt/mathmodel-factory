@@ -5,6 +5,9 @@
 /papers/
 /run_state/
 
+# Benchmark problems — fetched via scripts/fetch_benchmark.sh, not committed
+/benchmark/
+
 # Python artifacts
 __pycache__/
 *.py[cod]
@@ -26,6 +29,7 @@ __pycache__/
 # Local configuration and credentials
 .env
 .env.*
+!.env.example
 .claude/settings.local.json
 
 # Editor and OS files
