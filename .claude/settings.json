@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(command -v *)"
+      "Bash(command -v *)",
+      "Bash(./launch_agents.sh status)"
     ]
   }
 }
