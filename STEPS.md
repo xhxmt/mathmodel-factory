@@ -47,8 +47,8 @@ Produce:
 - `research_brief.md` — literature / industry references relevant to the problem domain and chosen method families; cite real sources with full attribution. Do not fabricate.
 - `viable_streams.md` — concrete list of N (typically 3–5) candidate modeling streams, each with: method family (from `method_library/`), expected sub-problem coverage, data-feasibility note, time-budget estimate
 - `viability_gate.md` — verdict on each candidate stream after data and time-budget reality check. Top line:
-  - `VERDICT: PROCEED` (≥ 2 streams pass) — continue to Step 2
-  - `VERDICT: KILL` (no stream is feasible) — also write `kill_memo.md` explaining why, then stop. Factory short-circuits to step 16 cleanup.
+  - `VERDICT: PASS` (≥ 2 streams pass) — continue to Step 2
+  - `VERDICT: KILL` (no stream is feasible) — also write `kill_memo.md` explaining why, then stop. Runner prunes rebuildable intermediates via `scripts/cleanup_project_artifacts.py` and marks the project `.killed`.
 
 Read `problem/*.md` and `method_library/README.md` first. Reference real, citable sources only.
 

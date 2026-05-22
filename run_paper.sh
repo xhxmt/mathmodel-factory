@@ -227,6 +227,20 @@ infer_step() {
     # 16: final PDF delivered to papers/
     [[ -f "$FACTORY/papers/${base}_paper.pdf" ]] && echo 16 && return
 
+    # Modeling-mode step inference — short-circuits when problem/ exists.
+    # Steps 2+ will be wired here as their prompts are ported (Phase 3.x).
+    if [[ -d "$P/problem" ]]; then
+        # 1: research_brief + viable_streams + viability_gate (verdict line)
+        if [[ -f "$P/research_brief.md" && -f "$P/viable_streams.md" && \
+              -f "$P/viability_gate.md" ]] \
+            && (( $(_lines "$P/research_brief.md") >= 30 )) \
+            && (( $(_lines "$P/viable_streams.md") >= 20 )) \
+            && (( $(_lines "$P/viability_gate.md") >= 10 )); then
+            echo 1
+            return
+        fi
+    fi
+
     local has_analysis_data=0
     project_has_analysis_ready_data "$P" && has_analysis_data=1
 
@@ -1466,223 +1480,67 @@ NOTE FROM THE RESEARCHER: $note"
 # files to verify. No Claude orchestrator — shell handles monitoring.
 
 run_step_1() {
-    local have_1a=0
-    local have_1b=0
-    local have_1b5=0
-    local step1a_pid=""
-    local step1b5_pid=""
-    local step1a_started=0
-    local step1b5_started=0
+    # Modeling-mode Step 1: research_brief + viable_streams + viability_gate
+    # via a single Claude worker on prompts/step1_research_viability.txt.
+    #
+    # Per project convention (Phase 3): tasks are routed to Claude as the
+    # primary worker; codex primitives stay in the file as a future hook
+    # but are not invoked here.  The social-science multi-phase 1A-1E
+    # implementation lives in STEPS_original.md and pre-86f21de git
+    # history if it ever needs to be revived.
+    local rb="$PROJECT/research_brief.md"
+    local vs="$PROJECT/viable_streams.md"
+    local vg="$PROJECT/viability_gate.md"
 
-    [[ -f "$PROJECT/codex_research.md" ]] && \
-        (( $(_lines "$PROJECT/codex_research.md") >= 20 )) && have_1a=1
-    [[ -f "$PROJECT/data_wrangle.md" ]] && \
-        (( $(_lines "$PROJECT/data_wrangle.md") >= 20 )) && \
-        project_has_analysis_ready_data "$PROJECT" && have_1b=1
-    [[ -f "$PROJECT/data_context.md" ]] && \
-        (( $(_lines "$PROJECT/data_context.md") >= 20 )) && have_1b5=1
-
-    # Launch deep research in the background and only require it by the end of
-    # Step 1. Data wrangling is the true prerequisite for 1C/1D/1E.
-    if (( have_1a )); then
-        log "   Step 1A: codex_research.md exists — skipping"
+    if [[ -f "$rb" && -f "$vs" && -f "$vg" ]] \
+       && (( $(_lines "$rb") >= 30 )) \
+       && (( $(_lines "$vs") >= 20 )) \
+       && (( $(_lines "$vg") >= 10 )); then
+        log "   Step 1: artifacts present — skipping worker"
     else
-        local step1a_prompt step1_note step1a_log
-        step1a_prompt=$(render_prompt step1a_deep_research.txt)
-        step1_note=$(get_user_note "$NEXT")
-        [[ -n "$step1_note" ]] && step1a_prompt="$step1a_prompt
-
-NOTE FROM THE RESEARCHER: $step1_note"
-        step1a_prompt=$(prepend_agent_key "$(agent_key_from_prompt_file step1a_deep_research.txt)" "$step1a_prompt")
-
-        step1a_log="$PROJECT/logs/step_${NEXT}_codex_step1a_deep_research_$(date +%Y%m%d_%H%M%S).log"
-        log "   Step 1A: deep research (background)"
-        (
-            cd "$PROJECT" && timeout --kill-after=120 21600 \
-                codex exec \
-                  --model gpt-5.5 \
-                  -c 'model_reasoning_effort="xhigh"' \
-                  --dangerously-bypass-approvals-and-sandbox \
-                  -C "$PROJECT" \
-                  --skip-git-repo-check \
-                  "$step1a_prompt"
-        ) > "$step1a_log" 2>&1 &
-        step1a_pid=$!
-        step1a_started=1
+        log "   Step 1: research + method preselection + viability gate (Claude)"
+        run_claude_worker step1_research_viability.txt 14400 || true
     fi
 
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-    if (( have_1b )); then
-        log "   Step 1B: data wrangle outputs exist — skipping"
-    else
-        log "   Step 1B: data wrangle"
-        run_codex step1b_data_wrangle.txt 21600 7200 || run_claude_fallback 1
-        if [[ ! -f "$PROJECT/data_wrangle.md" ]] || \
-           (( $(_lines "$PROJECT/data_wrangle.md") < 20 )); then
-            log "   data_wrangle.md missing/short — Claude fallback for 1B"
-            run_claude_fallback 1
-        fi
-    fi
-
-    if ! project_has_analysis_ready_data "$PROJECT"; then
-        log "   Step 1B incomplete — no analysis-ready data found in data/final, analysis/final, or analysis/unified"
-        return 1
-    fi
-
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-    # Phase 1B.5: data-context memo (background after wrangling, overlaps
-    # the key-variable and viability phases when possible)
-    if (( have_1b5 )); then
-        log "   Step 1B.5: data_context.md exists — skipping"
-    else
-        local step1b5_prompt step1b5_note step1b5_log
-        step1b5_prompt=$(render_prompt step1b5_data_context.txt)
-        step1b5_note=$(get_user_note "$NEXT")
-        [[ -n "$step1b5_note" ]] && step1b5_prompt="$step1b5_prompt
-
-NOTE FROM THE RESEARCHER: $step1b5_note"
-        step1b5_prompt=$(prepend_agent_key "$(agent_key_from_prompt_file step1b5_data_context.txt)" "$step1b5_prompt")
-
-        step1b5_log="$PROJECT/logs/step_${NEXT}_codex_step1b5_data_context_$(date +%Y%m%d_%H%M%S).log"
-        log "   Step 1B.5: data context (background)"
-        (
-            cd "$PROJECT" && timeout --kill-after=120 10800 \
-                codex exec \
-                  --model gpt-5.5 \
-                  -c 'model_reasoning_effort="xhigh"' \
-                  --dangerously-bypass-approvals-and-sandbox \
-                  -C "$PROJECT" \
-                  --skip-git-repo-check \
-                  "$step1b5_prompt"
-        ) > "$step1b5_log" 2>&1 &
-        step1b5_pid=$!
-        step1b5_started=1
-    fi
-
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-    # Phase C: key variables (needs wrangled data from 1B)
-    if [[ -f "$PROJECT/key_variables.md" ]] && \
-       (( $(_lines "$PROJECT/key_variables.md") >= 20 )) && \
-       project_has_analysis_ready_data "$PROJECT"; then
-        log "   Step 1C: key_variables.md exists — skipping"
-    else
-        log "   Step 1C: key variables"
-        run_codex step1c_key_variables.txt 14400 7200 || run_claude_fallback 1
-        if [[ ! -f "$PROJECT/key_variables.md" ]] || \
-           (( $(_lines "$PROJECT/key_variables.md") < 20 )); then
-            log "   key_variables.md missing/short — Claude fallback for 1C"
-            run_claude_fallback 1
-        fi
-    fi
-
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-    # Phase D: main-test viability gate (kills hopeless projects before the
-    # expensive descriptive-map pass)
-    local gate_verdict=""
+    # KILL gate — short-circuit if verdict is KILL.  Reuses the existing
+    # step1_viability_verdict() and mark_project_killed() helpers.
+    local gate_verdict
     gate_verdict=$(step1_viability_verdict)
-    if [[ -f "$PROJECT/viability_gate.md" ]] && \
-       (( $(_lines "$PROJECT/viability_gate.md") >= 10 )) && \
-       [[ "$gate_verdict" == "PASS" ]]; then
-        log "   Step 1D: viability gate PASS exists — skipping"
-    else
-        log "   Step 1D: main-test viability gate"
-        run_codex step1d_viability_gate.txt 10800 3600 || run_claude_fallback 1
-        gate_verdict=$(step1_viability_verdict)
-        if [[ ! -f "$PROJECT/viability_gate.md" ]] || \
-           (( $(_lines "$PROJECT/viability_gate.md") < 10 )) || \
-           [[ "$gate_verdict" != "PASS" && "$gate_verdict" != "KILL" ]]; then
-            log "   viability_gate.md missing/invalid — Claude fallback for 1D"
-            run_claude_fallback 1
-            gate_verdict=$(step1_viability_verdict)
-        fi
-    fi
-
     if [[ "$gate_verdict" == "KILL" ]]; then
         if [[ ! -f "$PROJECT/kill_memo.md" ]] || \
            (( $(_lines "$PROJECT/kill_memo.md") < 5 )); then
-            log "   kill_memo.md missing/short — Claude fallback for 1D"
-            run_claude_fallback 1
+            log "   kill_memo.md missing/short — retrying Step 1 once"
+            run_claude_worker step1_research_viability.txt 14400 || true
             gate_verdict=$(step1_viability_verdict)
         fi
-        if [[ "$gate_verdict" == "KILL" ]] && \
-           [[ -f "$PROJECT/kill_memo.md" ]] && \
-           (( $(_lines "$PROJECT/kill_memo.md") >= 5 )); then
-            log "   Step 1D verdict: KILL — stopping before descriptive map"
+        if [[ "$gate_verdict" == "KILL" && -f "$PROJECT/kill_memo.md" ]] \
+           && (( $(_lines "$PROJECT/kill_memo.md") >= 5 )); then
+            log "   Step 1 verdict: KILL — pruning intermediates and stopping"
+            if [[ -f "$FACTORY/scripts/cleanup_project_artifacts.py" ]]; then
+                python3 "$FACTORY/scripts/cleanup_project_artifacts.py" "$PROJECT" \
+                    >> "$PROJECT/logs/runner.log" 2>&1 || true
+            fi
             mark_project_killed
             return 0
         fi
     fi
 
+    # Pass-path verification
     if [[ "$gate_verdict" != "PASS" ]]; then
-        log "   viability gate did not produce a usable PASS/KILL verdict"
+        log "   Step 1: viability_gate.md missing or verdict not PASS/KILL"
         return 1
     fi
-
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-    # Phase E: descriptive map (needs wrangled data + key variables + PASS gate)
-    if [[ -f "$PROJECT/descriptive_map.md" ]] && \
-       (( $(_lines "$PROJECT/descriptive_map.md") >= 40 )) && \
-       project_has_analysis_ready_data "$PROJECT"; then
-        log "   Step 1E: descriptive_map.md exists — skipping"
-    else
-        log "   Step 1E: descriptive map"
-        run_codex step1e_descriptive_map.txt 14400 7200 || run_claude_fallback 1
-        if [[ ! -f "$PROJECT/descriptive_map.md" ]] || \
-           (( $(_lines "$PROJECT/descriptive_map.md") < 40 )); then
-            log "   descriptive_map.md missing/short — Claude fallback for 1E"
-            run_claude_fallback 1
-        fi
+    if [[ ! -f "$rb" ]] || (( $(_lines "$rb") < 30 )); then
+        log "   Step 1: research_brief.md missing or too short"
+        return 1
     fi
-
-    if (( ! have_1b5 )); then
-        if (( step1b5_started )); then
-            local step1b5_ec
-            log "   Step 1B.5: waiting for background data-context memo to finish"
-            set +e
-            wait "$step1b5_pid"
-            step1b5_ec=$?
-            set -e
-            case "$step1b5_ec" in
-                0)   log "   Step 1B.5 background completed OK" ;;
-                124) log "   Step 1B.5 background TIMEOUT" ;;
-                *)   log "   Step 1B.5 background exit code $step1b5_ec" ;;
-            esac
-        fi
-
-        if [[ ! -f "$PROJECT/data_context.md" ]] || \
-           (( $(_lines "$PROJECT/data_context.md") < 20 )); then
-            log "   data_context.md missing/short — focused fallback for 1B.5"
-            run_claude_then_codex step1b5_data_context.txt 7200 3600
-        fi
+    if [[ ! -f "$vs" ]] || (( $(_lines "$vs") < 20 )); then
+        log "   Step 1: viable_streams.md missing or too short"
+        return 1
     fi
-
-    if (( ! have_1a )); then
-        if (( step1a_started )); then
-            local step1a_ec
-            log "   Step 1A: waiting for background deep research to finish"
-            set +e
-            wait "$step1a_pid"
-            step1a_ec=$?
-            set -e
-            case "$step1a_ec" in
-                0)   log "   Step 1A background completed OK" ;;
-                124) log "   Step 1A background TIMEOUT" ;;
-                *)   log "   Step 1A background exit code $step1a_ec" ;;
-            esac
-        fi
-
-        if [[ ! -f "$PROJECT/codex_research.md" ]] || \
-           (( $(_lines "$PROJECT/codex_research.md") < 20 )); then
-            log "   codex_research.md missing/short — Claude fallback for 1A"
-            run_claude_fallback 1
-        fi
-    fi
+    return 0
 }
+
 
 run_step_2() {
     local max_rounds=4
