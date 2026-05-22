@@ -1203,7 +1203,7 @@ NOTE FROM THE RESEARCHER: $note"
     log "   Claude worker: ${prompt_src:0:60}"
 
     set +e
-    ( cd "$PROJECT" && unbuffer timeout --kill-after=120 "$timeout" \
+    ( cd "$PROJECT" && stdbuf -oL -eL timeout --kill-after=120 "$timeout" \
         claude -p "$prompt" --dangerously-skip-permissions --effort max \
     ) > "$claude_log" 2>&1
     local ec=$?
@@ -1595,7 +1595,7 @@ NOTE FROM THE RESEARCHER: $note"
             ) > "$log_path" 2>&1 &
         else
             (
-                cd "$PROJECT" && unbuffer timeout --kill-after=120 "$finding_timeout" \
+                cd "$PROJECT" && stdbuf -oL -eL timeout --kill-after=120 "$finding_timeout" \
                     claude -p "$prompt" --dangerously-skip-permissions --effort max
             ) > "$log_path" 2>&1 &
         fi
