@@ -113,62 +113,90 @@ project_has_analysis_ready_data() {
     return 1
 }
 
-step2_findings_memo_path() {
+step2_spec_path() {
     local P="$1" idx="$2"
-    echo "$P/findings_memo_${idx}.md"
+    echo "$P/m${idx}_spec.md"
 }
 
-step2_findings_critique_path() {
+step2_critique_path() {
     local P="$1" idx="$2"
-    echo "$P/findings_critique_${idx}.md"
+    echo "$P/m${idx}_critique.md"
+}
+
+step2_demo_result_path() {
+    local P="$1" idx="$2"
+    echo "$P/m${idx}_demo_result.json"
 }
 
 step2_stream_prefix() {
     local idx="$1"
-    echo "f${idx}"
+    echo "m${idx}"
+}
+
+# Parse viable_streams.md for ## Stream m<N>: headers and return the
+# active idx list as a space-separated string (e.g., "1 2 3"). When the
+# file is missing or unparseable, return empty — callers must handle this
+# (Step 2 cannot run without Step 1 having produced the stream roster).
+step2_active_stream_ids() {
+    local P="$1"
+    local f="$P/viable_streams.md"
+    [[ -f "$f" ]] || return 0
+    grep -oE '^## Stream m[0-9]+:' "$f" 2>/dev/null \
+        | grep -oE '[0-9]+' \
+        | sort -un \
+        | tr '\n' ' ' \
+        | sed 's/ $//'
 }
 
 step2_critique_verdict() {
     local P="$1" idx="$2"
     awk -F': *' '/^VERDICT:/{print $2; exit}' \
-        "$(step2_findings_critique_path "$P" "$idx")" 2>/dev/null | tr -d '\r'
+        "$(step2_critique_path "$P" "$idx")" 2>/dev/null | tr -d '\r'
 }
 
-step2_stream_has_core_outputs() {
-    local P="$1" idx="$2" prefix
-    prefix="$(step2_stream_prefix "$idx")"
-
-    find "$P/figures" -maxdepth 1 -type f \
-        \( -name "${prefix}_*.pdf" -o -name "${prefix}_*.png" \) \
-        -print -quit 2>/dev/null | grep -q . || return 1
-    find "$P/tables" -maxdepth 1 -type f \
-        \( -name "${prefix}_*.tex" -o -name "${prefix}_*.csv" \) \
-        -print -quit 2>/dev/null | grep -q . || return 1
-    return 0
-}
-
-step2_stream_findings_ready() {
+# A stream's spec+demo artifacts are "ready" when the spec is substantive
+# (≥ 30 lines per the Step 2 contract) and the demo result JSON exists.
+# The runner then feeds these to the critic. Demo JSON validity (jobid
+# really in run_state/solver_jobs/, status==OPTIMAL, etc.) is the
+# critic's job, not the runner's — runner only checks existence here.
+step2_stream_ready() {
     local P="$1" idx="$2"
-    local memo
-    memo="$(step2_findings_memo_path "$P" "$idx")"
-    [[ -f "$memo" ]] || return 1
-    (( $(_lines "$memo") >= 20 )) || return 1
-    step2_stream_has_core_outputs "$P" "$idx"
+    local spec demo
+    spec="$(step2_spec_path "$P" "$idx")"
+    demo="$(step2_demo_result_path "$P" "$idx")"
+    [[ -f "$spec" ]] || return 1
+    (( $(_lines "$spec") >= 30 )) || return 1
+    [[ -s "$demo" ]] || return 1
+    return 0
 }
 
 step2_stream_validated() {
     local P="$1" idx="$2"
-    step2_stream_findings_ready "$P" "$idx" || return 1
+    step2_stream_ready "$P" "$idx" || return 1
     [[ "$(step2_critique_verdict "$P" "$idx")" == "VALIDATED" ]]
 }
 
-project_has_validated_findings_packages() {
+step2_stream_abandoned() {
+    local P="$1" idx="$2"
+    [[ -f "$(step2_critique_path "$P" "$idx")" ]] || return 1
+    [[ "$(step2_critique_verdict "$P" "$idx")" == "ABANDONED" ]]
+}
+
+# Step 2 is "done" for the project when at least 2 streams are
+# VALIDATED. Remaining streams may be ABANDONED — those are kept on
+# disk to inform Step 3's trade-off discussion but don't count toward
+# the threshold. If Step 1's viable_streams.md produced fewer than 2
+# streams in the first place, Step 2 can never pass and the project
+# would have already been KILLed at the viability gate.
+step2_has_enough_validated_streams() {
     local P="$1"
-    local idx
-    for idx in 1 2 3 4 5 6; do
-        step2_stream_validated "$P" "$idx" || return 1
+    local idx count=0
+    for idx in $(step2_active_stream_ids "$P"); do
+        if step2_stream_validated "$P" "$idx"; then
+            count=$((count + 1))
+        fi
     done
-    return 0
+    (( count >= 2 ))
 }
 
 review_cycle_info() {
@@ -348,15 +376,17 @@ infer_step() {
             && _review_step_is_fresh 3 "$P/findings_decision.md" "$P/findings_brief.md" \
             && echo 3 && return
 
-        # 2: six validated findings packages
+        # 2: at least 2 validated modeling streams (per viable_streams.md)
         local -a step2_files=()
         local step2_idx
-        for step2_idx in 1 2 3 4 5 6; do
-            step2_files+=("$P/findings_memo_${step2_idx}.md" "$P/findings_critique_${step2_idx}.md")
+        for step2_idx in $(step2_active_stream_ids "$P"); do
+            step2_files+=("$P/m${step2_idx}_spec.md" "$P/m${step2_idx}_critique.md")
         done
-        project_has_validated_findings_packages "$P" \
-            && _review_step_is_fresh 2 "${step2_files[@]}" \
-            && echo 2 && return
+        if (( ${#step2_files[@]} > 0 )); then
+            step2_has_enough_validated_streams "$P" \
+                && _review_step_is_fresh 2 "${step2_files[@]}" \
+                && echo 2 && return
+        fi
 
         # 1: research + data wrangle + data context + key variables + descriptive map
         [[ -f "$P/codex_research.md" && -f "$P/data_wrangle.md" && \
@@ -1227,14 +1257,14 @@ run_claude_fallback() {
     case "$step" in
         2)
             prompt="Read the current Step 2 contracts at:
-- $PROMPTS/step2_findings_agent.txt
-- $PROMPTS/step2_findings_critic.txt
+- $PROMPTS/step2_modeling_proposal.txt
+- $PROMPTS/step2_modeling_critic.txt
 
 Execute ONLY Step 2 for the project at $PROJECT.
 Base name: \"$BASE\". Research question:
 $QUESTION
 
-Implement the full six-stream findings workflow yourself: six focused findings packages, each followed by critical assessment and revision loops, until findings_critique_{1-6}.md all carry VERDICT: VALIDATED.
+Read $PROJECT/viable_streams.md to discover the active stream ids (## Stream m<N>: headers). For each stream, run the proposal agent to produce m<N>_spec.md + m<N>_demo_result.json + models/m<N>_<short>/ code, then run the critic to produce m<N>_critique.md with a verdict line (VALIDATED / REVISE / ABANDONED). Loop proposal↔critic up to 4 rounds per stream. The step passes when at least 2 streams end with VERDICT: VALIDATED; remaining streams may be ABANDONED and their artifacts must be kept.
 
 IMPORTANT: A previous Codex agent attempt for this step FAILED. Do NOT launch any Codex agents. Do the work yourself directly using your own tools (Bash, Read, Write, Edit, Glob, Grep, Agent subagents, etc.). Follow the current Step 2 prompt contracts, but execute the work yourself instead of delegating to Codex.
 
@@ -1544,19 +1574,37 @@ run_step_1() {
 
 run_step_2() {
     local max_rounds=4
-    local finding_timeout=18000
+    local proposal_timeout=18000
     local critic_timeout=7200
     local idx
 
-    local -a stream_models stream_phases stream_pids stream_rounds stream_critic_attempts
-    # Keep most findings streams on Codex, but reserve two independent
-    # packages for Claude to diversify the Step 2 search.
-    stream_models[1]="codex"
-    stream_models[2]="codex"
-    stream_models[3]="codex"
-    stream_models[4]="codex"
-    stream_models[5]="claude"
-    stream_models[6]="claude"
+    local -a active_ids
+    local active_str
+    active_str=$(step2_active_stream_ids "$PROJECT")
+    if [[ -z "$active_str" ]]; then
+        log "   Step 2: viable_streams.md missing or empty — cannot launch streams"
+        return 1
+    fi
+    read -ra active_ids <<<"$active_str"
+    if (( ${#active_ids[@]} < 2 )); then
+        log "   Step 2: only ${#active_ids[@]} stream(s) in viable_streams.md (need ≥ 2)"
+        return 1
+    fi
+    log "   Step 2: active streams = ${active_ids[*]} (N=${#active_ids[@]})"
+
+    # Model assignment: last stream goes to Claude for diversification,
+    # rest go to Codex. Critic is always Codex (stable structured judge).
+    local -A stream_models
+    local last_idx="${active_ids[${#active_ids[@]}-1]}"
+    for idx in "${active_ids[@]}"; do
+        if [[ "$idx" == "$last_idx" ]]; then
+            stream_models[$idx]="claude"
+        else
+            stream_models[$idx]="codex"
+        fi
+    done
+
+    local -A stream_phases stream_pids stream_rounds stream_critic_attempts
 
     local note note_block=""
     note=$(get_user_note "$NEXT")
@@ -1564,7 +1612,7 @@ run_step_2() {
 
 NOTE FROM THE RESEARCHER: $note"
 
-    launch_findings_stream() {
+    launch_proposal_stream() {
         local stream_idx="$1"
         local model="${stream_models[$stream_idx]}"
         local prefix prompt log_path
@@ -1573,18 +1621,18 @@ NOTE FROM THE RESEARCHER: $note"
         stream_rounds[$stream_idx]=$(( ${stream_rounds[$stream_idx]:-0} + 1 ))
         stream_critic_attempts[$stream_idx]=0
 
-        prompt=$(render_prompt step2_findings_agent.txt)
+        prompt=$(render_prompt step2_modeling_proposal.txt)
         prompt="${prompt//__STREAM_ID__/$stream_idx}"
         prompt="${prompt//__STREAM_PREFIX__/$prefix}"
         prompt="$prompt$note_block"
-        prompt=$(prepend_agent_key "step2_findings_stream_${stream_idx}" "$prompt")
+        prompt=$(prepend_agent_key "step2_modeling_proposal_${stream_idx}" "$prompt")
 
-        log_path="$PROJECT/logs/step_${NEXT}_${prefix}_${model}_findings_r${stream_rounds[$stream_idx]}_$(date +%Y%m%d_%H%M%S).log"
-        log "   Step 2: launching findings stream $stream_idx ($model, round ${stream_rounds[$stream_idx]})"
+        log_path="$PROJECT/logs/step_${NEXT}_${prefix}_${model}_proposal_r${stream_rounds[$stream_idx]}_$(date +%Y%m%d_%H%M%S).log"
+        log "   Step 2: launching proposal stream $stream_idx ($model, round ${stream_rounds[$stream_idx]})"
 
         if [[ "$model" == "codex" ]]; then
             (
-                cd "$PROJECT" && timeout --kill-after=120 "$finding_timeout" \
+                cd "$PROJECT" && timeout --kill-after=120 "$proposal_timeout" \
                     codex exec \
                       --model gpt-5.5 \
                       -c 'model_reasoning_effort="xhigh"' \
@@ -1595,13 +1643,13 @@ NOTE FROM THE RESEARCHER: $note"
             ) > "$log_path" 2>&1 &
         else
             (
-                cd "$PROJECT" && stdbuf -oL -eL timeout --kill-after=120 "$finding_timeout" \
+                cd "$PROJECT" && stdbuf -oL -eL timeout --kill-after=120 "$proposal_timeout" \
                     claude -p "$prompt" --dangerously-skip-permissions --effort max
             ) > "$log_path" 2>&1 &
         fi
 
         stream_pids[$stream_idx]=$!
-        stream_phases[$stream_idx]="finding"
+        stream_phases[$stream_idx]="proposal"
     }
 
     launch_critic_stream() {
@@ -1611,11 +1659,11 @@ NOTE FROM THE RESEARCHER: $note"
         prefix="$(step2_stream_prefix "$stream_idx")"
         stream_critic_attempts[$stream_idx]=$(( ${stream_critic_attempts[$stream_idx]:-0} + 1 ))
 
-        prompt=$(render_prompt step2_findings_critic.txt)
+        prompt=$(render_prompt step2_modeling_critic.txt)
         prompt="${prompt//__STREAM_ID__/$stream_idx}"
         prompt="${prompt//__STREAM_PREFIX__/$prefix}"
         prompt="$prompt$note_block"
-        prompt=$(prepend_agent_key "step2_findings_critic_${stream_idx}" "$prompt")
+        prompt=$(prepend_agent_key "step2_modeling_critic_${stream_idx}" "$prompt")
 
         log_path="$PROJECT/logs/step_${NEXT}_${prefix}_critic_a${stream_critic_attempts[$stream_idx]}_$(date +%Y%m%d_%H%M%S).log"
         log "   Step 2: launching critic for stream $stream_idx"
@@ -1635,7 +1683,7 @@ NOTE FROM THE RESEARCHER: $note"
         stream_phases[$stream_idx]="critic"
     }
 
-    for idx in 1 2 3 4 5 6; do
+    for idx in "${active_ids[@]}"; do
         local verdict
         verdict=$(step2_critique_verdict "$PROJECT" "$idx")
         stream_rounds[$idx]=0
@@ -1645,17 +1693,20 @@ NOTE FROM THE RESEARCHER: $note"
         if step2_stream_validated "$PROJECT" "$idx"; then
             stream_phases[$idx]="done"
             log "   Step 2: stream $idx already validated — skipping"
-        elif step2_stream_findings_ready "$PROJECT" "$idx" && [[ -z "$verdict" ]]; then
+        elif step2_stream_abandoned "$PROJECT" "$idx"; then
+            stream_phases[$idx]="done"
+            log "   Step 2: stream $idx already abandoned — keeping artifacts, not relaunching"
+        elif step2_stream_ready "$PROJECT" "$idx" && [[ -z "$verdict" ]]; then
             launch_critic_stream "$idx"
         else
-            [[ -f "$(step2_findings_critique_path "$PROJECT" "$idx")" ]] && stream_rounds[$idx]=1
-            launch_findings_stream "$idx"
+            [[ -f "$(step2_critique_path "$PROJECT" "$idx")" ]] && stream_rounds[$idx]=1
+            launch_proposal_stream "$idx"
         fi
     done
 
     while true; do
         local all_done=true
-        for idx in 1 2 3 4 5 6; do
+        for idx in "${active_ids[@]}"; do
             if [[ "${stream_phases[$idx]}" != "done" ]]; then
                 all_done=false
                 break
@@ -1666,7 +1717,7 @@ NOTE FROM THE RESEARCHER: $note"
         sleep "$MONITOR_SLEEP"
         echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
 
-        for idx in 1 2 3 4 5 6; do
+        for idx in "${active_ids[@]}"; do
             local phase pid ec verdict
             phase="${stream_phases[$idx]}"
             pid="${stream_pids[$idx]}"
@@ -1677,43 +1728,60 @@ NOTE FROM THE RESEARCHER: $note"
             ec=$?
             stream_pids[$idx]=""
 
-            if [[ "$phase" == "finding" ]]; then
-                if (( ec == 0 )) && step2_stream_findings_ready "$PROJECT" "$idx"; then
+            if [[ "$phase" == "proposal" ]]; then
+                if (( ec == 0 )) && step2_stream_ready "$PROJECT" "$idx"; then
                     launch_critic_stream "$idx"
                 elif (( stream_rounds[$idx] < max_rounds )); then
-                    log "   Step 2: findings stream $idx incomplete (exit $ec) — retrying"
-                    launch_findings_stream "$idx"
+                    log "   Step 2: proposal stream $idx incomplete (exit $ec) — retrying"
+                    launch_proposal_stream "$idx"
                 else
-                    log "   Step 2: findings stream $idx exhausted retries"
-                    return 1
+                    log "   Step 2: proposal stream $idx exhausted retries"
+                    stream_phases[$idx]="done"
                 fi
             elif [[ "$phase" == "critic" ]]; then
                 verdict=$(step2_critique_verdict "$PROJECT" "$idx")
                 if (( ec == 0 )) && [[ "$verdict" == "VALIDATED" ]]; then
                     stream_phases[$idx]="done"
-                    log "   Step 2: findings stream $idx validated"
+                    log "   Step 2: stream $idx VALIDATED"
+                elif (( ec == 0 )) && [[ "$verdict" == "ABANDONED" ]]; then
+                    stream_phases[$idx]="done"
+                    log "   Step 2: stream $idx ABANDONED (kept for Step 3 reference)"
                 elif (( ec == 0 )) && [[ "$verdict" == "REVISE" ]]; then
                     if (( stream_rounds[$idx] < max_rounds )); then
                         log "   Step 2: critic requested revision for stream $idx"
-                        launch_findings_stream "$idx"
+                        launch_proposal_stream "$idx"
                     else
-                        log "   Step 2: stream $idx hit max revision rounds without validation"
-                        return 1
+                        log "   Step 2: stream $idx hit max revision rounds — treating as ABANDONED"
+                        stream_phases[$idx]="done"
                     fi
                 elif (( stream_critic_attempts[$idx] < 2 )); then
                     log "   Step 2: critic output for stream $idx unusable (exit $ec, verdict '${verdict:-missing}') — retrying critic"
                     launch_critic_stream "$idx"
                 else
                     log "   Step 2: critic for stream $idx exhausted retries"
-                    return 1
+                    stream_phases[$idx]="done"
                 fi
             fi
         done
     done
 
-    for idx in 1 2 3 4 5 6; do
-        step2_stream_validated "$PROJECT" "$idx" || return 1
-    done
+    # Step 2 passes if ≥ 2 streams ended up VALIDATED. Streams that
+    # ABANDONED or exhausted retries are recorded but don't count.
+    if step2_has_enough_validated_streams "$PROJECT"; then
+        local validated=0 abandoned=0
+        for idx in "${active_ids[@]}"; do
+            if step2_stream_validated "$PROJECT" "$idx"; then
+                validated=$((validated + 1))
+            elif step2_stream_abandoned "$PROJECT" "$idx"; then
+                abandoned=$((abandoned + 1))
+            fi
+        done
+        log "   Step 2: complete — $validated validated, $abandoned abandoned, $((${#active_ids[@]} - validated - abandoned)) other"
+        return 0
+    fi
+
+    log "   Step 2: insufficient validated streams (need ≥ 2)"
+    return 1
 }
 
 run_step_3() {
