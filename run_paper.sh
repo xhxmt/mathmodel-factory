@@ -1608,14 +1608,16 @@ run_step_2() {
     log "   Step 2: active streams = ${active_ids[*]} (N=${#active_ids[@]})"
 
     # Model assignment: last stream goes to Claude for diversification,
-    # rest go to Codex. Critic is always Codex (stable structured judge).
+    # rest go to Agy (Gemini via Antigravity CLI). Critic is always Agy.
+    # NOTE: originally Codex (gpt-5.5); switched to Agy while Codex quota is
+    # exhausted (recovery date May 28). Revert "agy" → "codex" to restore.
     local -A stream_models
     local last_idx="${active_ids[${#active_ids[@]}-1]}"
     for idx in "${active_ids[@]}"; do
         if [[ "$idx" == "$last_idx" ]]; then
             stream_models[$idx]="claude"
         else
-            stream_models[$idx]="codex"
+            stream_models[$idx]="agy"
         fi
     done
 
@@ -1645,16 +1647,17 @@ NOTE FROM THE RESEARCHER: $note"
         log_path="$PROJECT/logs/step_${NEXT}_${prefix}_${model}_proposal_r${stream_rounds[$stream_idx]}_$(date +%Y%m%d_%H%M%S).log"
         log "   Step 2: launching proposal stream $stream_idx ($model, round ${stream_rounds[$stream_idx]})"
 
-        if [[ "$model" == "codex" ]]; then
+        if [[ "$model" == "agy" ]]; then
+            local agy_inner=$(( proposal_timeout - 30 ))
+            (( agy_inner < 60 )) && agy_inner=$proposal_timeout
             (
                 cd "$PROJECT" && timeout --kill-after=120 "$proposal_timeout" \
-                    codex exec \
-                      --model gpt-5.5 \
-                      -c 'model_reasoning_effort="xhigh"' \
-                      --dangerously-bypass-approvals-and-sandbox \
-                      -C "$PROJECT" \
-                      --skip-git-repo-check \
-                      "$prompt"
+                    agy \
+                      --print "$prompt" \
+                      --add-dir "$PROJECT" \
+                      --add-dir "$FACTORY" \
+                      --dangerously-skip-permissions \
+                      --print-timeout "${agy_inner}s"
             ) > "$log_path" 2>&1 &
         else
             (
@@ -1683,15 +1686,16 @@ NOTE FROM THE RESEARCHER: $note"
         log_path="$PROJECT/logs/step_${NEXT}_${prefix}_critic_a${stream_critic_attempts[$stream_idx]}_$(date +%Y%m%d_%H%M%S).log"
         log "   Step 2: launching critic for stream $stream_idx"
 
+        local agy_inner=$(( critic_timeout - 30 ))
+        (( agy_inner < 60 )) && agy_inner=$critic_timeout
         (
             cd "$PROJECT" && timeout --kill-after=120 "$critic_timeout" \
-                codex exec \
-                  --model gpt-5.5 \
-                  -c 'model_reasoning_effort="xhigh"' \
-                  --dangerously-bypass-approvals-and-sandbox \
-                  -C "$PROJECT" \
-                  --skip-git-repo-check \
-                  "$prompt"
+                agy \
+                  --print "$prompt" \
+                  --add-dir "$PROJECT" \
+                  --add-dir "$FACTORY" \
+                  --dangerously-skip-permissions \
+                  --print-timeout "${agy_inner}s"
         ) > "$log_path" 2>&1 &
 
         stream_pids[$stream_idx]=$!
