@@ -258,6 +258,18 @@ infer_step() {
     # Modeling-mode step inference — short-circuits when problem/ exists.
     # Steps 2+ will be wired here as their prompts are ported (Phase 3.x).
     if [[ -d "$P/problem" ]]; then
+        # 3: method_decision.md + chosen_method.md with PRIMARY: marker.
+        # Checked before step 2 because the m{N}_critique.md files (which
+        # step 2 detection reads) remain on disk past step 3 — descending
+        # by step number ensures we report the latest completed step.
+        if [[ -f "$P/method_decision.md" && -f "$P/chosen_method.md" ]] \
+            && (( $(_lines "$P/method_decision.md") >= 30 )) \
+            && (( $(_lines "$P/chosen_method.md") >= 10 )) \
+            && grep -q "^PRIMARY:" "$P/chosen_method.md" 2>/dev/null; then
+            echo 3
+            return
+        fi
+
         # 2: ≥ 2 active streams reached VERDICT: VALIDATED (Step 2 contract).
         # Checked before step 1 so a completed run isn't mistaken for "still
         # at step 1" because step 1 artifacts are always present after step 1.
@@ -1804,7 +1816,39 @@ NOTE FROM THE RESEARCHER: $note"
 }
 
 run_step_3() {
-    run_codex_then_claude step3_decider.txt 7200 3600
+    # Modeling-mode Step 3: method selection.  Single Claude worker reads all
+    # VALIDATED m{N} streams, picks PRIMARY + optional AUXILIARY, honors the
+    # `## Step 3 decision:` human-override section in human_review.md if
+    # present.  Mirrors run_step_1's primary-Claude convention.  The original
+    # social-science decider lives at prompts/step3_decider.txt and in
+    # STEPS_original.md / pre-86f21de git history.
+    local md="$PROJECT/method_decision.md"
+    local cm="$PROJECT/chosen_method.md"
+
+    if [[ -f "$md" && -f "$cm" ]] \
+       && (( $(_lines "$md") >= 30 )) \
+       && (( $(_lines "$cm") >= 10 )) \
+       && grep -q "^PRIMARY:" "$cm" 2>/dev/null; then
+        log "   Step 3: artifacts present — skipping worker"
+        return 0
+    fi
+
+    log "   Step 3: method selection (Claude)"
+    run_claude_worker step3_method_selection.txt 7200 || true
+
+    if [[ ! -f "$md" ]] || (( $(_lines "$md") < 30 )); then
+        log "   Step 3: method_decision.md missing or < 30 lines"
+        return 1
+    fi
+    if [[ ! -f "$cm" ]] || (( $(_lines "$cm") < 10 )); then
+        log "   Step 3: chosen_method.md missing or < 10 lines"
+        return 1
+    fi
+    if ! grep -q "^PRIMARY:" "$cm" 2>/dev/null; then
+        log "   Step 3: chosen_method.md missing PRIMARY: marker on line 1"
+        return 1
+    fi
+    return 0
 }
 
 run_step_4() {
