@@ -129,7 +129,8 @@ verdict 行之后写：
    - viability_gate.md 第一行精确匹配 `^VERDICT: (PASS|KILL)$`
    - viable_streams.md 中每个 `method_library/...md` 路径 `test -f` 验证
    - research_brief.md 中每个引用至少有作者+年份+刊物
-9. 更新 `__PROJECT_PATH__/checkpoint.md`：`Last completed step: 1`
+
+不要写 `checkpoint.md`——runner 用磁盘文件推断步骤进度并自行重写 checkpoint，agent 写入会产生格式冲突的重复行。
 
 [质量边界]
 - 文献严禁伪造。宁愿引用少而准，也不要泛泛而谈。
