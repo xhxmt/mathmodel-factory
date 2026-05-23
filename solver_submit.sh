@@ -259,12 +259,15 @@ fi
 mkdir -p "$WORKDIR/logs"
 
 # Launch via solver_wrapper.sh so $! is the pid of a process that
-# survives this script's exit and is recoverable by --status. The
-# wrapper writes the exit code to EXIT_FILE after the command returns.
+# survives this script's exit and is recoverable by --status. setsid
+# puts the wrapper in its own session/process group so it survives if
+# a parent agent does `kill -- -PGID` cleanup on its child group (codex
+# exec_command does this between turns, which previously killed the
+# wrapper before it could write EXIT_FILE).
 SOLVER_WRAPPER="$FACTORY/solver_wrapper.sh"
 (
     cd "$WORKDIR"
-    nohup "$SOLVER_WRAPPER" "$EXIT_FILE" "${WRAPPED_CMD[@]}" \
+    setsid "$SOLVER_WRAPPER" "$EXIT_FILE" "${WRAPPED_CMD[@]}" \
         > "$STDOUT_LOG" 2> "$STDERR_LOG" < /dev/null &
     bg_pid=$!
     {
