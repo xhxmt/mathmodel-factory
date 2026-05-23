@@ -940,7 +940,7 @@ prepend_agent_key() {
 
 common_prompt_preamble() {
     cat <<EOF
-Before doing any substantive work, read \`analysis_guide.md\` in the current project directory if it exists. Treat it as the canonical guide for local Stata/job execution, figure style, data layout, do-file conventions, error recovery, and esttab formatting. For tasks that do not touch those areas directly, skim it and apply the relevant parts.
+Before doing any substantive work, read the project style guide in the current project directory: prefer \`modeling_guide.md\` (math-modeling mode) if present, otherwise read \`analysis_guide.md\` (legacy social-science mode). It is the canonical guide for local job execution (solver_submit.sh / stata_submit.sh), figure style, project file layout, code conventions, error recovery, and table formatting. For tasks that do not touch those areas directly, skim it and apply the relevant parts.
 
 If \`human_review.md\` exists in the current project directory, read it before doing substantive work. Treat it as the newest human reviewer guidance for the current review cycle. If it conflicts with older review materials, prefer \`human_review.md\`. Older downstream artifacts may still be on disk for context after a rewind or revision request; do not treat them as authoritative unless you deliberately reuse or regenerate them in the current step.
 
