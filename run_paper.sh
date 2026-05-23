@@ -258,6 +258,21 @@ infer_step() {
     # Modeling-mode step inference — short-circuits when problem/ exists.
     # Steps 2+ will be wired here as their prompts are ported (Phase 3.x).
     if [[ -d "$P/problem" ]]; then
+        # 2: ≥ 2 active streams reached VERDICT: VALIDATED (Step 2 contract).
+        # Checked before step 1 so a completed run isn't mistaken for "still
+        # at step 1" because step 1 artifacts are always present after step 1.
+        if [[ -f "$P/viable_streams.md" ]]; then
+            local _s2_active _s2_validated=0 _s2_idx
+            _s2_active="$(step2_active_stream_ids "$P")"
+            for _s2_idx in $_s2_active; do
+                step2_stream_validated "$P" "$_s2_idx" && _s2_validated=$((_s2_validated + 1))
+            done
+            if (( _s2_validated >= 2 )); then
+                echo 2
+                return
+            fi
+        fi
+
         # 1: research_brief + viable_streams + viability_gate (verdict line)
         if [[ -f "$P/research_brief.md" && -f "$P/viable_streams.md" && \
               -f "$P/viability_gate.md" ]] \
