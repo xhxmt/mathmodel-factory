@@ -258,6 +258,19 @@ infer_step() {
     # Modeling-mode step inference — short-circuits when problem/ exists.
     # Steps 2+ will be wired here as their prompts are ported (Phase 3.x).
     if [[ -d "$P/problem" ]]; then
+        # 4: model.md + symbol_table.md + assumption_ledger.md (Step 4
+        # contract).  Checked before step 3 because chosen_method.md /
+        # method_decision.md remain on disk past step 4 — descending by
+        # step number ensures the latest completed step is reported.
+        if [[ -f "$P/model.md" && -f "$P/symbol_table.md" && \
+              -f "$P/assumption_ledger.md" ]] \
+            && (( $(_lines "$P/model.md") >= 100 )) \
+            && (( $(_lines "$P/symbol_table.md") >= 10 )) \
+            && (( $(_lines "$P/assumption_ledger.md") >= 10 )); then
+            echo 4
+            return
+        fi
+
         # 3: method_decision.md + chosen_method.md with PRIMARY: marker.
         # Checked before step 2 because the m{N}_critique.md files (which
         # step 2 detection reads) remain on disk past step 3 — descending
@@ -552,7 +565,7 @@ step_timeout() {
         1)  echo 14400 ;;   # 4h  — two background agents + monitoring
         2)  echo 28800 ;;   # 8h  — 6 parallel findings/critic streams with revisions
         3)  echo 7200  ;;   # 2h  — findings-package decider
-        4)  echo 28800 ;;   # 8h  — 6 extensions + argument architecture
+        4)  echo 14400 ;;   # 4h  — full model construction (single agent)
         5)  echo 10800 ;;   # 3h  — data audit
         6)  echo 10800 ;;   # 3h  — methods audit
         7)  echo 10800 ;;   # 3h  — paper writing
@@ -1308,26 +1321,16 @@ $QUESTION
 IMPORTANT: A previous Codex agent attempt for this step FAILED. Do NOT launch any Codex agents. Do the work yourself directly using your own tools. Follow the current Step 3 contract, pick one validated findings package, write findings_decision.md and findings_brief.md, then stop."
             ;;
         4)
-            prompt="Read the current Step 4 contracts at:
-- $PROMPTS/step4_ext1_identification.txt
-- $PROMPTS/step4_ext2_supplementary.txt
-- $PROMPTS/step4_ext3_heterogeneity.txt
-- $PROMPTS/step4_ext4_primary_robustness.txt
-- $PROMPTS/step4_ext5_objection_robustness.txt
-- $PROMPTS/step4_ext6_descriptive_support.txt
-- $PROMPTS/step4_ext7_moonshot2.txt
-- $PROMPTS/step4_architect.txt
-- $PROMPTS/step4_architect_lenses.txt
-- $PROMPTS/step4_architect_review.txt
-- $PROMPTS/step4_decider.txt
-- $PROMPTS/step4_auditor.txt
-- $PROMPTS/step4_executor.txt
+            prompt="Read the current Step 4 contract at:
+- $PROMPTS/step4_model_construction.txt
 
 Execute ONLY Step 4 for the project at $PROJECT.
 Base name: \"$BASE\". Research question:
 $QUESTION
 
-IMPORTANT: A previous Codex agent attempt for this step FAILED. Do NOT launch any Codex agents. Do the work yourself directly using your own tools. Follow the current Step 4 contracts, including the current extension roster and focused architecture discipline, then stop."
+Read $PROJECT/chosen_method.md to identify the PRIMARY stream m{N} and optional AUXILIARY m{M}. Promote m{N}_spec.md into model.md (≥ 100 lines), produce symbol_table.md and assumption_ledger.md, and populate models/m{N}_<short>/ with runnable 01_data/02_model/03_solve/04_postprocess scripts + at least 3 sanity tests under tests/. If AUXILIARY is not NONE, create models/m{M}_<short>/ as a scaffold only (README + .stub files, no executable code).
+
+IMPORTANT: A previous Agy agent attempt for this step FAILED. Do NOT launch any Agy or Codex agents. Do the work yourself directly using your own tools (Bash, Read, Write, Edit, Glob, Grep, Agent subagents). Follow the current Step 4 prompt contract exactly, then stop."
             ;;
         *)
             prompt="Read the paper skill instructions at $SKILL.
@@ -1852,327 +1855,44 @@ run_step_3() {
 }
 
 run_step_4() {
-    local -a ext_ids=(1 2 3 4 5 6 7)
-    local -a ext_prompts=(
-        step4_ext1_identification.txt
-        step4_ext2_supplementary.txt
-        step4_ext3_heterogeneity.txt
-        step4_ext4_primary_robustness.txt
-        step4_ext5_objection_robustness.txt
-        step4_ext6_descriptive_support.txt
-        step4_ext7_moonshot2.txt
-    )
-    local need_ext=0
-    local ext_idx
-    for ext_idx in "${ext_ids[@]}"; do
-        if [[ ! -f "$PROJECT/extension_brief_${ext_idx}.md" ]] || \
-           (( $(_lines "$PROJECT/extension_brief_${ext_idx}.md") < 20 )); then
-            need_ext=1; break
-        fi
-    done
-    if (( need_ext )); then
-        log "   Step 4A: 7 extension agents (parallel Codex)"
-        run_codex_parallel 14400 3600 "${ext_prompts[@]}"
-        local ext_rc=$?
+    # Modeling-mode Step 4: full model construction.  Single Agy worker
+    # (Claude fallback) reads chosen_method.md to identify PRIMARY (and
+    # optional AUXILIARY), expands m{primary}_spec.md into the canonical
+    # cross-step trio (model.md / symbol_table.md / assumption_ledger.md)
+    # plus runnable code under models/m{primary}_<short>/.  AUXILIARY gets
+    # scaffold-only (README + stub + entry comment); full impl deferred to
+    # Step 5/6.  The original social-science multi-phase (extensions /
+    # architects / decider+auditor / executor) is preserved in
+    # prompts/step4_{ext*,architect*,decider,auditor,executor}.txt and
+    # STEPS_original.md / pre-Phase-3.5 git history.
+    local mdl="$PROJECT/model.md"
+    local sym="$PROJECT/symbol_table.md"
+    local ledger="$PROJECT/assumption_ledger.md"
 
-        # Check each extension brief — fallback for any missing
-        local ext_failures=0
-        for ext_idx in "${ext_ids[@]}"; do
-            if [[ ! -f "$PROJECT/extension_brief_${ext_idx}.md" ]] || \
-               (( $(_lines "$PROJECT/extension_brief_${ext_idx}.md") < 20 )); then
-                log "   extension_brief_${ext_idx}.md missing/short"
-                ext_failures=$((ext_failures + 1))
-            fi
-        done
-        if (( ext_failures > 0 )); then
-            log "   $ext_failures extension briefs missing — Claude fallback for Step 4 extensions"
-            run_claude_fallback 4
-        fi
-    else
-        log "   Step 4A: all extension briefs exist — skipping"
+    if [[ -f "$mdl" && -f "$sym" && -f "$ledger" ]] \
+       && (( $(_lines "$mdl") >= 100 )) \
+       && (( $(_lines "$sym") >= 10 )) \
+       && (( $(_lines "$ledger") >= 10 )); then
+        log "   Step 4: artifacts present — skipping worker"
+        return 0
     fi
 
-    # Heartbeat between phases so watchdog doesn't kill us
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
+    log "   Step 4: full model construction (Agy → Claude fallback)"
+    run_agy_then_claude step4_model_construction.txt 14400 3600 || true
 
-    # Phase B: 5 parallel Claude architect agents (skip if all exist)
-    local need_arch=0
-    for n in 1 2 3 4 5; do
-        if [[ ! -f "$PROJECT/paper_map_${n}.md" ]] || \
-           (( $(_lines "$PROJECT/paper_map_${n}.md") < 30 )); then
-            need_arch=1; break
-        fi
-    done
-    if (( ! need_arch )); then
-        log "   Step 4B: all architect proposals exist — skipping"
-    else
-    log "   Step 4B: 5 argument architects (parallel Codex)"
-    local arch_pids=()
-    for n in 1 2 3 4 5; do
-        local lens_text
-        lens_text=$(sed -n "/^---LENS_${n}---$/,/^---/{/^---/d; p;}" \
-            "$PROMPTS/step4_architect_lenses.txt")
-
-        # Build the architect prompt with all substitutions
-        local arch_prompt
-        arch_prompt=$(render_prompt step4_architect.txt)
-        arch_prompt="${arch_prompt//__LENS__/$lens_text}"
-        arch_prompt="${arch_prompt//__N__/$n}"
-        arch_prompt=$(prepend_agent_key "step4_architect_${n}" "$arch_prompt")
-
-        local arch_log="$PROJECT/logs/step_${NEXT}_architect_${n}_$(date +%Y%m%d_%H%M%S).log"
-        ( cd "$PROJECT" && timeout --kill-after=120 7200 \
-            codex exec \
-              --model gpt-5.5 \
-              -c 'model_reasoning_effort="xhigh"' \
-              --dangerously-bypass-approvals-and-sandbox \
-              -C "$PROJECT" \
-              --skip-git-repo-check \
-              "$arch_prompt" \
-        ) > "$arch_log" 2>&1 &
-        arch_pids+=($!)
-    done
-
-    # Wait for all architects
-    for pid in "${arch_pids[@]}"; do
-        wait "$pid" 2>/dev/null || true
-    done
-
-    # Verify paper_map files
-    local arch_failures=0
-    for n in 1 2 3 4 5; do
-        if [[ ! -f "$PROJECT/paper_map_${n}.md" ]] || \
-           (( $(_lines "$PROJECT/paper_map_${n}.md") < 30 )); then
-            log "   paper_map_${n}.md missing/short"
-            arch_failures=$((arch_failures + 1))
-        fi
-    done
-    if (( arch_failures > 0 )); then
-        log "   $arch_failures architect proposals missing — Claude fallback"
-        run_claude_fallback 4
+    if [[ ! -f "$mdl" ]] || (( $(_lines "$mdl") < 100 )); then
+        log "   Step 4: model.md missing or < 100 lines"
+        return 1
     fi
-    fi  # end need_arch
-
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-    # Phase B2: 5 parallel Codex proposal reviewers (skip if all exist and are current)
-    local need_arch_review=0
-    for n in 1 2 3 4 5; do
-        if [[ ! -f "$PROJECT/paper_map_review_${n}.md" ]] || \
-           (( $(_lines "$PROJECT/paper_map_review_${n}.md") < 20 )) || \
-           _is_newer_by "$PROJECT/paper_map_${n}.md" "$PROJECT/paper_map_review_${n}.md" 1; then
-            need_arch_review=1; break
-        fi
-    done
-    if (( ! need_arch_review )); then
-        log "   Step 4B2: all architect reviews exist — skipping"
-    else
-        log "   Step 4B2: 5 architecture claim reviewers (parallel Codex)"
-        local review_pids=() review_traces=() review_labels=()
-        local review_last_sizes=() review_stale_since=()
-        local review_before_ts review_note
-        review_before_ts=$(date +%s)
-        review_note=$(get_user_note "$NEXT")
-
-        for n in 1 2 3 4 5; do
-            local review_prompt
-            review_prompt=$(render_prompt step4_architect_review.txt)
-            review_prompt="${review_prompt//__N__/$n}"
-            [[ -n "$review_note" ]] && review_prompt="$review_prompt
-
-NOTE FROM THE RESEARCHER: $review_note"
-            review_prompt=$(prepend_agent_key "step4_architect_review_${n}" "$review_prompt")
-
-            local review_log="$PROJECT/logs/step_${NEXT}_codex_architect_review_${n}_$(date +%Y%m%d_%H%M%S).log"
-            log "   Launching Codex: step4_architect_review proposal $n"
-
-            ( cd "$PROJECT" && timeout --kill-after=120 7200 \
-                codex exec \
-                  --model gpt-5.5 \
-                  -c 'model_reasoning_effort="xhigh"' \
-                  --dangerously-bypass-approvals-and-sandbox \
-                  -C "$PROJECT" \
-                  --skip-git-repo-check \
-                  "$review_prompt" \
-            ) > "$review_log" 2>&1 &
-            review_pids+=($!)
-            review_labels+=("paper_map_review_${n}.md")
-            review_traces+=("")
-            review_last_sizes+=( 0 )
-            review_stale_since+=( "$(date +%s)" )
-        done
-
-        while true; do
-            local any_review_alive=false
-            for i in "${!review_pids[@]}"; do
-                kill -0 "${review_pids[$i]}" 2>/dev/null && any_review_alive=true
-            done
-            $any_review_alive || break
-
-            sleep "$MONITOR_SLEEP"
-            echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-            local now
-            now=$(date +%s)
-
-            for i in "${!review_pids[@]}"; do
-                kill -0 "${review_pids[$i]}" 2>/dev/null || continue
-
-                if [[ -z "${review_traces[$i]}" ]]; then
-                    for f in "$CODEX_SESSIONS"/*/*/*/*.jsonl "$CODEX_SESSIONS"/*/*/*.jsonl "$CODEX_SESSIONS"/*.jsonl; do
-                        [ -f "$f" ] || continue
-                        local mt
-                        mt=$(stat -c %Y "$f" 2>/dev/null || echo 0)
-                        (( mt <= review_before_ts )) && continue
-                        if head -1 "$f" 2>/dev/null | grep -q "$PROJECT"; then
-                            local already=false
-                            for j in "${!review_traces[@]}"; do
-                                [[ "${review_traces[$j]}" == "$f" ]] && already=true
-                            done
-                            $already || { review_traces[$i]="$f"; break; }
-                        fi
-                    done
-                fi
-
-                if [[ -n "${review_traces[$i]}" ]] && [[ -f "${review_traces[$i]}" ]]; then
-                    local cur_size
-                    cur_size=$(stat -c %s "${review_traces[$i]}" 2>/dev/null || echo 0)
-                    if (( cur_size > review_last_sizes[$i] )); then
-                        review_last_sizes[$i]=$cur_size
-                        review_stale_since[$i]=$now
-                    fi
-                fi
-
-                if (( now - review_stale_since[$i] > 1800 )); then
-                    local has_work=false
-                    local desc_pids
-                    desc_pids=$(pgrep -P "${review_pids[$i]}" 2>/dev/null || true)
-                    local frontier="$desc_pids"
-                    while [[ -n "$frontier" ]]; do
-                        local next_frontier=""
-                        for dpid in $frontier; do
-                            local pname
-                            pname=$(ps -p "$dpid" -o comm= 2>/dev/null || true)
-                            if [[ "$pname" == srun || "$pname" == stata* || "$pname" == python* || "$pname" == Rscript || "$pname" == R || "$pname" == julia ]]; then
-                                has_work=true
-                            fi
-                            local grandkids
-                            grandkids=$(pgrep -P "$dpid" 2>/dev/null || true)
-                            next_frontier="$next_frontier $grandkids"
-                        done
-                        frontier=$(echo "$next_frontier" | xargs)
-                    done
-
-                    if $has_work; then
-                        log "   Codex ${review_labels[$i]} trace stale but work processes are running — not hung"
-                    else
-                        log "   Codex ${review_labels[$i]} hung (stale 1800s, no work processes) — killing"
-                        kill "${review_pids[$i]}" 2>/dev/null || true
-                    fi
-                fi
-            done
-        done
-
-        local review_failures=0
-        for i in "${!review_pids[@]}"; do
-            wait "${review_pids[$i]}" 2>/dev/null
-            local ec=$?
-            if (( ec != 0 )); then
-                log "   Codex ${review_labels[$i]} failed (exit $ec)"
-                review_failures=$((review_failures + 1))
-            else
-                log "   Codex ${review_labels[$i]} completed OK"
-            fi
-        done
-
-        local missing_review_outputs=0
-        for n in 1 2 3 4 5; do
-            if [[ ! -f "$PROJECT/paper_map_review_${n}.md" ]] || \
-               (( $(_lines "$PROJECT/paper_map_review_${n}.md") < 20 )); then
-                log "   paper_map_review_${n}.md missing/short"
-                missing_review_outputs=$((missing_review_outputs + 1))
-            fi
-        done
-        if (( review_failures > 0 || missing_review_outputs > 0 )); then
-            log "   Proposal-review phase incomplete — Claude fallback for Step 4"
-            run_claude_fallback 4
-        fi
+    if [[ ! -f "$sym" ]] || (( $(_lines "$sym") < 10 )); then
+        log "   Step 4: symbol_table.md missing or < 10 lines"
+        return 1
     fi
-
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-    # Phase C + C2: Decider-Auditor loop
-    # The auditor checks whether data construction undermines the argument.
-    # If FAIL, it annotates the paper_map files and we re-run the decider.
-    if [[ -f "$PROJECT/proposal_audit.md" ]] && \
-       grep -q "VERDICT: PASS" "$PROJECT/proposal_audit.md" && \
-       [[ -f "$PROJECT/argument_decision.md" ]] && \
-       (( $(_lines "$PROJECT/argument_decision.md") >= 40 )); then
-        log "   Step 4C+C2: decider + auditor already complete — skipping"
-    else
-        local audit_round=0
-        local max_audit_rounds=2
-
-        while (( audit_round < max_audit_rounds )); do
-            # Phase C: Decider
-            if [[ -f "$PROJECT/argument_decision.md" ]] && \
-               (( $(_lines "$PROJECT/argument_decision.md") >= 40 )); then
-                log "   Step 4C: argument_decision.md exists — skipping decider"
-            else
-                if (( audit_round > 0 )); then
-                    log "   Step 4C: argument decider (post-audit round $audit_round)"
-                else
-                    log "   Step 4C: argument decider"
-                fi
-                run_codex_then_claude step4_decider.txt 7200 3600 || true
-                if [[ ! -f "$PROJECT/argument_decision.md" ]] || \
-                   (( $(_lines "$PROJECT/argument_decision.md") < 40 )); then
-                    log "   argument_decision.md missing — Claude fallback"
-                    run_claude_fallback 4
-                fi
-            fi
-
-            echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-            # Phase C2: Proposal Auditor
-            audit_round=$((audit_round + 1))
-            log "   Step 4C2: proposal auditor (round $audit_round/$max_audit_rounds)"
-            rm -f "$PROJECT/proposal_audit.md"
-            run_codex_then_claude step4_auditor.txt 7200 3600 || true
-
-            if [[ ! -f "$PROJECT/proposal_audit.md" ]] || \
-               (( $(_lines "$PROJECT/proposal_audit.md") < 10 )); then
-                log "   proposal_audit.md missing/short — Claude fallback"
-                run_claude_fallback 4
-            fi
-
-            if [[ -f "$PROJECT/proposal_audit.md" ]] && \
-               grep -q "VERDICT: FAIL" "$PROJECT/proposal_audit.md"; then
-                if (( audit_round >= max_audit_rounds )); then
-                    log "   Auditor FAIL (round $audit_round/$max_audit_rounds) — max rounds reached, proceeding"
-                    break
-                fi
-                log "   Auditor FAIL — annotated paper_maps, recycling to decider"
-                mv "$PROJECT/proposal_audit.md" "$PROJECT/proposal_audit_round_${audit_round}.md"
-                rm -f "$PROJECT/argument_decision.md"
-                echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-                continue
-            elif [[ -f "$PROJECT/proposal_audit.md" ]] && \
-                 grep -q "VERDICT: PASS" "$PROJECT/proposal_audit.md"; then
-                log "   Auditor PASS — proceeding to executor"
-                break
-            else
-                log "   proposal_audit.md missing verdict — keeping current argument and proceeding"
-                break
-            fi
-        done
+    if [[ ! -f "$ledger" ]] || (( $(_lines "$ledger") < 10 )); then
+        log "   Step 4: assumption_ledger.md missing or < 10 lines"
+        return 1
     fi
-
-    echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
-
-    # Phase D: Executor (Codex, fall back to Claude)
-    log "   Step 4D: execution agent"
-    run_codex step4_executor.txt 14400 || run_claude_fallback 4
+    return 0
 }
 
 run_step_5() {
