@@ -1173,9 +1173,11 @@ NOTE FROM THE RESEARCHER: $note"
     (( agy_inner < 60 )) && agy_inner=$timeout
 
     ( cd "$PROJECT" && timeout --kill-after=120 "$timeout" \
-        python3 "$FACTORY/scripts/agy_run.py" \
+        "$FACTORY/.venv/bin/python3" "$FACTORY/scripts/agy_run.py" \
             --prompt-file "$agy_prompt_tmp" \
             --timeout-secs "$agy_inner" \
+            --workspace "$PROJECT" \
+            --workspace "$FACTORY" \
     ) > "$agy_log" 2>&1 &
     local agy_pid=$!
 
