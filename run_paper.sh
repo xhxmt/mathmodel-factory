@@ -1128,21 +1128,26 @@ NOTE FROM THE RESEARCHER: $note"
 # Usage: run_agy <prompt_file> <timeout_secs> [hang_timeout_secs]
 # Returns: 0=success, 1=timeout/error, 2=hung(killed)
 #
-# agy differs from codex in three ways the rest of this file cares about:
+# Phase 3.6: this used to shell out to the `agy` CLI binary; it now calls the
+# `google-antigravity` Python SDK via scripts/agy_run.py.  See that file for
+# the SDK contract (LocalAgentConfig + CapabilitiesConfig + async chat).
+#
+# agy still differs from codex in three ways the rest of this file cares about:
 #  1. The CLI has no --model / --reasoning-effort knobs — auth is OAuth via
-#     ~/.gemini/antigravity-cli/antigravity-oauth-token; model is whatever
-#     Gemini Pro tier is bound to that token.
+#     ~/.gemini/antigravity-cli/antigravity-oauth-token, or GEMINI_API_KEY in
+#     env; model is whatever Gemini Pro tier is bound to that token/key.
 #  2. There is no per-session trace file we can poll (codex writes to
 #     ~/.codex/sessions/.../*.jsonl) — so hang detection watches the
 #     redirected stdout log file's mtime instead.  The same long-job
 #     whitelist (real children: python/julia/matlab/...) applies.
-#  3. agy's internal --print-timeout defaults to 5m and would otherwise abort
-#     long agent runs prematurely.  We forward our outer timeout to it.
+#  3. The SDK is async; we forward our outer timeout to scripts/agy_run.py
+#     via --timeout-secs (the inner asyncio.wait_for cancellation fires
+#     slightly before the outer bash `timeout` SIGTERM, giving us a clean
+#     Python-level traceback instead of a hard kill).
 #
-# NOTE: the rendered prompt is passed as an argv string.  Linux ARG_MAX is
-# ~128KB on amd64, large enough for current prompts (step 0 is ~3.5KB
-# rendered) but watch out for step 4/7-style prompts that pull in many
-# files.
+# Prompt size: rendered prompts (step 4 / step 7 pull in many files, can hit
+# ~30KB) are passed via a tempfile rather than argv, so we're not constrained
+# by Linux ARG_MAX.
 run_agy() {
     local prompt_file="$1" timeout="$2" hang_timeout="${3:-3600}"
     local rendered
@@ -1155,21 +1160,22 @@ NOTE FROM THE RESEARCHER: $note"
     rendered=$(prepend_agent_key "$(agent_key_from_prompt_file "$prompt_file")" "$rendered")
 
     local agy_log="$PROJECT/logs/step_${NEXT}_agy_${prompt_file%.txt}_$(date +%Y%m%d_%H%M%S).log"
+    local agy_prompt_tmp="$PROJECT/logs/step_${NEXT}_agy_${prompt_file%.txt}_$(date +%Y%m%d_%H%M%S).prompt.txt"
+    printf '%s' "$rendered" > "$agy_prompt_tmp"
 
-    log "   Agy: $prompt_file (timeout ${timeout}s)"
+    log "   Agy: $prompt_file (timeout ${timeout}s, SDK via scripts/agy_run.py)"
 
-    # Pad agy's --print-timeout slightly under the outer 'timeout' wrapper
-    # so the outer wrapper is the authoritative kill, but never below 60s.
+    # Pad the inner asyncio timeout slightly under the outer bash 'timeout'
+    # wrapper so the outer wrapper is the authoritative kill, but never below
+    # 60s.  scripts/agy_run.py exits 124 on inner timeout, matching the unix
+    # `timeout` convention so the post-run case statement below stays simple.
     local agy_inner=$(( timeout - 30 ))
     (( agy_inner < 60 )) && agy_inner=$timeout
 
     ( cd "$PROJECT" && timeout --kill-after=120 "$timeout" \
-        agy \
-          --print "$rendered" \
-          --add-dir "$PROJECT" \
-          --add-dir "$FACTORY" \
-          --dangerously-skip-permissions \
-          --print-timeout "${agy_inner}s" \
+        python3 "$FACTORY/scripts/agy_run.py" \
+            --prompt-file "$agy_prompt_tmp" \
+            --timeout-secs "$agy_inner" \
     ) > "$agy_log" 2>&1 &
     local agy_pid=$!
 
@@ -1210,6 +1216,7 @@ NOTE FROM THE RESEARCHER: $note"
     local ec=$?
     case "$ec" in
         0)   log "   Agy $prompt_file exited OK" ;;
+        2)   log "   Agy $prompt_file: SDK not installed (run: pip install --user google-antigravity)" ; return 1 ;;
         124) log "   Agy $prompt_file TIMEOUT" ; return 1 ;;
         *)   log "   Agy $prompt_file exit code $ec" ; return 1 ;;
     esac
