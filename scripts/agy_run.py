@@ -37,9 +37,15 @@ Exit codes:
   2    — SDK not installed (ModuleNotFoundError on google.antigravity)
   124  — inner asyncio timeout fired (mirrors the unix `timeout` convention)
 
-Auth: GEMINI_API_KEY env var, or OAuth via ~/.gemini/antigravity-cli/
-antigravity-oauth-token (the SDK accepts either — the wrapper does not
-inject credentials itself).
+Auth: GEMINI_API_KEY env var.  Get a key at https://aistudio.google.com/apikey
+and put it in $FACTORY/.env as GEMINI_API_KEY=... — run_paper.sh sources that
+file on startup so this script inherits the value via os.environ.
+
+NOTE: the SDK does NOT accept the OAuth token used by the legacy `agy` CLI
+at ~/.gemini/antigravity-cli/antigravity-oauth-token.  Inspected on disk:
+.venv/.../google/antigravity/connections/local/local_connection.py raises
+AntigravityValidationError if neither GeminiConfig(api_key=...) nor
+GEMINI_API_KEY is set.
 """
 
 from __future__ import annotations
@@ -168,17 +174,21 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    if not os.environ.get("GEMINI_API_KEY") and not Path(
-        "~/.gemini/antigravity-cli/antigravity-oauth-token"
-    ).expanduser().exists():
+    if not os.environ.get("GEMINI_API_KEY"):
         print(
-            "[agy_run] no GEMINI_API_KEY in env and no OAuth token at "
-            "~/.gemini/antigravity-cli/antigravity-oauth-token — the SDK will "
-            "fail to authenticate.  Set the env var, or log in via the legacy "
-            "`agy` CLI to populate the OAuth token, before running.",
+            "[agy_run] GEMINI_API_KEY is not set in the environment.  The "
+            "google-antigravity SDK requires a Gemini API key and does NOT "
+            "accept the OAuth token used by the legacy `agy` CLI (see "
+            ".venv/.../google/antigravity/connections/local/local_connection.py "
+            "around the AntigravityValidationError raise).  Get a key at "
+            "https://aistudio.google.com/apikey and put it in $FACTORY/.env "
+            "as GEMINI_API_KEY=... — run_paper.sh sources that file on "
+            "startup so subprocesses inherit it.",
             file=sys.stderr,
+            flush=True,
         )
-        # Don't fail here — let the SDK raise its own auth error with context.
+        # Don't fail here — let the SDK raise its own auth error with context
+        # (it may also accept api_key passed programmatically in some flows).
 
     try:
         return asyncio.run(_run(args, prompt))

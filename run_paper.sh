@@ -26,6 +26,18 @@ REGISTRY="$FACTORY/run_state/process_registry"
 KILL_MARKER=".killed"
 REVIEW_STATE_FILE=".review_state.json"
 
+# Source $FACTORY/.env if present so subprocesses (the google-antigravity
+# SDK in scripts/agy_run.py, the MinerU client, etc.) see secrets like
+# GEMINI_API_KEY / MINERU_TOKEN.  The file is gitignored (see .gitignore
+# .env exclusion) so secrets never leak into the repo.  Format is plain
+# KEY=value lines — same shape as .env.example.
+if [[ -f "$FACTORY/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$FACTORY/.env"
+    set +a
+fi
+
 export PATH="$HOME/local/node/bin:$PATH"
 
 # ── File-state step inference ────────────────────────────────────────
@@ -1133,9 +1145,13 @@ NOTE FROM THE RESEARCHER: $note"
 # the SDK contract (LocalAgentConfig + CapabilitiesConfig + async chat).
 #
 # agy still differs from codex in three ways the rest of this file cares about:
-#  1. The CLI has no --model / --reasoning-effort knobs — auth is OAuth via
-#     ~/.gemini/antigravity-cli/antigravity-oauth-token, or GEMINI_API_KEY in
-#     env; model is whatever Gemini Pro tier is bound to that token/key.
+#  1. Auth is via GEMINI_API_KEY env var ONLY — the SDK does NOT accept the
+#     OAuth token at ~/.gemini/antigravity-cli/antigravity-oauth-token that
+#     the legacy `agy` CLI used.  run_paper.sh sources $FACTORY/.env on
+#     startup, so put `GEMINI_API_KEY=...` there (get a key from
+#     https://aistudio.google.com/apikey).  If the var is missing,
+#     scripts/agy_run.py exits 2 and run_agy logs a "pip install" / "set
+#     GEMINI_API_KEY" hint before falling through to the Claude fallback.
 #  2. There is no per-session trace file we can poll (codex writes to
 #     ~/.codex/sessions/.../*.jsonl) — so hang detection watches the
 #     redirected stdout log file's mtime instead.  The same long-job
