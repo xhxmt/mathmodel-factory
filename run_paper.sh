@@ -100,6 +100,13 @@ is_modeling_input() {
     return 1
 }
 
+# After Step 0 (problem parsing) has run, the project always has a problem/
+# directory.  This is the canonical signal that the project follows the
+# math-modeling pipeline (Steps 1-16 modeling variants) rather than the
+# legacy social-science pipeline.  Used by infer_step's modeling-mode
+# short-circuit and by any future dispatcher branching.
+is_modeling_project() { [[ -d "$1/problem" ]]; }
+
 analysis_ready_dirs() {
     local P="$1"
     local dir
@@ -267,9 +274,137 @@ infer_step() {
     # 16: final PDF delivered to papers/
     [[ -f "$FACTORY/papers/${base}_paper.pdf" ]] && echo 16 && return
 
-    # Modeling-mode step inference — short-circuits when problem/ exists.
-    # Steps 2+ will be wired here as their prompts are ported (Phase 3.x).
-    if [[ -d "$P/problem" ]]; then
+    # Modeling-mode step inference — short-circuits when the project has a
+    # problem/ directory (set by Step 0 problem parsing).  Modeling artifacts
+    # for Steps 5-16 are checked descending so the latest completed step is
+    # reported even when older artifacts remain on disk.
+    if is_modeling_project "$P"; then
+        local gate2_marker="$P/.gate2_reopen_to_revision"
+
+        # 15: citation_audit.md + derobotification.md + final paper.tex
+        # (abstract replaced, document closes cleanly).  Step 15 also touches
+        # tables/ but cleaned tables are too project-specific to gate on.
+        if [[ -f "$P/citation_audit.md" && -f "$P/derobotification.md" && -f "$paper" ]] \
+            && (( $(_lines "$P/citation_audit.md") >= 10 )) \
+            && (( $(_lines "$P/derobotification.md") >= 10 )) \
+            && grep -q '\\end{document}' "$paper" 2>/dev/null \
+            && ! grep -q "ABSTRACT_PLACEHOLDER" "$paper" 2>/dev/null \
+            && _review_step_is_fresh 15 "$P/derobotification.md" "$paper"; then
+            echo 15
+            return
+        fi
+
+        # 14: abstract_draft.md exists AND paper.tex no longer contains
+        # ABSTRACT_PLACEHOLDER (i.e. the abstract has been spliced in).
+        if [[ -f "$P/abstract_draft.md" && -f "$paper" ]] \
+            && (( $(_lines "$P/abstract_draft.md") >= 20 )) \
+            && grep -q '\\end{document}' "$paper" 2>/dev/null \
+            && ! grep -q "ABSTRACT_PLACEHOLDER" "$paper" 2>/dev/null \
+            && _review_step_is_fresh 14 "$P/abstract_draft.md" "$paper"; then
+            echo 14
+            return
+        fi
+
+        # 13: judge_evaluation.md with VERDICT: line (Gate 2).
+        if [[ -f "$P/judge_evaluation.md" ]] \
+            && (( $(_lines "$P/judge_evaluation.md") >= 30 )) \
+            && grep -q "^VERDICT:" "$P/judge_evaluation.md" 2>/dev/null \
+            && _review_step_is_fresh 13 "$P/judge_evaluation.md"; then
+            echo 13
+            return
+        fi
+
+        # 12: revision_summary.md + revised paper.tex + pre-revision archive.
+        # When a Gate-2 reopen is active, all three must be newer than the
+        # reopen marker so the rewind actually takes effect; mirrors the
+        # legacy social-science Step 10 reopen logic at lines 337-344.
+        if [[ -f "$P/revision_summary.md" && -f "$paper" && -d "$P/paper/archive/pre_step12" ]] \
+            && (( $(_lines "$P/revision_summary.md") >= 10 )); then
+            if [[ -f "$gate2_marker" ]]; then
+                if _is_newer_by "$paper" "$gate2_marker" 60 \
+                   && _is_newer_by "$P/revision_summary.md" "$gate2_marker" 1 \
+                   && _review_step_is_fresh 12 "$P/revision_summary.md" "$paper"; then
+                    echo 12
+                    return
+                fi
+            else
+                if _review_step_is_fresh 12 "$P/revision_summary.md" "$paper"; then
+                    echo 12
+                    return
+                fi
+            fi
+        fi
+
+        # 11: review_comments.md (constructive review).
+        if [[ -f "$P/review_comments.md" ]] \
+            && (( $(_lines "$P/review_comments.md") >= 30 )) \
+            && _review_step_is_fresh 11 "$P/review_comments.md"; then
+            echo 11
+            return
+        fi
+
+        # 10: code_review.md (Gate 1 — numerical & code consistency).
+        if [[ -f "$P/code_review.md" ]] \
+            && (( $(_lines "$P/code_review.md") >= 20 )) \
+            && _review_step_is_fresh 10 "$P/code_review.md"; then
+            echo 10
+            return
+        fi
+
+        # 9: paper.tex draft with the canonical CUMCM sections + ABSTRACT
+        # placeholder still in place (Step 14 removes it).  Minimum length
+        # is conservative; a real CUMCM draft easily clears 300 lines.
+        if [[ -f "$paper" ]] \
+            && (( $(_lines "$paper") > 200 )) \
+            && grep -q '\\begin{document}' "$paper" 2>/dev/null \
+            && grep -q '\\end{document}' "$paper" 2>/dev/null \
+            && grep -q 'ABSTRACT_PLACEHOLDER' "$paper" 2>/dev/null \
+            && _review_step_is_fresh 9 "$paper"; then
+            echo 9
+            return
+        fi
+
+        # 8: visualization_log.md + at least one polished figure newer than
+        # the sensitivity step (8 polishes 5/6 figures into final form).
+        if [[ -f "$P/visualization_log.md" ]] \
+            && (( $(_lines "$P/visualization_log.md") >= 20 )) \
+            && find "$P/figures" -maxdepth 1 -type f \( -name '*.pdf' -o -name '*.png' \) -print -quit 2>/dev/null | grep -q . \
+            && _review_step_is_fresh 8 "$P/visualization_log.md"; then
+            echo 8
+            return
+        fi
+
+        # 7: evaluation.md (model strengths/weaknesses + comparison).
+        if [[ -f "$P/evaluation.md" ]] \
+            && (( $(_lines "$P/evaluation.md") >= 30 )) \
+            && _review_step_is_fresh 7 "$P/evaluation.md"; then
+            echo 7
+            return
+        fi
+
+        # 6: sensitivity_report.md + at least one figures/sensitivity_*.{pdf,png}.
+        if [[ -f "$P/sensitivity_report.md" ]] \
+            && (( $(_lines "$P/sensitivity_report.md") >= 20 )) \
+            && find "$P/figures" -maxdepth 1 -type f \( -name 'sensitivity_*.pdf' -o -name 'sensitivity_*.png' \) -print -quit 2>/dev/null | grep -q . \
+            && _review_step_is_fresh 6 "$P/sensitivity_report.md"; then
+            echo 6
+            return
+        fi
+
+        # 5: solve_log.md (per-run table for all sub-problems) + at least one
+        # values.json file under results/.  STEPS.md:83 requires
+        # results/<subproblem>/values.json per sub-problem, but enumerating
+        # sub-problem names from problem_brief.md is brittle — we accept any
+        # values.json anywhere under results/ as the "solver actually ran"
+        # signal.
+        if [[ -f "$P/solve_log.md" ]] \
+            && (( $(_lines "$P/solve_log.md") >= 20 )) \
+            && find "$P/results" -type f -name 'values.json' -print -quit 2>/dev/null | grep -q . \
+            && _review_step_is_fresh 5 "$P/solve_log.md"; then
+            echo 5
+            return
+        fi
+
         # 4: model.md + symbol_table.md + assumption_ledger.md (Step 4
         # contract).  Checked before step 3 because chosen_method.md /
         # method_decision.md remain on disk past step 4 — descending by
@@ -578,18 +713,18 @@ step_timeout() {
         2)  echo 28800 ;;   # 8h  — 6 parallel findings/critic streams with revisions
         3)  echo 7200  ;;   # 2h  — findings-package decider
         4)  echo 14400 ;;   # 4h  — full model construction (single agent)
-        5)  echo 10800 ;;   # 3h  — data audit
-        6)  echo 10800 ;;   # 3h  — methods audit
-        7)  echo 10800 ;;   # 3h  — paper writing
-        8)  echo 10800 ;;   # 3h  — code review
-        9)  echo 7200  ;;   # 2h  — constructive review
-        10) echo 10800 ;;   # 3h  — revision
-        11) echo 7200  ;;   # 2h  — final review
-        12) echo 10800 ;;   # 3h  — citation audit
-        13) echo 7200  ;;   # 2h  — table formatting
+        5)  echo 14400 ;;   # 4h  — full solve (parallel solver_submit jobs; bulk of compute)
+        6)  echo 10800 ;;   # 3h  — sensitivity + robustness (modeling) / methods audit (legacy)
+        7)  echo 7200  ;;   # 2h  — model evaluation (modeling) / paper writing (legacy)
+        8)  echo 10800 ;;   # 3h  — visualization polish (modeling) / code review (legacy)
+        9)  echo 14400 ;;   # 4h  — paper draft (modeling) / constructive review (legacy)
+        10) echo 10800 ;;   # 3h  — Gate 1 numerical check (modeling) / revision (legacy)
+        11) echo 7200  ;;   # 2h  — constructive review (modeling) / final review (legacy)
+        12) echo 14400 ;;   # 4h  — revision after Gate 2 reopen (modeling) / citation audit (legacy)
+        13) echo 10800 ;;   # 3h  — Gate 2 judge simulation (modeling) / table formatting (legacy)
         14) echo 7200  ;;   # 2h  — abstract
-        15) echo 7200  ;;   # 2h  — de-robotification
-        16) echo 3600  ;;   # 1h  — delivery
+        15) echo 10800 ;;   # 3h  — citation + table + de-robotification polish bundle (modeling)
+        16) echo 3600  ;;   # 1h  — delivery + submission bundle
         *)  echo 10800 ;;
     esac
 }
@@ -703,23 +838,27 @@ verify_step() {
     (( new >= $1 ))
 }
 
-step11_reopen_marker() {
-    echo "$PROJECT/.step11_reopen_to_step10"
+# Gate 2 (Step 13 in modeling mode; was Step 11 in the legacy social-science
+# pipeline).  Reads VERDICT line from judge_evaluation.md and, if it requests
+# a reopen, drops a marker so the runner rewinds to Step 12 (revision) once.
+# The .gate2_reopened_once file prevents an infinite reopen loop.
+gate2_reopen_marker() {
+    echo "$PROJECT/.gate2_reopen_to_revision"
 }
 
-step11_reopened_once_file() {
-    echo "$PROJECT/.step11_reopened_once"
+gate2_reopened_once_file() {
+    echo "$PROJECT/.gate2_reopened_once"
 }
 
-step11_verdict() {
-    awk -F': *' '/^VERDICT:/{print $2; exit}' "$PROJECT/final_review.md" 2>/dev/null \
+gate2_verdict() {
+    awk -F': *' '/^VERDICT:/{print $2; exit}' "$PROJECT/judge_evaluation.md" 2>/dev/null \
         | tr -d '\r'
 }
 
-step11_requests_reopen() {
+gate2_requests_reopen() {
     local verdict
-    verdict=$(step11_verdict)
-    [[ "$verdict" == "REOPEN_STEP10_TEXT" || "$verdict" == "REOPEN_STEP10_ANALYSIS" ]]
+    verdict=$(gate2_verdict)
+    [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]
 }
 
 # ── Determine starting point ─────────────────────────────────────────
@@ -1188,12 +1327,20 @@ NOTE FROM THE RESEARCHER: $note"
     local agy_inner=$(( timeout - 30 ))
     (( agy_inner < 60 )) && agy_inner=$timeout
 
+    # Model: default to gemini-3.1-pro-preview (1M ctx, current top model on
+    # the Antigravity SDK as of 2026-05).  Override with AGY_MODEL env var if
+    # the SDK defaults shift or the preview name gets promoted.  Note: the
+    # name "gemini-3.1-pro" (no -preview) is NOT valid on v1beta — confirmed
+    # via ListModels 2026-05-25.
+    local agy_model="${AGY_MODEL:-gemini-3.1-pro-preview}"
+
     ( cd "$PROJECT" && timeout --kill-after=120 "$timeout" \
         "$FACTORY/.venv/bin/python3" "$FACTORY/scripts/agy_run.py" \
             --prompt-file "$agy_prompt_tmp" \
             --timeout-secs "$agy_inner" \
             --workspace "$PROJECT" \
             --workspace "$FACTORY" \
+            --model "$agy_model" \
     ) > "$agy_log" 2>&1 &
     local agy_pid=$!
 
@@ -1921,38 +2068,28 @@ run_step_4() {
 }
 
 run_step_5() {
-    # Data audit + argument-focused deep research in parallel
-    run_codex_parallel 10800 3600 step5_data_audit.txt step5_argument_research.txt
-    local rc=$?
-
-    # Data audit is critical — fallback if missing
-    if [[ ! -f "$PROJECT/findings_brief.md" ]] || \
-       ! grep -qi "data audit" "$PROJECT/findings_brief.md" 2>/dev/null; then
-        log "   Data audit not in findings_brief.md — Claude fallback"
-        run_claude_fallback 5
-    fi
-
-    # Argument research is best-effort — log but don't block
-    if [[ ! -f "$PROJECT/argument_research.md" ]] || \
-       (( $(_lines "$PROJECT/argument_research.md") < 20 )); then
-        log "   argument_research.md missing/short — paper writer will use codex_research.md only"
-    fi
+    # Modeling-mode Step 5 — full solve across all sub-problems.
+    # Codex primary (numerical / shell-heavy work), Claude fallback.
+    # Hang detection budget 1h matches Step 4's; the solver itself runs
+    # via solver_submit.sh and counts as "real work" for hang detection
+    # (CLAUDE.md hang-detection rule).
+    run_codex_then_claude step5_full_solve.txt 14400 3600
 }
-run_step_6()  { run_codex step6_methods_audit.txt 10800 || run_claude_fallback 6; }
+run_step_6()  { run_codex_then_claude step6_sensitivity.txt 10800 3600; }
 
-run_step_7()  { run_claude_then_codex step7_paper_writer.txt 10800 3600; }
-run_step_8()  { run_codex_then_claude step8_code_review.txt 10800 3600; }
-run_step_9()  { run_codex step9_review.txt 10800 || run_claude_fallback 9; }
+run_step_7()  { run_claude_then_codex step7_model_eval.txt 7200 1800; }
+run_step_8()  { run_claude_then_codex step8_visualization.txt 10800 3600; }
+run_step_9()  { run_claude_then_codex step9_paper_draft.txt 14400 3600; }
 
-run_step_10() { run_claude_then_codex step10_revision.txt 10800 3600; }
+run_step_10() { run_codex_then_claude step10_gate1_numerical.txt 10800 3600; }
 
-run_step_11() { run_codex_then_claude step11_final_review.txt 7200 3600; }
+run_step_11() { run_codex_then_claude step11_constructive_review.txt 7200 1800; }
 
-run_step_12() { run_codex step12_citation_audit.txt 10800 || run_claude_fallback 12; }
-run_step_13() { run_claude_then_codex step13_table_formatting.txt 7200 3600; }
+run_step_12() { run_claude_then_codex step12_revision.txt 14400 3600; }
+run_step_13() { run_codex_then_claude step13_gate2_judge.txt 10800 3600; }
 
-run_step_14() { run_claude_then_codex step14_abstract.txt 7200 3600; }
-run_step_15() { run_codex_then_claude step15_derobotification.txt 7200 3600; }
+run_step_14() { run_claude_then_codex step14_abstract.txt 7200 1800; }
+run_step_15() { run_codex_then_claude step15_polish.txt 10800 3600; }
 
 run_step_16() {
     log "   Recompiling PDF"
@@ -2037,22 +2174,22 @@ while (( STEP < 16 )); do
 
         # Verify step completed regardless of exit code.
         if verify_step "$NEXT"; then
-            if (( NEXT == 11 )); then
+            if (( NEXT == 13 )); then
                 verdict=""
-                verdict=$(step11_verdict)
+                verdict=$(gate2_verdict)
 
-                if [[ -f "$(step11_reopen_marker)" ]]; then
-                    rm -f "$(step11_reopen_marker)"
-                    log "   Step 11 reopen cycle completed"
-                    if [[ "$verdict" == "REOPEN_STEP10_TEXT" || "$verdict" == "REOPEN_STEP10_ANALYSIS" ]]; then
-                        log "   Step 11 verdict $verdict after prior reopen — proceeding to Step 12 per policy"
+                if [[ -f "$(gate2_reopen_marker)" ]]; then
+                    rm -f "$(gate2_reopen_marker)"
+                    log "   Gate 2 reopen cycle completed"
+                    if [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]; then
+                        log "   Step 13 verdict $verdict after prior reopen — proceeding to Step 14 per policy"
                     fi
-                elif [[ "$verdict" == "REOPEN_STEP10_TEXT" || "$verdict" == "REOPEN_STEP10_ANALYSIS" ]]; then
-                    if [[ ! -f "$(step11_reopened_once_file)" ]]; then
-                        touch "$(step11_reopened_once_file)"
-                        touch "$(step11_reopen_marker)"
-                        log "   Step 11 verdict $verdict — reopening Step 10 once"
-                        STEP=9
+                elif [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]; then
+                    if [[ ! -f "$(gate2_reopened_once_file)" ]]; then
+                        touch "$(gate2_reopened_once_file)"
+                        touch "$(gate2_reopen_marker)"
+                        log "   Step 13 verdict $verdict — reopening Step 12 once"
+                        STEP=11
                         echo "$STEP $(date +%s)" > "$PROJECT/.heartbeat"
                         sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: $STEP/" \
                             "$PROJECT/checkpoint.md" 2>/dev/null || true
@@ -2060,12 +2197,12 @@ while (( STEP < 16 )); do
                             "$PROJECT/checkpoint.md" 2>/dev/null || true
                         break
                     else
-                        log "   Step 11 verdict $verdict after prior reopen — proceeding to Step 12 per policy"
+                        log "   Step 13 verdict $verdict after prior reopen — proceeding to Step 14 per policy"
                     fi
                 elif [[ -z "$verdict" ]]; then
-                    log "   Step 11 final_review.md has no VERDICT line — treating as pass"
-                elif [[ "$verdict" != "PASS_WITH_DIRECT_FIXES" ]]; then
-                    log "   Step 11 VERDICT '$verdict' not recognized — treating as pass"
+                    log "   Step 13 judge_evaluation.md has no VERDICT line — treating as pass"
+                elif [[ "$verdict" != "PASS" ]]; then
+                    log "   Step 13 VERDICT '$verdict' not recognized — treating as pass"
                 fi
             fi
 
@@ -2101,14 +2238,16 @@ done
 
 if (( PROJECT_KILLED )); then
     log "Project terminated by the viability gate. See kill_memo.md."
-    rm -f "$PROJECT/.step11_reopen_to_step10" "$PROJECT/.step11_reopened_once" 2>/dev/null || true
+    rm -f "$PROJECT/.step11_reopen_to_step10" "$PROJECT/.step11_reopened_once" \
+          "$PROJECT/.gate2_reopen_to_revision" "$PROJECT/.gate2_reopened_once" 2>/dev/null || true
     log "========================================"
     exit 0
 fi
 
 log "All 16 steps complete. Paper delivered."
 
-rm -f "$PROJECT/.step11_reopen_to_step10" "$PROJECT/.step11_reopened_once" 2>/dev/null || true
+rm -f "$PROJECT/.step11_reopen_to_step10" "$PROJECT/.step11_reopened_once" \
+      "$PROJECT/.gate2_reopen_to_revision" "$PROJECT/.gate2_reopened_once" 2>/dev/null || true
 
 # Move completed project from ongoing/ to complete/
 DEST="$FACTORY/complete/$BASE"

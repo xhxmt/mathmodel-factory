@@ -1,14 +1,120 @@
-You are reading a social science paper for the first time. Read the ENTIRE file `__BASE_NAME___paper.tex` in the project directory `__PROJECT_PATH__`. Also read all table files in `tables/` and open all figure PDFs in `figures/`. Then read the model abstracts in `__FACTORY__/resources/examples/Abstract_examples.md` — study their structure and tone carefully and model your abstract after them.
+你是 Modeling Factory 的 Step 14 摘要 agent — 这是论文的 human intervention point。Step 13 Gate 2 已经 PASS, 论文整体已经达标。本步骤的任务是产出**最终摘要**, 把 `__BASE_NAME___paper.tex` 里的 `ABSTRACT_PLACEHOLDER` 替换成实际摘要文本。
 
-Write a 200-word-max abstract that follows this structure: (a) At least 3 sentences establishing the motivating puzzle, theoretical argument, and contribution of the paper — before any mention of data or findings. (b) 1 sentence introducing the data and empirical approach. (c) 2–3 sentences on key empirical findings, described in qualitative terms (e.g., "substantially lower," "a strong positive association") — do NOT report specific numbers such as sample sizes, percentages, coefficient estimates, or p-values. (d) 1 sentence on the broader implication.
+摘要是 CUMCM 评分细则里**单点权重最高**的章节 — 评委初筛时只看摘要, 通过初筛才会读正文。CUMCM 摘要的标准结构是「四段法」:
+1. **问题理解** (≈ 80 字): 把题目用自己的话讲一遍, 强调你看出了哪些 nuance
+2. **方法** (≈ 100 字): 主方法族 + 关键技术点 + 创新性主张 (PROTECTED 假设对应的差异化机制)
+3. **结果** (≈ 100 字): 关键数字 + 灵敏度稳健性结论 + 跨子问题一致性
+4. **亮点** (≈ 80 字): 把全文最强的卖点 (来自 evaluation.md §1 优点) 提炼成 1-2 句
 
-The abstract must read like the model abstracts: it should lead with ideas, not data. A reader should understand what the paper argues and why it matters before learning what the data show.
+**Human intervention 机制**: 如果 `human_review.md` 包含 `## Step 14 abstract:` 段落 (不区分大小写), 那个段落里的内容**直接覆盖** agent 起草的摘要。Agent 仍要产出 `abstract_draft.md` 作为 fallback, 但 paper.tex 里嵌入的摘要文本应该是 human 优先。
 
-Write the abstract to `abstract_draft.md` in the project directory.
+[重要 — 风格规范]
+- 风格圣经：`__FACTORY__/modeling_guide.md §LaTeX Document Requirements §1 Summary/Abstract`
+- 中文输出 (CUMCM 国赛); 美赛 (MCM/ICM) 英文 (本步骤可根据 problem/source.md 语言自适应判断)。
+- Markdown 产物: `abstract_draft.md`（新建, agent 起草, ≥ 20 行 含元信息）。
+- LaTeX 修订: `__BASE_NAME___paper.tex` 中 `ABSTRACT_PLACEHOLDER` token **整体替换**为最终摘要文本 (含合适的 LaTeX 段落分隔)。
 
-Also write a new title for the paper. The title should be short, analytical, and descriptive of what the paper actually studies. No puns, no literary flourishes. Colons with descriptive subtitles are fine. Model it on titles like "The Economic Consequences of Being Denied an Abortion" or "Firms and Labor Market Inequality" — plain, direct, informative. Write the title as the first line of `abstract_draft.md`, preceded by `# Title: `.
+[必读资料 — 顺序就是建议阅读次序]
 
-Then open `__BASE_NAME___paper.tex` and:
-1. Replace the abstract placeholder text (between `\begin{abstract}` and `\end{abstract}`) with the abstract you just wrote.
-2. Replace the existing `\title{...}` with your new title.
-Save the .tex file.
+1. `__PROJECT_PATH__/human_review.md`（如存在）—— **首先检查** `## Step 14 abstract:` 段落 (不区分大小写)。若存在, 这是最终摘要文本, agent 不创作。
+2. `__PROJECT_PATH__/judge_evaluation.md` —— §给 Step 14 摘要 段落已经为本步骤准备好了素材 (四段每段约 80-100 字的素材)。如果 Step 13 verdict 是 PASS, 直接用此处素材作为起草起点。
+3. `__PROJECT_PATH__/evaluation.md` §1 优点 §3 推广潜力 —— §亮点 段的核心素材。
+4. `__PROJECT_PATH__/solve_log.md` §关键发现 —— §结果 段可以引用的反直觉数值现象。
+5. `__PROJECT_PATH__/sensitivity_report.md` §4. 定性翻转记录 —— §结果 段中关于鲁棒性的关键结论。
+6. `__PROJECT_PATH__/__BASE_NAME___paper.tex` —— 全文阅读 (尤其 §1 §2 §6 §7 §8), 确保摘要不会与正文冲突。
+7. `__PROJECT_PATH__/problem/source.md` —— 判断 CUMCM 国赛 (中文摘要) vs 美赛 (英文 Summary)。
+8. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— § 提交格式硬约束 §摘要 / 字数限制。
+
+[输出契约 — runner 用磁盘文件判定本步骤是否 ready]
+
+═══════════════════════════════════════════════════════════════
+### 1. `__PROJECT_PATH__/abstract_draft.md`（≥ 20 行）
+
+完整摘要素材 + 元信息。结构:
+
+```markdown
+# Step 14 Abstract Draft — `__BASE_NAME__`
+
+语言: 中文 (CUMCM 国赛) | English (MCM/ICM)
+字数: <数字> (题目要求 <限制>; CUMCM 国赛通常 600-1200 字)
+人工覆盖: yes (来自 human_review.md ## Step 14 abstract:) | no (agent 起草)
+
+## 摘要正文 (准备嵌入 paper.tex 的版本)
+
+> 这是 agent 起草的版本。如果存在 human_review.md ## Step 14 abstract: 段落, 那版本覆盖此处。
+
+```
+<段 1 — 问题理解, ≈ 80 字>
+
+本文研究 ... 题目要求 ... 关键挑战在 ...
+
+<段 2 — 方法, ≈ 100 字>
+
+针对 ..., 我们建立了 m{N} 模型 (方法族 = ...), 主要思路是 ... 创新点是 ...
+(若有辅流程) 同时引入 m{M} 作为对照, 用于 ...
+
+<段 3 — 结果, ≈ 100 字>
+
+问题 1 (...) 求得 ... = <值>; 问题 2 (...) 求得最优决策 σ = <值>, 目标函数 = <值>; ...
+灵敏度分析显示 ...; 与基线决策 ... 相比, 我们的方法 ...
+
+<段 4 — 亮点, ≈ 80 字>
+
+本文的主要创新是 ... 这一框架的推广价值在于 ...
+```
+
+## 关键词 (≤ 6 个)
+
+逗号分隔: <kw1>, <kw2>, ..., <kw6>
+
+(关键词包含: 主方法族 + 次方法族 + 题目核心术语 + 创新性主张, 用 LaTeX 兼容的中英文术语)
+
+## Step 14 起草决策记录
+
+agent 在四段摘要里选择性强调了:
+- §问题理解 强调: <一句话, 例如「跨子问题的端到端贯通」>
+- §方法 强调: <一句话, 例如「PROTECTED 主张: SPRT 反推 δ → Γ-鲁棒输入」>
+- §结果 强调: <一句话, 例如「σ=(0,0,0,1) 在 6 cases × Γ ∈ {0,1,2,3} 全稳定」>
+- §亮点 强调: <一句话, 例如「per-attempt 公式的非单调性的诚实披露 + 公式根因分析」>
+
+(选择性强调有取舍 — 受 600-1200 字限制, 把次要点压缩或省略)
+```
+
+═══════════════════════════════════════════════════════════════
+### 2. `__PROJECT_PATH__/__BASE_NAME___paper.tex` 嵌入
+
+把 paper.tex 中**唯一一处** `ABSTRACT_PLACEHOLDER` token **整体替换**:
+
+- **如果 human_review.md ## Step 14 abstract: 存在**: 用 human 提供的内容替换 (做必要的 LaTeX 转义: `\`, `$`, `%`, `_`, `{`, `}`, `&` 等)
+- **否则**: 用 agent 起草的 abstract_draft.md §摘要正文 的版本替换
+
+替换后 paper.tex 应该:
+- 不再含 `ABSTRACT_PLACEHOLDER` 字符串 (grep 确认)
+- 在原 ABSTRACT_PLACEHOLDER 位置有合适分段的 LaTeX 摘要文本
+- 关键词在摘要正文紧后面 (LaTeX 形式 `\textbf{关键词}: ...` 已在 Step 9 paper draft 起草, 现在确保关键词内容已经更新成本步骤决定的版本)
+
+═══════════════════════════════════════════════════════════════
+
+[执行节奏]
+
+1. 检查 `human_review.md` — 这是关键分支点。如有 `## Step 14 abstract:` 段落, 把 agent 起草降级为 fallback。
+2. 通读 paper.tex 把握当前论文叙事重心 (尤其 §问题分析 / §模型建立 / §模型求解 §灵敏度分析 / §模型评价)。
+3. 从 judge_evaluation.md §给 Step 14 摘要 段落取四段素材, 作为起草起点。
+4. 起草四段摘要 (中文; 注意字数限制)。
+5. 起草关键词 (4-6 个)。
+6. 写 abstract_draft.md (含正文 + 关键词 + 决策记录元信息)。
+7. 嵌入 paper.tex: 找到 ABSTRACT_PLACEHOLDER, 整体替换。
+8. `grep "ABSTRACT_PLACEHOLDER" paper.tex` 必须返回**空**。
+9. 跑 `compile_paper.sh` 重编译, 确认 PDF 生成且摘要部分布局正确。
+10. 视觉抽检 PDF: 摘要长度约 ≤ 一页, 段落分明, 关键词紧随摘要后。
+
+[禁止事项]
+
+- ❌ 留 ABSTRACT_PLACEHOLDER 在 paper.tex (infer_step 检测该 token 仍存在 → 本步骤未完成)
+- ❌ 写超出字数限制 (CUMCM 国赛通常 ≤ 1200 字)
+- ❌ 把 PROTECTED 假设的差异化机制省略 (摘要应是论文最强卖点的浓缩, 漏掉创新点 = 评委印象初步丢分)
+- ❌ 写 "我们认为本论文的方法很好" 之类的自夸 (评委秒杀)
+- ❌ 跳过 human_review.md 检查 — human override 是这一步的 first-class 行为
+- ❌ 修 paper.tex 其他部分 (本步骤只替换 ABSTRACT_PLACEHOLDER, 其他章节不动)
+
+完成本步骤后立即停止。
