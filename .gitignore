@@ -5,6 +5,15 @@
 /papers/
 /run_state/
 
+# Project-local Python virtualenv (created by `python3 -m venv .venv`).
+# Holds the google-antigravity SDK + transitive deps; run_paper.sh calls
+# .venv/bin/python3 explicitly for scripts/agy_run.py.  Recreate via:
+#   python3 -m venv .venv && .venv/bin/pip install google-antigravity
+/.venv/
+
+# Benchmark problems — fetched via scripts/fetch_benchmark.sh, not committed
+/benchmark/
+
 # Python artifacts
 __pycache__/
 *.py[cod]
@@ -26,6 +35,8 @@ __pycache__/
 # Local configuration and credentials
 .env
 .env.*
+!.env.example
+.claude/settings.local.json
 
 # Editor and OS files
 .DS_Store

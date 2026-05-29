@@ -6,11 +6,17 @@ BASE="${2:?Usage: $0 <project_dir> <base_name>}"
 
 cd "$PROJECT"
 
-pdflatex -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1
+ENGINE="pdflatex"
+if grep -qE '\\documentclass\s*(\[[^]]*\])?\s*\{(ctex|cumcmthesis|mcmthesis)' "${BASE}_paper.tex" 2>/dev/null \
+   || grep -q '\\usepackage{xeCJK}' "${BASE}_paper.tex" 2>/dev/null; then
+    ENGINE="xelatex"
+fi
+
+"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1
 
 if [[ -f "${BASE}_paper.aux" ]] && grep -q '\\bibdata' "${BASE}_paper.aux" 2>/dev/null; then
     bibtex "${BASE}_paper" >/dev/null 2>&1
 fi
 
-pdflatex -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1
-pdflatex -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1
+"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1
+"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1

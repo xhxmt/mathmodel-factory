@@ -184,7 +184,7 @@ def parse_codex_line(d):
             text = payload.get("message", "")[:150].replace("\n", " ")
             return [f"  \033[33m...\033[0m {text}"]
         elif msg_type == "token_count":
-            info = payload.get("info", {}).get("total_token_usage", {})
+            info = (payload.get("info") or {}).get("total_token_usage") or {}
             inp = info.get("input_tokens", 0)
             out = info.get("output_tokens", 0)
             cached = info.get("cached_input_tokens", 0)
