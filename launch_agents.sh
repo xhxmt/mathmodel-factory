@@ -190,7 +190,7 @@ fi
 
 if [[ "${1:-}" == "status" ]]; then
     echo ""
-    echo "=== Local Paper Factory Status ==="
+    echo "=== Modeling Factory Status ==="
 
     _print_projects() {
         local section="$1" search_dir="$2"

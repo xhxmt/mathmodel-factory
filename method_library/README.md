@@ -45,5 +45,5 @@ method_library/
 
 - step0 的 `candidate_methods.md` 必须用本目录的相对路径引用方法（如 `method_library/optimization/milp.md`），不能凭空写未登记的方法名。
 - 若题目需要的方法不在本目录，新建条目并在 README 索引表登记。**绝不**在 prompt 阶段杜撰方法。
-- 代码模板默认 Python（`numpy`/`scipy`/`statsmodels`/`gurobipy`），保持 `analysis_guide` 与 `modeling_guide` 的可复现要求（固定随机种子、显式输出文件路径）。
+- 代码模板默认 Python（`numpy`/`scipy`/`statsmodels`/`gurobipy`），保持 `modeling_guide.md` 的可复现要求（固定随机种子、显式输出文件路径）。
 - 一篇方法文档不超过 ~300 行；如果展开复杂变体，新建 `<name>_variant.md` 而不是把单文件变厚。
