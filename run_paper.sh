@@ -271,8 +271,8 @@ infer_step() {
     # Killed projects stop before Step 1 completes.
     [[ -f "$P/$KILL_MARKER" ]] && echo 0 && return
 
-    # 16: final PDF delivered to papers/
-    [[ -f "$FACTORY/papers/${base}_paper.pdf" ]] && echo 16 && return
+    # 16: final PDF and submission bundle delivered to papers/
+    [[ -f "$FACTORY/papers/${base}_paper.pdf" && -f "$FACTORY/papers/${base}_submission.zip" ]] && echo 16 && return
 
     # Modeling-mode step inference — short-circuits when the project has a
     # problem/ directory (set by Step 0 problem parsing).  Modeling artifacts
@@ -972,6 +972,16 @@ Do not inspect, reference, reuse, or mention completed projects unless the human
     wait "$SETUP_PID" 2>/dev/null
     SETUP_EC=$?
     set -e
+
+    # The modeling step-0 prompt forbids the agent from writing checkpoint.md
+    # (the runner owns it — see prompts/step0_problem_parsing.txt). Once the
+    # structured problem/ brief exists, record setup completion here so the
+    # gate below and infer_step() agree on step 0. Gated on the modeling brief
+    # so social-mode setup (whose agent writes its own checkpoint) is untouched.
+    if [[ -f "$PROJECT/problem/problem_brief.md" ]]; then
+        sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: 0/" \
+            "$PROJECT/checkpoint.md" 2>/dev/null || true
+    fi
 
     if project_setup_complete "$PROJECT"; then
         log "Setup complete"
@@ -1795,16 +1805,14 @@ run_step_2() {
     log "   Step 2: active streams = ${active_ids[*]} (N=${#active_ids[@]})"
 
     # Model assignment: last stream goes to Claude for diversification,
-    # rest go to Agy (Gemini via Antigravity CLI). Critic is always Agy.
-    # NOTE: originally Codex (gpt-5.5); switched to Agy while Codex quota is
-    # exhausted (recovery date May 28). Revert "agy" → "codex" to restore.
+    # rest go to Codex. Critic is always Codex (stable structured judge).
     local -A stream_models
     local last_idx="${active_ids[${#active_ids[@]}-1]}"
     for idx in "${active_ids[@]}"; do
         if [[ "$idx" == "$last_idx" ]]; then
             stream_models[$idx]="claude"
         else
-            stream_models[$idx]="agy"
+            stream_models[$idx]="codex"
         fi
     done
 
@@ -1834,17 +1842,16 @@ NOTE FROM THE RESEARCHER: $note"
         log_path="$PROJECT/logs/step_${NEXT}_${prefix}_${model}_proposal_r${stream_rounds[$stream_idx]}_$(date +%Y%m%d_%H%M%S).log"
         log "   Step 2: launching proposal stream $stream_idx ($model, round ${stream_rounds[$stream_idx]})"
 
-        if [[ "$model" == "agy" ]]; then
-            local agy_inner=$(( proposal_timeout - 30 ))
-            (( agy_inner < 60 )) && agy_inner=$proposal_timeout
+        if [[ "$model" == "codex" ]]; then
             (
                 cd "$PROJECT" && timeout --kill-after=120 "$proposal_timeout" \
-                    agy \
-                      --print "$prompt" \
-                      --add-dir "$PROJECT" \
-                      --add-dir "$FACTORY" \
-                      --dangerously-skip-permissions \
-                      --print-timeout "${agy_inner}s"
+                    codex exec \
+                      --model gpt-5.5 \
+                      -c 'model_reasoning_effort="xhigh"' \
+                      --dangerously-bypass-approvals-and-sandbox \
+                      -C "$PROJECT" \
+                      --skip-git-repo-check \
+                      "$prompt"
             ) > "$log_path" 2>&1 &
         else
             (
@@ -1873,16 +1880,15 @@ NOTE FROM THE RESEARCHER: $note"
         log_path="$PROJECT/logs/step_${NEXT}_${prefix}_critic_a${stream_critic_attempts[$stream_idx]}_$(date +%Y%m%d_%H%M%S).log"
         log "   Step 2: launching critic for stream $stream_idx"
 
-        local agy_inner=$(( critic_timeout - 30 ))
-        (( agy_inner < 60 )) && agy_inner=$critic_timeout
         (
             cd "$PROJECT" && timeout --kill-after=120 "$critic_timeout" \
-                agy \
-                  --print "$prompt" \
-                  --add-dir "$PROJECT" \
-                  --add-dir "$FACTORY" \
-                  --dangerously-skip-permissions \
-                  --print-timeout "${agy_inner}s"
+                codex exec \
+                  --model gpt-5.5 \
+                  -c 'model_reasoning_effort="xhigh"' \
+                  --dangerously-bypass-approvals-and-sandbox \
+                  -C "$PROJECT" \
+                  --skip-git-repo-check \
+                  "$prompt"
         ) > "$log_path" 2>&1 &
 
         stream_pids[$stream_idx]=$!
@@ -2101,6 +2107,18 @@ run_step_16() {
     log "   Delivering final PDF"
     mkdir -p "$FACTORY/papers"
     cp "$PROJECT/${BASE}_paper.pdf" "$FACTORY/papers/" 2>/dev/null || true
+    if [[ -x "$FACTORY/scripts/package_submission.py" ]]; then
+        log "   Creating submission bundle"
+        if "$FACTORY/scripts/package_submission.py" "$PROJECT" "$BASE" "$FACTORY/papers/${BASE}_submission.zip" >> "$PROJECT/logs/runner.log" 2>&1; then
+            log "   Submission bundle OK"
+        else
+            log "   WARNING: submission bundle creation failed (exit $?)"
+            return 1
+        fi
+    else
+        log "   WARNING: package_submission.py not found or not executable"
+        return 1
+    fi
     if [[ -x "$FACTORY/scripts/cleanup_project_artifacts.py" ]]; then
         log "   Cleaning rebuildable intermediate data"
         if "$FACTORY/scripts/cleanup_project_artifacts.py" "$PROJECT" >> "$PROJECT/logs/runner.log" 2>&1; then

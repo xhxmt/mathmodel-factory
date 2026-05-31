@@ -143,5 +143,5 @@ See `STEPS.md` for the exact file contract used by
   actual artifacts, and checkpoint text is corrected to match.
 - `modeling_guide.md` wins over legacy `analysis_guide.md` whenever both exist.
 - Finished projects are moved from `ongoing/` to `complete/`.
-- Final PDFs are copied to `papers/`; submission zips may be produced manually
-  until Step 16 packaging is fully automated in the runner.
+- Step 16 copies final PDFs to `papers/` and creates
+  `papers/<base>_submission.zip`.
