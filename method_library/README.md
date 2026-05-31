@@ -2,23 +2,39 @@
 
 本目录是 Modeling Factory 的"方法字典"。`step0_problem_parsing` agent 读这里来做候选方法预选；后续 step 写代码时也以这里的代码模板为出发点（再按题目改）。
 
+`index.json` 是机器可检索的 HMML-lite 登记表；`scripts/method_retrieve.py` 会读取它并按题目文本输出候选短名单。README 仍是人类阅读入口，方法正文仍以各 `.md` 文件为准。
+
 ## 目录约定
 
 ```
 method_library/
   README.md                ← 本文件，索引
+  index.json               ← 结构化方法登记表（供 scripts/method_retrieve.py 使用）
   evaluation/              ← 评价/赋权类
     ahp.md
     topsis.md
   optimization/            ← 优化类
     milp.md
+    nonlinear_programming.md
   prediction/              ← 预测类
     arima.md
   dynamics/                ← 动力学/微分方程类
     ode_system.md
+    path_kinematics.md
+  geometry/                ← 几何/运动学类
+    archimedean_spiral.md
+    collision_detection.md
+  numerical/               ← 数值方法类
+    root_finding.md
+  metaheuristic/           ← 元启发式/智能优化类
+    genetic_algorithm.md
+    pso.md
+    simulated_annealing.md
 ```
 
-未来扩展（占位，先不实现）：`classification/`（logistic, svm, xgboost）、`network/`（最短路、最大流、复杂网络）、`metaheuristic/`（GA, PSO, SA）。
+已实现：`metaheuristic/`（GA, PSO, SA）、`geometry/`（等距螺线、碰撞检测）、`numerical/`（求根/事件定位）、`dynamics/path_kinematics.md`、`optimization/nonlinear_programming.md`。
+
+未来扩展（占位，先不实现）：`classification/`（logistic, svm, xgboost）、`network/`（最短路、最大流、复杂网络）。
 
 ## 索引表
 
@@ -29,6 +45,14 @@ method_library/
 | [optimization/milp.md](optimization/milp.md) | 混合整数线性规划 | 调度 / 选址 / 生产决策 / 0-1 选择 |
 | [prediction/arima.md](prediction/arima.md) | ARIMA / SARIMA | 单变量时间序列预测，含季节性 |
 | [dynamics/ode_system.md](dynamics/ode_system.md) | 常微分方程组 | 连续动力学过程（传染病 / 反应 / 力学 / 人口） |
+| [dynamics/path_kinematics.md](dynamics/path_kinematics.md) | 路径运动学 / 链式速度传递 | 多点沿同一曲线、刚性杆连接，速度沿链传递 / 速度放大系数 |
+| [geometry/archimedean_spiral.md](geometry/archimedean_spiral.md) | 阿基米德螺线 / 曲线运动学 | 等距螺线位置 / 弧长 / 切法向量 / 定弦长反解（铰接递推） |
+| [geometry/collision_detection.md](geometry/collision_detection.md) | 碰撞 / 干涉检测 (SAT) | 有向矩形 / 凸多边形互不重叠约束，碰撞对 / 临界间距 |
+| [numerical/root_finding.md](numerical/root_finding.md) | 方程求根 / 事件定位 | 解 f(x)=0、临界时刻 / 阈值 / 相切点、一维可行性搜索 |
+| [optimization/nonlinear_programming.md](optimization/nonlinear_programming.md) | 非线性规划 NLP | 连续变量约束最优化（非线性目标 / 约束，SLSQP / 全局兜底） |
+| [metaheuristic/genetic_algorithm.md](metaheuristic/genetic_algorithm.md) | 遗传算法 GA | 单目标非凸 / 多峰 / 黑箱 / 离散全局搜索 |
+| [metaheuristic/pso.md](metaheuristic/pso.md) | 粒子群 PSO | 连续变量非凸 / 多峰全局优化，调参少收敛快 |
+| [metaheuristic/simulated_annealing.md](metaheuristic/simulated_annealing.md) | 模拟退火 SA | 组合优化 / 粗糙多峰，单解迭代、可跳出局部最优 |
 
 ## 每个方法文档的结构（写新方法时按此模板）
 
