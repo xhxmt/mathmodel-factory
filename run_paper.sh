@@ -107,6 +107,25 @@ is_modeling_input() {
 # short-circuit and by any future dispatcher branching.
 is_modeling_project() { [[ -d "$1/problem" ]]; }
 
+# HMML-lite hard gate.  Every method_library/<...>.md path cited in the given
+# files MUST be a method registered in method_library/index.json (and the
+# registry itself must be structurally valid — method_retrieve.py validates
+# that on every run).  Echoes a report to stdout and returns non-zero on any
+# unregistered/invalid citation.  Tolerates a missing retriever or index
+# (returns 0) so social-mode projects and partial checkouts are unaffected.
+check_method_citations() {
+    local P="$1"; shift
+    local script="$FACTORY/scripts/method_retrieve.py"
+    local index="$FACTORY/method_library/index.json"
+    [[ -f "$script" && -f "$index" ]] || return 0
+    local -a args=() f
+    for f in "$@"; do
+        [[ -f "$f" ]] && args+=( --check-citations "$f" )
+    done
+    (( ${#args[@]} )) || return 0
+    python3 "$script" "${args[@]}" 2>&1
+}
+
 analysis_ready_dirs() {
     local P="$1"
     local dir
@@ -445,12 +464,16 @@ infer_step() {
             fi
         fi
 
-        # 1: research_brief + viable_streams + viability_gate (verdict line)
+        # 1: research_brief + viable_streams + viability_gate (verdict line),
+        # and viable_streams.md must cite only registered methods (HMML-lite
+        # hard gate). An unregistered citation keeps the project at step 0 so
+        # the runner retries Step 1 rather than building on a phantom method.
         if [[ -f "$P/research_brief.md" && -f "$P/viable_streams.md" && \
               -f "$P/viability_gate.md" ]] \
             && (( $(_lines "$P/research_brief.md") >= 30 )) \
             && (( $(_lines "$P/viable_streams.md") >= 20 )) \
-            && (( $(_lines "$P/viability_gate.md") >= 10 )); then
+            && (( $(_lines "$P/viability_gate.md") >= 10 )) \
+            && check_method_citations "$P" "$P/viable_streams.md" >/dev/null 2>&1; then
             echo 1
             return
         fi
@@ -984,6 +1007,22 @@ Do not inspect, reference, reuse, or mention completed projects unless the human
     fi
 
     if project_setup_complete "$PROJECT"; then
+        # HMML-lite hard gate: Step 0's candidate_methods.md may cite only
+        # methods registered in method_library/index.json. A hallucinated or
+        # unregistered method path is a correctness violation — stop for human
+        # review rather than letting a phantom method propagate into Steps 1-5.
+        # (No setup retry loop exists here, so this is FATAL by design.)
+        if [[ -f "$PROJECT/problem/candidate_methods.md" ]]; then
+            if ! cm_report=$(check_method_citations "$PROJECT" "$PROJECT/problem/candidate_methods.md"); then
+                log "FATAL: Step 0 candidate_methods.md cites unregistered method(s):"
+                while IFS= read -r cm_line; do [[ -n "$cm_line" ]] && log "   $cm_line"; done <<<"$cm_report"
+                log "   Fix the path(s) to registered method_library/ methods, or register the method in"
+                log "   method_library/index.json (+ .md doc), then resume. Unregistered suggestions"
+                log "   belong in candidate_methods.md WITHOUT the method_library/ prefix."
+                echo "STUCK:0 $(date +%s)" > "$PROJECT/.heartbeat"
+                exit 1
+            fi
+        fi
         log "Setup complete"
         STEP=0
         echo "0 $(date +%s)" > "$PROJECT/.heartbeat"
@@ -1778,6 +1817,15 @@ run_step_1() {
     fi
     if [[ ! -f "$vs" ]] || (( $(_lines "$vs") < 20 )); then
         log "   Step 1: viable_streams.md missing or too short"
+        return 1
+    fi
+    # HMML-lite hard gate: viable_streams.md may cite only registered methods.
+    # infer_step() blocks advancement on this; log the offenders so the retry
+    # reason is visible rather than the generic "output files missing".
+    local _cit_report
+    if ! _cit_report=$(check_method_citations "$PROJECT" "$vs"); then
+        log "   Step 1: viable_streams.md cites unregistered method(s) — must exist in method_library/index.json:"
+        while IFS= read -r _cl; do [[ -n "$_cl" ]] && log "     $_cl"; done <<<"$_cit_report"
         return 1
     fi
     return 0

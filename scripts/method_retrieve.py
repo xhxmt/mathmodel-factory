@@ -18,6 +18,9 @@ from typing import Any
 
 WORD_RE = re.compile(r"[a-z0-9_+\-.]+", re.I)
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+# A citation is any reference to a method document under method_library/.
+# Used by --check-citations to enforce that agents cite only registered methods.
+CITATION_RE = re.compile(r"method_library/[A-Za-z0-9_./-]+\.md")
 
 
 def repo_root() -> Path:
@@ -140,6 +143,49 @@ def print_markdown(ranked: list[dict[str, Any]]) -> None:
         )
 
 
+def check_citations(entries: list[dict[str, Any]], files: list[str]) -> int:
+    """Verify every method_library/<...>.md reference in `files` is registered.
+
+    Enforces the HMML-lite rule that agents may cite only methods present in
+    index.json. References to README.md are ignored (doc links, not methods).
+    Returns 0 when every citation is registered, 1 otherwise (with a report).
+    """
+    registered = {str(entry.get("path", "")) for entry in entries}
+    offenders: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    total = 0
+    checked = 0
+    for fp in files:
+        path = Path(fp)
+        if not path.is_file():
+            print(f"WARNING: citation-check target not found, skipped: {fp}", file=sys.stderr)
+            continue
+        checked += 1
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in CITATION_RE.finditer(text):
+            cited = match.group(0)
+            if cited.endswith("/README.md"):
+                continue
+            total += 1
+            key = (fp, cited)
+            if cited not in registered and key not in seen:
+                seen.add(key)
+                offenders.append(key)
+
+    if offenders:
+        print("UNREGISTERED METHOD CITATIONS (not in method_library/index.json):")
+        for fp, cited in offenders:
+            print(f"  {cited}   <- {fp}")
+        print(
+            f"\n{len(offenders)} unregistered citation(s) across {checked} file(s). "
+            "Agents may cite only methods registered in index.json — register the "
+            "method (index entry + .md doc) or fix the path."
+        )
+        return 1
+    print(f"OK: {total} method citation(s) across {checked} file(s), all registered.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", default=str(repo_root() / "method_library" / "index.json"))
@@ -148,6 +194,13 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=8, help="Number of methods to return. Use 0 for all.")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
     parser.add_argument("--validate-only", action="store_true", help="Only validate index schema and paths.")
+    parser.add_argument(
+        "--check-citations",
+        action="append",
+        metavar="FILE",
+        help="Verify every method_library/<...>.md reference in FILE is registered. "
+        "May be repeated. Exits 1 if any citation is unregistered.",
+    )
     args = parser.parse_args()
 
     root = repo_root()
@@ -156,6 +209,9 @@ def main() -> int:
     if not isinstance(entries, list):
         raise SystemExit("index must be a JSON list")
     validate_paths(entries, root)
+
+    if args.check_citations:
+        return check_citations(entries, args.check_citations)
 
     if args.validate_only:
         print(f"OK: {len(entries)} registered methods")

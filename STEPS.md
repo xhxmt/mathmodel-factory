@@ -42,7 +42,7 @@ Produce in `problem/`:
   `../../scripts/method_retrieve.py`; this is evidence for `candidate_methods.md`,
   not a replacement for sub-problem-specific judgment
 
-Stop after the 6 files exist and `checkpoint.md` reads `Last completed step: 0`.
+Stop after the 7 files exist and `checkpoint.md` reads `Last completed step: 0`.
 
 ## Step Outputs
 
