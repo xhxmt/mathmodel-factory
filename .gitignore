@@ -8,6 +8,10 @@
 # External evaluation per-run outputs (regenerable; baseline_scores.md is kept)
 /evaluation/results/
 
+# Reference papers: PDFs and OCR output are large/binary, gitignored
+# Only scripts and metadata are committed
+/reference_papers/
+
 # Project-local Python virtualenv (created by `python3 -m venv .venv`).
 # Holds the google-antigravity SDK + transitive deps; run_paper.sh calls
 # .venv/bin/python3 explicitly for scripts/agy_run.py.  Recreate via:
