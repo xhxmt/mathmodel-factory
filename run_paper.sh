@@ -40,6 +40,20 @@ fi
 
 export PATH="$HOME/local/node/bin:$PATH"
 
+# ── Ablation toggles (experiments/) ──────────────────────────────────
+#
+# Each toggle disables one pipeline mechanism so the experiments/ harness
+# can measure its marginal contribution to paper quality (docs/refactor_plan
+# §5.4). All are OFF unless set to a truthy value (1/true/yes/on). They are
+# read from the environment (launchers `export` them) and survive the snapshot
+# re-exec below because it uses `env` without -i. See experiments/README.md.
+_ablate_on() { case "${1,,}" in 1|true|yes|on) return 0;; *) return 1;; esac; }
+ABLATE_NO_CONSULTATION="${ABLATE_NO_CONSULTATION:-0}"
+ABLATE_NO_METHOD_LIB="${ABLATE_NO_METHOD_LIB:-0}"
+ABLATE_NO_JUDGE="${ABLATE_NO_JUDGE:-0}"
+ABLATE_NO_INNOVATION_PROTECT="${ABLATE_NO_INNOVATION_PROTECT:-0}"
+
+
 # ── File-state step inference ────────────────────────────────────────
 #
 # Determines the last completed step by checking which output files
@@ -115,6 +129,10 @@ is_modeling_project() { [[ -d "$1/problem" ]]; }
 # (returns 0) so social-mode projects and partial checkouts are unaffected.
 check_method_citations() {
     local P="$1"; shift
+    if _ablate_on "$ABLATE_NO_METHOD_LIB"; then
+        echo "ABLATION: method-library citation gate disabled (ABLATE_NO_METHOD_LIB)"
+        return 0
+    fi
     local script="$FACTORY/scripts/method_retrieve.py"
     local index="$FACTORY/method_library/index.json"
     [[ -f "$script" && -f "$index" ]] || return 0
@@ -873,6 +891,50 @@ gate2_reopened_once_file() {
     echo "$PROJECT/.gate2_reopened_once"
 }
 
+# Ablation stub for Step 13 (ABLATE_NO_JUDGE): write a minimal judge_evaluation.md
+# that satisfies the Step-13 output contract (first line VERDICT:, >= 30 lines,
+# written fresh) WITHOUT running the real judge or its reopen logic. VERDICT: PASS
+# makes the main-loop gate2 branch advance straight to Step 14, and the structural
+# precheck (scripts/evaluate_modeling_project.py) accepts it.
+_write_judge_stub() {
+    cat > "$PROJECT/judge_evaluation.md" <<EOF
+VERDICT: PASS
+
+# Step 13 Gate 2 — Judge Simulation (ABLATED) — \`$BASE\`
+
+修订轮次: 1
+整体得分: N/A (judge ablated via ABLATE_NO_JUDGE)
+
+## 说明
+
+本运行启用了 ABLATE_NO_JUDGE 消融开关: 跳过真实评委模拟与 reopen 逻辑。
+本文件仅用于满足 Step 13 的结构契约 (VERDICT 行 + >= 30 行 + 新鲜度),
+使流水线推进到 Step 14。它**不代表任何真实质量评判**。
+
+真实质量评分由 experiments/ 外部的 evaluation/run_evaluation.sh 统一负责,
+这正是本消融实验要测量的对照: "去掉 in-loop 评委后, 论文质量掉多少"。
+
+## 6 维度评分 (消融, 留空)
+
+下游 evaluate_modeling_project.py 只检查 VERDICT: PASS 与文件存在性, 不解析下表。
+
+| 维度 | 权重 | 得分 | 评级 |
+|---|---|---|---|
+| 模型合理性 | 20% | - | - |
+| 求解正确性 | 20% | - | - |
+| 创新性 | 20% | - | - |
+| 写作清晰度 | 15% | - | - |
+| 结果说服力 | 15% | - | - |
+| 灵敏度分析 | 10% | - | - |
+
+## 备注
+
+- ablation = ABLATE_NO_JUDGE
+- 不触发 REOPEN_REVISION_TEXT / REOPEN_REVISION_MODEL
+- 不执行 Gate-2 reopen → Step 12 第二轮修订 (该效应已并入本消融的对照差异)
+EOF
+}
+
 gate2_verdict() {
     awk -F': *' '/^VERDICT:/{print $2; exit}' "$PROJECT/judge_evaluation.md" 2>/dev/null \
         | tr -d '\r'
@@ -895,6 +957,14 @@ QUESTION=$(get_question)
 log "========================================"
 log "Runner starting"
 log "  file-state: step $INFERRED | checkpoint: step $FROM_CP | resuming from: step $STEP"
+{
+    _active_ablations=""
+    _ablate_on "$ABLATE_NO_CONSULTATION"       && _active_ablations+=" no-consultation"
+    _ablate_on "$ABLATE_NO_METHOD_LIB"         && _active_ablations+=" no-method-lib"
+    _ablate_on "$ABLATE_NO_JUDGE"              && _active_ablations+=" no-judge"
+    _ablate_on "$ABLATE_NO_INNOVATION_PROTECT" && _active_ablations+=" no-innovation-protect"
+    [[ -n "$_active_ablations" ]] && log "  ABLATIONS ACTIVE:$_active_ablations"
+}
 
 if [[ -z "$QUESTION" ]]; then
     log "ERROR: no research question in checkpoint.md"
@@ -1167,13 +1237,37 @@ render_prompt() {
     local extra="${2:-}"
     # Escape & in QUESTION so sed doesn't treat it as "insert match"
     local q_escaped="${QUESTION//&/\\&}"
+    # Build sed args as an array. (Historically $extra was spliced in unquoted,
+    # which would word-split any space-containing arg — no caller uses it, but
+    # the array form is correct and lets the ablations below add space-bearing
+    # Chinese patterns safely.)
+    local -a sed_args=(
+        -e "s|__PROJECT_PATH__|$PROJECT|g"
+        -e "s|__RESEARCH_QUESTION__|$q_escaped|g"
+        -e "s|__BASE_NAME__|$BASE|g"
+        -e "s|__FACTORY__|$FACTORY|g"
+    )
+    # Ablation: external web consultation. Only Step 1 carries the web-search
+    # instruction; drop just the web clause, leaving the rest of the line.
+    if _ablate_on "$ABLATE_NO_CONSULTATION" && [[ "$template" == step1_research_viability.txt ]]; then
+        sed_args+=( -e 's#；用 web 检索拿到主文献##' )
+    fi
+    # Ablation: innovation protection. Delete lines where a PROTECTED label
+    # co-occurs with a non-downgrade enforcement verb, freeing downstream
+    # review/revision to alter those assumptions. The PROTECTED label-creation
+    # table in step4 is left intact (no enforcement verb on those rows).
+    if _ablate_on "$ABLATE_NO_INNOVATION_PROTECT"; then
+        case "$template" in
+            step4_model_construction.txt|step6_sensitivity.txt|step7_model_eval.txt|\
+            step10_gate1_numerical.txt|step11_constructive_review.txt|\
+            step12_revision.txt|step13_gate2_judge.txt|step14_abstract.txt)
+                sed_args+=( -e '/PROTECTED/{/不可降级\|不得删除\|删 PROTECTED\|永不动\|绝不动\|永远不动/d}' )
+                ;;
+        esac
+    fi
+    [[ -n "$extra" ]] && sed_args+=( $extra )  # back-compat slot (currently unused)
     common_prompt_preamble
-    sed -e "s|__PROJECT_PATH__|$PROJECT|g" \
-        -e "s|__RESEARCH_QUESTION__|$q_escaped|g" \
-        -e "s|__BASE_NAME__|$BASE|g" \
-        -e "s|__FACTORY__|$FACTORY|g" \
-        $extra \
-        "$PROMPTS/$template"
+    sed "${sed_args[@]}" "$PROMPTS/$template"
 }
 
 get_user_note() {
@@ -2140,7 +2234,14 @@ run_step_10() { run_codex_then_claude step10_gate1_numerical.txt 10800 3600; }
 run_step_11() { run_codex_then_claude step11_constructive_review.txt 7200 1800; }
 
 run_step_12() { run_claude_then_codex step12_revision.txt 14400 3600; }
-run_step_13() { run_codex_then_claude step13_gate2_judge.txt 10800 3600; }
+run_step_13() {
+    if _ablate_on "$ABLATE_NO_JUDGE"; then
+        log "   ABLATION: skipping Gate-2 judge (ABLATE_NO_JUDGE); writing PASS stub"
+        _write_judge_stub
+        return 0
+    fi
+    run_codex_then_claude step13_gate2_judge.txt 10800 3600
+}
 
 run_step_14() { run_claude_then_codex step14_abstract.txt 7200 1800; }
 run_step_15() { run_codex_then_claude step15_polish.txt 10800 3600; }
