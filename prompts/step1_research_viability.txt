@@ -8,14 +8,24 @@
 [必读资料]
 1. `__PROJECT_PATH__/problem/problem_brief.md` —— 子问题分解 + 评分倾向
 2. `__PROJECT_PATH__/problem/candidate_methods.md` —— Step 0 提的候选方法
-3. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— 74 小时时间预算 + 算力上限
-4. `__PROJECT_PATH__/problem/data_inventory.md` —— 题目附件清单
-5. `__PROJECT_PATH__/problem/terminology_table.md` —— 术语精确定义
-6. `__FACTORY__/method_library/README.md` 索引表 + 每个被 Step 0 候选过的方法详档
-7. `__FACTORY__/modeling_guide.md` —— 项目结构、符号规范
-8. `__PROJECT_PATH__/human_review.md`（如存在）—— 最新人工指引
+3. `__PROJECT_PATH__/problem/method_retrieval.md` —— Step 0 的 HMML-lite 检索短名单；若缺失，按下方命令补生成
+4. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— 74 小时时间预算 + 算力上限
+5. `__PROJECT_PATH__/problem/data_inventory.md` —— 题目附件清单
+6. `__PROJECT_PATH__/problem/terminology_table.md` —— 术语精确定义
+7. `__FACTORY__/method_library/index.json` + `__FACTORY__/method_library/README.md` 索引表 + 每个被 Step 0 候选过的方法详档
+8. `__FACTORY__/modeling_guide.md` —— 项目结构、符号规范
+9. `__PROJECT_PATH__/human_review.md`（如存在）—— 最新人工指引
 
 不要重新读 `problem/source.md` 全文——Step 0 已经把要点压到 problem_brief.md 里了，回头读原文等于浪费 token。
+
+若 `problem/method_retrieval.md` 不存在，可用 Step 0 的结构化摘要补跑一次检索：
+
+```bash
+python3 __FACTORY__/scripts/method_retrieve.py \
+  --query-file __PROJECT_PATH__/problem/problem_brief.md \
+  --query-file __PROJECT_PATH__/problem/data_inventory.md \
+  --top-k 8 > __PROJECT_PATH__/problem/method_retrieval.md
+```
 
 [文献检索原则]
 - 只引可验证的真实文献（期刊、教材、政府报告、行业白皮书、官方手册）。**严禁伪造引用**。CUMCM 论文里的假引用是一票否决项。
@@ -118,13 +128,14 @@ verdict 行之后写：
 
 [执行流程]
 1. 顺序读 `__PROJECT_PATH__/problem/{problem_brief,candidate_methods,feasibility_constraints,data_inventory,terminology_table}.md`
-2. 读 `__FACTORY__/method_library/README.md`，对照 candidate_methods.md 中提到的方法，**只展开实际要用的**方法详档（不要把整个方法库读个遍）
-3. 决定本题需要的检索方向（领域 + 方法族 + 情境数据）；用 web 检索拿到主文献
-4. 写 `research_brief.md`
-5. 基于 research_brief 和 problem_brief 设计 N 条流，写 `viable_streams.md`
-6. 逐流甄别，写 `viability_gate.md`（先 verdict 行，再表，再备注）
-7. 若 VERDICT: KILL，再写 `kill_memo.md`
-8. 自检：
+2. 读 `__PROJECT_PATH__/problem/method_retrieval.md` 和 `__FACTORY__/method_library/index.json`，把检索短名单与 candidate_methods.md 对齐；检索分数只作证据，不替代可行性判断
+3. 读 `__FACTORY__/method_library/README.md`，对照 candidate_methods.md 中提到的方法，**只展开实际要用的**方法详档（不要把整个方法库读个遍）
+4. 决定本题需要的检索方向（领域 + 方法族 + 情境数据）；用 web 检索拿到主文献
+5. 写 `research_brief.md`
+6. 基于 research_brief 和 problem_brief 设计 N 条流，写 `viable_streams.md`
+7. 逐流甄别，写 `viability_gate.md`（先 verdict 行，再表，再备注）
+8. 若 VERDICT: KILL，再写 `kill_memo.md`
+9. 自检：
    - `ls __PROJECT_PATH__/` 应能看到 `research_brief.md`, `viable_streams.md`, `viability_gate.md`（KILL 情况下还有 `kill_memo.md`）
    - viability_gate.md 第一行精确匹配 `^VERDICT: (PASS|KILL)$`
    - viable_streams.md 中每个 `method_library/...md` 路径 `test -f` 验证
