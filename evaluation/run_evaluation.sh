@@ -187,8 +187,14 @@ d["unmatched_numbers"] = os.environ["UNMATCHED"]
 d["inloop_total"]      = os.environ["INLOOP"]
 json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
 pc = "PASS" if d["precheck_passed"] else "FAIL"
-print(f'{os.environ["BASE"]}: external={d.get("median_total")}/100 '
-      f'(spread {d.get("min_total")}-{d.get("max_total")}), '
+# Report the recomputed median (dimension-sum, robust to total-score anchoring)
+# as the headline external score; show the judge's anchored total in parens.
+ext = d.get("median_recomputed")
+ext = ext if ext is not None else d.get("median_total")
+lo, hi = d.get("min_recomputed"), d.get("max_recomputed")
+clamp = " [clamped]" if d.get("any_clamped") else ""
+print(f'{os.environ["BASE"]}: external={ext}/100 '
+      f'(spread {lo}-{hi}, anchored-total={d.get("median_total")}){clamp}, '
       f'in-loop={os.environ["INLOOP"]}, unmatched={os.environ["UNMATCHED"]}, precheck={pc}')
 PY
 )"
