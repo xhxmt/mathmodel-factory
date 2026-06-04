@@ -34,16 +34,22 @@ import statistics
 import sys
 from pathlib import Path
 
-# The 6 CUMCM rubric dimensions (STEPS.md:144, step13_gate2_judge.txt:5-11).
-# Keyed by name so we never mis-parse the header/separator/total rows.
-DIMENSIONS = (
-    "模型合理性",
-    "求解正确性",
-    "创新性",
-    "写作清晰度",
-    "结果说服力",
-    "灵敏度分析",
-)
+# The 6 CUMCM rubric dimensions with their per-dimension max scores
+# (STEPS.md:144, step13_gate2_judge.txt:5-11). Keyed by name so we never
+# mis-parse the header/separator/total rows. The max is used to CLAMP the
+# weighted-mean cell: judges (esp. deepseek/haiku) sometimes emit an
+# out-of-range value like 灵敏度分析 13/10, which would otherwise inflate the
+# total and corrupt cross-paper ordering. (Mirrors the clamp already in
+# perturbation_harness.py:_parse_score so the two parsers don't drift.)
+DIMENSION_MAX = {
+    "模型合理性": 20,
+    "求解正确性": 20,
+    "创新性": 20,
+    "写作清晰度": 15,
+    "结果说服力": 15,
+    "灵敏度分析": 10,
+}
+DIMENSIONS = tuple(DIMENSION_MAX)
 
 VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(\S+)", re.M)
 TOTAL_LINE_RE = re.compile(r"整体得分[:：]\s*([\d.]+)\s*/\s*100")
@@ -84,6 +90,9 @@ def parse_file(path: Path, base: str | None = None) -> dict:
     dims: dict[str, dict] = {}
     total_from_table: float | None = None
     table_grade: str | None = None
+    overflow_sum = 0.0  # total points clamped away from out-of-range dimensions
+    dim_weighted_sum = 0.0  # sum of clamped weighted means (recomputed total)
+    n_dims_seen = 0
 
     for line in text.splitlines():
         if "|" not in line:
@@ -104,17 +113,47 @@ def parse_file(path: Path, base: str | None = None) -> dict:
 
         if name in DIMENSIONS and len(cells) >= 6:
             weighted = _first_number(cells[-2])  # 加权均分 column
+            # Clamp an out-of-range weighted mean to the dimension's max so a
+            # judge typo like 灵敏度分析 13/10 can't corrupt downstream stats.
+            dim_max = DIMENSION_MAX[name]
+            clamped = weighted is not None and weighted > dim_max
+            if clamped:
+                overflow_sum += weighted - dim_max
+                weighted = float(dim_max)
+            if weighted is not None:
+                dim_weighted_sum += weighted
+                n_dims_seen += 1
             grade = cells[-1].replace("*", "").strip() or None
             weight_m = re.search(r"(\d+)", cells[1]) if len(cells) > 1 else None
             dims[name] = {
                 "weight": int(weight_m.group(1)) if weight_m else None,
                 "weighted_mean": weighted,
+                "max": dim_max,
                 "grade": grade,
             }
+            if clamped:
+                dims[name]["clamped"] = True
 
     # The `整体得分:` line is the canonical total; fall back to the table row.
     total_m = TOTAL_LINE_RE.search(text)
     total = float(total_m.group(1)) if total_m else total_from_table
+
+    # Adjusted total: the judge computes 整体得分 from its own (possibly
+    # out-of-range) dimension cells, so an overflow like 灵敏度 13/10 inflates it.
+    # Subtract the clamped overflow to recover a comparable total. Clean runs
+    # (overflow_sum == 0) keep the judge's value unchanged, so the validated
+    # in-loop reads (80.2 / 86.4) are preserved.
+    total_adjusted = (round(total - overflow_sum, 2)
+                      if total is not None and overflow_sum else total)
+
+    # Recomputed total = sum of the (clamped) per-dimension weighted means. The
+    # six dimension maxes sum to 100, so this IS a 0-100 score. Use it for
+    # cross-paper comparison: some judges (observed: deepseek-chat) anchor the
+    # hand-written 整体得分 to a near-constant value regardless of their own
+    # dimension scores, which destroys ordering; the dimension sum does not.
+    # Validated against the two in-loop files: recomputed 81.8/88.1 vs the
+    # judge's 80.2/86.4 — same ordering, constant ~1.6 rounding gap.
+    total_recomputed = round(dim_weighted_sum, 2) if n_dims_seen == len(DIMENSION_MAX) else None
 
     if base is None:
         title_m = TITLE_BASE_RE.search(text)
@@ -127,6 +166,9 @@ def parse_file(path: Path, base: str | None = None) -> dict:
         "base": base,
         "verdict": verdict,
         "total": total,
+        "total_adjusted": total_adjusted,
+        "total_recomputed": total_recomputed,
+        "overflow_clamped": round(overflow_sum, 2) if overflow_sum else 0,
         "grade": table_grade,
         "dims": dims,
         "source_file": str(path),
@@ -135,14 +177,26 @@ def parse_file(path: Path, base: str | None = None) -> dict:
 
 def aggregate(paths: list[Path], base: str | None = None) -> dict:
     runs = [parse_file(p, base=base) for p in paths]
-    totals = [r["total"] for r in runs if isinstance(r["total"], (int, float))]
+    # Aggregate over the adjusted total (overflow-clamped) so an out-of-range
+    # dimension in one run can't skew the cross-paper median. Falls back to the
+    # raw total when no clamping happened (clean runs are unchanged).
+    adj = [r.get("total_adjusted") for r in runs if isinstance(r.get("total_adjusted"), (int, float))]
+    raw = [r["total"] for r in runs if isinstance(r["total"], (int, float))]
+    recomp = [r.get("total_recomputed") for r in runs if isinstance(r.get("total_recomputed"), (int, float))]
     agg = {
         "base": base or next((r["base"] for r in runs if r["base"]), None),
         "n": len(runs),
-        "n_scored": len(totals),
-        "median_total": round(statistics.median(totals), 2) if totals else None,
-        "min_total": min(totals) if totals else None,
-        "max_total": max(totals) if totals else None,
+        "n_scored": len(adj),
+        "median_total": round(statistics.median(adj), 2) if adj else None,
+        "min_total": min(adj) if adj else None,
+        "max_total": max(adj) if adj else None,
+        "median_total_raw": round(statistics.median(raw), 2) if raw else None,
+        # Cross-comparison axis (robust to total-score anchoring): median of the
+        # recomputed dimension sums. See parse_file() for why this beats `total`.
+        "median_recomputed": round(statistics.median(recomp), 2) if recomp else None,
+        "min_recomputed": min(recomp) if recomp else None,
+        "max_recomputed": max(recomp) if recomp else None,
+        "any_clamped": any(r.get("overflow_clamped") for r in runs),
         "verdicts": [r["verdict"] for r in runs],
         "runs": runs,
     }
