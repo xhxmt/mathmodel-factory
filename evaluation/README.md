@@ -10,8 +10,8 @@
 
 `evaluation/` 提供同一套 6 维度 rubric、**不同的评判主体**：
 
-- 评委走 `claude -p`，默认 **`haiku[1m]`**，与流水线的 codex / gpt-5.5 谱系不同 → 降低自我偏好；也绕开 codex 配额问题。
-  （plan 原定用 Opus，但本机路由 `anyrouter.top` 上 `opus[1m]` 对重型评委请求会卡死——详见 `baseline_scores.md` 的"模型决策"。模型用 `CLAUDE_MODEL` 一行可覆盖。）
+- 评委走共享调用器 `scripts/llm_judge_call.py`，默认 **`deepseek-chat`**，按 model 名前缀分派后端（`deepseek*` / `gemini*` / 否则 `claude -p`）。与流水线的 codex / gpt-5.5 谱系不同 → 降低自我偏好。
+  （选 DeepSeek 的依据：5.3b 扰动实验显示它对"被破坏的论文"扣分远比 haiku 灵敏——总分扣分率 73% vs 0%；且在本机路由上不像 `opus[1m]` 那样卡死。模型用 `CLAUDE_MODEL` 一行可覆盖，如 `CLAUDE_MODEL=opus`（直连 Anthropic key）或 `=haiku[1m]`。）
 - 评委被明确告知它是"外部独立评委"，没看过流水线的内部推理。
 - 用重复采样（默认 K=3）取中位数，给出方差，对抗 LLM 评委的随机性。
 
@@ -20,6 +20,7 @@
 | 文件 | 作用 |
 |---|---|
 | `run_evaluation.sh` | 主入口：预检门 → 编译 → 数值核查 → 评委 ×K → 聚合 |
+| `../scripts/llm_judge_call.py` | 共享 LLM 调用器：按 model 名分派 DeepSeek / Gemini / Claude 三后端（run_evaluation.sh 与 perturbation_harness.py 共用） |
 | `llm_judge_prompt.txt` | 外部 LLM 评委 prompt（复用 Step 13 rubric + 输出格式） |
 | `human_rubric.md` | 给真人评委的纸面打分表（同一把尺子） |
 | `baseline_scores.md` | 提交进 git 的校准基线（已完成项目的外部 vs in-loop 读数） |
@@ -52,7 +53,7 @@
 
 | | in-loop Step 13 | 外部 evaluation/ |
 |---|---|---|
-| 评判主体 | 写论文的同一上下文 (codex/gpt 谱系) | 独立 `claude -p`（默认 `haiku[1m]`，可换 Opus/Sonnet） |
+| 评判主体 | 写论文的同一上下文 (codex/gpt 谱系) | 独立调用（默认 `deepseek-chat`，可换 Opus/Sonnet/haiku/gemini） |
 | 用途 | 驱动 reopen（控制流） | 客观读数 / 横比 / 消融基线（观察） |
 | VERDICT | 驱动 runner 回退 | 仅分类标签，不驱动任何循环 |
 | rubric | 6 维度（同） | 6 维度（同） |

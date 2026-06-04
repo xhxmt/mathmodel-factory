@@ -14,6 +14,9 @@ Usage:
 """
 import argparse, json, os, pathlib, re, subprocess, sys, time, urllib.request
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from llm_judge_call import call as _llm_call  # shared backend dispatcher
+
 ROOT = pathlib.Path(__file__).parent.parent
 RESULTS = ROOT / "evaluation/results"
 JUDGE_PROMPT = ROOT / "evaluation/external_paper_judge_prompt.txt"
@@ -128,45 +131,15 @@ PERTURBATIONS = [
 
 # ── judge & parser ────────────────────────────────────────────────────────────
 
-def _deepseek_call(prompt: str, model: str, timeout: int) -> str | None:
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
-    if not key:
-        return None
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 3000,
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions",
-        data=body, method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {key}"},
-    )
+def run_judge(paper_text: str, model: str, timeout: int = 360) -> dict | None:
+    """Score one paper. Backend (deepseek/gemini/claude) is picked by model name
+    prefix inside the shared scripts/llm_judge_call.py dispatcher."""
+    prompt = JUDGE_PROMPT.read_text() + "\n\n" + paper_text
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read())
-            return data["choices"][0]["message"]["content"]
+        text = _llm_call(prompt, model, timeout, max_tokens=4000)
     except Exception:
         return None
-
-
-def run_judge(paper_text: str, model: str, timeout: int = 360) -> dict | None:
-    prompt = JUDGE_PROMPT.read_text() + "\n\n" + paper_text
-    # DeepSeek backend
-    if model.startswith("deepseek"):
-        text = _deepseek_call(prompt, model, timeout)
-        return _parse_score(text) if text else None
-    # Claude backend
-    try:
-        r = subprocess.run(
-            ["claude", "-p", "--dangerously-skip-permissions",
-             "--strict-mcp-config", "--model", model],
-            input=prompt, capture_output=True, text=True, timeout=timeout,
-        )
-        return _parse_score(r.stdout)
-    except subprocess.TimeoutExpired:
-        return None
+    return _parse_score(text) if text else None
 
 
 def _parse_score(text: str) -> dict | None:
@@ -205,12 +178,27 @@ def median(vals):
     s = sorted(vals)
     return s[len(s) // 2]
 
+
+def _load_env(path: pathlib.Path) -> None:
+    """Minimal .env loader (KEY=VALUE lines) so API keys are available when the
+    harness is run standalone. Existing environment variables are not overwritten."""
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        os.environ.setdefault(key, val)
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    _load_env(ROOT / ".env")
     ap = argparse.ArgumentParser()
     ap.add_argument("--samples", type=int, default=3)
-    ap.add_argument("--model", default=os.environ.get("CLAUDE_MODEL", "haiku[1m]"))
+    ap.add_argument("--model", default=os.environ.get("CLAUDE_MODEL", "deepseek-chat"))
     args = ap.parse_args()
 
     RESULTS.mkdir(parents=True, exist_ok=True)

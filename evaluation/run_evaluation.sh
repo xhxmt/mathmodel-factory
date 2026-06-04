@@ -15,6 +15,12 @@ SCRIPTS="$REPO_ROOT/scripts"
 RESULTS_DIR="$REPO_ROOT/evaluation/results"
 PROMPT_FILE="$REPO_ROOT/evaluation/llm_judge_prompt.txt"
 
+# API keys (DEEPSEEK_API_KEY / GEMINI_API_KEY) live in .env; source it so the
+# shared caller scripts/llm_judge_call.py can see them. Existing env wins.
+if [ -f "$REPO_ROOT/.env" ]; then
+  set -a; . "$REPO_ROOT/.env"; set +a
+fi
+
 # Evidence files fed to the judge alongside the paper .tex (each guarded by -f).
 EVIDENCE_FILES=(model.md solve_log.md sensitivity_report.md evaluation.md symbol_table.md assumption_ledger.md)
 
@@ -28,7 +34,7 @@ Usage: $0 <project_dir> [base_name] [--samples K] [--force] [--json]
   --force         run the judge even if the structural precheck fails
   --json          also print the aggregate JSON to stdout
 
-Env overrides: CLAUDE_BIN, CLAUDE_MODEL (default haiku[1m]), CLAUDE_EFFORT, JUDGE_TIMEOUT (sec, default 360)
+Env overrides: CLAUDE_BIN, CLAUDE_MODEL (default deepseek-chat), CLAUDE_EFFORT, JUDGE_TIMEOUT (sec, default 360)
 EOF
   exit 2
 }
@@ -60,17 +66,20 @@ PROJECT="$(cd "$PROJECT" && pwd)"
 [ -n "$BASE" ] || BASE="$(basename "$PROJECT")"
 
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
-command -v "$CLAUDE_BIN" >/dev/null 2>&1 || { echo "ERROR: '$CLAUDE_BIN' not on PATH" >&2; exit 3; }
 
-# Judge model. The repo's own CLI default (opus[1m], from ~/.claude/settings.json)
-# STALLS indefinitely on the anyrouter.top endpoint for this heavy scoring
-# workload — it returns 0 bytes and is killed at JUDGE_TIMEOUT (verified: a
-# trivial prompt answers in ~6s, but the reasoning-heavy judge never streams a
-# token). haiku[1m] completes in ~40-150s and calibrates within a few points of
-# the in-loop judge. The [1m] suffix is REQUIRED by this router (plain `sonnet`/
-# `opus` are rejected 400 "请启用 1m 上下文"). For a different endpoint (e.g. a
-# direct Anthropic key) override it:  CLAUDE_MODEL=opus ./evaluation/run_evaluation.sh ...
-CLAUDE_MODEL="${CLAUDE_MODEL:-haiku[1m]}"
+# Judge model. Default deepseek-chat: the perturbation study (phase 5.3b) showed
+# it dramatically outperforms haiku[1m] at detecting degraded papers (total-score
+# deduction rate 73% vs 0%), and unlike opus[1m] on the anyrouter.top router it
+# does not stall on this heavy scoring workload. Backend is picked by name prefix
+# in scripts/llm_judge_call.py (deepseek* / gemini* / else=claude). Override with
+# CLAUDE_MODEL, e.g. CLAUDE_MODEL=opus (direct Anthropic key) or =haiku[1m].
+CLAUDE_MODEL="${CLAUDE_MODEL:-deepseek-chat}"
+
+# A claude-* model needs the CLI on PATH; API backends (deepseek/gemini) don't.
+case "$CLAUDE_MODEL" in
+  deepseek*|gemini*) : ;;
+  *) command -v "$CLAUDE_BIN" >/dev/null 2>&1 || { echo "ERROR: '$CLAUDE_BIN' not on PATH" >&2; exit 3; } ;;
+esac
 mkdir -p "$RESULTS_DIR"
 
 echo ">>> Evaluating $BASE  (project: $PROJECT, samples: $SAMPLES)"
@@ -130,15 +139,14 @@ trap 'rm -f "$INPUT_FILE"' EXIT
 # ---- 5. run judge K times (stdin = full prompt; avoids ARG_MAX limits) ----
 echo ">>> [5/5] judging x$SAMPLES"
 judge_call() {  # prompt on stdin -> scorecard on stdout
-  # --strict-mcp-config drops ambient MCP servers (e.g. grok-search) so they
-  # aren't spawned for a pure scoring call. (NOTE: --disallowedTools <list> was
-  # tried to force single-shot/no-tools but it HANGS claude -p even on trivial
-  # prompts, so it is intentionally not used here — see evaluation/README.)
-  # Model defaults to haiku[1m] (see CLAUDE_MODEL note above re: opus[1m] stall).
-  local args=( -p --dangerously-skip-permissions --strict-mcp-config )
-  [ -n "${CLAUDE_MODEL:-}" ]  && args+=( --model "$CLAUDE_MODEL" )
-  [ -n "${CLAUDE_EFFORT:-}" ] && args+=( --effort "$CLAUDE_EFFORT" )
-  timeout "${JUDGE_TIMEOUT:-360}" "$CLAUDE_BIN" "${args[@]}"
+  # Routes through scripts/llm_judge_call.py, which picks the backend by model
+  # name prefix: deepseek* (DeepSeek API), gemini* (Google API), else `claude -p`.
+  # For the claude backend it sets --strict-mcp-config (drops ambient MCP servers
+  # like grok-search) and passes CLAUDE_EFFORT through. (NOTE: --disallowedTools
+  # was tried to force no-tools but HANGS claude -p, so it is intentionally unused
+  # — see evaluation/README.) Model defaults to deepseek-chat (see note above).
+  python3 "$SCRIPTS/llm_judge_call.py" --model "$CLAUDE_MODEL" \
+    --timeout "${JUDGE_TIMEOUT:-360}"
 }
 RUN_FILES=()
 for k in $(seq 1 "$SAMPLES"); do
