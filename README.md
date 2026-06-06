@@ -4,6 +4,10 @@
 
 原始的社会科学资产保留以供参考和兼容，但标准建模流程遵循 `STEPS.md` 和 `modeling_guide.md`。
 
+## 交互式演示界面
+
+请查看位于 **`xhxmt.github.io/`** 的交互式演示项目。它现已升级为一个动态的前端交互页面，采用现代化的 UI 设计风格构建。该演示站点不仅模拟了多智能体数学建模工作流的终端执行过程，还结合真实的数据产出，通过直观的交互式卡片展示了系统的工作流架构、质量检查门禁和评测指标。只需在浏览器中打开 `xhxmt.github.io/index.html` 即可体验全貌。
+
 ## 包含内容
 
 - `launch_agents.sh`：本地启动器，包含 `new`、`resume`、`pause`、`run`、`attach`、`trace` 和 `status` 等命令。
@@ -140,7 +144,3 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 代码库包含完整的测试工具集：
 - **`evaluation/`**：包含校准的外部 LLM 评委（DeepSeek/Claude）解析器。这些脚本能评估最终编译的 PDF，并在 6 个关键维度上模拟竞赛评分。
 - **`experiments/`**：消融实验测试工具。你可以设置环境变量（例如 `ABLATE_NO_CONSULTATION=1`、`ABLATE_NO_METHOD_LIB=1`、`ABLATE_NO_JUDGE=1`、`ABLATE_NO_INNOVATION_PROTECT=1`）来选择性地关闭管道特征，并通过外部评委衡量其对成绩的影响。
-
-## 交互式演示界面
-
-请查看位于 **`xhxmt.github.io/`** 的交互式演示项目。它现已升级为一个动态的前端交互页面，采用现代化的 UI 设计风格构建。该演示站点不仅模拟了多智能体数学建模工作流的终端执行过程，还结合真实的数据产出，通过直观的交互式卡片展示了系统的工作流架构、质量检查门禁和评测指标。只需在浏览器中打开 `xhxmt.github.io/index.html` 即可体验全貌。
