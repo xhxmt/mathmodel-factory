@@ -4,6 +4,10 @@
 
 原始的社会科学资产保留以供参考和兼容，但标准建模流程遵循 `STEPS.md` 和 `modeling_guide.md`。
 
+## 交互式演示界面
+
+请查看位于 **`xhxmt.github.io/`** 的交互式演示项目。它现已升级为一个动态的前端交互页面，采用现代化的 UI 设计风格构建。该演示站点不仅模拟了多智能体数学建模工作流的终端执行过程，还结合真实的数据产出，通过直观的交互式卡片展示了系统的工作流架构、质量检查门禁和评测指标。只需在浏览器中打开 `xhxmt.github.io/index.html` 即可体验全貌。
+
 ## 包含内容
 
 - `launch_agents.sh`：本地启动器，包含 `new`、`resume`、`pause`、`run`、`attach`、`trace` 和 `status` 等命令。
@@ -17,7 +21,7 @@
 - `scripts/`：辅助脚本，用于 Antigravity 路由、MinerU 解析、数字校验和清理工作。
 - `evaluation/`：评分解析器以及针对外部大语言模型（LLM）裁判的基准校准脚本。
 - `experiments/`：消融实验测试工具，用于测试不同流程机制对结果的影响。
-- `demo_site/`：一个交互式的单文件 HTML 展示幻灯片，用于项目演示。
+- `xhxmt.github.io/`：交互式的项目演示前端界面，用于展示多智能体工作流的运行过程与结果。
 
 诸如 `analysis_guide.md`、`stata_submit.sh` 和 `stata_wrapper.sh` 等旧文件仅为保持跨模式兼容性而保留。新建模项目请遵循 `modeling_guide.md` 规范并使用 `solver_submit.sh`。
 
@@ -140,7 +144,3 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 代码库包含完整的测试工具集：
 - **`evaluation/`**：包含校准的外部 LLM 评委（DeepSeek/Claude）解析器。这些脚本能评估最终编译的 PDF，并在 6 个关键维度上模拟竞赛评分。
 - **`experiments/`**：消融实验测试工具。你可以设置环境变量（例如 `ABLATE_NO_CONSULTATION=1`、`ABLATE_NO_METHOD_LIB=1`、`ABLATE_NO_JUDGE=1`、`ABLATE_NO_INNOVATION_PROTECT=1`）来选择性地关闭管道特征，并通过外部评委衡量其对成绩的影响。
-
-## 演示幻灯片
-
-请查看位于 **`demo_site/`** 的交互式演示幻灯片。它是一个无依赖的单文件 HTML 幻灯片，采用国际瑞士设计风格构建，使用真实的数据产出展示了工作流的架构、质量检查门禁和评测指标。只需在浏览器中打开 `demo_site/index.html` 即可观看。
