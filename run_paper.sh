@@ -197,7 +197,7 @@ step2_active_stream_ids() {
     local P="$1"
     local f="$P/viable_streams.md"
     [[ -f "$f" ]] || return 0
-    grep -oE '^## Stream m[0-9]+:' "$f" 2>/dev/null \
+    grep -oP '^## Stream m[0-9]+[：:]' "$f" 2>/dev/null \
         | grep -oE '[0-9]+' \
         | sort -un \
         | tr '\n' ' ' \
@@ -1230,6 +1230,16 @@ If \`human_review.md\` exists in the current project directory, read it before d
 Do not inspect, read, cite, summarize, reuse, or mention completed projects unless the human researcher explicitly instructs you to do so for this project. Work from the current project directory, the source data, the active prompts, and shared infrastructure only.
 
 EOF
+    # Only when this project opted into the consultation window AND the dynamic
+    # gate is active: tell the agent how to ask a human for help instead of
+    # guessing on a hard, load-bearing decision. Omitted entirely otherwise so
+    # unattended runs see a byte-identical preamble.
+    if consult_gate_active dynamic; then
+        cat <<EOF
+如果在本步遇到难以独立判断、且会显著影响后续的关键决策（例如建模路线分叉、关键假设取舍、与题意冲突的数据解释），不要臆断：把该决策清楚地写入项目目录下的 \`consultation/REQUEST.md\`（首行 \`CONSULT: <一句话问题>\`，其后补充背景、你已尝试的选项与各自利弊），并就此停手、不要产出本步的最终交付物。人工会借助前沿模型回填结论，流水线随后带着回填重跑本步。仅在真正卡住时使用；常规不确定性请按既有纪律自行处理。
+
+EOF
+    fi
 }
 
 render_prompt() {
@@ -1286,6 +1296,174 @@ except: pass
 " 2>/dev/null || true)
     fi
     echo "$note"
+}
+
+# ── Human consultation window (opt-in) ───────────────────────────────
+#
+# Lets a human inject GPT Pro / Gemini Deep Think conclusions into the
+# otherwise-autonomous pipeline at chosen points (pre-flight seed, before
+# Step 4 modeling, or any step where an agent asks for help).
+#
+# Design is dictated by the activity monitor: a blocking wait would both hold
+# the lock and look like a hang (the known hang-bug family).  So a consultation
+# pause writes a request, notifies, and EXITS CLEANLY (exit 0) — the EXIT trap
+# releases the lock, exactly like `.paused`.  The human pastes the answer into
+# human_review.md (read at highest priority by every agent via the prompt
+# preamble), flips STATUS to READY, and `resume`s; on the next run the gate
+# sees READY and proceeds.
+#
+# OFF by default: gates are no-ops unless the project opts in via
+# `consultation/enabled` (or CONSULT_ENABLE=1).  This keeps unattended
+# benchmark/ablation runs byte-identical and stops them from stalling.
+CONSULT_DIR="$PROJECT/consultation"
+CONSULT_AWAIT_MARKER="$PROJECT/.awaiting_consultation"
+HUMAN_REVIEW="$PROJECT/human_review.md"
+
+consult_enabled() {
+    [[ "${CONSULT_ENABLE:-0}" == 1 ]] && return 0
+    [[ -f "$CONSULT_DIR/enabled" ]]
+}
+
+# A gate is active if consultation is enabled AND (the enabled file lists no
+# gates → all gates on, OR it lists this gate).  Tokens are space/comma/newline
+# separated, e.g.  preflight step4  or  preflight,dynamic.
+consult_gate_active() {
+    local gate="$1"
+    consult_enabled || return 1
+    local f="$CONSULT_DIR/enabled"
+    [[ -f "$f" ]] || return 0            # CONSULT_ENABLE=1, no file → all gates
+    local body
+    body=$(tr ',\n\t' '   ' < "$f" 2>/dev/null || true)
+    [[ -z "${body// /}" ]] && return 0   # empty file → all gates
+    grep -qiw "$gate" <<<"$body"
+}
+
+# Has the human marked this gate READY in human_review.md?
+# Matches a heading like:  ## CONSULT <gate> (Step N) — STATUS: READY
+consult_ready() {
+    local gate="$1"
+    [[ -f "$HUMAN_REVIEW" ]] || return 1
+    grep -qiE "^##[[:space:]]+CONSULT[[:space:]]+${gate}([[:space:](].*)?STATUS:[[:space:]]*READY" \
+        "$HUMAN_REVIEW"
+}
+
+consult_section_exists() {
+    local gate="$1"
+    [[ -f "$HUMAN_REVIEW" ]] || return 1
+    grep -qiE "^##[[:space:]]+CONSULT[[:space:]]+${gate}\b" "$HUMAN_REVIEW"
+}
+
+# Best-effort Telegram push.  DISABLED by default — set CONSULT_TELEGRAM=1 to
+# enable.  Reads token/chat from env or the claude-to-im config; silently skips
+# if unavailable.  The terminal log (via log()) always happens regardless.
+notify_consult_telegram() {
+    local text="$1"
+    [[ "${CONSULT_TELEGRAM:-0}" == 1 ]] || return 0
+    local tok="${CTI_TG_BOT_TOKEN:-}" chat="${CTI_TG_CHAT_ID:-}"
+    if [[ -z "$tok" || -z "$chat" ]]; then
+        local cfg="$HOME/.config/claude-to-im/config.env"
+        if [[ -f "$cfg" ]]; then
+            tok=$(grep -E '^CTI_TG_BOT_TOKEN=' "$cfg" 2>/dev/null | head -1 | cut -d= -f2- || true)
+            chat=$(grep -E '^CTI_TG_CHAT_ID=' "$cfg" 2>/dev/null | head -1 | cut -d= -f2- || true)
+        fi
+    fi
+    [[ -n "$tok" && -n "$chat" ]] || return 0
+    curl -s --max-time 15 "https://api.telegram.org/bot${tok}/sendMessage" \
+        --data-urlencode "chat_id=${chat}" \
+        --data-urlencode "text=${text}" >/dev/null 2>&1 || true
+}
+
+# Append a fill-in section to human_review.md for the human to complete.
+_consult_seed_section() {
+    local gate="$1" step="$2" title="$3"
+    consult_section_exists "$gate" && return 0
+    touch "$HUMAN_REVIEW"
+    cat >> "$HUMAN_REVIEW" <<EOF
+
+## CONSULT ${gate} (Step ${step}) — STATUS: AWAITING
+<!--
+咨询点：${title}
+请用 GPT Pro / Gemini Deep Think 处理 consultation/${gate}_request.md 里的问题，
+把结论粘到下面「你的回填」标题之下，然后把上面这行的 STATUS: AWAITING 改成 STATUS: READY，
+再运行：  ./launch_agents.sh resume ${BASE}
+流水线会带着你的回填重新接管。STATUS 未改成 READY 之前不会继续。
+-->
+
+### 你的回填（${gate}）：
+
+EOF
+}
+
+# Remove a `## CONSULT <gate> …` section (heading through the line before the
+# next `## ` heading or EOF) from human_review.md.  Used to reset the repeatable
+# `dynamic` gate after its answer has been consumed, so a later dynamic request
+# re-pauses instead of seeing a stale STATUS: READY.
+_consult_drop_section() {
+    local gate="$1"
+    [[ -f "$HUMAN_REVIEW" ]] || return 0
+    awk -v g="$gate" '
+        tolower($0) ~ ("^##[ \t]+consult[ \t]+" tolower(g) "([ \t(]|$)") { drop=1; next }
+        drop==1 && /^##[ \t]/ { drop=0 }
+        drop==1 { next }
+        { print }
+    ' "$HUMAN_REVIEW" > "$HUMAN_REVIEW.tmp" 2>/dev/null \
+        && mv "$HUMAN_REVIEW.tmp" "$HUMAN_REVIEW" || rm -f "$HUMAN_REVIEW.tmp"
+}
+
+# Core gate.  Returns 0 to proceed; otherwise writes a request, notifies, and
+# exits the runner cleanly so the human can fill in the answer and resume.
+#   $1 gate id   $2 step   $3 human-readable title   $4 optional context file
+maybe_consult() {
+    local gate="$1" step="$2" title="$3" ctx_file="${4:-}"
+    consult_gate_active "$gate" || return 0
+
+    if consult_ready "$gate"; then
+        log "   CONSULT[$gate]: human marked READY — proceeding (answer in human_review.md)"
+        rm -f "$CONSULT_AWAIT_MARKER" 2>/dev/null || true
+        return 0
+    fi
+
+    mkdir -p "$CONSULT_DIR"
+    local req="$CONSULT_DIR/${gate}_request.md"
+    if [[ ! -f "$req" ]]; then
+        {
+            echo "# 咨询请求：${title}"
+            echo
+            echo "- gate: ${gate}"
+            echo "- step: ${step}"
+            echo "- project: ${BASE}"
+            echo "- created: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo
+            echo "## 需要你（借助 GPT Pro / Gemini Deep Think）决定的事"
+            echo
+            if [[ -n "$ctx_file" && -f "$ctx_file" ]]; then
+                cat "$ctx_file"
+            else
+                echo "${title}"
+            fi
+            echo
+            echo "## 回填方式"
+            echo "1. 把结论写进 human_review.md 的「## CONSULT ${gate} … STATUS: …」段落下；"
+            echo "2. 把该段 STATUS 改成 READY；"
+            echo "3. 运行：./launch_agents.sh resume ${BASE}"
+        } > "$req"
+    fi
+
+    _consult_seed_section "$gate" "$step" "$title"
+
+    echo "GATE:${gate} STEP:${step} TS:$(date +%s)" > "$CONSULT_AWAIT_MARKER"
+    echo "CONSULT:${step} $(date +%s)" > "$PROJECT/.heartbeat"
+
+    local msg="🛑 [paper_factory] ${BASE} 在 Step ${step} 暂停，等待人工咨询：${title}
+请阅读 ${req}
+填 human_review.md 的 §CONSULT ${gate}（STATUS 改 READY），然后：./launch_agents.sh resume ${BASE}"
+    log "   CONSULT[$gate]: pausing for human input — see $req"
+    log "   等待人工咨询：$title"
+    notify_consult_telegram "$msg"
+
+    remove_registry_entry "$BASE"
+    log "   Runner exiting cleanly for consultation. Resume with: ./launch_agents.sh resume $BASE"
+    exit 0
 }
 
 # ── Execution primitives ────────────────────────────────────────────
@@ -2286,10 +2464,24 @@ run_step_16() {
 # ── Main step loop ────────────────────────────────────────────────────
 
 PROJECT_KILLED=0
+
+# Pre-flight consultation: seed the run with human / frontier-model input
+# (problem reading + candidate methods) before Step 1.  No-op unless the
+# project opted in (consultation/enabled + the `preflight` gate active).
+if (( STEP < 1 )); then
+    maybe_consult preflight 0 "启动前 seed：题目解读与候选方法（贴 GPT Pro / Gemini Deep Think 的初步结论）"
+fi
+
 while (( STEP < 16 )); do
     NEXT=$((STEP + 1))
     RETRIES=0
     TIMEOUT=$(step_timeout "$NEXT")
+
+    # Pre-Step-4 consultation: confirm the modeling route before the full
+    # model is constructed.  No-op unless opted in + the `step4` gate active.
+    if (( NEXT == 4 )); then
+        maybe_consult step4 4 "建模定型前：确认 model.md 的建模路线（贴前沿模型的建模方案）"
+    fi
 
     while (( RETRIES < MAX_RETRIES )); do
         log "-- Step $NEXT | attempt $((RETRIES + 1))/$MAX_RETRIES | timeout ${TIMEOUT}s --"
@@ -2332,6 +2524,24 @@ while (( STEP < 16 )); do
 
         # Kill lingering child processes
         cleanup_children
+
+        # Agent-initiated consultation (dynamic gate): an agent that hit a hard
+        # judgment call wrote consultation/REQUEST.md and left the step
+        # incomplete.  If the human has since answered (STATUS: READY), archive
+        # the request and let the step re-run with the answer in human_review.md;
+        # otherwise pause for input (maybe_consult exits cleanly).
+        if consult_gate_active dynamic && [[ -f "$CONSULT_DIR/REQUEST.md" ]]; then
+            if consult_ready dynamic; then
+                log "   CONSULT[dynamic]: resolved — archiving request, re-running Step $NEXT"
+                mv "$CONSULT_DIR/REQUEST.md" \
+                   "$CONSULT_DIR/REQUEST.resolved.$(date +%s).md" 2>/dev/null || true
+                rm -f "$CONSULT_AWAIT_MARKER" 2>/dev/null || true
+                # Reset the repeatable dynamic section so a later request re-pauses.
+                _consult_drop_section dynamic
+            else
+                maybe_consult dynamic "$NEXT" "Step $NEXT agent 主动求助" "$CONSULT_DIR/REQUEST.md"
+            fi
+        fi
 
         if project_is_killed "$PROJECT"; then
             PROJECT_KILLED=1
