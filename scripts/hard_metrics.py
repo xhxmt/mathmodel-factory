@@ -92,3 +92,39 @@ def collect_code_metrics(project_dir):
         "code_lines": total_lines,
         "code_mean_lines": round(total_lines / n, 1) if n else None,
     }
+
+
+def _pdf_pages(pdf_path):
+    try:
+        out = subprocess.run(["pdfinfo", pdf_path], capture_output=True, text=True, timeout=20)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    for line in out.stdout.splitlines():
+        if line.startswith("Pages:"):
+            try:
+                return int(line.split(":", 1)[1].strip())
+            except ValueError:
+                return None
+    return None
+
+
+def collect_artifact_metrics(project_dir, base_name):
+    """检查编译产物 PDF 与提交包 zip 是否存在/有效；附 PDF 页数（仅 reference）。"""
+    pdf_candidates = [
+        os.path.join(project_dir, f"{base_name}_paper.pdf"),
+        os.path.join(project_dir, "papers", f"{base_name}_paper.pdf"),
+    ]
+    pdf_path = next((p for p in pdf_candidates if os.path.exists(p) and os.path.getsize(p) > 0), None)
+    zip_path = os.path.join(project_dir, f"{base_name}_submission.zip")
+    zip_ok = False
+    if os.path.exists(zip_path):
+        try:
+            with zipfile.ZipFile(zip_path) as z:
+                zip_ok = z.testzip() is None and len(z.namelist()) > 0
+        except zipfile.BadZipFile:
+            zip_ok = False
+    return {
+        "pdf_ok": pdf_path is not None,
+        "zip_ok": zip_ok,
+        "pdf_pages": _pdf_pages(pdf_path) if pdf_path else None,
+    }
