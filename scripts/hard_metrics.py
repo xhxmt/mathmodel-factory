@@ -158,3 +158,77 @@ def collect_all(project_dir, base_name):
     undef = row.get("symbols_undefined")
     row["symbol_coverage"] = round(1 - undef / used, 3) if used else None
     return row
+
+
+_COLUMNS = [
+    ("project", "项目"),
+    ("dangling_cites", "悬空引用"),
+    ("uncited_entries", "未引用"),
+    ("abstract_placeholder_residue", "占位符残留"),
+    ("symbols_undefined", "符号未定义"),
+    ("symbol_coverage", "符号覆盖"),
+    ("numbers_unmatched", "数字无源"),
+    ("assumptions_total", "假设数"),
+    ("protected", "PROTECTED"),
+    ("critical", "CRITICAL"),
+    ("code_files", "代码文件"),
+    ("code_mean_lines", "均行/文件"),
+    ("pdf_ok", "PDF"),
+    ("zip_ok", "提交包"),
+    ("pdf_pages", "页数*"),
+]
+
+
+def _fmt(v):
+    if v is None:
+        return "—"
+    if v is True:
+        return "✓"
+    if v is False:
+        return "✗"
+    return str(v)
+
+
+def render_markdown(rows):
+    keys = [k for k, _ in _COLUMNS]
+    heads = [f"{label} ({k})" for k, label in _COLUMNS]
+    lines = ["| " + " | ".join(heads) + " |",
+             "|" + "|".join(["---"] * len(keys)) + "|"]
+    for r in rows:
+        lines.append("| " + " | ".join(_fmt(r.get(k)) for k in keys) + " |")
+    out = "\n".join(lines)
+    return out + "\n\n> 页数* 仅作 reference，非质量分（页数受代码附录主导）。\n"
+
+
+def _discover_projects(parent):
+    found = []
+    for name in sorted(os.listdir(parent)):
+        pdir = os.path.join(parent, name)
+        if os.path.isdir(pdir) and os.path.exists(os.path.join(pdir, f"{name}_paper.tex")):
+            found.append((pdir, name))
+        elif os.path.isdir(pdir):
+            print(f"[hard_metrics] skip {name}: no {name}_paper.tex", file=sys.stderr)
+    return found
+
+
+def main():
+    args = sys.argv[1:]
+    as_json = "--json" in args
+    args = [a for a in args if a != "--json"]
+    if len(args) >= 2 and args[0] == "--batch":
+        rows = [collect_all(pdir, base) for pdir, base in _discover_projects(args[1])]
+    elif len(args) >= 2 and not args[0].startswith("--"):
+        rows = [collect_all(args[0], args[1])]
+    else:
+        print("Usage: hard_metrics.py <project_dir> <base_name>", file=sys.stderr)
+        print("   or: hard_metrics.py --batch <dir> [--json]", file=sys.stderr)
+        sys.exit(2)
+    if as_json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    else:
+        print(render_markdown(rows))
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
