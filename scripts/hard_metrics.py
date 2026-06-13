@@ -128,3 +128,33 @@ def collect_artifact_metrics(project_dir, base_name):
         "zip_ok": zip_ok,
         "pdf_pages": _pdf_pages(pdf_path) if pdf_path else None,
     }
+
+
+def _safe(fn, *args, label=""):
+    try:
+        return fn(*args) or {}
+    except Exception as e:  # noqa: BLE001 — 批量跑必须容错
+        print(f"[hard_metrics] WARN {label}: {e}", file=sys.stderr)
+        return {}
+
+
+def collect_all(project_dir, base_name):
+    """聚合所有 collect_* 成一行扁平 dict（去明细键）+ 派生指标。"""
+    row = {"project": base_name}
+    cite = _safe(collect_citation_metrics,
+                 os.path.join(project_dir, f"{base_name}_paper.tex"),
+                 os.path.join(project_dir, "references.bib"), label="citation")
+    assum = _safe(collect_assumption_metrics,
+                  os.path.join(project_dir, "assumption_ledger.md"), label="assumption")
+    code = _safe(collect_code_metrics, project_dir, label="code")
+    art = _safe(collect_artifact_metrics, project_dir, base_name, label="artifact")
+    sym = _safe(collect_symbol_metrics, project_dir, base_name, label="symbol")
+    num = _safe(collect_number_metrics, project_dir, base_name, label="number")
+    for d in (cite, assum, code, art, sym, num):
+        for k, v in d.items():
+            if not k.startswith("_") and k != "project":
+                row[k] = v
+    used = row.get("symbols_used")
+    undef = row.get("symbols_undefined")
+    row["symbol_coverage"] = round(1 - undef / used, 3) if used else None
+    return row
