@@ -29,11 +29,12 @@ There are three relevant audiences for code in this repo:
 User-facing CLI from repo root:
 
 ```bash
-./launch_agents.sh new [--no-start] <base> "/abs/path/to/problem.pdf"
+./launch_agents.sh new [--no-start] [--consult] <base> "/abs/path/to/problem.pdf"
 ./launch_agents.sh resume <base> [<base2> ...]
 ./launch_agents.sh <base1> [<base2> ...]
 ./launch_agents.sh run <base>
 ./launch_agents.sh pause <base>
+./launch_agents.sh consult <base>
 ./launch_agents.sh status
 ./launch_agents.sh attach <base>
 ./launch_agents.sh trace <base> [--lines N] [--follow]
@@ -87,6 +88,28 @@ delete or regenerate the output artifacts that define the step.
 Modeling-mode is detected by the `problem/` directory after setup. The runner
 then uses the modeling branch of `infer_step()` and the modeling Step 1-16
 contracts.
+
+### Human Consultation Window (opt-in)
+
+Lets a human inject GPT Pro / Gemini Deep Think conclusions into the otherwise
+autonomous pipeline. **Off by default** — enable per project with
+`new --consult` (writes `consultation/enabled`) or env `CONSULT_ENABLE=1`. When
+off, prompts and behavior are byte-identical, so unattended benchmark/ablation
+runs are unaffected.
+
+`maybe_consult <gate> <step> <title>` in `run_paper.sh` is the gate primitive.
+Three gates: **preflight** (after Step 0 parsing, before Step 1), **step4**
+(before full model construction), and **dynamic** (an agent writes
+`consultation/REQUEST.md` and stops when it hits a hard call). A gate that is
+not yet resolved writes `consultation/<gate>_request.md`, seeds a `## CONSULT
+<gate> … STATUS: AWAITING` section in `human_review.md`, notifies, and **exits
+the runner cleanly (`exit 0`)** — never a blocking wait, because the activity
+monitor would treat a waiting process as a hang and a live process holds the
+lock. The human pastes the answer under that section, flips `STATUS: READY`,
+and `resume`s; the gate then proceeds (agents read `human_review.md` at highest
+priority via the prompt preamble). `consult <base>` prints the pending request;
+`status` shows `CONSULT(<step>)`. Telegram push is a best-effort hook, disabled
+unless `CONSULT_TELEGRAM=1`; terminal notification always fires.
 
 ### Prompt Rendering
 

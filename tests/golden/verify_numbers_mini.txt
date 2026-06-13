@@ -1,0 +1,18 @@
+=== Number Verification Report ===
+Paper: /home/tfisher/paper_factory/tests/fixtures/mini_proj/mini_paper.tex
+Log numbers found: 2
+Table numbers found: 0
+Paper prose numbers found: 2
+
+MATCHED (found in logs/tables): 1
+UNMATCHED (no source found):    1
+
+======================================================================
+UNMATCHED NUMBERS — review these manually:
+======================================================================
+         999.9  ...参数 $\alpha = 3.14$，残差 $\beta = 999.9$。...
+
+======================================================================
+MATCHED NUMBERS (OK):
+======================================================================
+          3.14  ...参数 $\alpha = 3.14$，残差 $\beta = 999.9$。...

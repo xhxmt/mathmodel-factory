@@ -1,0 +1,14 @@
+=== Symbol Verification Report ===
+Paper:        /home/tfisher/paper_factory/tests/fixtures/mini_proj/mini_paper.tex
+Symbol table: /home/tfisher/paper_factory/tests/fixtures/mini_proj/symbol_table.md
+
+SYMBOLS_DEFINED   = 1
+SYMBOLS_USED      = 2
+UNDEFINED_SYMBOLS = 1
+USE_BEFORE_DEF    = 0
+
+============================================================
+UNDEFINED SYMBOLS (used in body, not in symbol table):
+============================================================
+  \beta             first used at line 9
+

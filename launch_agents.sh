@@ -158,11 +158,12 @@ resume_project() {
 usage() {
     cat <<EOF
 Usage:
-  ./launch_agents.sh new [--no-start] <base_name> "question"
+  ./launch_agents.sh new [--no-start] [--consult] <base_name> "question"
   ./launch_agents.sh <project> [project2] ...
   ./launch_agents.sh resume <project> [project2] ...
   ./launch_agents.sh pause <project> [project2] ...
   ./launch_agents.sh run <project>
+  ./launch_agents.sh consult <project>
   ./launch_agents.sh attach <project>
   ./launch_agents.sh trace <project> [--lines N] [--follow]
   ./launch_agents.sh status
@@ -223,6 +224,10 @@ if [[ "${1:-}" == "status" ]]; then
                 process="KILLED"
             elif [[ -f "$dir/.paused" ]]; then
                 process="PAUSED"
+            elif [[ -f "$dir/.awaiting_consultation" ]]; then
+                local cstep
+                cstep=$(grep -oP 'STEP:\K[0-9]+' "$dir/.awaiting_consultation" 2>/dev/null | head -1)
+                process="CONSULT(${cstep:-?})"
             else
                 pid=""
                 [[ -f "$dir/.runner.pid" ]] && pid="$(cat "$dir/.runner.pid" 2>/dev/null || true)"
@@ -241,6 +246,32 @@ if [[ "${1:-}" == "status" ]]; then
 
     _print_projects "ONGOING" "$FACTORY/ongoing"
     _print_projects "COMPLETE" "$FACTORY/complete"
+    echo ""
+    exit 0
+fi
+
+if [[ "${1:-}" == "consult" ]]; then
+    proj="${2:-}"
+    [[ -n "$proj" ]] || { echo "Usage: $0 consult <project>"; exit 1; }
+    d="$(project_dir "$proj")"
+    [[ -d "$d" ]] || { echo "ERROR: no such project: $proj"; exit 1; }
+    echo ""
+    if [[ -f "$d/.awaiting_consultation" ]]; then
+        echo "── $proj 正在等待人工咨询 ──"
+        cat "$d/.awaiting_consultation"
+        echo ""
+    else
+        echo "（$proj 当前没有挂起的咨询请求）"
+    fi
+    shopt -s nullglob
+    for r in "$d"/consultation/*_request.md "$d"/consultation/REQUEST.md; do
+        [[ -f "$r" ]] || continue
+        echo "===================== $r ====================="
+        cat "$r"
+        echo ""
+    done
+    shopt -u nullglob
+    echo "回填后运行： $0 resume $proj"
     echo ""
     exit 0
 fi
@@ -266,10 +297,14 @@ fi
 if [[ "${1:-}" == "new" ]]; then
     shift
     NO_START=0
-    if [[ "${1:-}" == "--no-start" ]]; then
-        NO_START=1
-        shift
-    fi
+    CONSULT=0
+    while [[ "${1:-}" == --* ]]; do
+        case "$1" in
+            --no-start) NO_START=1; shift;;
+            --consult)  CONSULT=1; shift;;
+            *) echo "ERROR: unknown flag for 'new': $1"; exit 1;;
+        esac
+    done
 
     BASE_NAME="${1:?Usage: $0 new [--no-start] <base_name> \"Research question\"}"
     shift
@@ -304,6 +339,14 @@ if [[ "${1:-}" == "new" ]]; then
 - **Last completed step**: -1
 - **Timestamp**: $(date '+%Y-%m-%d %H:%M')
 EOF
+
+    if (( CONSULT )); then
+        mkdir -p "$FACTORY/ongoing/$BASE_NAME/consultation"
+        : > "$FACTORY/ongoing/$BASE_NAME/consultation/enabled"
+        echo "Consultation window ENABLED (gates: preflight, step4, dynamic)."
+        echo "  The pipeline will pause for your input at those points; fill"
+        echo "  human_review.md (§CONSULT ...), set STATUS: READY, then resume."
+    fi
 
     if (( NO_START )); then
         echo "Created project without starting the runner."
