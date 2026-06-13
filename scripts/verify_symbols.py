@@ -260,28 +260,15 @@ def find_symbol_table_line(paper_path: str) -> int:
     return -1
 
 
-def main():
-    args = sys.argv[1:]
-    if len(args) >= 4 and args[0] == '--paper' and args[2] == '--table':
-        paper_path = args[1]
-        table_path = args[3]
-    elif len(args) >= 2 and not args[0].startswith('--'):
-        project_dir, base_name = args[0], args[1]
-        paper_path = os.path.join(project_dir, f'{base_name}_paper.tex')
-        table_path = os.path.join(project_dir, 'symbol_table.md')
-    else:
-        print("Usage: verify_symbols.py <project_dir> <base_name>")
-        print("   or: verify_symbols.py --paper <paper> --table <symbol_table.md>")
-        sys.exit(2)
-
+def collect_symbol_metrics(project_dir, base_name):
+    """返回符号覆盖指标 dict；不打印。paper 缺失返回 None。"""
+    paper_path = os.path.join(project_dir, f'{base_name}_paper.tex')
+    table_path = os.path.join(project_dir, 'symbol_table.md')
     if not os.path.exists(paper_path):
-        print(f"ERROR: {paper_path} not found")
-        sys.exit(3)
-
+        return None
     defined = extract_defined_symbols(table_path)
     used, first_use = extract_used_symbols(paper_path)
     table_line = find_symbol_table_line(paper_path)
-
     undefined = sorted(used - defined)
     use_before_def = []
     if table_line > 0:
@@ -289,13 +276,29 @@ def main():
             s for s in (used & defined)
             if first_use.get(s, 10**9) < table_line - 5
         )
+    return {
+        "symbols_defined": len(defined),
+        "symbols_used": len(used),
+        "symbols_undefined": len(undefined),
+        "use_before_def": len(use_before_def),
+        "_undefined_list": undefined,
+        "_use_before_def_list": use_before_def,
+        "_first_use": first_use,
+        "_table_line": table_line,
+        "_table_path": table_path,
+        "_paper_path": paper_path,
+    }
 
+
+def _print_report(paper_path, table_path, defined_count, used_count,
+                  undefined, use_before_def, first_use, table_line):
+    """Print the Symbol Verification Report exactly as the CLI always has."""
     print("=== Symbol Verification Report ===")
     print(f"Paper:        {paper_path}")
     print(f"Symbol table: {table_path}{'  (MISSING)' if not os.path.exists(table_path) else ''}")
     print()
-    print(f"SYMBOLS_DEFINED   = {len(defined)}")
-    print(f"SYMBOLS_USED      = {len(used)}")
+    print(f"SYMBOLS_DEFINED   = {defined_count}")
+    print(f"SYMBOLS_USED      = {used_count}")
     print(f"UNDEFINED_SYMBOLS = {len(undefined)}")
     print(f"USE_BEFORE_DEF    = {len(use_before_def)}")
     print()
@@ -316,7 +319,56 @@ def main():
             print(f"  {s:<16s}  line {first_use.get(s)} (< table @ {table_line})")
         print()
 
-    sys.exit(0 if not undefined else 1)
+
+def main():
+    args = sys.argv[1:]
+    if len(args) >= 4 and args[0] == '--paper' and args[2] == '--table':
+        # --paper/--table branch: direct computation + prints, unchanged.
+        paper_path = args[1]
+        table_path = args[3]
+
+        if not os.path.exists(paper_path):
+            print(f"ERROR: {paper_path} not found")
+            sys.exit(3)
+
+        defined = extract_defined_symbols(table_path)
+        used, first_use = extract_used_symbols(paper_path)
+        table_line = find_symbol_table_line(paper_path)
+
+        undefined = sorted(used - defined)
+        use_before_def = []
+        if table_line > 0:
+            use_before_def = sorted(
+                s for s in (used & defined)
+                if first_use.get(s, 10**9) < table_line - 5
+            )
+
+        _print_report(paper_path, table_path, len(defined), len(used),
+                      undefined, use_before_def, first_use, table_line)
+        sys.exit(0 if not undefined else 1)
+
+    elif len(args) >= 2 and not args[0].startswith('--'):
+        project_dir, base_name = args[0], args[1]
+        metrics = collect_symbol_metrics(project_dir, base_name)
+        if metrics is None:
+            paper_path = os.path.join(project_dir, f'{base_name}_paper.tex')
+            print(f"ERROR: {paper_path} not found")
+            sys.exit(3)
+
+        undefined = metrics["_undefined_list"]
+        use_before_def = metrics["_use_before_def_list"]
+        _print_report(
+            metrics["_paper_path"], metrics["_table_path"],
+            metrics["symbols_defined"], metrics["symbols_used"],
+            undefined, use_before_def,
+            metrics["_first_use"], metrics["_table_line"],
+        )
+        sys.exit(0 if not undefined else 1)
+
+    else:
+        print("Usage: verify_symbols.py <project_dir> <base_name>")
+        print("   or: verify_symbols.py --paper <paper> --table <symbol_table.md>")
+        sys.exit(2)
 
 
 if __name__ == '__main__':
