@@ -50,3 +50,27 @@ def collect_citation_metrics(tex_path, bib_path):
         "uncited_entries": len(uncited),
         "abstract_placeholder_residue": tex.count("ABSTRACT_PLACEHOLDER"),
     }
+
+
+def collect_assumption_metrics(ledger_path):
+    """统计 assumption_ledger.md 表格行的总数 / PROTECTED / CRITICAL。"""
+    if not os.path.exists(ledger_path):
+        return None
+    total = protected = critical = 0
+    for line in _read(ledger_path).splitlines():
+        s = line.strip()
+        if not s.startswith('|'):
+            continue
+        cells = [c.strip() for c in s.strip('|').split('|')]
+        if len(cells) < 6:
+            continue
+        first = cells[0].lower()
+        if first in ('id', '') or set(cells[0]) <= set('-: '):
+            continue
+        total += 1
+        tags = cells[-1].upper()
+        if 'PROTECTED' in tags:
+            protected += 1
+        if 'CRITICAL' in tags:
+            critical += 1
+    return {"assumptions_total": total, "protected": protected, "critical": critical}
