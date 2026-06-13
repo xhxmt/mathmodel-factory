@@ -156,6 +156,32 @@ def number_matches(val, reference_numbers, tolerance=0.02):
     return False
 
 
+def collect_number_metrics(project_dir, base_name):
+    """返回数值一致性指标 dict；不打印。paper 缺失返回 None。"""
+    tex_path = os.path.join(project_dir, f'{base_name}_paper.tex')
+    if not os.path.exists(tex_path):
+        return None
+    log_dir = os.path.join(project_dir, 'logs')
+    tables_dir = os.path.join(project_dir, 'tables')
+    paper_numbers = extract_tex_numbers(tex_path)
+    log_numbers = extract_log_numbers(log_dir)
+    table_numbers = extract_table_numbers(tables_dir)
+    reference_numbers = log_numbers | table_numbers
+    matched, unmatched = [], []
+    for entry in paper_numbers:
+        (matched if number_matches(entry['value'], reference_numbers) else unmatched).append(entry)
+    return {
+        "numbers_matched": len(matched),
+        "numbers_unmatched": len(unmatched),
+        "_matched": matched,
+        "_unmatched": unmatched,
+        "_paper_numbers": paper_numbers,
+        "_reference_count": len(reference_numbers),
+        "_log_count": len(log_numbers),
+        "_table_count": len(table_numbers),
+    }
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage: verify_numbers.py <project_dir> <base_name>")
@@ -165,34 +191,21 @@ def main():
     base_name = sys.argv[2]
 
     tex_path = os.path.join(project_dir, f'{base_name}_paper.tex')
-    log_dir = os.path.join(project_dir, 'logs')
-    tables_dir = os.path.join(project_dir, 'tables')
 
     if not os.path.exists(tex_path):
         print(f"ERROR: {tex_path} not found")
         sys.exit(1)
 
-    # Extract numbers
-    paper_numbers = extract_tex_numbers(tex_path)
-    log_numbers = extract_log_numbers(log_dir)
-    table_numbers = extract_table_numbers(tables_dir)
-    reference_numbers = log_numbers | table_numbers
+    metrics = collect_number_metrics(project_dir, base_name)
+    matched = metrics['_matched']
+    unmatched = metrics['_unmatched']
 
     print(f"=== Number Verification Report ===")
     print(f"Paper: {tex_path}")
-    print(f"Log numbers found: {len(log_numbers)}")
-    print(f"Table numbers found: {len(table_numbers)}")
-    print(f"Paper prose numbers found: {len(paper_numbers)}")
+    print(f"Log numbers found: {metrics['_log_count']}")
+    print(f"Table numbers found: {metrics['_table_count']}")
+    print(f"Paper prose numbers found: {len(metrics['_paper_numbers'])}")
     print()
-
-    matched = []
-    unmatched = []
-
-    for entry in paper_numbers:
-        if number_matches(entry['value'], reference_numbers):
-            matched.append(entry)
-        else:
-            unmatched.append(entry)
 
     print(f"MATCHED (found in logs/tables): {len(matched)}")
     print(f"UNMATCHED (no source found):    {len(unmatched)}")
