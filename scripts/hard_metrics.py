@@ -15,6 +15,8 @@ import subprocess
 
 from verify_symbols import collect_symbol_metrics
 from verify_numbers import collect_number_metrics
+from verify_solver import collect_solver_metrics
+from verify_number_chain import collect_number_chain_metrics
 
 _CITE_RE = re.compile(r'\\(?:cite|citep|citet|citealp|citeyear)\*?(?:\[[^\]]*\])*\{([^}]*)\}')
 _BIB_KEY_RE = re.compile(r'^@(?P<type>[a-zA-Z]+)\s*\{\s*(?P<key>[^,\s]+)\s*,', re.MULTILINE)
@@ -151,7 +153,9 @@ def collect_all(project_dir, base_name):
     sym = _safe(collect_symbol_metrics, project_dir, base_name, label="symbol")
     num = _safe(collect_number_metrics, project_dir, base_name, label="number")
     meth = _safe(collect_method_citations, project_dir, base_name, label="method")
-    for d in (cite, assum, code, art, sym, num, meth):
+    solver = _safe(collect_solver_metrics, project_dir, base_name, label="solver")
+    chain = _safe(collect_number_chain_metrics, project_dir, base_name, label="number_chain")
+    for d in (cite, assum, code, art, sym, num, meth, solver, chain):
         for k, v in d.items():
             if not k.startswith("_") and k != "project":
                 row[k] = v
@@ -170,6 +174,9 @@ _COLUMNS = [
     ("symbols_undefined", "符号未定义"),
     ("symbol_coverage", "符号覆盖"),
     ("numbers_unmatched", "数字无源"),
+    ("non_converged", "求解器未收敛"),
+    ("solver_warnings", "求解器警告"),
+    ("chain_breaks", "数值链断裂"),
     ("assumptions_total", "假设数"),
     ("protected", "PROTECTED"),
     ("critical", "CRITICAL"),

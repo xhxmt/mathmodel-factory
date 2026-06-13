@@ -2122,6 +2122,23 @@ run_step_2() {
         log "   Step 2: only ${#active_ids[@]} stream(s) in viable_streams.md (need ≥ 2)"
         return 1
     fi
+
+    # ── Step 2 资源配额优化 ──────────────────────────────────────────
+    # 根据问题复杂度动态裁剪流数量，避免简单问题过度并行
+    local quota_result
+    if quota_result=$(python3 "$FACTORY/scripts/step2_resource_quota.py" "$PROJECT" 2>/dev/null); then
+        local recommended
+        recommended=$(echo "$quota_result" | python3 -c "import sys,json; print(json.load(sys.stdin)['recommended_streams'])" 2>/dev/null || echo "")
+        if [[ -n "$recommended" && "$recommended" =~ ^[0-9]+$ ]]; then
+            local original_count=${#active_ids[@]}
+            if (( recommended < original_count )); then
+                log "   Step 2: quota advisor recommends $recommended streams (original: $original_count)"
+                # 保留前N个流（Step 1按优先级排序）
+                active_ids=("${active_ids[@]:0:$recommended}")
+            fi
+        fi
+    fi
+
     log "   Step 2: active streams = ${active_ids[*]} (N=${#active_ids[@]})"
 
     # Model assignment: last stream goes to Claude for diversification,
@@ -2248,6 +2265,37 @@ NOTE FROM THE RESEARCHER: $note"
 
         sleep "$MONITOR_SLEEP"
         echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
+
+        # ── Step 2 早停检测 ──────────────────────────────────────────
+        # 在proposal阶段，每个监控周期检查demo是否快速失败，提前终止
+        for idx in "${active_ids[@]}"; do
+            local phase="${stream_phases[$idx]}"
+            [[ "$phase" != "proposal" ]] && continue
+            local pid="${stream_pids[$idx]}"
+            [[ -z "$pid" ]] && continue
+            kill -0 "$pid" 2>/dev/null || continue  # 已经退出的跳过
+
+            # 调用早停检测器
+            local early_result
+            if early_result=$(python3 "$FACTORY/scripts/step2_early_stop.py" "$PROJECT" "$idx" 2>/dev/null); then
+                local should_stop
+                should_stop=$(echo "$early_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('should_stop', False))" 2>/dev/null || echo "False")
+                if [[ "$should_stop" == "True" ]]; then
+                    local reason
+                    reason=$(echo "$early_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('reason', 'unknown'))" 2>/dev/null || echo "unknown")
+                    log "   Step 2: stream $idx early-stop triggered (reason: $reason) — killing proposal agent"
+                    _kill_process_tree "$pid" TERM
+                    sleep 2
+                    kill -0 "$pid" 2>/dev/null && _kill_process_tree "$pid" KILL
+                    stream_pids[$idx]=""
+                    stream_phases[$idx]="done"
+                    # 在critique文件中记录早停
+                    local critique_path
+                    critique_path=$(step2_critique_path "$PROJECT" "$idx")
+                    echo -e "\n## Early Stop\n\nVERDICT: ABANDONED\n\nReason: Demo solve failed early with $reason. Stream terminated to save resources.\n" >> "$critique_path"
+                fi
+            fi
+        done
 
         for idx in "${active_ids[@]}"; do
             local phase pid ec verdict
