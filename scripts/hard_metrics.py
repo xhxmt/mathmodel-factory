@@ -74,3 +74,21 @@ def collect_assumption_metrics(ledger_path):
         if 'CRITICAL' in tags:
             critical += 1
     return {"assumptions_total": total, "protected": protected, "critical": critical}
+
+
+def collect_code_metrics(project_dir):
+    """统计 models/ 下 *.py 的文件数 / 总行数 / 均值（碎片化度）。"""
+    py_files = glob.glob(os.path.join(project_dir, "models", "**", "*.py"), recursive=True)
+    total_lines = 0
+    for p in py_files:
+        try:
+            with open(p, 'r', encoding='utf-8', errors='replace') as f:
+                total_lines += sum(1 for _ in f)
+        except OSError:
+            continue
+    n = len(py_files)
+    return {
+        "code_files": n,
+        "code_lines": total_lines,
+        "code_mean_lines": round(total_lines / n, 1) if n else None,
+    }
