@@ -150,7 +150,8 @@ def collect_all(project_dir, base_name):
     art = _safe(collect_artifact_metrics, project_dir, base_name, label="artifact")
     sym = _safe(collect_symbol_metrics, project_dir, base_name, label="symbol")
     num = _safe(collect_number_metrics, project_dir, base_name, label="number")
-    for d in (cite, assum, code, art, sym, num):
+    meth = _safe(collect_method_citations, project_dir, base_name, label="method")
+    for d in (cite, assum, code, art, sym, num, meth):
         for k, v in d.items():
             if not k.startswith("_") and k != "project":
                 row[k] = v
@@ -163,6 +164,7 @@ def collect_all(project_dir, base_name):
 _COLUMNS = [
     ("project", "项目"),
     ("dangling_cites", "悬空引用"),
+    ("method_refs_missing", "缺method库"),
     ("uncited_entries", "未引用"),
     ("abstract_placeholder_residue", "占位符残留"),
     ("symbols_undefined", "符号未定义"),
@@ -198,6 +200,42 @@ def render_markdown(rows):
         lines.append("| " + " | ".join(_fmt(r.get(k)) for k in keys) + " |")
     out = "\n".join(lines)
     return out + "\n\n> 页数* 仅作 reference，非质量分（页数受代码附录主导）。\n"
+
+
+def collect_method_citations(project_dir, base_name):
+    """Extract method_library/*.md references and check if they exist."""
+    import re
+    METHOD_PATH_RE = re.compile(r"method_library/[A-Za-z0-9_./-]+\.md")
+
+    candidates = [
+        os.path.join(project_dir, "problem", "candidate_methods.md"),
+        os.path.join(project_dir, "viable_streams.md"),
+        os.path.join(project_dir, "chosen_method.md"),
+        os.path.join(project_dir, "method_decision.md"),
+    ]
+
+    paths = set()
+    for path in candidates:
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    content = f.read()
+                    paths.update(METHOD_PATH_RE.findall(content))
+            except Exception:
+                pass
+
+    # Filter out template placeholders
+    paths = {p for p in paths if "..." not in p}
+
+    # Check which ones are missing (relative to repo root)
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    missing = sorted(p for p in paths if not os.path.isfile(os.path.join(repo_root, p)))
+
+    return {
+        "method_refs_total": len(paths),
+        "method_refs_missing": len(missing),
+        "_method_refs_missing_list": missing,
+    }
 
 
 def _discover_projects(parent):
