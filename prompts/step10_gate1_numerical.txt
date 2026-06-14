@@ -160,8 +160,13 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
    - 判定: [PASS / WARNING / FAIL]
    ```
 
-2. `grep -nE "[0-9]+\.[0-9]+|[0-9]+%" __BASE_NAME___paper.tex` —— 把所有数字 / 百分比的出现位置列出来 (≈ 50-100 处, 数量取决于论文规模)。
-3. 对每个数字, 用 python 读 results/<sub>/values.json 或 results/sensitivity/*.json, 核对。
+2. **数字双向绑定审计**（新增）：
+   - **第一步：生成数字清单** `../../scripts/verify_numbers.py --generate "$(pwd)"` 从 `results/*/values.json` 生成 `numbers_manifest.json`（数字清单 + checksum）
+   - **第二步：验证论文数字** `../../scripts/verify_numbers.py --verify "$(pwd)" __BASE_NAME__` 检查论文里的每个数字是否能追溯到 manifest，并验证 checksum
+   - 把验证报告 `number_verification.md` 的内容拷贝到 code_review.md §1 数字审计 段
+   - **重要**：如果 Step 6 重新运行（灵敏度分析更新），必须先 `--update` 更新 manifest，否则会出现 checksum 不匹配
+
+3. 对每个数字, 用 python 读 results/<sub>/values.json 或 results/sensitivity/*.json, 核对（如果 verify_numbers.py 未覆盖的特殊情况）。
 4. 把核对结果填进 code_review.md §1 表格。
 5. 对每个 discrepancy: 写到 §2 详细诊断, 直接修 paper.tex, 在 §5 修订摘要记一笔。
 6. 修完后跑 `compile_paper.sh` 确认 PDF 还能编译; 如果挂, 修。

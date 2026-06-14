@@ -1,0 +1,40 @@
+% abstract_placeholder.sty
+% LaTeX package for safe abstract placeholder mechanism
+% Prevents bare ABSTRACT_PLACEHOLDER from breaking xelatex
+% Provides compile-time error detection if abstract is not filled
+
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{abstract_placeholder}[2026/06/14 v1.0 Safe abstract placeholder]
+
+% Define a command to hold the abstract content
+\newcommand{\AbstractContent}{}
+
+% Command to set the abstract content (used by Step 14)
+\newcommand{\SetAbstract}[1]{%
+  \renewcommand{\AbstractContent}{#1}%
+}
+
+% Command to render the abstract with safety checks
+\newcommand{\RenderAbstract}{%
+  \ifx\AbstractContent\empty
+    % If abstract is still empty, show clear error
+    \PackageError{abstract_placeholder}{%
+      Abstract content not set. Run Step 14 to fill the abstract.%
+    }{%
+      The ABSTRACT_PLACEHOLDER token must be replaced by Step 14.%
+    }%
+    \textcolor{red}{\textbf{[ERROR: Abstract not filled by Step 14]}}%
+  \else
+    % Render the actual abstract content
+    \AbstractContent
+  \fi
+}
+
+% Alternative: Simple placeholder that doesn't break compilation
+% Step 9 should write: \AbstractPlaceholder
+% Step 14 replaces with: \SetAbstract{...actual content...}
+\newcommand{\AbstractPlaceholder}{%
+  \textit{[Abstract placeholder -- to be filled in Step 14]}%
+}
+
+\endinput

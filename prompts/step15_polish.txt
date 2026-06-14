@@ -10,7 +10,7 @@
 - Markdown 产物: `citation_audit.md`（新建）+ `derobotification.md`（新建）。
 - LaTeX 修订: `__BASE_NAME___paper.tex`（原地修订, 仅 polish, 不动数字 / 不动公式 / 不动 figures 引用）。
 - references.bib 修订: 增删条目以匹配论文真实引用。
-- 不动 `\\detokenize{ABSTRACT_PLACEHOLDER}` (本步骤跑前 Step 14 应该已经填了; 如果还有 placeholder, 这是个 issue, 写到 citation_audit.md §I issue 列表)。
+- 不动 `\\AbstractPlaceholder` (本步骤跑前 Step 14 应该已经填了; 如果还有 placeholder, 这是个 issue, 写到 citation_audit.md §I issue 列表)。
 
 [必读资料 — 顺序就是建议阅读次序]
 
@@ -176,7 +176,7 @@ formatting issues (bib entry 字段格式问题, 如缺 year / author): <数量>
 4. 跑 `compile_paper.sh` 验证 LaTeX 仍能编译。
 
 5. **sanity check**:
-   - `grep "\\detokenize{ABSTRACT_PLACEHOLDER}" paper.tex` —— 必须返回**空** (Step 14 应该已经填了)。
+   - `grep "\\AbstractPlaceholder" paper.tex` —— 必须返回**空** (Step 14 应该已经填了)。
    - `grep -E "^\*\*|^##" paper.tex` —— 必须返回**空** (markdown 语法残留扫干净)。
    - `wc -l citation_audit.md` —— ≥ 10 行
    - `wc -l derobotification.md` —— ≥ 10 行

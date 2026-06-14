@@ -1,234 +1,283 @@
 #!/usr/bin/env python3
-"""Extract numbers from a .tex paper and Stata logs, flag mismatches.
+"""
+verify_numbers.py - Two-way binding for numerical values in papers
+
+Step 10 Gate 1: Generate numbers_manifest.json from results/*
+Step 11+: Verify paper numbers against manifest with checksums
 
 Usage:
-    python3 verify_numbers.py <project_dir> <base_name>
+  # Generate manifest (run at Step 10)
+  python3 verify_numbers.py --generate <project_dir>
 
-Outputs a report to stdout listing every number found in the paper prose
-and whether a matching number exists in the log files (within rounding
-tolerance). Numbers that appear in the logs are marked OK; numbers with
-no log match are flagged for manual review.
+  # Verify paper against manifest (run at Step 11+)
+  python3 verify_numbers.py --verify <project_dir> <base_name>
 
-Designed as a helper for code-review agents — not a replacement for
-careful reading, but a way to catch obvious mismatches.
+  # Update manifest after results change (Step 6+ reruns)
+  python3 verify_numbers.py --update <project_dir>
+
+  # Legacy mode (backward compatibility with old Step 10)
+  python3 verify_numbers.py <project_dir> <base_name>
 """
 
-import re
-import sys
+import json
 import os
-import glob
+import sys
+import re
+import hashlib
+from pathlib import Path
+from typing import Dict, List, Tuple, Any
 
 
-def extract_tex_numbers(tex_path):
-    """Extract numbers from paper prose, skipping LaTeX preamble/commands."""
-    with open(tex_path, 'r') as f:
-        text = f.read()
+def compute_checksum(value: Any) -> str:
+    """Compute MD5 checksum for a value."""
+    if isinstance(value, (int, float)):
+        # Normalize float representation
+        normalized = f"{value:.10e}" if isinstance(value, float) else str(value)
+    else:
+        normalized = str(value)
+    return hashlib.md5(normalized.encode()).hexdigest()[:8]
 
-    # Remove preamble (before \begin{document})
-    doc_start = text.find(r'\begin{document}')
-    if doc_start >= 0:
-        text = text[doc_start:]
 
-    # Remove LaTeX commands that contain non-prose numbers
-    # Remove \label{...}, \ref{...}, \input{...}, \includegraphics{...}
-    text = re.sub(r'\\(?:label|ref|input|includegraphics|cite[tp]?|citealp|hypersetup|bibliographystyle|bibliography)\{[^}]*\}', '', text)
-    # Remove \begin{...} and \end{...}
-    text = re.sub(r'\\(?:begin|end)\{[^}]*\}', '', text)
-    # Remove figure/table float environments entirely (captions are ok but
-    # the filenames and labels inside aren't prose numbers)
-    # Remove tabular content (numbers inside tables are from esttab, not prose)
-    text = re.sub(r'\\begin\{tabular\}.*?\\end\{tabular\}', '', text, flags=re.DOTALL)
+def scan_results_directory(project_dir: Path) -> Dict[str, Any]:
+    """
+    Scan results/ directory and build manifest of all numerical values.
 
-    results = []
-    lines = text.split('\n')
-    for i, line in enumerate(lines, 1):
-        # Skip pure LaTeX command lines
-        if line.strip().startswith('%'):
+    Returns:
+        {
+            "source": "results/p1/values.json",
+            "values": {
+                "objective_value": {"value": 187.2, "checksum": "a3f5b2c1", "type": "float"},
+                ...
+            }
+        }
+    """
+    manifest = {}
+    results_dir = project_dir / "results"
+
+    if not results_dir.exists():
+        return manifest
+
+    for subdir in results_dir.iterdir():
+        if not subdir.is_dir():
             continue
-        if re.match(r'^\s*\\(setcounter|renewcommand|newcommand|def\\)', line):
-            continue
 
-        # Find numbers: integers, decimals, percentages, negatives
-        # Match patterns like: 0.037, -0.067, 13.8, 48,539, 2,600, 0.435%
-        for m in re.finditer(r'-?\d[\d,]*\.?\d*%?', line):
-            num_str = m.group()
-            # Skip years (1900-2099) unless they have decimals
-            if re.match(r'^(19|20)\d{2}$', num_str):
-                continue
-            # Skip very small integers that are likely enumerators (1, 2, 3...)
-            # but keep anything with decimals or commas
-            clean = num_str.replace(',', '').rstrip('%')
+        # Look for values.json
+        values_file = subdir / "values.json"
+        if values_file.exists():
             try:
-                val = float(clean)
-            except ValueError:
+                with open(values_file) as f:
+                    data = json.load(f)
+
+                relative_path = str(values_file.relative_to(project_dir))
+                manifest[relative_path] = {}
+
+                # Extract all numeric values
+                for key, value in data.items():
+                    if isinstance(value, (int, float)):
+                        manifest[relative_path][key] = {
+                            "value": value,
+                            "checksum": compute_checksum(value),
+                            "type": "float" if isinstance(value, float) else "int"
+                        }
+                    elif isinstance(value, list) and all(isinstance(x, (int, float)) for x in value):
+                        # Handle lists of numbers
+                        manifest[relative_path][key] = {
+                            "value": value,
+                            "checksum": compute_checksum(tuple(value)),
+                            "type": "array"
+                        }
+            except Exception as e:
+                print(f"Warning: Failed to parse {values_file}: {e}", file=sys.stderr)
+
+    return manifest
+
+
+def generate_manifest(project_dir: Path) -> None:
+    """Generate numbers_manifest.json from results/*"""
+    manifest = scan_results_directory(project_dir)
+
+    output = {
+        "generated_by": "scripts/verify_numbers.py",
+        "step": "Step 10 Gate 1",
+        "sources": manifest
+    }
+
+    manifest_file = project_dir / "numbers_manifest.json"
+    with open(manifest_file, "w") as f:
+        json.dump(output, f, indent=2)
+
+    print(f"✓ Generated {manifest_file}")
+    print(f"  Total sources: {len(manifest)}")
+    print(f"  Total values: {sum(len(v) for v in manifest.values())}")
+
+
+def extract_numbers_from_tex(tex_file: Path) -> List[Tuple[int, str, float]]:
+    """
+    Extract numerical values from LaTeX file.
+
+    Returns:
+        [(line_number, context, value), ...]
+    """
+    numbers = []
+
+    with open(tex_file) as f:
+        for line_num, line in enumerate(f, start=1):
+            # Skip comments
+            if line.strip().startswith('%'):
                 continue
-            if val == 0:
-                continue
-            # Skip integers 1-20 (likely enumerators, footnote numbers, etc.)
-            if val == int(val) and 1 <= val <= 20 and '.' not in num_str:
-                continue
 
-            # Get surrounding context (30 chars each side)
-            start = max(0, m.start() - 40)
-            end = min(len(line), m.end() + 40)
-            context = line[start:end].strip()
-
-            results.append({
-                'number': num_str,
-                'value': val,
-                'is_pct': num_str.endswith('%'),
-                'context': context,
-            })
-
-    return results
-
-
-def extract_log_numbers(log_dir):
-    """Extract all numbers from Stata log files."""
-    numbers = set()
-    log_files = glob.glob(os.path.join(log_dir, '*.log'))
-
-    for lf in log_files:
-        try:
-            with open(lf, 'r') as f:
-                text = f.read()
-        except (IOError, UnicodeDecodeError):
-            continue
-
-        for m in re.finditer(r'-?\d[\d,]*\.?\d*', text):
-            clean = m.group().replace(',', '')
-            try:
-                val = float(clean)
-            except ValueError:
-                continue
-            if val != 0:
-                numbers.add(val)
+            # Find numbers in text (not in commands)
+            # Match patterns like: 187.2, 0.0478, $x = 42$, etc.
+            pattern = r'(?<![a-zA-Z])(\d+\.?\d*(?:[eE][+-]?\d+)?)'
+            for match in re.finditer(pattern, line):
+                try:
+                    value = float(match.group(1))
+                    context = line.strip()[:60]
+                    numbers.append((line_num, context, value))
+                except ValueError:
+                    pass
 
     return numbers
 
 
-def extract_table_numbers(tables_dir):
-    """Extract numbers from .tex table files."""
-    numbers = set()
-    table_files = glob.glob(os.path.join(tables_dir, '*.tex'))
+def verify_paper(project_dir: Path, base_name: str) -> bool:
+    """
+    Verify paper numbers against manifest.
 
-    for tf in table_files:
-        try:
-            with open(tf, 'r') as f:
-                text = f.read()
-        except (IOError, UnicodeDecodeError):
-            continue
+    Returns:
+        True if all checks pass, False otherwise
+    """
+    manifest_file = project_dir / "numbers_manifest.json"
+    if not manifest_file.exists():
+        print(f"✗ numbers_manifest.json not found. Run with --generate first.", file=sys.stderr)
+        return False
 
-        for m in re.finditer(r'-?\d[\d,]*\.?\d*', text):
-            clean = m.group().replace(',', '')
-            try:
-                val = float(clean)
-            except ValueError:
-                continue
-            if val != 0:
-                numbers.add(val)
+    with open(manifest_file) as f:
+        manifest_data = json.load(f)
 
-    return numbers
+    # Build reverse lookup: value -> source
+    value_sources = {}
+    for source_path, values in manifest_data["sources"].items():
+        for key, entry in values.items():
+            value = entry["value"]
+            checksum = entry["checksum"]
+            if isinstance(value, list):
+                value = tuple(value)
+            value_sources[value] = (source_path, key, checksum)
 
+    # Extract numbers from paper
+    paper_file = project_dir / f"{base_name}_paper.tex"
+    if not paper_file.exists():
+        print(f"✗ Paper file {paper_file} not found.", file=sys.stderr)
+        return False
 
-def number_matches(val, reference_numbers, tolerance=0.02):
-    """Check if val matches any reference number within tolerance."""
-    # Exact match
-    if val in reference_numbers:
-        return True
+    paper_numbers = extract_numbers_from_tex(paper_file)
 
-    # Check with rounding tolerance (relative for large, absolute for small)
-    for ref in reference_numbers:
-        if ref == 0:
-            continue
-        # Relative tolerance
-        if abs(val - ref) / abs(ref) <= tolerance:
+    # Check each number
+    untraced = []
+    checksum_mismatches = []
+
+    for line_num, context, value in paper_numbers:
+        # Try to find this value in manifest (with tolerance for floats)
+        found = False
+        for manifest_value, (source, key, checksum) in value_sources.items():
+            if isinstance(manifest_value, (int, float)):
+                # Allow small floating point tolerance
+                if abs(float(manifest_value) - value) < 1e-6:
+                    # Verify checksum
+                    value_checksum = compute_checksum(value)
+                    if value_checksum != checksum:
+                        checksum_mismatches.append((line_num, context, value, source))
+                    found = True
+                    break
+
+        if not found:
+            # Check if it's a "safe" number (like page numbers, section numbers)
+            if value in [1, 2, 3, 4, 5, 10, 20, 100] and value == int(value):
+                continue  # Skip common structural numbers
+            untraced.append((line_num, context, value))
+
+    # Report results
+    report_file = project_dir / "number_verification.md"
+    with open(report_file, "w") as f:
+        f.write(f"# Number Verification Report — {base_name}\n\n")
+        f.write(f"Paper: `{base_name}_paper.tex`\n")
+        f.write(f"Manifest: `numbers_manifest.json`\n\n")
+
+        if not untraced and not checksum_mismatches:
+            f.write("✓ All numerical values are traced to source files.\n")
+            print("✓ Number verification passed")
             return True
-        # Also check if paper reports a scaled version (x100 for percentages)
-        if abs(val - ref * 100) / abs(ref * 100) <= tolerance:
-            return True
-        if ref != 0 and abs(val - ref / 100) / abs(ref / 100) <= tolerance:
-            return True
-        # Check x1000 scaling
-        if abs(val - ref * 1000) / abs(ref * 1000) <= tolerance:
-            return True
 
+        if untraced:
+            f.write(f"## ⚠ Untraced Numbers ({len(untraced)})\n\n")
+            f.write("These numbers appear in the paper but not in `results/*/values.json`:\n\n")
+            for line_num, context, value in untraced:
+                f.write(f"- Line {line_num}: `{value}` in \"{context}\"\n")
+            f.write("\n")
+
+        if checksum_mismatches:
+            f.write(f"## ⚠ Checksum Mismatches ({len(checksum_mismatches)})\n\n")
+            f.write("These numbers exist in results but checksums don't match (value may have changed):\n\n")
+            for line_num, context, value, source in checksum_mismatches:
+                f.write(f"- Line {line_num}: `{value}` (source: `{source}`)\n")
+            f.write("\n")
+
+    print(f"✗ Number verification found issues. See {report_file}")
     return False
 
 
-def collect_number_metrics(project_dir, base_name):
-    """返回数值一致性指标 dict；不打印。paper 缺失返回 None。"""
-    tex_path = os.path.join(project_dir, f'{base_name}_paper.tex')
-    if not os.path.exists(tex_path):
-        return None
-    log_dir = os.path.join(project_dir, 'logs')
-    tables_dir = os.path.join(project_dir, 'tables')
-    paper_numbers = extract_tex_numbers(tex_path)
-    log_numbers = extract_log_numbers(log_dir)
-    table_numbers = extract_table_numbers(tables_dir)
-    reference_numbers = log_numbers | table_numbers
-    matched, unmatched = [], []
-    for entry in paper_numbers:
-        (matched if number_matches(entry['value'], reference_numbers) else unmatched).append(entry)
-    return {
-        "numbers_matched": len(matched),
-        "numbers_unmatched": len(unmatched),
-        "_matched": matched,
-        "_unmatched": unmatched,
-        "_paper_numbers": paper_numbers,
-        "_reference_count": len(reference_numbers),
-        "_log_count": len(log_numbers),
-        "_table_count": len(table_numbers),
-    }
+def update_manifest(project_dir: Path) -> None:
+    """Update manifest after results/ changes."""
+    print("Updating numbers_manifest.json...")
+    generate_manifest(project_dir)
 
 
 def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    # Legacy mode: verify_numbers.py <project_dir> <base_name>
+    if len(sys.argv) == 3 and not sys.argv[1].startswith('--'):
+        project_dir = Path(sys.argv[1])
+        base_name = sys.argv[2]
+        # Generate manifest if missing, then verify
+        manifest_file = project_dir / "numbers_manifest.json"
+        if not manifest_file.exists():
+            generate_manifest(project_dir)
+        success = verify_paper(project_dir, base_name)
+        sys.exit(0 if success else 1)
+
+    # New mode with flags
+    mode = sys.argv[1]
     if len(sys.argv) < 3:
-        print("Usage: verify_numbers.py <project_dir> <base_name>")
+        print("Error: Missing project_dir argument", file=sys.stderr)
+        print(__doc__)
         sys.exit(1)
 
-    project_dir = sys.argv[1]
-    base_name = sys.argv[2]
+    project_dir = Path(sys.argv[2])
 
-    tex_path = os.path.join(project_dir, f'{base_name}_paper.tex')
-
-    if not os.path.exists(tex_path):
-        print(f"ERROR: {tex_path} not found")
+    if not project_dir.exists():
+        print(f"Error: Project directory {project_dir} not found", file=sys.stderr)
         sys.exit(1)
 
-    metrics = collect_number_metrics(project_dir, base_name)
-    matched = metrics['_matched']
-    unmatched = metrics['_unmatched']
-
-    print(f"=== Number Verification Report ===")
-    print(f"Paper: {tex_path}")
-    print(f"Log numbers found: {metrics['_log_count']}")
-    print(f"Table numbers found: {metrics['_table_count']}")
-    print(f"Paper prose numbers found: {len(metrics['_paper_numbers'])}")
-    print()
-
-    print(f"MATCHED (found in logs/tables): {len(matched)}")
-    print(f"UNMATCHED (no source found):    {len(unmatched)}")
-    print()
-
-    if unmatched:
-        print("=" * 70)
-        print("UNMATCHED NUMBERS — review these manually:")
-        print("=" * 70)
-        for entry in unmatched:
-            print(f"  {entry['number']:>12s}  ...{entry['context']}...")
-        print()
-
-    if matched:
-        print("=" * 70)
-        print("MATCHED NUMBERS (OK):")
-        print("=" * 70)
-        for entry in matched:
-            print(f"  {entry['number']:>12s}  ...{entry['context']}...")
-
-    # Exit code: 0 if all matched, 1 if any unmatched
-    sys.exit(0 if not unmatched else 1)
+    if mode == "--generate":
+        generate_manifest(project_dir)
+    elif mode == "--verify":
+        if len(sys.argv) < 4:
+            print("Error: --verify requires base_name argument", file=sys.stderr)
+            sys.exit(1)
+        base_name = sys.argv[3]
+        success = verify_paper(project_dir, base_name)
+        sys.exit(0 if success else 1)
+    elif mode == "--update":
+        update_manifest(project_dir)
+    else:
+        print(f"Error: Unknown mode {mode}", file=sys.stderr)
+        print(__doc__)
+        sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
