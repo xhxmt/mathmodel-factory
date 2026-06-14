@@ -1,0 +1,129 @@
+╔════════════════════════════════════════════════════════════════╗
+║                                                                ║
+║          Paper Factory Web Dashboard - Quick Start            ║
+║                                                                ║
+╚════════════════════════════════════════════════════════════════╝
+
+📦 INSTALLATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  cd /home/tfisher/paper_factory/web
+  ./start_dashboard.sh
+
+  首次运行会自动安装依赖（约 30 秒）
+
+🚀 LAUNCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  One-line launcher:
+    cd web && ./start_dashboard.sh
+
+  或者分别启动：
+    cd web/backend && ./start.sh      # 终端 1
+    cd web/frontend && ./start.sh     # 终端 2
+
+  或者使用 Python 开发服务器：
+    cd web && ./dev.py
+
+  访问: http://localhost:5173
+
+🎯 FEATURES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✓ 实时项目监控（WebSocket 自动推送）
+  ✓ 项目管理（暂停/恢复/终止）
+  ✓ 日志查看（最近 100 行，可刷新）
+  ✓ 人工咨询回答提交（GPT Pro / Gemini Deep Think）
+
+📊 INTERFACE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  主界面
+  ├─ 顶部统计栏（运行中/等待咨询/已完成）
+  ├─ 项目卡片网格
+  │  ├─ 状态指示器（蓝色/黄色/绿色圆点）
+  │  ├─ 进度条（X/16 步骤）
+  │  ├─ 控制按钮（⏸ ▶️ ⏹）
+  │  └─ 元数据（更新时间、PID）
+  └─ 详情弹窗
+     ├─ 概览（checkpoint.md）
+     ├─ 日志（实时查看）
+     └─ 人工咨询（回答提交）
+
+🔧 WORKFLOW EXAMPLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. 启动 Dashboard
+     $ cd web && ./start_dashboard.sh
+
+  2. 启动建模任务（另一终端）
+     $ ./launch_agents.sh new --consult test_problem \
+         /path/to/problem.pdf
+
+  3. 在 Dashboard 中监控
+     - 实时查看步骤进度
+     - 当状态变为 "等待咨询" 时：
+       → 点击项目卡片 "查看详情"
+       → 切换到 "人工咨询" 标签
+       → 复制问题到 GPT Pro / Gemini Deep Think
+       → 粘贴回答并提交
+     - 项目自动恢复运行
+
+  4. 查看日志（调试用）
+     - 详情弹窗 → "日志" 标签
+     - 点击 "刷新" 获取最新日志
+
+💡 TIPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  • WebSocket 断开会自动重连（3 秒）
+  • 咨询回答支持 Markdown 格式
+  • 按 ESC 或点击背景关闭详情弹窗
+  • 多个项目可以同时运行和监控
+  • 响应式设计，支持移动端访问
+
+📚 DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  README.md           - 完整功能说明和 API 文档
+  INTERFACE_GUIDE.md  - 界面元素详细说明
+  SCREENSHOTS.md      - 截图占位（待添加）
+
+🐛 TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  端口占用：
+    lsof -ti:8000 | xargs kill -9  # 后端
+    lsof -ti:5173 | xargs kill -9  # 前端
+
+  后端日志：
+    cd web/backend && source venv/bin/activate
+    python3 app.py
+
+  前端日志：
+    cd web/frontend && npm run dev
+
+  测试脚本：
+    cd web && ./test_dashboard.sh
+
+🔗 PORTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Frontend:  http://localhost:5173       (Vite dev server)
+  Backend:   http://127.0.0.1:8000       (FastAPI)
+  API Docs:  http://127.0.0.1:8000/docs  (Swagger UI)
+  WebSocket: ws://127.0.0.1:8000/ws      (实时更新)
+
+⚡ TECH STACK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Backend:  FastAPI + uvicorn + WebSocket
+  Frontend: Vue 3 + Vite + axios
+  Style:    暗色主题 + 现代化 UI
+
+═══════════════════════════════════════════════════════════════════
+
+  Ready to go! 🚀
+  Start with: cd web && ./start_dashboard.sh
+
+═══════════════════════════════════════════════════════════════════

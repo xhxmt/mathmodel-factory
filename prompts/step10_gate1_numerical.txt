@@ -36,6 +36,31 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
 数据源: `results/*/values.json`, `results/sensitivity/*.json`, `logs/*.log`, `solve_log.md`
 审计原则: 每个论文数字 → 来源文件 + 精确数值匹配 (容差 ≤ 0.5% 或 ≤ 单位最小有效位)
 
+## 0. 符号覆盖率审计（Gate 1 硬门禁）
+
+运行 `python3 __FACTORY__/scripts/verify_symbols.py __PROJECT_PATH__ __BASE_NAME__` 并解析输出。
+
+| 指标 | 值 | 状态 |
+|---|---|---|
+| 论文中使用的符号总数 | (SYMBOLS_USED) | — |
+| 已在 symbol_table.md 登记 | (SYMBOLS_DEFINED) | — |
+| 未登记符号数 | (UNDEFINED_SYMBOLS) | — |
+| 覆盖率 | (SYMBOLS_DEFINED / SYMBOLS_USED) | [PASS/WARNING/FAIL] |
+
+**判定阈值**：
+- **coverage ≥ 0.7**: ✅ PASS（符号规范合格）
+- **0.5 ≤ coverage < 0.7**: ⚠️ WARNING（符号泄漏，需补登记）
+- **coverage < 0.5**: ❌ FAIL（质量崩溃，必须回 Step 4）
+
+**未登记符号清单**（如有）：
+- `symbol1`: 出现在 §X 第Y段
+- `symbol2`: 出现在 §Z 公式 (N)
+- ...
+
+**处理方案**：
+- 若 FAIL: 在本步骤停止，code_review.md 末尾写明"Gate 1 FAIL — 符号覆盖率 < 0.5，要求回 Step 4 补全 symbol_table.md"
+- 若 WARNING: 继续数值检查，但在 §6 verdict 中要求 Step 11 优先处理符号补登记
+
 ## 1. 数字逐项核对表
 
 | 论文位置 | 数字 | 应来源 | 实际匹配 | 差异 | 状态 |
@@ -85,6 +110,7 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
 
 ## 6. Gate 1 verdict
 
+- [x] 符号覆盖率 ≥ 0.7（或 ≥ 0.5 且已列出补登记方案）
 - [x] 100% 数字可追溯到 results/*
 - [x] 0 个凭空数字
 - [x] 所有 discrepancy 已修复且 paper.tex 已 reflect
@@ -92,9 +118,12 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
 
 **Gate 1 PASS** — 可以进入 Step 11 建设性审稿。
 
-或如果有未修复的 issue (例如发现严重数字问题需要回到 Step 5 重跑):
+或如果有未修复的 issue:
 
-**Gate 1 FAIL** — <理由>。建议: <处理方案 (如回 Step 5/6 重跑指定子问题)>。Step 11 暂不应启动。
+**Gate 1 FAIL** — <理由>。建议: <处理方案>。常见失败原因：
+- 符号覆盖率 < 0.5 → 回 Step 4 补全 symbol_table.md
+- 发现凭空数字 → 回 Step 5/6 重跑对应子问题
+- 编译失败 → 修复 LaTeX 语法错误
 ```
 
 ═══════════════════════════════════════════════════════════════
@@ -111,12 +140,35 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
 
 [执行节奏]
 
-1. `grep -nE "[0-9]+\.[0-9]+|[0-9]+%" __BASE_NAME___paper.tex` —— 把所有数字 / 百分比的出现位置列出来 (≈ 50-100 处, 数量取决于论文规模)。
-2. 对每个数字, 用 python 读 results/<sub>/values.json 或 results/sensitivity/*.json, 核对。
-3. 把核对结果填进 code_review.md §1 表格。
-4. 对每个 discrepancy: 写到 §2 详细诊断, 直接修 paper.tex, 在 §5 修订摘要记一笔。
-5. 修完后跑 `compile_paper.sh` 确认 PDF 还能编译; 如果挂, 修。
-6. 写 §6 Gate 1 verdict — 通过率 100% 才能写 "PASS"; 任何凭空数字 / 未修 discrepancy = FAIL。
+1. **符号覆盖率硬门禁**（新增）：
+   ```bash
+   python3 __FACTORY__/scripts/verify_symbols.py __PROJECT_PATH__ __BASE_NAME__
+   ```
+   检查输出的 `symbol_coverage` 值：
+   - **coverage < 0.5**: 质量崩溃阈值，直接 FAIL，要求回 Step 4 补全符号表
+   - **0.5 ≤ coverage < 0.7**: 符号泄漏警告，在 code_review.md 中列出所有 undefined_symbols 并要求补登记
+   - **coverage ≥ 0.7**: 符号规范合格，继续数值检查
+
+   把符号覆盖率报告整合到 code_review.md §0（在数字核对表之前）：
+   ```markdown
+   ## 0. 符号覆盖率审计（Gate 1 硬门禁）
+
+   - 论文中使用的符号总数: X
+   - 已在 symbol_table.md 登记: Y
+   - 覆盖率: Y/X = Z%
+   - 未登记符号清单: [...]
+   - 判定: [PASS / WARNING / FAIL]
+   ```
+
+2. `grep -nE "[0-9]+\.[0-9]+|[0-9]+%" __BASE_NAME___paper.tex` —— 把所有数字 / 百分比的出现位置列出来 (≈ 50-100 处, 数量取决于论文规模)。
+3. 对每个数字, 用 python 读 results/<sub>/values.json 或 results/sensitivity/*.json, 核对。
+4. 把核对结果填进 code_review.md §1 表格。
+5. 对每个 discrepancy: 写到 §2 详细诊断, 直接修 paper.tex, 在 §5 修订摘要记一笔。
+6. 修完后跑 `compile_paper.sh` 确认 PDF 还能编译; 如果挂, 修。
+7. 写 §6 Gate 1 verdict — 必须满足：
+   - 符号覆盖率 ≥ 0.7（或 ≥ 0.5 但所有泄漏符号已在 code_review.md 中列出补登记方案）
+   - 数字通过率 100%（任何凭空数字 / 未修 discrepancy = FAIL）
+   - 编译成功
 
 [禁止事项]
 
