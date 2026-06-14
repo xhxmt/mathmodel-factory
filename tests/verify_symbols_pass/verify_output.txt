@@ -1,0 +1,9 @@
+=== Symbol Verification Report ===
+Paper:        /home/tfisher/paper_factory/tests/verify_symbols_pass/test_paper.tex
+Symbol table: /home/tfisher/paper_factory/tests/verify_symbols_pass/symbol_table.md
+
+SYMBOLS_DEFINED   = 5
+SYMBOLS_USED      = 5
+UNDEFINED_SYMBOLS = 0
+USE_BEFORE_DEF    = 0
+
