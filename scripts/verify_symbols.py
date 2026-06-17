@@ -220,11 +220,6 @@ def extract_used_symbols(paper_path: str):
     used = set()
     first_use_line = {}
 
-    # Collect math spans with their line numbers
-    line_starts = [0]
-    for ch in text:
-        pass  # placeholder; compute below
-
     def line_of(pos: int) -> int:
         return text.count('\n', 0, pos) + 1
 

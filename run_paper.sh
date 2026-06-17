@@ -62,7 +62,11 @@ ABLATE_NO_INNOVATION_PROTECT="${ABLATE_NO_INNOVATION_PROTECT:-0}"
 
 _lines() { wc -l < "$1" 2>/dev/null || echo 0; }
 _chars() { wc -c < "$1" 2>/dev/null || echo 0; }
-_mtime() { stat -c %Y "$1" 2>/dev/null || echo 0; }
+_mtime() {
+    if stat -c %Y "$1" 2>/dev/null; then :       # GNU stat (Linux)
+    elif stat -f %m "$1" 2>/dev/null; then :     # BSD stat (macOS)
+    else echo 0; fi
+}
 _is_newer_by() {
     local newer="$1" older="$2" min_delta="${3:-1}"
     local newer_ts older_ts
@@ -812,7 +816,7 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
                 fi
             else
                 # Can't parse heartbeat — fall back to lock dir age
-                lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCKDIR") ))
+                lock_age=$(( $(date +%s) - $(_mtime "$LOCKDIR") ))
                 if (( lock_age > 14400 )); then
                     stale=true
                     stale_reason="lock age ${lock_age}s exceeds 14400s"
@@ -820,7 +824,7 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
             fi
         elif ! $stale; then
             # No heartbeat file — fall back to lock dir age (4h)
-            lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCKDIR") ))
+            lock_age=$(( $(date +%s) - $(_mtime "$LOCKDIR") ))
             if (( lock_age > 14400 )); then
                 stale=true
                 stale_reason="lock age ${lock_age}s exceeds 14400s"
@@ -835,12 +839,12 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
             if ! rmdir "$LOCKDIR" 2>/dev/null; then
                 echo "$(date '+%Y-%m-%d %H:%M:%S') [${BASE}] Failed to remove stale lock directory. Exiting." \
                     | tee -a "$PROJECT/logs/runner.log"
-                exit 0
+                exit 1
             fi
             if ! mkdir "$LOCKDIR" 2>/dev/null; then
                 echo "$(date '+%Y-%m-%d %H:%M:%S') [${BASE}] Failed to reacquire lock after reclaim. Exiting." \
                     | tee -a "$PROJECT/logs/runner.log"
-                exit 0
+                exit 1
             fi
         else
             echo "$(date '+%Y-%m-%d %H:%M:%S') [${BASE}] Another runner is active (lock exists). Exiting." \
@@ -1005,7 +1009,9 @@ if (( STEP < 0 )); then
         # The step0 prompt is self-contained — it explicitly overrides
         # analysis_guide.md with modeling_guide.md — so we deliberately skip
         # the social-science common_prompt_preamble.
-        _q_escaped="${QUESTION//&/\\&}"
+        _q_escaped="${QUESTION//\\/\\\\}"
+        _q_escaped="${_q_escaped//|/\\|}"
+        _q_escaped="${_q_escaped//&/\\&}"
         SETUP_PROMPT=$(sed \
             -e "s|__PROJECT_PATH__|$PROJECT|g" \
             -e "s|__RESEARCH_QUESTION__|$_q_escaped|g" \
@@ -1245,8 +1251,11 @@ EOF
 render_prompt() {
     local template="$1"
     local extra="${2:-}"
-    # Escape & in QUESTION so sed doesn't treat it as "insert match"
-    local q_escaped="${QUESTION//&/\\&}"
+    # Escape sed-special chars in QUESTION: & (back-ref), | (our delimiter),
+    # and \ (escape char) so values containing these don't break substitution.
+    local q_escaped="${QUESTION//\\/\\\\}"
+    q_escaped="${q_escaped//|/\\|}"
+    q_escaped="${q_escaped//&/\\&}"
     # Build sed args as an array. (Historically $extra was spliced in unquoted,
     # which would word-split any space-containing arg — no caller uses it, but
     # the array form is correct and lets the ablations below add space-bearing
@@ -1286,14 +1295,14 @@ get_user_note() {
     local notes_file="$FACTORY/web/notes.json"
     if [[ -f "$notes_file" ]]; then
         note=$(python3 -c "
-import json
+import json, sys
 try:
-    with open('$notes_file') as f:
+    with open(sys.argv[1]) as f:
         notes = json.load(f)
-    n = notes.get('$BASE', {}).get('step_$step', '')
+    n = notes.get(sys.argv[2], {}).get('step_' + sys.argv[3], '')
     if n: print(n)
 except: pass
-" 2>/dev/null || true)
+" "$notes_file" "$BASE" "$step" 2>/dev/null || true)
     fi
     echo "$note"
 }

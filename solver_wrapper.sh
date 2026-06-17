@@ -13,6 +13,12 @@ set -uo pipefail
 EXIT_FILE="${1:?usage: solver_wrapper.sh <exit_code_file> <cmd> [args...]}"
 shift
 
+if [[ $# -eq 0 ]]; then
+    echo "ERROR: no command provided after exit_code_file" >&2
+    echo "1" > "$EXIT_FILE"
+    exit 1
+fi
+
 "$@"
 rc=$?
 echo "$rc" > "$EXIT_FILE"

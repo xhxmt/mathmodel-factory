@@ -13,6 +13,13 @@ import json
 import zipfile
 import subprocess
 
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf8'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except (AttributeError, OSError):
+        pass
+
 from verify_symbols import collect_symbol_metrics
 from verify_numbers import collect_number_metrics
 from verify_solver import collect_solver_metrics

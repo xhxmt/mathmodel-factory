@@ -6,12 +6,15 @@ set -euo pipefail
 FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$FACTORY"
 
+TMPDIR_TEST="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_TEST"' EXIT
+
 echo "=== 方法库智能化功能测试 ==="
 echo
 
 # 测试1: 引用模式学习
 echo "测试 1: 引用模式学习（从历史项目学习）"
-python3 scripts/method_fit_score.py --learn complete/ > /tmp/fit_model_test.json 2>&1
+python3 scripts/method_fit_score.py --learn complete/ > "$TMPDIR_TEST/fit_model_test.json" 2>&1
 if [ -f scripts/method_fit_model.json ]; then
     learned_projects=$(python3 -c "import json; d=json.load(open('scripts/method_fit_model.json')); print(d['summary']['total_projects'])")
     learned_methods=$(python3 -c "import json; d=json.load(open('scripts/method_fit_model.json')); print(d['summary']['methods_seen'])")
@@ -32,7 +35,7 @@ echo
 
 # 测试3: 反例库构建
 echo "测试 3: 反例库构建（从历史失败学习）"
-python3 scripts/method_antipatterns.py --build complete/ > /tmp/antipatterns_test.json 2>&1
+python3 scripts/method_antipatterns.py --build complete/ > "$TMPDIR_TEST/antipatterns_test.json" 2>&1
 if [ -f scripts/method_antipatterns.json ]; then
     ap_count=$(python3 -c "import json; d=json.load(open('scripts/method_antipatterns.json')); print(d['summary']['total_antipatterns'])")
     high_severity=$(python3 -c "import json; d=json.load(open('scripts/method_antipatterns.json')); print(d['summary']['high_severity_count'])")
@@ -45,11 +48,11 @@ echo
 
 # 测试4: 反例检查
 echo "测试 4: 反例检查（检查阿基米德螺线方法）"
-if python3 scripts/method_antipatterns.py --check complete/test_cumcm2024a "method_library/geometry/archimedean_spiral.md" > /tmp/anticheck.json 2>&1; then
+if python3 scripts/method_antipatterns.py --check complete/test_cumcm2024a "method_library/geometry/archimedean_spiral.md" > "$TMPDIR_TEST/anticheck.json" 2>&1; then
     echo "  ⚠ 未检测到反例（预期应检测到）"
 else
-    matches=$(python3 -c "import json; d=json.load(open('/tmp/anticheck.json')); print(len(d['matches']))")
-    severity=$(python3 -c "import json; d=json.load(open('/tmp/anticheck.json')); print(d['max_severity'])")
+    matches=$(python3 -c "import json; d=json.load(open('$TMPDIR_TEST/anticheck.json')); print(len(d['matches']))")
+    severity=$(python3 -c "import json; d=json.load(open('$TMPDIR_TEST/anticheck.json')); print(d['max_severity'])")
     echo "  ✓ 检测到反例: $matches 个匹配, 最高严重度 $severity"
 fi
 echo
@@ -73,7 +76,7 @@ echo
 # 测试6: 模拟方法库更新验证
 echo "测试 6: 模拟验证（检查使用MILP的项目）"
 projects_using_milp=$(find complete -name "chosen_method.md" -exec grep -l "method_library/optimization/milp.md" {} \; | wc -l)
-if [ $projects_using_milp -gt 0 ]; then
+if [[ "${projects_using_milp:-0}" -gt 0 ]]; then
     echo "  ✓ 找到 $projects_using_milp 个项目使用MILP"
     echo "  （实际验证需要时间，跳过自动运行）"
 else

@@ -4,12 +4,11 @@ Usage: python3 mineru_ocr.py <pdf_path> <out_dir>
 """
 import sys, time, json, zipfile, io, pathlib, subprocess, urllib.request
 
-API_KEY = ("eyJ0eXBlIjoiSldUIiwiYWxnIjoiSFM1MTIifQ.eyJqdGkiOiIxNDUwMDMzNyIsIn"
-           "JvbCI6IlJPTEVfUkVHSVNURVIiLCJpc3MiOiJPcGVuWExhYiIsImlhdCI6MTc3OTI5"
-           "MDA3NSwiY2xpZW50SWQiOiJsa3pkeDU3bnZ5MjJqa3BxOXgydyIsInBob25lIjoiIiw"
-           "ib3BlbklkIjpudWxsLCJ1dWlkIjoiMGY0MDkzZmMtNzcyNS00OTBiLTgxYWItMGY3YW"
-           "FlZGQ3OTNkIiwiZW1haWwiOiIiLCJleHAiOjE3ODcwNjYwNzV9.MmAoZFBLkUG_9ed3"
-           "rPrUt9Ib2v-_QAFbMWdD-lKhcZTiX7h0gjBUXnpMdFKq3b_wSJ5objCyajrQhipc1xAuZw")
+import os
+API_KEY = os.environ.get("MINERU_TOKEN", "")
+if not API_KEY:
+    sys.exit("ERROR: MINERU_TOKEN not set. Copy .env.example to .env and fill in your token.\n"
+             "Get one at: https://mineru.net/apiManage/token")
 BASE = "https://mineru.net/api/v4"
 
 def api(method, path, body=None):

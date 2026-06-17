@@ -9,7 +9,9 @@ def test_cli_output_byte_identical():
         capture_output=True, text=True,
     )
     combined = out.stdout + out.stderr
-    with open(GOLDEN) as f:
+    combined = combined.replace(FIXTURE + os.sep, "tests/fixtures/mini_proj/")
+    combined = combined.replace(FIXTURE + "/", "tests/fixtures/mini_proj/")
+    with open(GOLDEN, encoding='utf-8') as f:
         assert combined == f.read()
 
 def test_collect_symbol_metrics_dict():
