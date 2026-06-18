@@ -30,12 +30,14 @@ cat > "$TEST_PROJECT/problem/problem_brief.md" << 'EOF'
 这是一个凸优化问题，有唯一最优解 x* = 2。
 EOF
 
-cat > "$TEST_PROJECT/problem/constraints.md" << 'EOF'
+cat > "$TEST_PROJECT/problem/feasibility_constraints.md" << 'EOF'
 # 约束条件
 
 1. x ≥ 0
 2. x ≤ 10
 EOF
+
+cp "$TEST_PROJECT/problem/feasibility_constraints.md" "$TEST_PROJECT/problem/constraints.md"
 
 # 创建模拟的 viable_streams.md（包含5个候选流）
 cat > "$TEST_PROJECT/viable_streams.md" << 'EOF'

@@ -38,6 +38,8 @@ import glob
 from pathlib import Path
 from collections import defaultdict
 
+from problem_paths import resolve_problem_constraints_path
+
 
 def _read_file(path):
     """读取文件，容错编码。"""
@@ -57,7 +59,7 @@ def extract_problem_features(project_dir):
     # 这里简化，实际应导入method_fit_score.extract_problem_features
     problem_dir = os.path.join(project_dir, 'problem')
     brief_path = os.path.join(problem_dir, 'problem_brief.md')
-    constraints_path = os.path.join(problem_dir, 'constraints.md')
+    constraints_path = resolve_problem_constraints_path(project_dir)
 
     brief_text = _read_file(brief_path)
     constraints_text = _read_file(constraints_path)
