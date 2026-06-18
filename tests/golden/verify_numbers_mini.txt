@@ -1,5 +1,5 @@
 === Number Verification Report ===
-Paper: /home/tfisher/paper_factory/tests/fixtures/mini_proj/mini_paper.tex
+Paper: tests/fixtures/mini_proj/mini_paper.tex
 Log numbers found: 2
 Table numbers found: 0
 Paper prose numbers found: 2

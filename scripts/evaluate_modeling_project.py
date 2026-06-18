@@ -69,6 +69,10 @@ def infer_step(root: Path, project: Path) -> tuple[int | None, str]:
             timeout=30,
             check=False,
         )
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 193:
+            return None, "run_paper.sh requires a POSIX shell (bash or WSL) on Windows"
+        return None, str(exc)
     except Exception as exc:  # pragma: no cover - defensive for local ops
         return None, str(exc)
     text = (proc.stdout or proc.stderr).strip()

@@ -40,6 +40,8 @@ import glob
 from pathlib import Path
 from collections import defaultdict
 
+from problem_paths import resolve_problem_constraints_path
+
 
 def _read_file(path):
     """读取文件，容错编码。"""
@@ -58,7 +60,7 @@ def extract_problem_features(project_dir):
     """从problem/目录提取问题特征。"""
     problem_dir = os.path.join(project_dir, 'problem')
     brief_path = os.path.join(problem_dir, 'problem_brief.md')
-    constraints_path = os.path.join(problem_dir, 'constraints.md')
+    constraints_path = resolve_problem_constraints_path(project_dir)
 
     brief_text = _read_file(brief_path)
     constraints_text = _read_file(constraints_path)
@@ -155,6 +157,8 @@ def find_method_path(family_desc):
     if not family_desc:
         return None
 
+    repo_root = Path(__file__).resolve().parents[1]
+
     # 关键词映射
     keyword_map = {
         'milp': 'method_library/optimization/milp.md',
@@ -174,7 +178,7 @@ def find_method_path(family_desc):
 
     family_lower = family_desc.lower()
     for kw, path in keyword_map.items():
-        if kw in family_lower:
+        if kw in family_lower and (repo_root / path).is_file():
             return path
 
     return None

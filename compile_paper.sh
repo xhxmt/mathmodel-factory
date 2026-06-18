@@ -12,11 +12,13 @@ if grep -qE '\\documentclass\s*(\[[^]]*\])?\s*\{(ctex|cumcmthesis|mcmthesis)' "$
     ENGINE="xelatex"
 fi
 
-"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1
+COMPILE_LOG="${BASE}_compile.log"
+
+"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >"$COMPILE_LOG" 2>&1
 
 if [[ -f "${BASE}_paper.aux" ]] && grep -q '\\bibdata' "${BASE}_paper.aux" 2>/dev/null; then
-    bibtex "${BASE}_paper" >/dev/null 2>&1
+    bibtex "${BASE}_paper" >>"$COMPILE_LOG" 2>&1
 fi
 
-"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1
-"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >/dev/null 2>&1
+"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >>"$COMPILE_LOG" 2>&1
+"$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" >>"$COMPILE_LOG" 2>&1

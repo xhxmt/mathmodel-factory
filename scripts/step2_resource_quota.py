@@ -11,7 +11,7 @@ Usage:
 
 基于：
   - problem/problem_brief.md 中的问题描述
-  - problem/constraints.md 中的约束数量
+  - problem/feasibility_constraints.md 中的约束数量（兼容旧名 constraints.md）
   - viable_streams.md 中Step 1提出的候选方法数
 
 返回 JSON:
@@ -32,6 +32,8 @@ import os
 import re
 import sys
 import json
+
+from problem_paths import resolve_problem_constraints_path
 
 
 def _read_file(path):
@@ -207,7 +209,7 @@ def analyze_resource_quota(project_dir):
     """分析项目，返回资源配额推荐。"""
     problem_dir = os.path.join(project_dir, 'problem')
     brief_path = os.path.join(problem_dir, 'problem_brief.md')
-    constraints_path = os.path.join(problem_dir, 'constraints.md')
+    constraints_path = resolve_problem_constraints_path(project_dir)
     viable_path = os.path.join(project_dir, 'viable_streams.md')
 
     brief_text = _read_file(brief_path)

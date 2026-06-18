@@ -174,9 +174,10 @@ def _parse_score(text: str) -> dict | None:
     }
 
 
+import statistics
+
 def median(vals):
-    s = sorted(vals)
-    return s[len(s) // 2]
+    return statistics.median(vals)
 
 
 def _load_env(path: pathlib.Path) -> None:

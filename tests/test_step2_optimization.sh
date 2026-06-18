@@ -6,6 +6,9 @@ set -euo pipefail
 FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_PROJECT="$FACTORY/test_step2_optimization"
 
+cleanup() { rm -rf "$TEST_PROJECT"; }
+trap cleanup EXIT
+
 echo "=== Step 2 优化功能测试 ==="
 echo
 
@@ -27,12 +30,14 @@ cat > "$TEST_PROJECT/problem/problem_brief.md" << 'EOF'
 这是一个凸优化问题，有唯一最优解 x* = 2。
 EOF
 
-cat > "$TEST_PROJECT/problem/constraints.md" << 'EOF'
+cat > "$TEST_PROJECT/problem/feasibility_constraints.md" << 'EOF'
 # 约束条件
 
 1. x ≥ 0
 2. x ≤ 10
 EOF
+
+cp "$TEST_PROJECT/problem/feasibility_constraints.md" "$TEST_PROJECT/problem/constraints.md"
 
 # 创建模拟的 viable_streams.md（包含5个候选流）
 cat > "$TEST_PROJECT/viable_streams.md" << 'EOF'
@@ -126,6 +131,4 @@ echo "3. 求解器收敛: m2流正常收敛"
 echo
 echo "预期成本节约: 简单问题减少2个并行流 × 5小时平均时长 = 节省约40%的Step 2成本"
 
-# 清理测试目录
-rm -rf "$TEST_PROJECT"
 exit 0

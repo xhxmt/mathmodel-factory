@@ -21,7 +21,7 @@ import glob
 
 def extract_tex_numbers(tex_path):
     """Extract numbers from paper prose, skipping LaTeX preamble/commands."""
-    with open(tex_path, 'r') as f:
+    with open(tex_path, 'r', encoding='utf-8') as f:
         text = f.read()
 
     # Remove preamble (before \begin{document})
@@ -90,7 +90,7 @@ def extract_log_numbers(log_dir):
 
     for lf in log_files:
         try:
-            with open(lf, 'r') as f:
+            with open(lf, 'r', encoding='utf-8') as f:
                 text = f.read()
         except (IOError, UnicodeDecodeError):
             continue
@@ -114,7 +114,7 @@ def extract_table_numbers(tables_dir):
 
     for tf in table_files:
         try:
-            with open(tf, 'r') as f:
+            with open(tf, 'r', encoding='utf-8') as f:
                 text = f.read()
         except (IOError, UnicodeDecodeError):
             continue

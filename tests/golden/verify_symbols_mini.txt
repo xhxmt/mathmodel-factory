@@ -1,6 +1,6 @@
 === Symbol Verification Report ===
-Paper:        /home/tfisher/paper_factory/tests/fixtures/mini_proj/mini_paper.tex
-Symbol table: /home/tfisher/paper_factory/tests/fixtures/mini_proj/symbol_table.md
+Paper:        tests/fixtures/mini_proj/mini_paper.tex
+Symbol table: tests/fixtures/mini_proj/symbol_table.md
 
 SYMBOLS_DEFINED   = 1
 SYMBOLS_USED      = 2
