@@ -59,12 +59,53 @@ diagnose() {
     [[ -n "$fatal" ]] && log "  FATAL/STUCK: $fatal"
 }
 
+_is_lock_stale() {
+    local proj_dir="$1"
+    local lock="$proj_dir/.runner.lock"
+
+    # No lock directory = definitely stale
+    [[ ! -d "$lock" ]] && return 0
+
+    # Check PID file first (most reliable)
+    local pid_file="$proj_dir/.runner.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid=$(cat "$pid_file" 2>/dev/null || echo "")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            # Process is alive, lock is NOT stale
+            return 1
+        fi
+    fi
+
+    # Fallback: check heartbeat freshness
+    local hb="$proj_dir/.heartbeat"
+    if [[ -f "$hb" ]]; then
+        local age=$(($(date +%s) - $(stat -c %Y "$hb" 2>/dev/null || echo 0)))
+        # If heartbeat updated in last 30 minutes, assume lock is still held
+        if (( age < 1800 )); then
+            return 1
+        fi
+    fi
+
+    # All checks passed, lock is stale
+    return 0
+}
+
 start_project() {
     local proj="$1" env_var="${ABLATION_VARS[$proj]}"
-    # clear stale lock
-    rm -rf "$FACTORY/ongoing/$proj/.runner.lock"
+    local proj_dir="$FACTORY/ongoing/$proj"
+
+    # CRITICAL: Only clear lock if it's truly stale
+    if _is_lock_stale "$proj_dir"; then
+        log "  $proj: lock is stale, clearing..."
+        rm -rf "$proj_dir/.runner.lock"
+    else
+        log "  $proj: lock still held by live process (PID or recent heartbeat), SKIP restart"
+        return 0
+    fi
+
     local out="$FACTORY/logs/${proj}_mon_$(date +%Y%m%d_%H%M%S).out"
-    nohup env $env_var "$FACTORY/run_paper.sh" "$FACTORY/ongoing/$proj" >> "$out" 2>&1 &
+    nohup env $env_var "$FACTORY/run_paper.sh" "$proj_dir" >> "$out" 2>&1 &
     local pid=$!
     echo "$pid" > "$FACTORY/run_state/${proj}.pid"
     log "  restarted $proj -> pid $pid ($env_var)"

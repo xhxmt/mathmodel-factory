@@ -873,6 +873,156 @@ get_question() {
         | sed 's/.*\*\*: //'
 }
 
+# ── Semantic verification for step outputs ──────────────────────────
+#
+# Verifies that step outputs are not just present but semantically valid.
+# Goes beyond line-count thresholds to check for structural markers that
+# indicate real completion (VERDICT lines, proper escaping, minimum content).
+#
+# Returns 0 if the step output passes semantic checks, 1 otherwise.
+verify_step_output() {
+    local step="$1" P="$PROJECT"
+
+    case "$step" in
+        1)
+            # Step 1: viable_streams.md and viability_gate.md must exist with VERDICT
+            [[ -f "$P/viable_streams.md" ]] || return 1
+            [[ -f "$P/viability_gate.md" ]] || return 1
+            grep -q "^VERDICT:" "$P/viability_gate.md" || return 1
+            # At least one stream should be listed
+            grep -q "^## Stream m[0-9]" "$P/viable_streams.md" || return 1
+            ;;
+        2)
+            # Step 2: at least one validated stream
+            local validated=0
+            for f in "$P"/m*_critique.md; do
+                [[ -f "$f" ]] || continue
+                if grep -q "^VERDICT: VALIDATED" "$f"; then
+                    validated=1
+                    break
+                fi
+            done
+            (( validated )) || return 1
+            ;;
+        3)
+            # Step 3: method_decision.md and chosen_method.md must exist
+            [[ -f "$P/method_decision.md" ]] || return 1
+            [[ -f "$P/chosen_method.md" ]] || return 1
+            # Chosen method should reference a stream
+            grep -q "m[0-9]" "$P/chosen_method.md" || return 1
+            ;;
+        4)
+            # Step 4: model.md, symbol_table.md, assumption_ledger.md
+            [[ -f "$P/model.md" ]] || return 1
+            [[ -f "$P/symbol_table.md" ]] || return 1
+            [[ -f "$P/assumption_ledger.md" ]] || return 1
+            # Symbol table should have at least some entries
+            (( $(_lines "$P/symbol_table.md") >= 10 )) || return 1
+            ;;
+        9)
+            # Step 9: paper.tex must have ABSTRACT_PLACEHOLDER properly escaped
+            [[ -f "$P/paper/paper.tex" ]] || return 1
+            # Check for proper detokenize or at least presence of placeholder
+            if grep -q 'detokenize.*ABSTRACT.*PLACEHOLDER' "$P/paper/paper.tex"; then
+                : # Good: properly escaped
+            elif grep -q 'ABSTRACT.*PLACEHOLDER' "$P/paper/paper.tex"; then
+                : # Acceptable: placeholder present (might work)
+            else
+                return 1  # No placeholder found
+            fi
+            ;;
+        10)
+            # Step 10: Gate 1 numerical check
+            [[ -f "$P/gate1_numerical_check.md" ]] || return 1
+            # Should have some verification results
+            (( $(_lines "$P/gate1_numerical_check.md") >= 20 )) || return 1
+            ;;
+        13)
+            # Step 13: Gate 2 judge evaluation must have VERDICT
+            [[ -f "$P/judge_evaluation.md" ]] || return 1
+            grep -q "^VERDICT:" "$P/judge_evaluation.md" || return 1
+            ;;
+        14)
+            # Step 14: Abstract should replace placeholder
+            [[ -f "$P/paper/paper.tex" ]] || return 1
+            # Placeholder should be gone or filled
+            if grep -q 'ABSTRACT.*PLACEHOLDER' "$P/paper/paper.tex"; then
+                # If placeholder still exists, it's not done
+                return 1
+            fi
+            ;;
+        16)
+            # Step 16: Final PDF must exist
+            [[ -f "$P/${BASE}_paper.pdf" ]] || return 1
+            # PDF should be substantial (> 50KB)
+            local pdf_size
+            pdf_size=$(stat -c %s "$P/${BASE}_paper.pdf" 2>/dev/null || echo 0)
+            (( pdf_size > 51200 )) || return 1
+            ;;
+        *)
+            # For other steps, rely on file-state inference
+            return 0
+            ;;
+    esac
+
+    return 0
+}
+
+# ── Error classification for intelligent retry ──────────────────────
+#
+# Classifies errors from step logs to distinguish transient (retry-worthy)
+# from permanent (stop immediately) failures.
+classify_step_error() {
+    local log_file="$1"
+    [[ -f "$log_file" ]] || { echo "UNKNOWN"; return; }
+
+    # Check for retryable transient errors
+    if grep -qiE "rate.?limit|429|quota.?exceeded|too.?many.?requests" "$log_file"; then
+        echo "TRANSIENT_RATE_LIMIT"
+        return
+    fi
+
+    if grep -qiE "timeout|timed.?out|connection.?timeout|504|502|503" "$log_file"; then
+        echo "TRANSIENT_TIMEOUT"
+        return
+    fi
+
+    if grep -qiE "temporary|temporarily.?unavailable|service.?unavailable" "$log_file"; then
+        echo "TRANSIENT_UNAVAILABLE"
+        return
+    fi
+
+    # Check for permanent errors
+    if grep -qiE "authentication.?failed|invalid.?api.?key|401|403|permission.?denied" "$log_file"; then
+        echo "PERMANENT_AUTH"
+        return
+    fi
+
+    if grep -qiE "not.?found|404|file.?not.?found|no.?such.?file" "$log_file"; then
+        echo "PERMANENT_NOT_FOUND"
+        return
+    fi
+
+    if grep -qiE "invalid.?request|bad.?request|400|malformed" "$log_file"; then
+        echo "PERMANENT_INVALID"
+        return
+    fi
+
+    # Check for resource errors
+    if grep -qiE "out.?of.?memory|oom.?killed|memory.?error|cannot.?allocate" "$log_file"; then
+        echo "RESOURCE_MEMORY"
+        return
+    fi
+
+    if grep -qiE "disk.?full|no.?space.?left|quota.?exceeded" "$log_file"; then
+        echo "RESOURCE_DISK"
+        return
+    fi
+
+    # Default: unknown (retry with caution)
+    echo "UNKNOWN"
+}
+
 verify_step() {
     local new
     new=$(infer_step "$PROJECT" "$BASE")
@@ -1429,12 +1579,128 @@ maybe_consult() {
         {
             echo "# 咨询请求：${title}"
             echo
+            echo "**元数据**"
             echo "- gate: ${gate}"
             echo "- step: ${step}"
             echo "- project: ${BASE}"
             echo "- created: $(date '+%Y-%m-%d %H:%M:%S')"
             echo
-            echo "## 需要你（借助 GPT Pro / Gemini Deep Think）决定的事"
+
+            # ── 项目背景上下文 ──
+            echo "## 📋 项目背景"
+            echo
+            if [[ -f "$PROJECT/problem/problem_brief.md" ]]; then
+                echo "### 问题概要"
+                echo '```'
+                head -30 "$PROJECT/problem/problem_brief.md" 2>/dev/null || echo "(无法读取)"
+                echo '```'
+                echo
+            fi
+
+            local current_step_name=""
+            case "$step" in
+                0) current_step_name="问题解析与候选方法识别" ;;
+                1) current_step_name="背景研究与方法可行性" ;;
+                2) current_step_name="并行建模提案与demo验证" ;;
+                3) current_step_name="方法选择" ;;
+                4) current_step_name="完整模型构建" ;;
+                5) current_step_name="模型求解" ;;
+                6-15) current_step_name="论文写作与审核（Step $step）" ;;
+            esac
+            echo "**当前所在步骤**: Step ${step} — ${current_step_name}"
+            echo
+
+            # ── 决策影响分析 ──
+            echo "## 🎯 决策影响"
+            echo
+            case "$gate" in
+                preflight)
+                    echo "这是**启动前咨询**，你的决策将影响："
+                    echo "- Step 1 的背景研究方向（哪些领域、哪些前沿方法值得深入）"
+                    echo "- Step 2 的建模提案范围（探索哪些技术路线）"
+                    echo "- 整个项目的技术栈选择（优化器、求解器、工具链）"
+                    echo
+                    echo "**建议关注点**："
+                    echo "- 问题的本质是什么？（优化/预测/分类/仿真/博弈…）"
+                    echo "- 哪些前沿方法/论文值得参考？"
+                    echo "- 有无特殊约束需要在建模初期就考虑？"
+                    ;;
+                step4)
+                    echo "这是**建模定型前咨询**，你的决策将影响："
+                    echo "- Step 4 最终的模型公式化"
+                    echo "- Step 5 的求解方案（算法、求解器选择）"
+                    echo "- Step 6-7 的敏感性分析和鲁棒性验证策略"
+                    echo
+                    echo "**建议关注点**："
+                    echo "- 模型假设是否合理？有无遗漏的关键约束？"
+                    echo "- 是否有更优雅/高效的数学表达？"
+                    echo "- 求解难度评估：凸优化？NP-hard？可近似？"
+                    ;;
+                dynamic)
+                    echo "这是**agent 主动求助**，说明遇到了难以自动决策的问题。"
+                    echo "你的决策将直接影响当前 Step ${step} 能否顺利推进。"
+                    echo
+                    ;;
+            esac
+            echo
+
+            # ── 关键文件引用 ──
+            echo "## 📁 关键文件引用"
+            echo
+            echo "以下是项目中已完成的关键文件，供你参考决策："
+            echo
+
+            local has_any_file=0
+            [[ -f "$PROJECT/problem/problem_brief.md" ]] && {
+                echo "- \`problem/problem_brief.md\` — 问题解析"
+                has_any_file=1
+            }
+            [[ -f "$PROJECT/problem/constraints.md" ]] && {
+                echo "- \`problem/constraints.md\` — 约束条件分析"
+                has_any_file=1
+            }
+            [[ -f "$PROJECT/problem/data_inventory.md" ]] && {
+                echo "- \`problem/data_inventory.md\` — 数据清单"
+                has_any_file=1
+            }
+            [[ -f "$PROJECT/viable_streams.md" ]] && {
+                echo "- \`viable_streams.md\` — 可行方法流（Step 1 产出）"
+                has_any_file=1
+            }
+            for idx in {1..5}; do
+                [[ -f "$PROJECT/m${idx}_spec.md" ]] && {
+                    echo "- \`m${idx}_spec.md\` — 建模提案 ${idx}"
+                    has_any_file=1
+                }
+                [[ -f "$PROJECT/m${idx}_critique.md" ]] && {
+                    echo "- \`m${idx}_critique.md\` — 提案 ${idx} 评审"
+                    has_any_file=1
+                }
+            done
+            [[ -f "$PROJECT/method_decision.md" ]] && {
+                echo "- \`method_decision.md\` — 方法决策记录（Step 3 产出）"
+                has_any_file=1
+            }
+            [[ -f "$PROJECT/model.md" ]] && {
+                echo "- \`model.md\` — 完整模型描述"
+                has_any_file=1
+            }
+            [[ -f "$PROJECT/symbol_table.md" ]] && {
+                echo "- \`symbol_table.md\` — 符号表"
+                has_any_file=1
+            }
+            [[ -f "$PROJECT/assumption_ledger.md" ]] && {
+                echo "- \`assumption_ledger.md\` — 假设清单"
+                has_any_file=1
+            }
+
+            if (( has_any_file == 0 )); then
+                echo "（项目刚启动，暂无已完成文件）"
+            fi
+            echo
+
+            # ── 核心咨询内容 ──
+            echo "## 🤔 需要你（借助 GPT Pro / Gemini Deep Think）决定的事"
             echo
             if [[ -n "$ctx_file" && -f "$ctx_file" ]]; then
                 cat "$ctx_file"
@@ -1442,10 +1708,27 @@ maybe_consult() {
                 echo "${title}"
             fi
             echo
-            echo "## 回填方式"
-            echo "1. 把结论写进 human_review.md 的「## CONSULT ${gate} … STATUS: …」段落下；"
-            echo "2. 把该段 STATUS 改成 READY；"
-            echo "3. 运行：./launch_agents.sh resume ${BASE}"
+
+            # ── 回答指引 ──
+            echo "## 💡 回答建议"
+            echo
+            echo "请提供："
+            echo "1. **明确的决策建议**（选哪个方案 / 采用什么策略）"
+            echo "2. **充分的理由**（为什么这样选？有何优势？）"
+            echo "3. **潜在风险提示**（这个选择可能遇到的坑）"
+            echo "4. **实施要点**（如果有具体的技术细节、参数建议、论文引用等）"
+            echo
+            echo "你可以用 GPT Pro 的深度思考模式、或 Gemini 的 Deep Think 功能，来进行多角度分析。"
+            echo
+
+            # ── 回填方式 ──
+            echo "## 🔄 回填方式"
+            echo
+            echo "1. 把你的决策结论写进 \`human_review.md\` 的「## CONSULT ${gate} … STATUS: …」段落下；"
+            echo "2. 把该段落的 \`STATUS: AWAITING\` 改成 \`STATUS: READY\`；"
+            echo "3. 运行：\`./launch_agents.sh resume ${BASE}\`"
+            echo
+            echo "流水线会读取你的回填内容，并在后续步骤中优先参考。"
         } > "$req"
     fi
 
@@ -1511,6 +1794,9 @@ find_codex_trace() {
 # Returns: 0=success, 1=timeout/error, 2=hung(killed)
 run_codex() {
     local prompt_file="$1" timeout="$2" hang_timeout="${3:-3600}"
+    # Optional model override (model registry / per-step dispatch).  Defaults
+    # preserve the historical hardcoded behavior for every existing caller.
+    local cx_model="${4:-gpt-5.5}" cx_effort="${5:-xhigh}"
     local rendered
     rendered=$(render_prompt "$prompt_file")
     local note
@@ -1524,12 +1810,12 @@ NOTE FROM THE RESEARCHER: $note"
     local before_ts
     before_ts=$(date +%s)
 
-    log "   Codex: $prompt_file (timeout ${timeout}s)"
+    log "   Codex: $prompt_file (model=$cx_model effort=$cx_effort, timeout ${timeout}s)"
 
     ( cd "$PROJECT" && timeout --kill-after=120 "$timeout" \
         codex exec \
-          --model gpt-5.5 \
-          -c 'model_reasoning_effort="xhigh"' \
+          --model "$cx_model" \
+          -c "model_reasoning_effort=\"$cx_effort\"" \
           --dangerously-bypass-approvals-and-sandbox \
           -C "$PROJECT" \
           --skip-git-repo-check \
@@ -1652,8 +1938,9 @@ NOTE FROM THE RESEARCHER: $note"
     # the Antigravity SDK as of 2026-05).  Override with AGY_MODEL env var if
     # the SDK defaults shift or the preview name gets promoted.  Note: the
     # name "gemini-3.1-pro" (no -preview) is NOT valid on v1beta — confirmed
-    # via ListModels 2026-05-25.
-    local agy_model="${AGY_MODEL:-gemini-3.1-pro-preview}"
+    # via ListModels 2026-05-25.  A 4th positional arg (from the model
+    # registry / per-step dispatch) takes precedence over AGY_MODEL.
+    local agy_model="${4:-${AGY_MODEL:-gemini-3.1-pro-preview}}"
 
     ( cd "$PROJECT" && timeout --kill-after=120 "$timeout" \
         "$FACTORY/.venv/bin/python3" "$FACTORY/scripts/agy_run.py" \
@@ -1745,7 +2032,7 @@ run_agy_then_claude() {
 # Usage: run_claude_worker <prompt_file_or_literal> <timeout_secs> [is_literal]
 # When is_literal is "literal", first arg is treated as the prompt text directly.
 run_claude_worker() {
-    local prompt_src="$1" timeout="$2" is_literal="${3:-}"
+    local prompt_src="$1" timeout="$2" is_literal="${3:-}" cl_model="${4:-}"
     local prompt
     if [[ "$is_literal" == "literal" ]]; then
         prompt="$(common_prompt_preamble)
@@ -1763,11 +2050,16 @@ NOTE FROM THE RESEARCHER: $note"
     fi
 
     local claude_log="$PROJECT/logs/step_${NEXT}_claude_$(date +%Y%m%d_%H%M%S).log"
-    log "   Claude worker: ${prompt_src:0:60}"
+    log "   Claude worker: ${prompt_src:0:60}${cl_model:+ (model=$cl_model)}"
+
+    # Optional --model override (model registry / per-step dispatch).  Empty =>
+    # the claude CLI's own default model, identical to historical behavior.
+    local cl_model_flag=()
+    [[ -n "$cl_model" ]] && cl_model_flag=(--model "$cl_model")
 
     set +e
     ( cd "$PROJECT" && stdbuf -oL -eL timeout --kill-after=120 "$timeout" \
-        claude -p "$prompt" --dangerously-skip-permissions --effort max \
+        claude -p "$prompt" --dangerously-skip-permissions --effort max "${cl_model_flag[@]}" \
     ) > "$claude_log" 2>&1
     local ec=$?
     set -e
@@ -2032,6 +2324,226 @@ NOTE FROM THE RESEARCHER: $note"
 # Each step function knows exactly what agents to launch and what
 # files to verify. No Claude orchestrator — shell handles monitoring.
 
+# ── Model registry & per-step model dispatch ─────────────────────────
+#
+# Optional, opt-in layer that lets the web dashboard pick which model runs
+# each step.  Mirrors the get_user_note()/web/notes.json precedent:
+#
+#   web/model_registry.json  — global catalog of selectable models.  Each entry:
+#       { "id", "label", "backend": claude|codex|agy|openai|gemini,
+#         "model", "effort", "base_url", "key_env", "enabled" }
+#   web/model_config.json    — per-step assignment, project overrides default:
+#       { "_default": { "step_13": {"primary":"<id>","fallback":"<id>"} },
+#         "<base>":   { "step_5":  {"primary":"<id>"} } }
+#
+# When a step has NO assignment, dispatch_step calls the step's built-in
+# hardcoded combinator unchanged, so unattended benchmark / ablation runs stay
+# byte-identical (no files => no behavior change).
+MODEL_REGISTRY_FILE="$FACTORY/web/model_registry.json"
+MODEL_CONFIG_FILE="$FACTORY/web/model_config.json"
+
+# Echo "primary_id|fallback_id" for a step ("" if no assignment).  Project
+# ($BASE) assignment wins over the "_default" preset.
+get_step_model_ids() {
+    local step="$1"
+    [[ -f "$MODEL_CONFIG_FILE" ]] || return 0
+    python3 - "$MODEL_CONFIG_FILE" "$BASE" "$step" <<'PY' 2>/dev/null || true
+import json, sys
+cfg_file, base, step = sys.argv[1], sys.argv[2], sys.argv[3]
+key = "step_%s" % step
+try:
+    with open(cfg_file) as f:
+        cfg = json.load(f)
+except Exception:
+    sys.exit(0)
+def get(scope):
+    e = (cfg.get(scope) or {}).get(key)
+    if isinstance(e, dict):
+        return e
+    if isinstance(e, str) and e:
+        return {"primary": e}
+    return None
+entry = get(base) or get("_default")
+if not entry:
+    sys.exit(0)
+prim = (entry.get("primary") or "").strip()
+fb = (entry.get("fallback") or "").strip()
+if not prim:
+    sys.exit(0)
+print("%s|%s" % (prim, fb))
+PY
+}
+
+# Echo "backend<US>model<US>effort<US>base_url<US>key_env" (US = \x1f) for a
+# registry id, or return 1 if the id is missing / disabled.  A non-whitespace
+# separator is required: `read` with IFS=tab collapses empty middle fields.
+get_model_entry() {
+    local id="$1"
+    [[ -n "$id" && -f "$MODEL_REGISTRY_FILE" ]] || return 1
+    python3 - "$MODEL_REGISTRY_FILE" "$id" <<'PY' 2>/dev/null || return 1
+import json, sys
+reg_file, mid = sys.argv[1], sys.argv[2]
+try:
+    with open(reg_file) as f:
+        reg = json.load(f)
+except Exception:
+    sys.exit(1)
+models = reg.get("models", []) if isinstance(reg, dict) else reg
+for m in models:
+    if m.get("id") == mid:
+        if m.get("enabled") is False:
+            sys.exit(1)
+        print("\x1f".join([
+            m.get("backend", ""), m.get("model", ""), m.get("effort", ""),
+            m.get("base_url", ""), m.get("key_env", ""),
+        ]))
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# Step -> the single markdown artifact a non-agentic API backend should write.
+# Only the judge / review / evaluation steps have a clean single-file output;
+# other steps need an agentic backend and return "" (API backend is skipped).
+api_step_output_file() {
+    case "$1" in
+        7)  echo "evaluation.md" ;;
+        11) echo "review_comments.md" ;;
+        13) echo "judge_evaluation.md" ;;
+        *)  echo "" ;;
+    esac
+}
+
+# Step -> project files inlined as context for a non-agentic API backend
+# (it cannot open files itself).  Missing files are skipped by api_agent_run.py.
+api_step_context_files() {
+    local step="$1"
+    local common="problem/problem_brief.md model.md symbol_table.md assumption_ledger.md"
+    case "$step" in
+        7)  echo "$common solve_log.md sensitivity_report.md" ;;
+        11) echo "$common solve_log.md sensitivity_report.md evaluation.md ${BASE}_paper.tex paper/paper.tex" ;;
+        13) echo "$common solve_log.md sensitivity_report.md evaluation.md review_comments.md revision_summary.md ${BASE}_paper.tex paper/paper.tex" ;;
+        *)  echo "$common" ;;
+    esac
+}
+
+# Run a non-agentic API model for the current step (NEXT) via api_agent_run.py.
+# Args: <prompt_file> <timeout> <model> <backend> <base_url> <key_env>
+run_api_model() {
+    local prompt_file="$1" timeout="$2" model="$3" backend="$4" base_url="$5" key_env="$6"
+    local out_rel
+    out_rel="$(api_step_output_file "$NEXT")"
+    if [[ -z "$out_rel" ]]; then
+        log "   API model: step $NEXT has no single-file output — API backend not applicable"
+        return 1
+    fi
+
+    local rendered note
+    rendered=$(render_prompt "$prompt_file")
+    note=$(get_user_note "$NEXT")
+    [[ -n "$note" ]] && rendered="$rendered
+
+NOTE FROM THE RESEARCHER: $note"
+
+    local stamp; stamp=$(date +%Y%m%d_%H%M%S)
+    local prompt_tmp="$PROJECT/logs/step_${NEXT}_api_${model//\//_}_${stamp}.prompt.txt"
+    local api_log="$PROJECT/logs/step_${NEXT}_api_${model//\//_}_${stamp}.log"
+    printf '%s' "$rendered" > "$prompt_tmp"
+
+    local ctx_args=() f
+    for f in $(api_step_context_files "$NEXT"); do
+        ctx_args+=(--context-file "$f")
+    done
+
+    local api_args=(--model "$model" --backend "$backend")
+    [[ -n "$base_url" ]] && api_args+=(--base-url "$base_url")
+    [[ -n "$key_env" ]] && api_args+=(--key-env "$key_env")
+
+    local inner=$(( timeout - 30 )); (( inner < 60 )) && inner=$timeout
+    log "   API model: $model [$backend] -> $out_rel (timeout ${timeout}s)"
+    ( cd "$PROJECT" && timeout --kill-after=60 "$timeout" \
+        python3 "$FACTORY/scripts/api_agent_run.py" \
+            "${api_args[@]}" \
+            --prompt-file "$prompt_tmp" \
+            --project "$PROJECT" \
+            --output-file "$out_rel" \
+            "${ctx_args[@]}" \
+            --timeout "$inner" \
+    ) > "$api_log" 2>&1
+    local ec=$?
+    if (( ec == 0 )); then
+        log "   API model $model wrote $out_rel"
+        return 0
+    fi
+    log "   API model $model failed (exit $ec) — see ${api_log##*/}"
+    return 1
+}
+
+# Run ONE registry model id for the current step's prompt, routing to the
+# right backend primitive.  Returns 0 on success.
+# Args: <model_id> <prompt_file> <timeout> <hang_timeout>
+run_backend() {
+    local mid="$1" prompt_file="$2" timeout="$3" hang="${4:-3600}"
+    local entry backend model effort base_url key_env
+    if ! entry="$(get_model_entry "$mid")"; then
+        log "   model '$mid' not found in registry (or disabled)"
+        return 1
+    fi
+    IFS=$'\x1f' read -r backend model effort base_url key_env <<<"$entry"
+    case "$backend" in
+        claude)
+            run_claude_worker "$prompt_file" "$timeout" "" "$model" ;;
+        codex)
+            run_codex "$prompt_file" "$timeout" "$hang" "${model:-gpt-5.5}" "${effort:-xhigh}" ;;
+        agy)
+            run_agy "$prompt_file" "$timeout" "$hang" "$model" ;;
+        openai|deepseek|gemini)
+            run_api_model "$prompt_file" "$timeout" "$model" "$backend" "$base_url" "$key_env" ;;
+        *)
+            log "   unknown backend '$backend' for model '$mid'"; return 1 ;;
+    esac
+}
+
+# Generic per-step dispatch.  If the step (NEXT) has a model assignment, run the
+# configured primary then fallback; otherwise call the step's built-in default
+# combinator with identical args (no behavior change).  default_fn must accept
+# (prompt_file, timeout, hang_timeout).
+# Args: <prompt_file> <timeout> <hang_timeout> <default_fn>
+dispatch_step() {
+    local prompt_file="$1" timeout="$2" hang="$3" default_fn="$4"
+    local ids primary fallback
+    ids="$(get_step_model_ids "$NEXT")"
+    if [[ -z "$ids" ]]; then
+        "$default_fn" "$prompt_file" "$timeout" "$hang"
+        return $?
+    fi
+    primary="${ids%%|*}"
+    fallback="${ids#*|}"
+    [[ "$fallback" == "$ids" ]] && fallback=""
+    log "   Step $NEXT: model override — primary='$primary' fallback='${fallback:-<none>}'"
+
+    if run_backend "$primary" "$prompt_file" "$timeout" "$hang"; then
+        return 0
+    fi
+    if verify_step "$NEXT"; then
+        log "   Step $NEXT: primary exited nonzero but artifacts verify — done"
+        return 0
+    fi
+    if [[ -n "$fallback" && "$fallback" != "$primary" ]]; then
+        log "   Step $NEXT: primary failed — trying configured fallback '$fallback'"
+        if run_backend "$fallback" "$prompt_file" "$timeout" "$hang"; then
+            return 0
+        fi
+        if verify_step "$NEXT"; then return 0; fi
+    fi
+    log "   Step $NEXT: configured model(s) failed — falling back to built-in default"
+    "$default_fn" "$prompt_file" "$timeout" "$hang"
+}
+
+# Wrapper so single-Claude-worker steps (1, 3) can be a dispatch default_fn:
+# run_claude_worker's 3rd arg is is_literal, NOT hang, so it must be elided.
+_default_claude_worker() { run_claude_worker "$1" "$2"; }
+
 run_step_1() {
     # Modeling-mode Step 1: research_brief + viable_streams + viability_gate
     # via a single Claude worker on prompts/step1_research_viability.txt.
@@ -2052,7 +2564,7 @@ run_step_1() {
         log "   Step 1: artifacts present — skipping worker"
     else
         log "   Step 1: research + method preselection + viability gate (Claude)"
-        run_claude_worker step1_research_viability.txt 14400 || true
+        dispatch_step step1_research_viability.txt 14400 3600 _default_claude_worker || true
     fi
 
     # KILL gate — short-circuit if verdict is KILL.  Reuses the existing
@@ -2383,7 +2895,7 @@ run_step_3() {
     fi
 
     log "   Step 3: method selection (Claude)"
-    run_claude_worker step3_method_selection.txt 7200 || true
+    dispatch_step step3_method_selection.txt 7200 1800 _default_claude_worker || true
 
     if [[ ! -f "$md" ]] || (( $(_lines "$md") < 30 )); then
         log "   Step 3: method_decision.md missing or < 30 lines"
@@ -2424,7 +2936,7 @@ run_step_4() {
     fi
 
     log "   Step 4: full model construction (Agy → Claude fallback)"
-    run_agy_then_claude step4_model_construction.txt 14400 3600 || true
+    dispatch_step step4_model_construction.txt 14400 3600 run_agy_then_claude || true
 
     if [[ ! -f "$mdl" ]] || (( $(_lines "$mdl") < 100 )); then
         log "   Step 4: model.md missing or < 100 lines"
@@ -2447,30 +2959,30 @@ run_step_5() {
     # Hang detection budget 1h matches Step 4's; the solver itself runs
     # via solver_submit.sh and counts as "real work" for hang detection
     # (CLAUDE.md hang-detection rule).
-    run_codex_then_claude step5_full_solve.txt 14400 3600
+    dispatch_step step5_full_solve.txt 14400 3600 run_codex_then_claude
 }
-run_step_6()  { run_codex_then_claude step6_sensitivity.txt 10800 3600; }
+run_step_6()  { dispatch_step step6_sensitivity.txt 10800 3600 run_codex_then_claude; }
 
-run_step_7()  { run_claude_then_codex step7_model_eval.txt 7200 1800; }
-run_step_8()  { run_claude_then_codex step8_visualization.txt 10800 3600; }
-run_step_9()  { run_claude_then_codex step9_paper_draft.txt 14400 3600; }
+run_step_7()  { dispatch_step step7_model_eval.txt 7200 1800 run_claude_then_codex; }
+run_step_8()  { dispatch_step step8_visualization.txt 10800 3600 run_claude_then_codex; }
+run_step_9()  { dispatch_step step9_paper_draft.txt 14400 3600 run_claude_then_codex; }
 
-run_step_10() { run_codex_then_claude step10_gate1_numerical.txt 10800 3600; }
+run_step_10() { dispatch_step step10_gate1_numerical.txt 10800 3600 run_codex_then_claude; }
 
-run_step_11() { run_codex_then_claude step11_constructive_review.txt 7200 1800; }
+run_step_11() { dispatch_step step11_constructive_review.txt 7200 1800 run_codex_then_claude; }
 
-run_step_12() { run_claude_then_codex step12_revision.txt 14400 3600; }
+run_step_12() { dispatch_step step12_revision.txt 14400 3600 run_claude_then_codex; }
 run_step_13() {
     if _ablate_on "$ABLATE_NO_JUDGE"; then
         log "   ABLATION: skipping Gate-2 judge (ABLATE_NO_JUDGE); writing PASS stub"
         _write_judge_stub
         return 0
     fi
-    run_codex_then_claude step13_gate2_judge.txt 10800 3600
+    dispatch_step step13_gate2_judge.txt 10800 3600 run_codex_then_claude
 }
 
-run_step_14() { run_claude_then_codex step14_abstract.txt 7200 1800; }
-run_step_15() { run_codex_then_claude step15_polish.txt 10800 3600; }
+run_step_14() { dispatch_step step14_abstract.txt 7200 1800 run_claude_then_codex; }
+run_step_15() { dispatch_step step15_polish.txt 10800 3600 run_codex_then_claude; }
 
 run_step_16() {
     log "   Recompiling PDF"
@@ -2598,7 +3110,8 @@ while (( STEP < 16 )); do
         fi
 
         # Verify step completed regardless of exit code.
-        if verify_step "$NEXT"; then
+        # First check file-state (infer_step), then semantic validation.
+        if verify_step "$NEXT" && verify_step_output "$NEXT"; then
             if (( NEXT == 13 )); then
                 verdict=""
                 verdict=$(gate2_verdict)
@@ -2642,10 +3155,28 @@ while (( STEP < 16 )); do
             break
         else
             RETRIES=$((RETRIES + 1))
-            log "   Step $NEXT NOT VERIFIED (expected output files missing)"
+
+            # Classify error for intelligent retry
+            local err_class
+            err_class=$(classify_step_error "$STEP_LOG")
+
+            log "   Step $NEXT NOT VERIFIED (expected output files missing or invalid)"
+            log "   Error classification: $err_class"
+
+            # Permanent errors: stop immediately
+            if [[ "$err_class" == PERMANENT_* ]]; then
+                log "   PERMANENT error detected — stopping retries"
+                RETRIES=$MAX_RETRIES
+            fi
+
             if (( RETRIES < MAX_RETRIES )); then
-                log "   Retrying in 30s..."
-                sleep 30
+                # Exponential backoff: 30s, 60s, 120s, 300s, 600s
+                local delays=(30 60 120 300 600)
+                local delay_idx=$((RETRIES - 1))
+                local delay=${delays[$delay_idx]:-600}
+
+                log "   Retrying in ${delay}s (attempt $((RETRIES + 1))/$MAX_RETRIES)..."
+                sleep "$delay"
             fi
         fi
     done

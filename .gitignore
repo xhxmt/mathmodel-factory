@@ -4,6 +4,13 @@
 /complete/
 /papers/
 /run_state/
+/uploads/
+
+# Web dashboard runtime config (edited via the UI, seeded by the backend).
+# No secrets here — only model names + key_env VARIABLE names (keys live in .env).
+/web/notes.json
+/web/model_registry.json
+/web/model_config.json
 
 # External evaluation per-run outputs (regenerable; baseline_scores.md is kept)
 /evaluation/results/

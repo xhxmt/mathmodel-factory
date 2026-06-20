@@ -1,369 +1,115 @@
 <template>
-  <div class="project-card" :class="statusClass">
-    <div class="card-header">
-      <div class="card-title">
-        <span class="status-dot" :class="statusClass"></span>
-        <h3>{{ project.base_name }}</h3>
-      </div>
-      <div class="card-actions">
-        <button v-if="project.is_running" @click="$emit('action', project, 'pause')" class="btn btn-sm" title="暂停">
-          ⏸
-        </button>
-        <button v-else-if="project.status === 'paused'" @click="$emit('action', project, 'resume')" class="btn btn-sm" title="恢复">
-          ▶️
-        </button>
-        <button v-if="project.is_running" @click="confirmKill" class="btn btn-sm btn-danger" title="终止">
-          ⏹
-        </button>
+  <article class="card panel" :class="['ac-' + project.status, { pending: project.consultation_pending }]" @click="$emit('open', project)" tabindex="0" @keydown.enter="$emit('open', project)">
+    <div class="c-top">
+      <span class="dot" :class="dotClass"></span>
+      <span class="c-name mono">{{ project.base_name }}</span>
+      <span class="spacer"></span>
+      <span class="tag" :class="'st-' + project.status">{{ statusLabel }}</span>
+    </div>
+
+    <div v-if="project.consultation_pending" class="c-consult">
+      <Icon name="alert-triangle" :size="13" />
+      <span>等待你处理 · {{ project.consultation_gate || 'gate' }}</span>
+    </div>
+
+    <div class="c-rail">
+      <StepRail :current-step="project.current_step" :awaiting="project.consultation_pending" compact />
+      <div class="c-railmeta mono">
+        <span class="c-step">{{ stepText }}</span>
+        <span class="c-pct" :class="{ done: project.progress_percent >= 100 }">{{ Math.round(project.progress_percent) }}%</span>
       </div>
     </div>
 
-    <div class="card-body">
-      <!-- Status Badge -->
-      <div class="status-badge" :class="statusClass">
-        {{ statusText }}
+    <div class="c-foot">
+      <div class="c-meta mono">
+        <span class="m-i"><Icon name="clock" :size="11" /> {{ rel(project.last_updated) }}</span>
+        <span v-if="project.pid" class="m-i">PID {{ project.pid }}</span>
       </div>
-
-      <!-- Consultation Alert -->
-      <div v-if="project.consultation_pending" class="consultation-alert">
-        <span class="alert-icon">⚠️</span>
-        <span>等待人工咨询 ({{ project.consultation_gate }})</span>
-      </div>
-
-      <!-- Progress -->
-      <div class="progress-section">
-        <div class="progress-label">
-          <span>步骤 {{ project.current_step + 1 }} / {{ project.total_steps }}</span>
-          <span class="progress-percent">{{ project.progress_percent }}%</span>
-        </div>
-        <div class="progress-bar">
-          <div class="progress-fill" :style="{ width: project.progress_percent + '%' }"></div>
-        </div>
-      </div>
-
-      <!-- Metadata -->
-      <div class="metadata">
-        <div class="metadata-item">
-          <span class="metadata-label">最后更新</span>
-          <span class="metadata-value">{{ formatTime(project.last_updated) }}</span>
-        </div>
-        <div v-if="project.pid" class="metadata-item">
-          <span class="metadata-label">PID</span>
-          <span class="metadata-value">{{ project.pid }}</span>
-        </div>
+      <div class="c-actions" @click.stop>
+        <button v-if="project.is_running" class="btn btn-icon btn-sm btn-ghost" @click="$emit('action', project, 'pause')" title="暂停"><Icon name="pause" :size="13" /></button>
+        <button v-else-if="canResume" class="btn btn-icon btn-sm btn-ghost" @click="$emit('action', project, 'resume')" title="恢复"><Icon name="play" :size="13" /></button>
+        <button class="btn btn-sm btn-ghost enter" @click.stop="$emit('open', project)">进入 <Icon name="chevron-right" :size="13" /></button>
       </div>
     </div>
-
-    <div class="card-footer">
-      <button @click="$emit('view-details', project)" class="btn btn-primary btn-block">
-        查看详情
-      </button>
-    </div>
-  </div>
+  </article>
 </template>
 
 <script>
+import Icon from './Icon.vue'
+import StepRail from './StepRail.vue'
+import { relativeTime } from '../lib/api.js'
+import { stepByIndex } from '../lib/steps.js'
+
+const STATUS_LABEL = {
+  running: '运行中', paused: '已暂停', completed: '已完成', awaiting_consultation: '等待咨询',
+  ready: '就绪', setup: '初始化', failed: '失败', killed: '已终止',
+}
+
 export default {
   name: 'ProjectCard',
-  props: {
-    project: {
-      type: Object,
-      required: true
-    }
-  },
+  components: { Icon, StepRail },
+  props: { project: { type: Object, required: true } },
+  emits: ['open', 'action'],
   computed: {
-    statusClass() {
-      const map = {
-        running: 'status-running',
-        paused: 'status-paused',
-        completed: 'status-completed',
-        awaiting_consultation: 'status-consultation',
-        failed: 'status-failed',
-        killed: 'status-killed'
-      }
-      return map[this.project.status] || 'status-unknown'
+    statusLabel() { return STATUS_LABEL[this.project.status] || this.project.status },
+    dotClass() {
+      return { running: 'live', awaiting_consultation: 'amber', completed: 'ok', paused: 'paused', failed: 'bad', killed: 'bad' }[this.project.status] || ''
     },
-    statusText() {
-      const map = {
-        running: '运行中',
-        paused: '已暂停',
-        completed: '已完成',
-        awaiting_consultation: '等待咨询',
-        failed: '失败',
-        killed: '已终止',
-        ready: '就绪',
-        setup: '初始化'
-      }
-      return map[this.project.status] || '未知'
-    }
+    canResume() { return ['paused', 'ready', 'awaiting_consultation'].includes(this.project.status) },
+    stepText() {
+      const c = this.project.current_step
+      if (c >= 16) return '16 · 已完成'
+      const s = stepByIndex(Math.min(16, Math.max(0, c + 1)))
+      return s ? `${Math.max(0, c + 1)} · ${s.name}` : `Step ${c + 1}`
+    },
   },
-  methods: {
-    formatTime(timestamp) {
-      const now = new Date()
-      const time = new Date(timestamp)
-      const diff = Math.floor((now - time) / 1000)
-
-      if (diff < 60) return `${diff}秒前`
-      if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
-      if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
-      return timestamp.split(' ')[0]
-    },
-    confirmKill() {
-      if (confirm(`确定要终止项目 ${this.project.base_name} 吗？`)) {
-        this.$emit('action', this.project, 'kill')
-      }
-    }
-  }
+  methods: { rel: relativeTime },
 }
 </script>
 
 <style scoped>
-.project-card {
-  background: rgba(26, 29, 53, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 0.75rem;
-  overflow: hidden;
-  transition: all 0.3s ease;
+.card {
+  position: relative; display: flex; flex-direction: column; gap: 14px;
+  padding: 16px 16px 14px; cursor: pointer;
+  border-left: 2px solid var(--ink-3);
+  transition: border-color 0.2s var(--ease), transform 0.2s var(--ease), box-shadow 0.2s var(--ease), background 0.2s var(--ease);
+}
+.card:hover { transform: translateY(-2px); box-shadow: var(--shadow); background: var(--panel-2); }
+.card:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.ac-running { border-left-color: var(--live); }
+.ac-completed { border-left-color: var(--ok); }
+.ac-paused { border-left-color: var(--paused); }
+.ac-failed, .ac-killed { border-left-color: var(--bad); }
+.card.pending { border-left-color: var(--amber); box-shadow: inset 2px 0 0 var(--amber), 0 0 0 1px var(--amber-line); }
+
+.c-top { display: flex; align-items: center; gap: 9px; }
+.c-name { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spacer { flex: 1; }
+
+.c-consult {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 11px; margin: -2px 0;
+  background: var(--amber-dim); border: 1px solid var(--amber-line); border-radius: var(--r-sm);
+  color: var(--amber); font-size: 12px; font-weight: 600;
 }
 
-.project-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  border-color: rgba(255, 255, 255, 0.2);
-}
+.c-rail { display: flex; flex-direction: column; gap: 9px; padding: 2px 2px 0; }
+.c-railmeta { display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
+.c-step { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-pct { color: var(--ink-3); font-weight: 700; }
+.c-pct.done { color: var(--ok); }
 
-.project-card.status-running {
-  border-left: 3px solid #60a5fa;
-}
+.c-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.c-meta { display: flex; gap: 12px; font-size: 11px; color: var(--ink-3); }
+.m-i { display: inline-flex; align-items: center; gap: 5px; }
+.c-actions { display: flex; align-items: center; gap: 6px; }
+.enter { color: var(--ink-2); }
+.enter:hover { color: var(--ink); border-color: var(--live); }
 
-.project-card.status-consultation {
-  border-left: 3px solid #fbbf24;
-}
-
-.project-card.status-completed {
-  border-left: 3px solid #34d399;
-}
-
-.project-card.status-paused {
-  border-left: 3px solid #a1a1aa;
-}
-
-.project-card.status-failed,
-.project-card.status-killed {
-  border-left: 3px solid #ef4444;
-}
-
-.card-header {
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.card-title h3 {
-  font-size: 1rem;
-  font-weight: 600;
-  color: #f4f4f5;
-  margin: 0;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.status-dot.status-running {
-  background: #60a5fa;
-  box-shadow: 0 0 8px rgba(96, 165, 250, 0.6);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-.status-dot.status-consultation {
-  background: #fbbf24;
-  box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-.status-dot.status-completed {
-  background: #34d399;
-}
-
-.status-dot.status-paused {
-  background: #a1a1aa;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-.card-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.card-body {
-  padding: 1.25rem;
-}
-
-.status-badge {
-  display: inline-block;
-  padding: 0.25rem 0.75rem;
-  border-radius: 0.375rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  margin-bottom: 1rem;
-}
-
-.status-badge.status-running {
-  background: rgba(96, 165, 250, 0.15);
-  color: #60a5fa;
-}
-
-.status-badge.status-consultation {
-  background: rgba(251, 191, 36, 0.15);
-  color: #fbbf24;
-}
-
-.status-badge.status-completed {
-  background: rgba(52, 211, 153, 0.15);
-  color: #34d399;
-}
-
-.status-badge.status-paused {
-  background: rgba(161, 161, 170, 0.15);
-  color: #a1a1aa;
-}
-
-.status-badge.status-failed,
-.status-badge.status-killed {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-}
-
-.consultation-alert {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  background: rgba(251, 191, 36, 0.1);
-  border: 1px solid rgba(251, 191, 36, 0.3);
-  border-radius: 0.5rem;
-  margin-bottom: 1rem;
-  font-size: 0.875rem;
-  color: #fbbf24;
-}
-
-.progress-section {
-  margin-bottom: 1rem;
-}
-
-.progress-label {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.875rem;
-  color: #a1a1aa;
-  margin-bottom: 0.5rem;
-}
-
-.progress-percent {
-  font-weight: 600;
-  color: #60a5fa;
-}
-
-.progress-bar {
-  height: 6px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #60a5fa, #3b82f6);
-  border-radius: 3px;
-  transition: width 0.3s ease;
-}
-
-.metadata {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-}
-
-.metadata-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.metadata-label {
-  font-size: 0.75rem;
-  color: #71717a;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.metadata-value {
-  font-size: 0.875rem;
-  color: #d4d4d8;
-  font-family: 'Monaco', 'Menlo', monospace;
-}
-
-.card-footer {
-  padding: 1rem 1.25rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.btn {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 0.375rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  background: rgba(255, 255, 255, 0.05);
-  color: #e4e4e7;
-}
-
-.btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.btn-sm {
-  padding: 0.375rem 0.625rem;
-  font-size: 0.75rem;
-}
-
-.btn-primary {
-  background: #3b82f6;
-  color: white;
-}
-
-.btn-primary:hover {
-  background: #2563eb;
-}
-
-.btn-danger {
-  background: rgba(239, 68, 68, 0.2);
-  color: #ef4444;
-}
-
-.btn-danger:hover {
-  background: rgba(239, 68, 68, 0.3);
-}
-
-.btn-block {
-  width: 100%;
-}
+.tag { font: 600 10px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 8px; border-radius: var(--r-xs); border: 1px solid var(--line); background: var(--panel-2); color: var(--ink-2); white-space: nowrap; }
+.st-running { color: var(--live); border-color: var(--live-dim); background: var(--live-dim); }
+.st-awaiting_consultation { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
+.st-completed { color: var(--ok); border-color: var(--ok-dim); background: var(--ok-dim); }
+.st-paused { color: var(--paused); }
+.st-failed, .st-killed { color: var(--bad); border-color: var(--bad-dim); background: var(--bad-dim); }
 </style>

@@ -1,353 +1,378 @@
 <template>
-  <div class="dashboard">
-    <!-- Header -->
-    <header class="header">
-      <div class="header-content">
-        <h1 class="title">
-          <span class="icon">📄</span>
-          Paper Factory Dashboard
-        </h1>
-        <div class="header-stats">
-          <div class="stat">
-            <span class="stat-label">运行中</span>
-            <span class="stat-value">{{ runningCount }}</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">等待咨询</span>
-            <span class="stat-value consultation">{{ consultationCount }}</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">已完成</span>
-            <span class="stat-value">{{ completedCount }}</span>
+  <Toasts />
+
+  <LoginForm v-if="!isAuthenticated" @login-success="onLogin" />
+
+  <template v-else>
+    <div class="console">
+      <!-- status rail -->
+      <header class="rail">
+        <div class="brand">
+          <div class="mark"><Icon name="layers" :size="18" /></div>
+          <div class="brand-tx">
+            <div class="brand-name mono">PAPER FACTORY</div>
+            <div class="brand-sub mono">建模工坊 · CONTROL</div>
           </div>
         </div>
-      </div>
-    </header>
 
-    <!-- Main Content -->
-    <main class="main-content">
-      <div class="container">
-        <!-- Connection Status -->
-        <div v-if="!wsConnected" class="alert alert-warning">
-          ⚠️ WebSocket 连接断开，正在重连...
+        <div class="kpis">
+          <button class="kpi amber" :class="{ flash: counts.needs > 0 }" @click="jumpNeeds" :disabled="!counts.needs">
+            <span class="k-val tnum">{{ counts.needs }}</span><span class="k-lbl">待你处理</span>
+          </button>
+          <div class="kpi"><span class="k-val live tnum">{{ counts.running }}</span><span class="k-lbl">运行中</span></div>
+          <div class="kpi"><span class="k-val ok tnum">{{ counts.completed }}</span><span class="k-lbl">已完成</span></div>
+          <div class="kpi"><span class="k-val tnum">{{ counts.total }}</span><span class="k-lbl">总数</span></div>
         </div>
 
-        <!-- Projects Grid -->
-        <div class="projects-grid">
-          <ProjectCard
-            v-for="project in projects"
-            :key="project.base_name"
-            :project="project"
-            @view-details="viewProjectDetails"
-            @action="handleProjectAction"
-          />
+        <div class="rr">
+          <button class="btn btn-amber" @click="openNew"><Icon name="plus" :size="15" /> <span class="hide-sm">新建</span></button>
+          <div class="hb mono" :class="{ off: !wsConnected }" :title="wsConnected ? '实时连接正常' : '正在重连'">
+            <span class="dot" :class="wsConnected ? 'live' : 'bad'"></span>{{ wsConnected ? 'LIVE' : 'RECONN' }}
+          </div>
+          <button class="btn btn-icon btn-ghost" @click="showPalette = true" title="命令面板 (⌘K)"><Icon name="command" :size="15" /></button>
+          <button class="btn btn-icon btn-ghost" @click="showModels = true" title="模型管理"><Icon name="cpu" :size="15" /></button>
+          <button class="btn btn-icon btn-ghost" @click="toggleTheme" title="切换主题"><Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="15" /></button>
+          <div class="user">
+            <Icon name="user" :size="14" />
+            <span class="mono u-name hide-sm">{{ username }}</span>
+            <button class="u-out" @click="logout" title="退出登录"><Icon name="log-out" :size="14" /></button>
+          </div>
         </div>
+      </header>
 
-        <!-- Empty State -->
-        <div v-if="projects.length === 0 && !loading" class="empty-state">
-          <div class="empty-icon">📭</div>
-          <p>暂无项目</p>
-          <p class="empty-hint">使用 <code>./launch_agents.sh new</code> 创建新项目</p>
-        </div>
+      <main class="main">
+        <!-- needs-you lane -->
+        <section v-if="needsYou.length" class="lane">
+          <div class="lane-h">
+            <Icon name="alert-triangle" :size="14" />
+            <span>等待你处理</span>
+            <span class="lane-n mono">{{ needsYou.length }}</span>
+          </div>
+          <div class="grid">
+            <ProjectCard v-for="p in needsYou" :key="p.base_name" :project="p" @open="openProject" @action="onAction" />
+          </div>
+        </section>
 
-        <!-- Loading State -->
-        <div v-if="loading" class="loading">
-          <div class="spinner"></div>
-          <p>加载中...</p>
-        </div>
-      </div>
-    </main>
+        <!-- fleet -->
+        <section class="fleet">
+          <div class="fleet-h">
+            <span class="label">项目 · PROJECTS <b class="mono">{{ others.length }}</b></span>
+            <div class="filters">
+              <div class="search">
+                <Icon name="search" :size="13" />
+                <input v-model="query" class="search-in mono" placeholder="搜索项目…" spellcheck="false" />
+                <button v-if="query" class="clr" @click="query = ''"><Icon name="x" :size="11" /></button>
+              </div>
+              <div class="chips">
+                <button v-for="f in filterChips" :key="f.key" class="chip" :class="{ on: statusFilter === f.key }" @click="statusFilter = f.key">{{ f.label }}</button>
+              </div>
+            </div>
+          </div>
 
-    <!-- Project Detail Modal -->
-    <ProjectDetailModal
-      v-if="selectedProject"
-      :project="selectedProject"
-      @close="selectedProject = null"
-      @consultation-submit="handleConsultationSubmit"
-    />
-  </div>
+          <div v-if="loading" class="grid">
+            <div v-for="i in 4" :key="i" class="skel panel"></div>
+          </div>
+          <div v-else-if="filteredOthers.length" class="grid">
+            <ProjectCard v-for="p in filteredOthers" :key="p.base_name" :project="p" @open="openProject" @action="onAction" />
+          </div>
+          <div v-else class="empty panel">
+            <Icon name="inbox" :size="34" />
+            <p>{{ query || statusFilter !== 'all' ? '无匹配项目' : '暂无项目' }}</p>
+            <span class="hint mono">点击「新建」或 ./launch_agents.sh new 创建</span>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <ProjectWorkspace v-if="selectedProject" :project="selectedProject" @close="closeWorkspace" @action="onAction" @refresh="fetchProjects" />
+    <NewProjectModal v-if="showNew" @close="showNew = false" @project-created="onCreated" />
+    <CommandPalette :visible="showPalette" :projects="projects" @close="showPalette = false" @open-project="openByBase" @new-project="openNew" @toggle-theme="toggleTheme" />
+    <ModelManager v-if="showModels" @close="showModels = false" @saved="() => {}" />
+  </template>
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import axios from 'axios'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import Icon from './components/Icon.vue'
+import Toasts from './components/Toasts.vue'
+import LoginForm from './components/LoginForm.vue'
 import ProjectCard from './components/ProjectCard.vue'
-import ProjectDetailModal from './components/ProjectDetailModal.vue'
+import ProjectWorkspace from './components/ProjectWorkspace.vue'
+import NewProjectModal from './components/NewProjectModal.vue'
+import CommandPalette from './components/CommandPalette.vue'
+import ModelManager from './components/ModelManager.vue'
+import { Projects, authMe, setUnauthorizedHandler } from './lib/api.js'
+import { useTheme } from './composables/useTheme.js'
+import { useToasts, notifyDesktop } from './composables/useToasts.js'
 
 export default {
   name: 'App',
-  components: {
-    ProjectCard,
-    ProjectDetailModal
-  },
+  components: { Icon, Toasts, LoginForm, ProjectCard, ProjectWorkspace, NewProjectModal, CommandPalette, ModelManager },
   setup() {
+    const { theme, toggle: toggleTheme } = useTheme()
+    const toasts = useToasts()
+
+    const isAuthenticated = ref(false)
+    const username = ref('')
     const projects = ref([])
-    const selectedProject = ref(null)
     const loading = ref(true)
     const wsConnected = ref(false)
+    const selectedBase = ref(null)
+    const showNew = ref(false)
+    const showPalette = ref(false)
+    const showModels = ref(false)
+    const query = ref('')
+    const statusFilter = ref('all')
+
     let ws = null
-    let reconnectTimer = null
+    let reconnect = null
+    let awaitingSeen = null // Set, null until seeded
 
-    const runningCount = computed(() =>
-      projects.value.filter(p => p.status === 'running').length
-    )
+    const filterChips = [
+      { key: 'all', label: '全部' },
+      { key: 'running', label: '运行中' },
+      { key: 'completed', label: '已完成' },
+      { key: 'paused', label: '已暂停' },
+    ]
 
-    const consultationCount = computed(() =>
-      projects.value.filter(p => p.consultation_pending).length
-    )
+    const needsYou = computed(() => projects.value.filter((p) => p.consultation_pending))
+    const others = computed(() => projects.value.filter((p) => !p.consultation_pending))
+    const filteredOthers = computed(() => {
+      const q = query.value.trim().toLowerCase()
+      return others.value.filter((p) => {
+        if (q && !p.base_name.toLowerCase().includes(q)) return false
+        if (statusFilter.value === 'all') return true
+        if (statusFilter.value === 'running') return p.is_running || p.status === 'running'
+        return p.status === statusFilter.value
+      })
+    })
+    const counts = computed(() => ({
+      needs: needsYou.value.length,
+      running: projects.value.filter((p) => p.is_running || p.status === 'running').length,
+      completed: projects.value.filter((p) => p.status === 'completed').length,
+      total: projects.value.length,
+    }))
+    const selectedProject = computed(() => projects.value.find((p) => p.base_name === selectedBase.value) || null)
 
-    const completedCount = computed(() =>
-      projects.value.filter(p => p.status === 'completed').length
-    )
-
-    const fetchProjects = async () => {
-      try {
-        const response = await axios.get('/api/projects')
-        projects.value = response.data
-        loading.value = false
-      } catch (error) {
-        console.error('Failed to fetch projects:', error)
-        loading.value = false
-      }
-    }
-
-    const connectWebSocket = () => {
-      ws = new WebSocket(`ws://${window.location.hostname}:8000/ws`)
-
-      ws.onopen = () => {
-        wsConnected.value = true
-        console.log('WebSocket connected')
-      }
-
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-
-        if (data.type === 'status_update') {
-          projects.value = data.projects
-        } else if (data.type === 'project_updated') {
-          const index = projects.value.findIndex(p => p.base_name === data.project)
-          if (index !== -1) {
-            projects.value[index] = data.status
-          } else {
-            fetchProjects()
+    function applyProjects(list) {
+      projects.value = list
+      // detect newly-awaiting projects → notify (skip on first seed)
+      const nowAwaiting = list.filter((p) => p.consultation_pending).map((p) => p.base_name)
+      if (awaitingSeen === null) {
+        awaitingSeen = new Set(nowAwaiting)
+      } else {
+        for (const b of nowAwaiting) {
+          if (!awaitingSeen.has(b)) {
+            toasts.warn(`项目 ${b} 需要你的决策`, '人工咨询')
+            notifyDesktop('Paper Factory · 需要你决策', `${b} 已在关卡处暂停`)
           }
         }
-      }
-
-      ws.onclose = () => {
-        wsConnected.value = false
-        console.log('WebSocket disconnected, reconnecting in 3s...')
-        reconnectTimer = setTimeout(connectWebSocket, 3000)
-      }
-
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error)
+        awaitingSeen = new Set(nowAwaiting)
       }
     }
 
-    const viewProjectDetails = (project) => {
-      selectedProject.value = project
-    }
-
-    const handleProjectAction = async (project, action) => {
+    async function fetchProjects() {
       try {
-        await axios.post(`/api/projects/${project.base_name}/action`, { action })
-        await fetchProjects()
-      } catch (error) {
-        console.error('Action failed:', error)
-        alert(`操作失败: ${error.message}`)
+        applyProjects(await Projects.list())
+      } catch (e) {
+        // surfaced elsewhere
+      } finally {
+        loading.value = false
       }
     }
 
-    const handleConsultationSubmit = async (projectName, answer) => {
-      try {
-        await axios.post(`/api/projects/${projectName}/consultation/answer`, { answer })
-        selectedProject.value = null
-        await fetchProjects()
-      } catch (error) {
-        console.error('Consultation submission failed:', error)
-        alert(`提交失败: ${error.message}`)
+    function connectWS() {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      ws = new WebSocket(`${proto}//${window.location.host}/ws`)
+      ws.onopen = () => { wsConnected.value = true }
+      ws.onmessage = (ev) => {
+        try {
+          const d = JSON.parse(ev.data)
+          if (d.type === 'status_update' && d.projects) applyProjects(d.projects)
+          else fetchProjects()
+        } catch (e) { /* ignore */ }
       }
+      ws.onclose = () => { wsConnected.value = false; reconnect = setTimeout(connectWS, 3000) }
+      ws.onerror = () => { try { ws.close() } catch (e) { /* */ } }
     }
 
-    onMounted(() => {
+    // ---- auth ----
+    function onLogin(data) {
+      isAuthenticated.value = true
+      username.value = data.username
+      loading.value = true
       fetchProjects()
-      connectWebSocket()
-    })
+      connectWS()
+    }
+    function logout() {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('username')
+      isAuthenticated.value = false
+      username.value = ''
+      selectedBase.value = null
+      if (ws) { try { ws.close() } catch (e) { /* */ } }
+    }
+    setUnauthorizedHandler(logout)
 
+    async function checkAuth() {
+      const token = localStorage.getItem('access_token')
+      const u = localStorage.getItem('username')
+      if (!token || !u) { loading.value = false; return }
+      try {
+        await authMe()
+        isAuthenticated.value = true
+        username.value = u
+        fetchProjects()
+        connectWS()
+      } catch (e) {
+        logout(); loading.value = false
+      }
+    }
+
+    // ---- actions ----
+    async function onAction(project, action) {
+      try {
+        await Projects.action(project.base_name, action)
+        const labels = { pause: '已暂停', resume: '已恢复', kill: '已终止' }
+        toasts.success(`${project.base_name} ${labels[action] || action}`)
+        if (action === 'kill') selectedBase.value = null
+        await fetchProjects()
+      } catch (e) {
+        toasts.error(e.response?.data?.detail || '操作失败')
+      }
+    }
+    function onCreated(result) {
+      toasts.success(`项目 ${result.base_name} 已创建`)
+      fetchProjects()
+    }
+
+    // ---- navigation / deep-link ----
+    function openProject(p) { selectedBase.value = p.base_name }
+    function openByBase(b) { selectedBase.value = b; showPalette.value = false }
+    function closeWorkspace() { selectedBase.value = null }
+    function openNew() { showNew.value = true; showPalette.value = false }
+    function jumpNeeds() { if (needsYou.value.length) openProject(needsYou.value[0]) }
+
+    function syncHash() {
+      const want = selectedBase.value ? `#/p/${selectedBase.value}` : ''
+      if (location.hash !== want) {
+        if (want) location.hash = want
+        else history.replaceState(null, '', location.pathname + location.search)
+      }
+    }
+    function readHash() {
+      const m = location.hash.match(/^#\/p\/(.+)$/)
+      selectedBase.value = m ? decodeURIComponent(m[1]) : null
+    }
+
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault(); showPalette.value = !showPalette.value
+      }
+    }
+
+    // keep the URL hash in sync with the selected project (deep-linkable)
+    watch(selectedBase, syncHash)
+
+    onMounted(async () => {
+      readHash()
+      await checkAuth()
+      window.addEventListener('hashchange', readHash)
+      window.addEventListener('keydown', onKey)
+    })
     onUnmounted(() => {
       if (ws) ws.close()
-      if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (reconnect) clearTimeout(reconnect)
+      window.removeEventListener('hashchange', readHash)
+      window.removeEventListener('keydown', onKey)
     })
 
     return {
-      projects,
-      selectedProject,
-      loading,
-      wsConnected,
-      runningCount,
-      consultationCount,
-      completedCount,
-      viewProjectDetails,
-      handleProjectAction,
-      handleConsultationSubmit
+      theme, toggleTheme,
+      isAuthenticated, username, projects, loading, wsConnected,
+      selectedBase, selectedProject, showNew, showPalette, showModels, query, statusFilter, filterChips,
+      needsYou, others, filteredOthers, counts,
+      onLogin, logout, onAction, onCreated,
+      openProject, openByBase, closeWorkspace, openNew, jumpNeeds, fetchProjects,
     }
-  }
+  },
 }
 </script>
 
 <style scoped>
-.dashboard {
-  min-height: 100vh;
-  background: linear-gradient(135deg, #0a0e27 0%, #1a1d35 100%);
-}
+.console { min-height: 100vh; display: flex; flex-direction: column; }
 
-.header {
-  background: rgba(26, 29, 53, 0.8);
+/* ---- status rail ---- */
+.rail {
+  position: sticky; top: 0; z-index: 90;
+  display: flex; align-items: center; gap: 22px;
+  padding: 11px 22px; min-height: var(--header-h);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
   backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 1.5rem 0;
-  position: sticky;
-  top: 0;
-  z-index: 100;
 }
+.brand { display: flex; align-items: center; gap: 11px; }
+.mark { width: 38px; height: 38px; border-radius: var(--r); background: var(--amber); color: var(--amber-ink); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 18px var(--amber-glow); }
+.brand-name { font-size: 14px; font-weight: 700; letter-spacing: 0.06em; }
+.brand-sub { font-size: 9.5px; color: var(--ink-3); letter-spacing: 0.14em; margin-top: 1px; }
 
-.header-content {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 0 2rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
+.kpis { display: flex; align-items: stretch; gap: 8px; margin-left: 8px; }
+.kpi { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 16px; background: none; border: 1px solid transparent; border-radius: var(--r); }
+.kpi + .kpi { border-left: 1px solid var(--line); border-radius: 0; }
+.k-val { font-size: 20px; font-weight: 700; line-height: 1; color: var(--ink); }
+.k-val.live { color: var(--live); } .k-val.ok { color: var(--ok); }
+.k-lbl { font: 500 9.5px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+.kpi.amber { cursor: pointer; border-radius: var(--r); border-color: transparent; }
+.kpi.amber .k-val { color: var(--ink-3); }
+.kpi.amber.flash { background: var(--amber-dim); border-color: var(--amber-line); }
+.kpi.amber.flash .k-val { color: var(--amber); }
+.kpi.amber.flash .k-lbl { color: var(--amber); }
+.kpi.amber:disabled { cursor: default; }
+.kpi.amber.flash { animation: kflash 2.2s var(--ease) infinite; }
+@keyframes kflash { 0%,100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 1px var(--amber-line); } }
 
-.title {
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: #f4f4f5;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
+.rr { display: flex; align-items: center; gap: 9px; margin-left: auto; }
+.hb { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--ok); padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.hb.off { color: var(--bad); }
+.user { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 11px; border: 1px solid var(--line); border-radius: 100px; color: var(--ink-2); }
+.u-name { font-size: 12px; }
+.u-out { background: none; border: none; color: var(--ink-3); cursor: pointer; display: flex; padding: 4px; border-radius: 50%; }
+.u-out:hover { color: var(--bad); background: var(--bad-dim); }
 
-.icon {
-  font-size: 2rem;
-}
+/* ---- main ---- */
+.main { flex: 1; max-width: 1480px; width: 100%; margin: 0 auto; padding: 22px 22px 60px; }
 
-.header-stats {
-  display: flex;
-  gap: 2rem;
-}
+.lane { margin-bottom: 26px; }
+.lane-h { display: flex; align-items: center; gap: 9px; margin-bottom: 13px; color: var(--amber); font-weight: 700; font-size: 13px; }
+.lane-n { font: 700 11px/1 var(--mono); background: var(--amber); color: var(--amber-ink); padding: 3px 7px; border-radius: 100px; }
 
-.stat {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-}
+.fleet-h { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+.fleet-h .label b { color: var(--ink); margin-left: 4px; }
+.filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.search { display: flex; align-items: center; gap: 7px; padding: 7px 11px; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r); color: var(--ink-3); }
+.search-in { background: none; border: none; outline: none; color: var(--ink); font-size: 12.5px; width: 150px; }
+.clr { background: none; border: none; color: var(--ink-3); cursor: pointer; display: flex; padding: 0; }
+.clr:hover { color: var(--ink); }
+.chips { display: flex; gap: 4px; padding: 3px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); }
+.chip { padding: 6px 11px; background: none; border: none; border-radius: var(--r-sm); color: var(--ink-3); font: 600 12px/1 var(--sans); cursor: pointer; }
+.chip:hover { color: var(--ink); }
+.chip.on { background: var(--panel-3); color: var(--ink); }
 
-.stat-label {
-  font-size: 0.75rem;
-  color: #a1a1aa;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
 
-.stat-value {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: #60a5fa;
-}
+.skel { height: 188px; position: relative; overflow: hidden; }
+.skel::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--panel-2), transparent); animation: sweep 1.4s infinite; }
 
-.stat-value.consultation {
-  color: #fbbf24;
-}
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; padding: 70px 20px; color: var(--ink-3); }
+.empty p { font-size: 15px; color: var(--ink-2); }
+.empty .hint { font-size: 11px; }
 
-.main-content {
-  padding: 2rem 0;
-}
-
-.container {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 0 2rem;
-}
-
-.alert {
-  padding: 1rem;
-  border-radius: 0.5rem;
-  margin-bottom: 1.5rem;
-  font-size: 0.875rem;
-}
-
-.alert-warning {
-  background: rgba(251, 191, 36, 0.1);
-  border: 1px solid rgba(251, 191, 36, 0.3);
-  color: #fbbf24;
-}
-
-.projects-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-  gap: 1.5rem;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 4rem 2rem;
-  color: #71717a;
-}
-
-.empty-icon {
-  font-size: 4rem;
-  margin-bottom: 1rem;
-}
-
-.empty-state p {
-  font-size: 1.125rem;
-  margin-bottom: 0.5rem;
-}
-
-.empty-hint {
-  font-size: 0.875rem;
-  color: #52525b;
-}
-
-.empty-hint code {
-  background: rgba(255, 255, 255, 0.05);
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.25rem;
-  font-family: 'Monaco', 'Menlo', monospace;
-  color: #a1a1aa;
-}
-
-.loading {
-  text-align: center;
-  padding: 4rem 2rem;
-}
-
-.spinner {
-  width: 40px;
-  height: 40px;
-  margin: 0 auto 1rem;
-  border: 3px solid rgba(96, 165, 250, 0.2);
-  border-top-color: #60a5fa;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-@media (max-width: 768px) {
-  .header-content {
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .projects-grid {
-    grid-template-columns: 1fr;
-  }
+@media (max-width: 720px) {
+  .rail { flex-wrap: wrap; gap: 14px; }
+  .kpis { order: 3; width: 100%; justify-content: space-between; }
+  .kpi { flex: 1; }
+  .rr { margin-left: 0; }
+  .hide-sm { display: none; }
+  .grid { grid-template-columns: 1fr; }
 }
 </style>

@@ -1,72 +1,282 @@
 # Paper Factory Web Dashboard
 
-实时监控 Paper Factory 任务进度的 Web 界面，支持人工介入和咨询回复。
+实时监控 Paper Factory 任务进度的 Web 界面，支持登录认证、项目创建、人工介入和咨询回复。
+
+## ✨ 新功能
+
+### 🔐 登录认证系统
+- JWT Token 认证，安全的会话管理
+- 密码保护，支持环境变量配置
+- Token 自动过期（默认 24 小时）
+
+### 🚀 Web 界面创建项目
+- 无需命令行，直接在网页上新建项目
+- 指定项目名称和赛题 PDF 路径
+- 可选：仅创建不自动启动、启用人工咨询模式
+
+### 🧠 模型管理与逐步选模型
+- **模型库**：在顶栏 <kbd>CPU</kbd> 图标打开「模型管理」，可添加 / 编辑 / 启停 / 删除可用模型。
+  - Agentic 后端（`claude` / `codex` / `agy`）：可读写文件、跑求解器，适用于任意步骤。
+  - API 后端（`openai` / `gemini` / `deepseek`）：HTTP 单轮调用（非 agentic），仅适用于评委/评审/评价步（7·11·13）。
+  - 引入新模型（如 DeepSeek、Qwen）只需填 `backend=openai` + `base_url` + `key_env`，密钥放在仓库根 `.env`（如 `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`），此处只写变量名。
+- **默认预设**：为**所有新建项目**设置每一步的默认主/备模型（写入 `_default`）。
+- **逐项目逐步覆盖**：进入某项目工作台，在流水线里点选某一步，即可为该项目单独指定该步的主模型 + 备用模型。
+- 留空＝沿用内置默认链，行为与改动前**完全一致**（无人值守 / 消融实验不受影响）。
 
 ## 功能特性
 
 ### 1. 实时项目监控
-- **项目列表**：显示所有 ongoing 和 complete 项目
-- **状态跟踪**：运行中、暂停、等待咨询、已完成等状态
-- **进度可视化**：步骤进度条（Step X/16）和百分比
-- **WebSocket 实时更新**：无需刷新页面，自动同步最新状态
+- 项目列表：显示所有 ongoing 和 complete 项目
+- 状态跟踪：运行中、暂停、等待咨询、已完成等
+- 进度可视化：步骤进度条（Step X/16）和百分比
+- WebSocket 实时更新：无需刷新页面
 
 ### 2. 项目管理
-- **控制操作**：暂停 (pause)、恢复 (resume)、终止 (kill) 项目
-- **详情查看**：
-  - 概览：checkpoint.md 内容、项目元数据
-  - 日志：最近的执行日志（可刷新）
-  - 人工咨询：pending consultation 请求列表
+- **创建项目**：通过 Web 界面创建新项目
+- **控制操作**：暂停 (pause)、恢复 (resume)、终止 (kill)
+- **详情查看**：checkpoint、日志、咨询请求
 
-### 3. 人工介入机制
-- **咨询请求展示**：显示 gate、step、title、content
-- **回答提交**：
-  - 粘贴 GPT Pro / Gemini Deep Think 的分析结果
-  - 自动写入 `human_review.md` 并标记 `STATUS: READY`
-  - 提交后自动触发项目恢复（如果之前在等待）
-
-## 技术架构
-
-```
-web/
-├── backend/              # FastAPI 后端
-│   ├── app.py           # 主应用（API + WebSocket）
-│   ├── requirements.txt # Python 依赖
-│   └── start.sh         # 后端启动脚本
-├── frontend/            # Vue 3 前端
-│   ├── src/
-│   │   ├── App.vue                           # 主应用
-│   │   └── components/
-│   │       ├── ProjectCard.vue               # 项目卡片
-│   │       └── ProjectDetailModal.vue        # 详情弹窗
-│   ├── index.html       # 入口 HTML
-│   ├── vite.config.js   # Vite 配置
-│   ├── package.json     # Node 依赖
-│   └── start.sh         # 前端启动脚本
-└── start_dashboard.sh   # 一键启动脚本
-```
+### 3. 人工介入
+- 咨询请求展示：显示 gate、step、title、content
+- 回答提交：粘贴 GPT Pro / Gemini Deep Think 的分析
+- 自动写入 `human_review.md` 并恢复运行
 
 ## 快速开始
 
-### 一键启动（推荐）
+### 步骤 1：配置环境变量
+
+首次使用需要配置管理员密码：
+
+```bash
+cd web
+cp .env.example .env
+```
+
+编辑 `.env` 文件，修改密码：
+```bash
+ADMIN_PASSWORD=your_secure_password
+```
+
+### 步骤 2：一键启动
 
 ```bash
 cd web
 ./start_dashboard.sh
 ```
 
-然后访问：**http://localhost:5173**
-
-脚本会自动：
+这会自动：
 1. 安装后端依赖（Python venv + pip）
 2. 安装前端依赖（npm install）
 3. 启动后端服务器（端口 8000）
 4. 启动前端开发服务器（端口 5173）
 
-按 `Ctrl+C` 停止所有服务。
+### 步骤 3：登录系统
 
-### 分别启动
+打开浏览器访问：**http://localhost:5173**
 
-如果需要单独启动：
+默认登录凭据：
+- 用户名：`admin`
+- 密码：`admin123`（或你在 `.env` 中设置的密码）
+
+## 使用指南
+
+### 新建项目
+
+1. 登录后，点击右上角 **"➕ 新建项目"** 按钮
+2. 填写项目信息：
+   - **项目名称**：例如 `cumcm2024_a`（只能包含字母、数字、下划线和连字符）
+   - **题目文件路径**：例如 `/home/user/problems/2024_A.pdf`
+   - **选项**：
+     - ☑️ 仅创建项目，不自动开始执行
+     - ☑️ 启用人工咨询模式
+3. 点击 **"创建项目"**
+4. 项目创建成功后会自动出现在列表中
+
+### 监控项目
+
+Dashboard 显示所有项目的实时状态：
+- **运行中**（蓝色）：正在执行，有活跃的 PID
+- **等待咨询**（黄色）：等待人工输入
+- **暂停**（灰色）：用户手动暂停
+- **已完成**（绿色）：所有 16 步完成
+- **已终止**（红色）：用户终止
+
+### 处理咨询请求
+
+当项目显示 "等待咨询" 状态：
+
+1. 点击项目卡片的 **"查看详情"**
+2. 切换到 **"人工咨询"** 标签页
+3. 查看咨询请求的具体内容
+4. 将问题复制到 GPT Pro / Gemini Deep Think
+5. 将模型的回答粘贴到文本框
+6. 点击 **"提交并恢复运行"**
+
+系统会自动写入 `human_review.md` 并标记 `STATUS: READY`。
+
+### 控制项目
+
+在项目卡片或详情页面：
+- **暂停**：暂停项目执行
+- **恢复**：恢复暂停的项目
+- **终止**：完全停止项目
+
+## API 端点
+
+### 认证
+
+- `POST /api/auth/login` - 登录
+  ```json
+  {"username": "admin", "password": "admin123"}
+  ```
+- `GET /api/auth/me` - 获取当前用户信息
+- `POST /api/auth/logout` - 登出
+
+### 项目管理（需要认证）
+
+所有端点需要在 Header 中携带 JWT Token：
+```
+Authorization: Bearer <your_token>
+```
+
+- `GET /api/projects` - 获取所有项目列表
+- `POST /api/projects/new` - 创建新项目
+- `GET /api/projects/{base_name}/status` - 获取项目状态
+- `GET /api/projects/{base_name}/checkpoint` - 获取 checkpoint 内容
+- `GET /api/projects/{base_name}/logs?lines=100` - 获取日志
+- `POST /api/projects/{base_name}/action` - 执行操作（pause/resume/kill）
+
+### 咨询管理
+
+- `GET /api/projects/{base_name}/consultation` - 获取咨询请求
+- `POST /api/projects/{base_name}/consultation/answer` - 提交咨询回答
+
+### 模型管理（需要认证）
+
+- `GET /api/models` - 模型库 + 逐步分配配置（注册表 / config / agentic 后端列表）
+- `PUT /api/models/registry` - 整体保存模型库 `{ "models": [...] }`
+- `PUT /api/models/config` - 保存某作用域的逐步分配 `{ "scope": "<base>|_default", "steps": { "step_13": {"primary": "<id>", "fallback": "<id>"} } }`
+
+> 配置文件：`web/model_registry.json`（模型库）、`web/model_config.json`（逐步分配，`_default` 为全局预设、`<base>` 为单项目覆盖）。两者均被 `.gitignore`，由后端首次访问时按内置默认播种；`run_paper.sh` 直接读取它们（见其 “Model registry & per-step model dispatch” 段）。
+
+### WebSocket
+
+- `WS /ws` - 实时状态更新
+  - `status_update`: 全量项目状态（每 2 秒）
+  - `project_updated`: 单个项目状态变化
+  - `project_created`: 新项目创建
+  - `consultation_answered`: 咨询已回答
+  - `project_action`: 项目操作执行
+
+## 安全配置
+
+### 修改管理员密码
+
+编辑 `web/.env` 文件：
+```bash
+ADMIN_PASSWORD=your_new_secure_password
+```
+
+重启服务后生效。
+
+### JWT Secret
+
+系统会自动生成随机的 JWT Secret。固定 Secret（多实例部署）：
+```bash
+JWT_SECRET=your-secret-key-here
+```
+
+### Token 有效期
+
+默认 24 小时。修改 `web/backend/app.py`：
+```python
+JWT_EXPIRATION_HOURS = 24
+```
+
+### 添加用户
+
+编辑 `web/backend/app.py` 中的 `USERS_DB`：
+```python
+USERS_DB = {
+    "admin": {
+        "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
+        "username": "admin",
+        "role": "admin"
+    },
+    "researcher1": {
+        "password_hash": hashlib.sha256("password123".encode()).hexdigest(),
+        "username": "researcher1",
+        "role": "user"
+    }
+}
+```
+
+## 技术架构
+
+```
+web/
+├── backend/
+│   ├── app.py              # FastAPI 后端（API + WebSocket + 认证）
+│   └── start.sh
+├── frontend/
+│   ├── src/
+│   │   ├── App.vue                    # 主应用
+│   │   └── components/
+│   │       ├── LoginForm.vue          # 登录表单
+│   │       ├── NewProjectModal.vue    # 新建项目对话框
+│   │       ├── ProjectCard.vue        # 项目卡片
+│   │       └── ProjectDetailModal.vue # 项目详情
+│   ├── package.json
+│   └── start.sh
+├── .env.example           # 环境变量模板
+├── requirements.txt       # Python 依赖
+└── start_dashboard.sh     # 一键启动脚本
+```
+
+### 技术栈
+
+**后端：**
+- FastAPI - Web 框架
+- Pydantic - 数据验证
+- PyJWT - JWT Token 处理
+- uvicorn - ASGI 服务器
+
+**前端：**
+- Vue 3 - JavaScript 框架
+- Axios - HTTP 客户端
+- WebSocket - 实时通信
+
+## 常见问题
+
+### Q: 登录后立即被登出？
+A: 检查系统时间是否正确。JWT Token 使用 UTC 时间戳验证。
+
+### Q: 无法创建项目？
+A: 确保：
+1. 题目文件路径正确且可访问
+2. `launch_agents.sh` 有执行权限
+3. 项目名称不与现有项目冲突
+
+### Q: WebSocket 连接失败？
+A: 如果使用反向代理（如 nginx），配置 WebSocket 支持：
+```nginx
+location /ws {
+    proxy_pass http://localhost:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+### Q: 后端启动失败？
+A: 检查端口占用：
+```bash
+lsof -i :8000
+```
+
+## 分别启动（开发用）
+
+如果需要单独控制前后端：
 
 ```bash
 # 后端（终端 1）
@@ -78,182 +288,90 @@ cd web/frontend
 ./start.sh
 ```
 
-## API 端点
-
-### 项目管理
-
-- `GET /api/projects` - 获取所有项目列表
-- `GET /api/projects/{base_name}/status` - 获取单个项目状态
-- `GET /api/projects/{base_name}/checkpoint` - 获取 checkpoint.md 内容
-- `GET /api/projects/{base_name}/logs?lines=100` - 获取最近日志
-- `POST /api/projects/{base_name}/action` - 执行操作（pause/resume/kill）
-
-### 咨询管理
-
-- `GET /api/projects/{base_name}/consultation` - 获取待处理咨询请求
-- `POST /api/projects/{base_name}/consultation/answer` - 提交咨询回答
-  ```json
-  {
-    "answer": "## 建模方案分析\n\n经过 GPT Pro 深度思考..."
-  }
-  ```
-
-### WebSocket
-
-- `WS /ws` - 实时状态推送
-  - 消息类型：
-    - `status_update`: 全量项目状态更新（每 2 秒）
-    - `project_updated`: 单个项目状态变化
-    - `consultation_answered`: 咨询已回答
-    - `project_action`: 项目操作已执行
-
-## 使用场景
-
-### 场景 1：监控批量实验
-
-```bash
-# 启动多个 ablation 实验
-./launch_agents.sh new cumcm2024b_no_methodlib_rep1 /path/to/problem.pdf
-./launch_agents.sh new cumcm2024b_no_judge_rep1 /path/to/problem.pdf
-
-# 打开 Dashboard 监控
-cd web && ./start_dashboard.sh
-```
-
-在浏览器中实时查看：
-- 每个实验的当前步骤
-- 进度条和完成百分比
-- 是否有卡住或失败的任务
-
-### 场景 2：处理咨询请求
-
-当项目进入 `consultation` 状态（黄色高亮 "等待咨询"）：
-
-1. 点击项目卡片的 **"查看详情"**
-2. 切换到 **"人工咨询"** 标签页
-3. 查看咨询请求的具体内容（例如 preflight、step4 gate）
-4. 将问题复制到 GPT Pro / Gemini Deep Think
-5. 将模型的回答粘贴到文本框
-6. 点击 **"提交并恢复运行"**
-
-系统会自动：
-- 写入 `human_review.md` 并标记 `STATUS: READY`
-- 如果项目在 `awaiting_consultation` 状态，后续 `resume` 会自动触发
-
-### 场景 3：查看运行日志
-
-点击项目卡片 → 详情弹窗 → "日志" 标签页：
-- 显示最近 100 行日志
-- 点击 "刷新" 按钮获取最新日志
-- 快速诊断 solver 错误、step 失败等问题
-
-## 状态说明
-
-| 状态                     | 颜色 | 说明                                   |
-|--------------------------|------|----------------------------------------|
-| `running`                | 蓝色 | 正在运行，有活跃的 PID                 |
-| `awaiting_consultation`  | 黄色 | 等待人工咨询回答，runner 已退出        |
-| `paused`                 | 灰色 | 用户手动暂停（`.paused` 标记存在）     |
-| `completed`              | 绿色 | 所有 16 步已完成，项目在 `complete/`   |
-| `killed`                 | 红色 | 用户终止（`.killed` 标记存在）         |
-
-## 依赖要求
+## 生产部署
 
 ### 后端
-- Python 3.8+
-- FastAPI 0.115+
-- uvicorn
-- websockets
 
-### 前端
-- Node.js 18+
-- Vue 3
-- Vite 5
-- axios
-
-## 开发说明
-
-### 修改后端代码
-
-编辑 `backend/app.py` 后，重启后端服务即可：
-
+使用 gunicorn + uvicorn workers：
 ```bash
-cd web/backend
-./start.sh
+pip install gunicorn
+gunicorn app:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
 ```
 
-### 修改前端代码
+### 前端
+
+构建静态文件：
+```bash
+cd web/frontend
+npm run build
+# 将 dist/ 目录部署到 nginx/caddy
+```
+
+### 反向代理（nginx）
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location / {
+        root /path/to/web/frontend/dist;
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://127.0.0.1:8000;
+    }
+
+    location /ws {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+### 进程管理（systemd）
+
+创建 `/etc/systemd/system/paper-factory-api.service`：
+```ini
+[Unit]
+Description=Paper Factory API
+After=network.target
+
+[Service]
+Type=simple
+User=tfisher
+WorkingDirectory=/home/tfisher/paper_factory/web/backend
+Environment="PATH=/home/tfisher/paper_factory/web/venv/bin"
+ExecStart=/home/tfisher/paper_factory/web/venv/bin/gunicorn app:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动服务：
+```bash
+sudo systemctl enable paper-factory-api
+sudo systemctl start paper-factory-api
+```
+
+## 开发
+
+### 前端开发
 
 Vite 支持热更新（HMR），编辑 `.vue` 文件后浏览器自动刷新。
 
-### 添加新功能
+### 后端开发
 
-例如，添加 "一键清理完成项目" 功能：
-
-1. 后端：在 `app.py` 添加端点
-   ```python
-   @app.post("/api/cleanup/completed")
-   async def cleanup_completed():
-       # 实现逻辑
-       pass
-   ```
-
-2. 前端：在 `App.vue` 添加按钮和调用
-   ```vue
-   <button @click="cleanupCompleted">清理已完成项目</button>
-   ```
-
-## 故障排查
-
-### 后端启动失败
-
-检查端口占用：
+FastAPI 支持自动重载：
 ```bash
-lsof -i :8000
+cd web/backend
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 前端无法连接后端
+## 许可证
 
-1. 确认后端已启动：`curl http://127.0.0.1:8000/`
-2. 检查 CORS 配置（`app.py` 中已配置 localhost:5173）
-
-### WebSocket 连接失败
-
-浏览器控制台应该显示连接状态，如果失败：
-1. 检查后端是否运行
-2. 检查防火墙设置
-3. 查看后端日志
-
-## 生产部署
-
-当前为本地开发模式。生产部署建议：
-
-1. **后端**：使用 gunicorn + uvicorn workers
-   ```bash
-   gunicorn app:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
-   ```
-
-2. **前端**：构建静态文件
-   ```bash
-   npm run build
-   # 将 dist/ 目录部署到 nginx/caddy
-   ```
-
-3. **反向代理**：使用 nginx 统一入口
-   ```nginx
-   location /api {
-       proxy_pass http://127.0.0.1:8000;
-   }
-   location /ws {
-       proxy_pass http://127.0.0.1:8000;
-       proxy_http_version 1.1;
-       proxy_set_header Upgrade $http_upgrade;
-       proxy_set_header Connection "upgrade";
-   }
-   ```
-
-4. **进程管理**：使用 systemd 或 supervisor 管理后端进程
-
-## 许可
-
-与 Paper Factory 主项目相同。
+与 Paper Factory 主项目保持一致。
