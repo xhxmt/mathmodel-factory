@@ -49,7 +49,7 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 - 重新嵌入图（图本身仍由 Step 8 / 13 提供, 本步骤不重画图）
 
 **不允许的操作**:
-- 改 `ABSTRACT_PLACEHOLDER` 区块（那是 Step 14 的工作; 本步骤的 paper.tex 必须**仍含 ABSTRACT_PLACEHOLDER**, infer_step 据此识别仍未进 Step 14）
+- 改 `\\detokenize{ABSTRACT_PLACEHOLDER}` 区块（那是 Step 14 的工作; 本步骤的 paper.tex 必须**仍含 \\detokenize{ABSTRACT_PLACEHOLDER}**, infer_step 据此识别仍未进 Step 14）
 - 删除 \section / \subsection 让论文章节数低于 modeling_guide.md §LaTeX Document Requirements 的 11 个章节
 - 删除已被引用的图 / 表 / 引文 (会破坏交叉引用)
 
@@ -106,7 +106,7 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 ## Sanity check verification
 
 - [ ] `compile_paper.sh "$(pwd)" __BASE_NAME__` exit 0
-- [ ] paper.tex 仍含 `ABSTRACT_PLACEHOLDER` 一次 (Step 14 未到, 不应填)
+- [ ] paper.tex 仍含 `\\detokenize{ABSTRACT_PLACEHOLDER}` 一次 (Step 14 未到, 不应填)
 - [ ] paper.tex 含 `\begin{document}` 和 `\end{document}` 各一次
 - [ ] 所有 figures/*.pdf 引用真实存在
 - [ ] 所有 \cite{} 在 references.bib 存在
@@ -136,7 +136,7 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 [禁止事项]
 
 - ❌ 跳过 archive 步骤 (Step 13 reopen 后会 diff 这俩版本; 没 archive 就 diff 不出来)
-- ❌ 填 `ABSTRACT_PLACEHOLDER` (那是 Step 14)
+- ❌ 填 `\\detokenize{ABSTRACT_PLACEHOLDER}` (那是 Step 14)
 - ❌ 删 PROTECTED 假设 (这是 CRITICAL 红线)
 - ❌ 减章节数到 modeling_guide.md §LaTeX Document Requirements 列出的 11 个章节以下
 - ❌ 修改 figures/* 文件 (本步骤不重画图; 如果某图必须重画, 在 revision_summary.md §未处理 issue 标注 + 给 Step 13 Gate 2 提示)

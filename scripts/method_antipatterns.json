@@ -1,0 +1,191 @@
+{
+  "antipatterns": [
+    {
+      "pattern_id": "ap_001",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": false,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": false,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/geometry/archimedean_spiral.md",
+      "failure_reason": "symbols_undefined_29",
+      "evidence_projects": [
+        "test_cumcm2024a"
+      ],
+      "severity": 0.65,
+      "occurrence_count": 2
+    },
+    {
+      "pattern_id": "ap_006",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": true,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": true,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/optimization/milp.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "cumcm2024b_no_judge_rep1",
+        "cumcm2024b_no_consult_rep1"
+      ],
+      "severity": 0.6,
+      "occurrence_count": 3
+    },
+    {
+      "pattern_id": "ap_008",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": true,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": false,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/optimization/milp.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "test_cumcm2024b",
+        "cumcm2024b_no_methodlib_rep1",
+        "cumcm2024b_no_innov_rep1"
+      ],
+      "severity": 0.54,
+      "occurrence_count": 8
+    },
+    {
+      "pattern_id": "ap_009",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": true,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": false,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/numerical/root_finding.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "cumcm2024b_no_methodlib_rep1"
+      ],
+      "severity": 0.5,
+      "occurrence_count": 2
+    },
+    {
+      "pattern_id": "ap_002",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": false,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": false,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/dynamics/ode_system.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "test_cumcm2024a"
+      ],
+      "severity": 0.5,
+      "occurrence_count": 1
+    },
+    {
+      "pattern_id": "ap_004",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": false,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": false,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/optimization/nonlinear_programming.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "test_cumcm2024a"
+      ],
+      "severity": 0.5,
+      "occurrence_count": 1
+    },
+    {
+      "pattern_id": "ap_005",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": true,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": true,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/metaheuristic/genetic_algorithm.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "cumcm2024b_no_consult_rep1"
+      ],
+      "severity": 0.5,
+      "occurrence_count": 1
+    },
+    {
+      "pattern_id": "ap_007",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": true,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": false,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/metaheuristic/simulated_annealing.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "cumcm2024b_no_methodlib_rep1"
+      ],
+      "severity": 0.5,
+      "occurrence_count": 1
+    },
+    {
+      "pattern_id": "ap_014",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": true,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": false,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/evaluation/topsis.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "test_cumcm2024b"
+      ],
+      "severity": 0.5,
+      "occurrence_count": 1
+    },
+    {
+      "pattern_id": "ap_016",
+      "problem_features": {
+        "has_integer": false,
+        "has_stochastic": true,
+        "has_nonlinear": false,
+        "is_multi_objective": false,
+        "is_evaluation": true,
+        "is_large_scale": false
+      },
+      "method_path": "method_library/optimization/decision_tree_dp.md",
+      "failure_reason": "abandoned_unknown",
+      "evidence_projects": [
+        "cumcm2024b_no_judge_rep1"
+      ],
+      "severity": 0.5,
+      "occurrence_count": 1
+    }
+  ],
+  "summary": {
+    "total_antipatterns": 10,
+    "high_severity_count": 0
+  }
+}

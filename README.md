@@ -8,6 +8,25 @@
 
 请查看位于 [**`xhxmt.github.io/`**](https://xhxmt.github.io/) 的交互式演示项目。它现已升级为一个动态的前端交互页面，采用现代化的 UI 设计风格构建。该演示站点不仅模拟了多智能体数学建模工作流的终端执行过程，还结合真实的数据产出，通过直观的交互式卡片展示了系统的工作流架构、质量检查门禁和评测指标。只需在浏览器中打开 [xhxmt.github.io](https://xhxmt.github.io/) 即可体验全貌。
 
+## 本地 Web Dashboard（新增）
+
+本项目现已提供本地 Web Dashboard，用于实时监控项目进度并进行人工介入：
+
+```bash
+cd web
+./start_dashboard.sh
+```
+
+然后在浏览器中访问 **http://localhost:5173**
+
+**主要功能：**
+- **实时监控**：WebSocket 自动推送项目状态更新，无需刷新页面
+- **项目管理**：暂停/恢复/终止正在运行的项目
+- **日志查看**：实时查看最新的执行日志
+- **人工咨询**：当项目进入 `awaiting_consultation` 状态时，通过 Web 界面提交 GPT Pro / Gemini Deep Think 的分析结果
+
+详细使用说明请参阅 [`web/README.md`](web/README.md)。
+
 ## 包含内容
 
 - `launch_agents.sh`：本地启动器，包含 `new`、`resume`、`pause`、`run`、`attach`、`trace` 和 `status` 等命令。
@@ -141,6 +160,57 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 ## 评测与消融实验
 
-代码库包含完整的测试工具集：
-- **`evaluation/`**：包含校准的外部 LLM 评委（DeepSeek/Claude）解析器。这些脚本能评估最终编译的 PDF，并在 6 个关键维度上模拟竞赛评分。
-- **`experiments/`**：消融实验测试工具。你可以设置环境变量（例如 `ABLATE_NO_CONSULTATION=1`、`ABLATE_NO_METHOD_LIB=1`、`ABLATE_NO_JUDGE=1`、`ABLATE_NO_INNOVATION_PROTECT=1`）来选择性地关闭管道特征，并通过外部评委衡量其对成绩的影响。
+代码库包含完整的测试和验证工具集：
+
+### 外部评估系统
+
+**`evaluation/`** 目录提供独立的论文质量评估框架：
+
+- 使用校准的外部 LLM 评委（默认 `deepseek-chat`，可配置为 Claude Opus/Sonnet/Gemini）
+- 在 6 个维度上评分：模型合理性、求解正确性、创新性、写作清晰度、结果说服力、灵敏度分析
+- 支持重复采样（K=3）和方差分析，确保评估稳定性
+- 与流水线内部 Step 13 评委解耦，消除自我偏好（self-preference bias）
+
+```bash
+# 评估已完成的项目
+./evaluation/run_evaluation.sh complete/test_cumcm2024b --samples 3
+
+# 对比多个项目
+python3 experiments/compare_ablations.py \
+    --baseline test_cumcm2024b \
+    --variant cumcm2024b_no_judge_rep1
+```
+
+详见：`evaluation/README.md` 和 `evaluation/baseline_scores.md`
+
+### 消融实验
+
+**`experiments/`** 目录提供系统化的机制验证工具：
+
+通过环境变量选择性关闭流水线机制，量化各组件对最终质量的贡献：
+
+| 消融开关 | 关闭的机制 | 已验证影响 (CUMCM 2024 B题) |
+|---|---|---|
+| `ABLATE_NO_METHOD_LIB=1` | 方法库引用硬门 | **-6.3分** (基础设施级) |
+| `ABLATE_NO_JUDGE=1` | Step 13 评委 + reopen循环 | **-3.4分** (质量门禁) |
+| `ABLATE_NO_INNOVATION_PROTECT=1` | PROTECTED标记保护 | **-2.7分** (创新性-0.7) |
+| `ABLATE_NO_CONSULTATION=1` | Step 1 web文献检索 | **-1.7分** (非瓶颈) |
+
+**快速启动消融实验**：
+
+```bash
+# 在指定题目上运行单个消融（自动生成项目、运行、评估）
+./experiments/ablation_no_judge.sh --problem B --reps 3
+
+# 运行所有四个消融并生成对比报告
+./experiments/test_ablations.sh  # 先验证开关生效性（秒级）
+./experiments/ablation_no_method_lib.sh --problem B --reps 1
+./experiments/ablation_no_judge.sh --problem B --reps 1
+./experiments/ablation_no_innovation_protect.sh --problem B --reps 1
+./experiments/ablation_no_consultation.sh --problem B --reps 1
+```
+
+详见：
+- **综合报告**: `evaluation/ablation_study_report.md` — 完整的实验设计、结果分析和洞察
+- **实验状态**: `evaluation/EXPERIMENTS_STATUS.md` — 当前进度和后续任务路线图
+- **实验指南**: `experiments/README.md` — 消融开关的实现细节和使用文档

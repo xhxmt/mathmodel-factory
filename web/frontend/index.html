@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paper Factory — 建模工坊控制台</title>
+  <meta name="color-scheme" content="dark light">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    /* ===================================================================
+       PAPER FACTORY · "Control Room / Telemetry"
+       Dark instrument console. Amber = "you must act". No glassmorphism.
+       =================================================================== */
+    :root, [data-theme="dark"] {
+      --bg:        #0a0b0d;
+      --bg-2:      #0d0f12;
+      --panel:     #101316;
+      --panel-2:   #15191e;
+      --panel-3:   #1c2128;
+      --line:      rgba(255,255,255,0.075);
+      --line-2:    rgba(255,255,255,0.14);
+      --grid:      rgba(255,255,255,0.022);
+
+      --ink:       #e7eaed;
+      --ink-2:     #9aa1a9;
+      --ink-3:     #626a73;
+
+      /* Amber — reserved for "needs you" / gate stop / primary action */
+      --amber:     #ffb000;
+      --amber-2:   #ffc24d;
+      --amber-ink: #1a1300;
+      --amber-dim: rgba(255,176,0,0.13);
+      --amber-line:rgba(255,176,0,0.34);
+      --amber-glow:rgba(255,176,0,0.42);
+
+      /* Live cyan — running / data flowing */
+      --live:      #54c7ec;
+      --live-dim:  rgba(84,199,236,0.13);
+      --live-glow: rgba(84,199,236,0.40);
+
+      --ok:        #46c49a;
+      --ok-dim:    rgba(70,196,154,0.13);
+      --ok-glow:   rgba(70,196,154,0.35);
+
+      --bad:       #f85149;
+      --bad-dim:   rgba(248,81,73,0.13);
+      --bad-glow:  rgba(248,81,73,0.38);
+
+      --paused:    #8a929b;
+      --paused-dim:rgba(138,146,155,0.13);
+
+      --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: 'Hanken Grotesk', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+      --r-xs: 3px; --r-sm: 5px; --r: 7px; --r-lg: 10px; --r-xl: 14px;
+      --ease: cubic-bezier(0.4, 0, 0.2, 1);
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --shadow:    0 8px 30px rgba(0,0,0,0.45);
+      --shadow-lg: 0 24px 70px rgba(0,0,0,0.62);
+      --header-h: 60px;
+    }
+
+    [data-theme="light"] {
+      --bg:        #f3f1ea;
+      --bg-2:      #eae7dd;
+      --panel:     #fbfaf6;
+      --panel-2:   #f1efe7;
+      --panel-3:   #e7e4d9;
+      --line:      rgba(22,25,29,0.12);
+      --line-2:    rgba(22,25,29,0.22);
+      --grid:      rgba(22,25,29,0.040);
+
+      --ink:       #16191d;
+      --ink-2:     #4b525a;
+      --ink-3:     #828a93;
+
+      --amber:     #a85f00;
+      --amber-2:   #875000;
+      --amber-ink: #fff6e6;
+      --amber-dim: rgba(168,95,0,0.12);
+      --amber-line:rgba(168,95,0,0.38);
+      --amber-glow:rgba(168,95,0,0.22);
+
+      --live:      #0c7ba0;
+      --live-dim:  rgba(12,123,160,0.12);
+      --live-glow: rgba(12,123,160,0.22);
+
+      --ok:        #1d8a66;
+      --ok-dim:    rgba(29,138,102,0.12);
+      --ok-glow:   rgba(29,138,102,0.22);
+
+      --bad:       #c0392b;
+      --bad-dim:   rgba(192,57,43,0.10);
+      --bad-glow:  rgba(192,57,43,0.22);
+
+      --paused:    #6b727a;
+      --paused-dim:rgba(107,114,122,0.12);
+
+      --shadow:    0 6px 22px rgba(22,25,29,0.10);
+      --shadow-lg: 0 22px 55px rgba(22,25,29,0.18);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { -webkit-text-size-adjust: 100%; }
+
+    body {
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--ink);
+      background-color: var(--bg);
+      /* faint engineering graph grid — no animated orbs */
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 34px 34px;
+      background-position: center top;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      min-height: 100vh;
+      overflow-x: hidden;
+      transition: background-color 0.4s var(--ease), color 0.4s var(--ease);
+    }
+
+    /* faint top signal rail */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0 0 auto 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--amber-line), transparent);
+      opacity: 0.5;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    h1, h2, h3, h4, h5, h6 { font-weight: 700; letter-spacing: -0.01em; }
+
+    code, pre, .mono { font-family: var(--mono); }
+    .tnum { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+
+    a { color: var(--live); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    #app { min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* ---- micro-typography utility ---- */
+    .label {
+      font: 500 10.5px/1 var(--mono);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+    }
+
+    /* ---- panels ---- */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--r-lg);
+    }
+    .panel-2 { background: var(--panel-2); }
+
+    /* ---- buttons ---- */
+    .btn {
+      font: 600 13px/1 var(--sans);
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 9px 14px;
+      border-radius: var(--r);
+      border: 1px solid var(--line-2);
+      background: var(--panel-2);
+      color: var(--ink);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s var(--ease), border-color 0.15s var(--ease),
+                  transform 0.08s var(--ease), box-shadow 0.15s var(--ease);
+    }
+    .btn:hover { background: var(--panel-3); border-color: var(--ink-3); }
+    .btn:active { transform: translateY(1px); }
+    .btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+    .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+    .btn svg { width: 15px; height: 15px; }
+
+    .btn-amber {
+      background: var(--amber); color: var(--amber-ink);
+      border-color: transparent; font-weight: 700;
+    }
+    .btn-amber:hover {
+      background: var(--amber-2); border-color: transparent;
+      box-shadow: 0 0 0 1px var(--amber-line), 0 6px 20px var(--amber-glow);
+    }
+    .btn-ghost { background: transparent; border-color: var(--line); }
+    .btn-ghost:hover { background: var(--panel-2); border-color: var(--line-2); }
+    .btn-danger { color: var(--bad); border-color: var(--bad-dim); background: var(--bad-dim); }
+    .btn-danger:hover { background: var(--bad); color: #fff; border-color: transparent; }
+    .btn-sm { padding: 6px 10px; font-size: 12px; gap: 5px; }
+    .btn-sm svg { width: 13px; height: 13px; }
+    .btn-icon { padding: 8px; }
+    .btn-icon.btn-sm { padding: 6px; }
+
+    /* ---- form fields ---- */
+    .field {
+      width: 100%;
+      font: 14px var(--sans);
+      padding: 11px 13px;
+      background: var(--bg-2);
+      border: 1px solid var(--line-2);
+      border-radius: var(--r);
+      color: var(--ink);
+      transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+    }
+    .field:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-dim); }
+    .field::placeholder { color: var(--ink-3); }
+    textarea.field { resize: vertical; line-height: 1.6; }
+
+    /* ---- status dot ---- */
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--ink-3); }
+    .dot.live   { background: var(--live);  box-shadow: 0 0 10px var(--live-glow);  animation: pulse 2s var(--ease) infinite; }
+    .dot.amber  { background: var(--amber); box-shadow: 0 0 10px var(--amber-glow); animation: pulse 1.4s var(--ease) infinite; }
+    .dot.ok     { background: var(--ok);    box-shadow: 0 0 8px var(--ok-glow); }
+    .dot.bad    { background: var(--bad);   box-shadow: 0 0 8px var(--bad-glow); }
+    .dot.paused { background: var(--paused); }
+
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
+    @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+    @keyframes rise  { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes spin  { to { transform: rotate(360deg); } }
+
+    .rise { animation: rise 0.5s var(--ease-out) both; }
+
+    /* ---- spinner ---- */
+    .spinner {
+      width: 18px; height: 18px; border-radius: 50%;
+      border: 2px solid var(--line-2); border-top-color: var(--amber);
+      animation: spin 0.7s linear infinite;
+    }
+
+    /* ---- scrollbars ---- */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--line-2); border-radius: 10px;
+      border: 2px solid transparent; background-clip: content-box;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: content-box; }
+    * { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+
+    ::selection { background: var(--amber); color: var(--amber-ink); }
+
+    :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+    /* KaTeX math (rendered into v-html content; inherits text color) */
+    .katex { font-size: 1.04em; }
+    .katex-display { overflow-x: auto; overflow-y: hidden; margin: 0.9em 0; padding: 2px 0; }
+    .md-mathraw { color: var(--amber); font-family: var(--mono); font-size: 0.9em; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

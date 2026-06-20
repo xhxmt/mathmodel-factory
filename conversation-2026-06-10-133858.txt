@@ -1,0 +1,967 @@
+ ▐▛███▜▌   Claude Code v2.1.161
+▝▜█████▛▘  Opus 4.8 · API Usage Billing
+  ▘▘ ▝▝    ~/paper_factory
+
+
+❯ /model 
+  ⎿  Kept model as Opus 4.8 (1M context)
+
+❯ 根据目前完成情况，你认为后续可以做什么                                        
+
+  Thought for 38s (ctrl+o to expand)
+
+● 我来先了解一下项目的当前完成状态，然后给出后续建议。让我并行查看几个关键位置。
+
+  Listed 2 directories (ctrl+o to expand)
+
+● Bash(echo "=== git log (recent 20) ===" && git log --oneline -20 && echo "" &&
+      echo "=== branches ===" && git branch -a && echo "" && echo "=== current
+      diff stat vs…)
+  ⎿  === git log (recent 20) ===
+     0b0d476 docs: make demo site links clickable
+     98548db docs: move interactive demo section to top
+     … +42 lines (ctrl+o to expand)
+
+  Thought for 38s (ctrl+o to expand)
+
+● This is a research project — a "Modeling Factory" with an ablation-study
+  experiment phase. Let me dig into the experiment state and the plan documents
+  to understand what's been done and what's outstanding.
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Bash(echo "=== plan files ===" && for f in
+      2026-05-31-150232-final-planhometfisherpaperfactory.txt
+      2026-06-02-091953-2026-05-31-150232-final-planh.txt; do echo "----…)
+  ⎿  === plan files ===
+     ----- 2026-05-31-150232-final-planhometfisherpaperfactory.txt (head) -
+     ----
+     … +121 lines (ctrl+o to expand)
+
+  Thought for 29s, listed 1 directory (ctrl+o to expand)
+
+● Now I understand the shape: this is a research project building the Modeling
+  Factory and writing an evaluation paper about it (§5.x = baseline, external
+  scoring, ablations, perturbation). Let me read the evaluation state, ablation
+  comparison, and memory notes to find exactly where things stand.
+
+● Bash(echo "=== evaluation/ tree ===" && find evaluation -maxdepth 2 -type f
+      2>/dev/null | sort && echo "" && echo "=== experiments/ tree ===" && find
+      experiments -ma…)
+  ⎿  === evaluation/ tree ===
+     evaluation/baseline_scores.md
+     evaluation/external_paper_judge_prompt.txt
+     … +177 lines (ctrl+o to expand)
+
+  Thought for 26s, read 1 file, listed 1 directory (ctrl+o to expand)
+
+● Clear picture forming. The factory is built and there's a substantial
+  evaluation effort (§5.x). Let me read the experiment design, the comparison
+  tooling, the memory notes in full, and the tail of the latest conversation to
+  see exactly where work paused.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Bash(echo "=== compare_ablations.py (run it if possible) ===" && python3
+      experiments/compare_ablations.py 2>&1 | head -60)
+  ⎿  === compare_ablations.py (run it if possible) ===
+     usage: compare_ablations.py [-h] --baseline BASELINE --variant VARIANT
+                                 [--json]
+     … +2 lines (ctrl+o to expand)
+
+● Bash(MEM=/home/tfisher/.claude/projects/-home-tfisher-paper-factory/memory &&
+      for f in ablation-results-judge-and-objective-signal.md
+      paper-page-count-not-quality-si…)
+  ⎿  ===== ablation-results-judge-and-objective-signal.md =====
+     ---
+     name: ablation-results-judge-and-objective-signal
+     … +175 lines (ctrl+o to expand)
+
+  Thought for 33s (ctrl+o to expand)
+
+● Let me check the most recent conversation trajectory, whether anything is
+  still running, and pull the actual ablation comparison numbers.
+
+● Bash(echo "=== running runners / agents ? ===" && ps -eo pid,ppid,etime,cmd
+      2>/dev/null | grep -iE "run_paper|launch_agents|codex|claude -p|agy_run" |
+      grep -v grep |…)
+  ⎿  === running runners / agents ? ===
+     1981724       1 61-02:48:36 node /home/tfisher/.codex/skills/claude-to
+     -im/dist/daemon.mjs
+     … +82 lines (ctrl+o to expand)
+
+● Bash(echo "=== Gemini-judged ablation comparison (current <base>_eval.json)
+      ===" && python3 experiments/compare_ablations.py --baseline
+      test_cumcm2024b --variant cum…)
+  ⎿  === Gemini-judged ablation comparison (current <base>_eval.json) ===
+     project                             total   模型合理   求解正确
+     创新
+     性   写作清晰   结果说服   灵敏度分
+     … +17 lines (ctrl+o to expand)
+
+  Thought for 2m 57s (ctrl+o to expand)
+
+● Two quick checks that directly shape the recommendation — the API keys (the
+  interrupted run died on GEMINI_API_KEY not set) and whether there's a master
+  plan doc driving the §5.x work.
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "=== API keys present? (masked) ==="…)
+  ⎿  === API keys present? (masked) ===
+       GEMINI_API_KEY = (unset in shell)
+       DEEPSEEK_API_KEY = (unset in shell)
+     … +22 lines (ctrl+o to expand)
+
+  Thought for 26s (ctrl+o to expand)
+
+● Let me read the §5 research-plan section that's driving all this evaluation
+  work — it defines what "done" looks like.
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "=== refactor_plan.md : section 5 (research/eval) ==="…)
+  ⎿  === refactor_plan.md : section 5 (research/eval) ===
+
+     === if nothing above, show all headings ===
+     … +24 lines (ctrl+o to expand)
+
+  Thought for 1m 29s, read 1 file (ctrl+o to expand)
+
+● I now have the full picture, including the master plan's Phase-5 acceptance
+  criteria. One last verification so I don't misreport what's missing:
+● Bash(cd /home/tfisher/paper_factory
+      echo "5.5 research-paper dir:"; ls -d paper_research/ 2>/dev/null || echo
+      "  ❌ paper_research/ 不存在"…)
+  ⎿  5.5 research-paper dir:
+       ❌ paper_research/ 不存在
+     5.3 prompt changelog:
+     … +11 lines (ctrl+o to expand)
+
+  Thought for 54s (ctrl+o to expand)
+
+● 已经把现状摸清了。下面是基于实际文件状态的评估，不是凭印象。
+
+  一、现在到哪了（对照 docs/refactor_plan.md 阶段 5 验收标准）
+
+  工厂本体（16 步流水线）已建成并能产出成品 PDF。最近两周的重心其实已经从"造工厂
+  "转到"给工厂做评估、写研究论文"。逐项核对阶段 5：
+
+  ┌─────────────────────────────┬────────────────┬─────────────────────────┐
+  │           子任务            │      状态      │          证据           │
+  ├─────────────────────────────┼────────────────┼─────────────────────────┤
+  │                             │                │ A/B/C/D 题都有          │
+  │ 5.1 benchmark（计划 5–10    │ ⚠️ 2/5         │ PDF，但只有 2024a/b     │
+  │ 题）                        │                │ 跑通；消融只在 单题     │
+  │                             │                │ 2024b 上做              │
+  ├─────────────────────────────┼────────────────┼─────────────────────────┤
+  │                             │ ✅             │ DeepSeek 校准基线 + K   │
+  │ 5.2 评估流程                │ 完成且已加固   │ 采样取中位数 + 稳健解析 │
+  │                             │                │ 器（夹紧/反锚定）       │
+  ├─────────────────────────────┼────────────────┼─────────────────────────┤
+  │ 5.3 prompt 迭代 CHANGELOG   │ ❌ 未建        │ prompts/CHANGELOG.md    │
+  │                             │                │ 不存在                  │
+  ├─────────────────────────────┼────────────────┼─────────────────────────┤
+  │ 5.3b 扰动验证（计划外，验证 │ ✅ 完成        │ DeepSeek 扣分检出 73%   │
+  │ 评委可信度）                │                │ vs haiku 0% → 评委可信  │
+  ├─────────────────────────────┼────────────────┼─────────────────────────┤
+  │                             │ ⚠️ 结构完成但  │ 4 条件各 n=1；判别评委  │
+  │ 5.4 消融实验                │ 效力不足       │ 问题已解（Gemini        │
+  │                             │                │ 能分开）                │
+  ├─────────────────────────────┼────────────────┼─────────────────────────┤
+  │ 5.5 研究论文                │ ❌ 未起步      │ paper_research/         │
+  │                             │                │ 不存在，无 draft.md     │
+  └─────────────────────────────┴────────────────┴─────────────────────────┘
+
+  阶段 5 三条验收：① 5 题跑通 ❌（才 2 题）② ≥1 次消融 ✅ ③ 数据支撑论文 
+  ⚠️（够但偏弱、且没写）。
+
+  二、三个关键短板（决定"后续做什么"）
+
+  1. 消融是 n=1，统计上站不住。 四个条件各只跑了一次。Gemini 给出的条件间差距（Δ
+  1.7–6.3）和它自己的采样波动（±3–4 分）同量级 → 现在的排序是"暗示性，非显著"。
+  而且每个消融把流水线推到了不同的模型/不同的数字（Q3 最优利润：基线 453 vs
+  no_judge 107 vs no_innov
+  28），单次抽样根本分不清是"组件作用"还是"流水线随机性"。
+  2. 唯一硬信号已找到，但只有一个。 no_methodlib 会产出 6 个指向不存在的 
+  method_library/*.md 的悬空引用 —— 这是确定性的、不依赖评委、能在 n=1
+  下幸存的缺陷，也是目前最强的单条证据。
+  3. 上一轮工作是被打断的。 最近一次会话（06-10 09:35）正在用 Gemini K=8 
+  重跑五个条件以压低评委方差，结果撞上 Gemini 503 + GEMINI_API_KEY 未导出（key
+  在 .env 里但没进 shell），五个任务全挂，会话中断。这是个现成的断点。
+
+  另有两个已知但未修的 runner 挂起 bug（活动监视器孤儿进程、ablation_monitor
+  重复
+  runner），记忆里标注"修法已设计、改前需先问你"——它们曾真实损坏过跑批结果。
+
+  三、我建议的优先级
+
+  - 立刻可做（便宜）：把被打断的 Gemini K=8 收尾（set -a; . .env 导出 key +
+  Gemini 恢复后重跑）。但要诚实——它只压评委采样方差，治不了 n=1 的流水线方差。
+  - 真正的交付物：写 §5.5 研究论文。所有评估（基线校准 / 扰动验证 / 外部对比 /
+  消融）本来就是喂给这篇论文的，而它一行都还没写。先动笔反而能暴露哪些证据是承重
+  的、哪些是装饰，从而决定值不值得为更多跑批烧算力。
+  - 要让论文"打得过审"：才需要补 rep2/rep3 或扩到第二道题（贵，每次数小时 +
+  codex/agy 配额），且动手前应先修那两个挂起 bug。
+
+  下面让你定方向——这几条不互斥，可多选：
+
+● User declined to answer questions
+  ⎿  · 接下来优先投入哪个方向？（可多选，我会按你选的开干） (起草研究论文 §5.5 /
+     补齐消融统计效力 / 扩展题目覆盖 / 先修流水线挂起 bug)
+
+  Thought for 16s (ctrl+o to expand)
+
+● 好的，先不急着选。你想澄清什么？可以从这几个角度告诉我，我再据此调整方向选项：
+
+  - 目标是什么？
+  是要尽快出一篇能投/能交的研究论文，还是先把工厂本身打磨得更强/更稳，还是只是想
+  看看手里这批评估数据还能榨出什么结论？目标不同，优先级完全不同。
+  - 算力/配额还够不够烧？ "加 rep2/rep3"和"扩到
+  2024a/C/D"都意味着真实流水线再跑很多个小时、消耗 codex/agy
+  配额。如果配额紧张，那基本只能走"用现有 n=1 数据写论文 + 诚实标注局限"这条路。
+  - 论文的标准是什么？ 是自用/组会汇报级别（现有暗示性证据 + no_methodlib
+  硬信号就够），还是要对外投稿/经得起审稿（那 n=1 必须补到
+  n≥3，且最好不止一道题）？
+  - 那两个 runner 挂起 bug 要不要碰？ 它们改的是 run_paper.sh 这个 agent
+  契约文件。如果你近期不打算再跑批，可以先不修；如果要跑 rep2/rep3，建议先修。
+  - 或者你心里已经有想做的事了，直接说，我就不替你排了。
+
+  你先说说是哪一类，或者有什么我没考虑到的约束/想法？
+
+✻ Worked for 9m 17s
+
+❯ 原定实施方案4是什么嘛                                                         
+
+  Thought for 1m 23s (ctrl+o to expand)
+
+● “原定实施方案4”——你是指上一轮会话正在执行的那个评估方案里的第 4 项吧（最近的
+  06-10 会话里在跑 B3，并提到
+  B4/B5/B6）。让我把那个原始方案捞出来确认，免得我记串了。
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "########## 1) 最近会话里出现的 B1..B6 计划项 ##########"…)
+  ⎿  ########## 1) 最近会话里出现的 B1..B6 计划项 ##########
+     conversation-2026-06-10-093520.txt:652:  A1 + A2
+     先做(免费、最硬,且立刻
+     能写),然后 **B3(加 K)+ B4(三评委)**把 Gemini
+     … +37 lines (ctrl+o to expand)
+
+  Thought for 39s (ctrl+o to expand)
+
+● 上一轮会话执行的是一个 A1/A2 + B3–B6
+  的评估方案。我把方案定义块完整捞出来，确认第 4 项到底是哪条。
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "########## 方案定义块（A1/A2/A3 + B1..B6 的定义处）##########"…)
+  ⎿  ########## 方案定义块（A1/A2/A3 + B1..B6 的定义处）##########
+     652:  A1 + A2 先做(免费、最硬,且立刻能写),然后 **B3(加 K)+ B4(三评委)*
+     *把 Gemini
+     … +19 lines (ctrl+o to expand)
+
+  Thought for 23s (ctrl+o to expand)
+
+● Let me read the actual plan-presentation blocks to see the full original
+  scheme and how it was numbered.
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "================= 会话 600–660（原始方案呈现处）================="…)
+  ⎿  ================= 会话 600–660（原始方案呈现处）=================
+       Thought for 19s (ctrl+o to expand)
+     … +147 lines (ctrl+o to expand)
+
+  Thought for 1m 13s (ctrl+o to expand)
+
+● 找到了。上一轮会话给你列的"原定实施方案"是一张 1–7 项的菜单，分 A/B/C 三组。第
+  4 项 = 加第三个评委（Claude），凑成三评委面板。
+
+  方案 4 具体是什么
+
+  ▎ 4. 加第三个评委（Claude）凑成评委面板。 现在已有 DeepSeek + Gemini，补 
+  ▎ Claude → 三评委一致性分析：哪些消融的排序是跨评委稳健的（no_methodlib 
+  ▎ 最差已在两评委下都成立），哪些只是单评委 artifact。
+
+  - 要解决的问题：现在的消融排序只有两个评委背书。DeepSeek
+  锚定、分不开细粒度消融；Gemini 能分但 n=1。加第 3 个独立评委（Claude，经
+  scripts/llm_judge_call.py 的 deepseek*/gemini*/else→claude
+  前缀分派），看哪些结论三家都同意。
+  - 能买到什么：把"no_methodlib
+  伤害最大"从"两评委一致"抬到"三评委一致"——这是不靠加 reps、就能让 §5.5
+  结论更硬的一步。同时把单评委的偶然性（artifact）剔出去。
+  - 已知的坑：Claude 大模型在本机 anyrouter.top
+  路由上对重型评委请求会卡死（opus[1m] 300s 0 字节），haiku 能跑但扰动检出
+  0%、不可信。所以方案 4 的真正难点是找到一个本机可用又有分辨力的 Claude 
+  模型——这也是为什么它当时排在 B3 之后。
+
+  整张菜单的现状（这才是"原定方案"的全貌）
+
+  #: 1
+  项: 客观确定性指标横比（precheck/verify_numbers/计数）
+  组: A 免费·不靠评委
+  状态: ✅ 已做（no_methodlib = precheck FAIL，6 个悬空引用）
+  ────────────────────────────────────────
+  #: 2
+  项: 定性 artifact diff（解释分差从哪来）
+  组: A
+  状态: ✅ 已做（结论写进了 memory）
+  ────────────────────────────────────────
+  #: 3
+  项: Gemini 采样 3→8–10 收窄置信区间
+  组: B 只调评委
+  状态: ⚠️ 尝试过即中断：撞 Gemini 503 + GEMINI_API_KEY
+    没导出，五个任务全挂。当前 *_eval.json 还是 K=3，没换成 K=8
+  ────────────────────────────────────────
+  #: 4
+  项: 加 Claude 凑三评委面板
+  组: B
+  状态: ❌ 未做（只 smoke-test 了 Claude CLI 就断了）← 你问的这个
+  ────────────────────────────────────────
+  #: 5
+  项: 成对 / A-B 判断（治"分不开细粒度消融"）
+  组: B
+  状态: ❌ 未做（harness 还没写）
+  ────────────────────────────────────────
+  #: 6
+  项: 跑 perturbation_harness.py 做第二口径交叉验证
+  组: B
+  状态: ❌ 未做（脚本在，5.3b 跑过一次，但没作为消融交叉口径重跑）
+  ────────────────────────────────────────
+  #: 7
+  项: 就现有证据老实写 §5.4
+  组: C 收尾
+  状态: ❌ 未写
+
+  简言之：A 组（1、2）已完成；B 组卡在第 3 项（Gemini K=8 因 key 
+  没导出而失败），方案 4（三评委）紧随其后但还没动；C 组收尾未写。
+  上一轮会话正是在"B3 失败 → 准备转 B4"这个点上被打断的。
+
+  要我从哪儿接？是先把 B3 收尾（导出 .env 的 key 重跑 Gemini K=8）再做方案 
+  4，还是直接试 方案 4 的 Claude 评委（先单样本 smoke-test 看本机哪个 Claude
+  模型能用）？
+
+✻ Churned for 3m 58s
+
+❯ 不是，目前在进行阶段5的有关内容，那么阶段4的内容是什么                        
+
+  Thought for 28s (ctrl+o to expand)
+
+● 啊，明白了——你说的是 docs/refactor_plan.md 里的阶段 4（我们现在在做阶段
+  5，阶段 4
+  被跳过了？）。我之前确实没读它，让我把原文调出来，再核一下它到底做了没有。
+
+  Thought for 45s, read 1 file (ctrl+o to expand)
+
+● 阶段 4 = 人机协作与外部咨询协议，但注意它在计划里只是个占位 
+  stub——原文明说"本阶段细节用户暂忽略，待阶段 3 完成后再展开设计"。让我核一下它
+  列的几个机制到底实现了没有，好给你一个诚实的"做了/跳了"判断。
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "########## 阶段4 列的 6 个机制，逐个在代码里查 ##########"…)
+  ⎿  ########## 阶段4 列的 6 个机制，逐个在代码里查 ##########
+     --- 1) pause_for_consultation 原语 ---
+     --- 2) notify_human / Telegram 通知 ---
+     … +39 lines (ctrl+o to expand)
+
+  Thought for 1m 9s (ctrl+o to expand)
+
+● 核完了。阶段 4 = 人机协作与外部咨询协议（Human-machine collaboration & 
+  External Consultation Protocol）——但关键是：它在计划里从来就只是个占位 
+  stub，原文明写"本阶段细节用户暂忽略，待阶段 3
+  完成后再展开设计"。也就是说，实际开发从阶段 3 直接跳到了阶段 5，阶段 4
+  没正式做。
+
+  它当时草拟（未细化）的 6 个机制，逐个对一下代码里到底有没有：
+
+  ┌───────────────────┬────────┬────────────────────────────────────────────┐
+  │ 阶段4 计划的机制  │ 实现状 │                    实情                    │
+  │                   │   态   │                                            │
+  ├───────────────────┼────────┼────────────────────────────────────────────┤
+  │ External          │ ❌     │ 计划设想的"流水线遇到决策点→请人/外部专家→ │
+  │ Consultation      │ 未实现 │ 恢复"协议没建                              │
+  │ Protocol          │        │                                            │
+  ├───────────────────┼────────┼────────────────────────────────────────────┤
+  │ pause_for_consult │ ❌     │ grep 零匹配。launch_agents.sh 的           │
+  │ ation 原语        │ 没有   │ pause/.paused 是手动暂停整个               │
+  │                   │        │ runner，不是"自动停下等人决策"的咨询原语   │
+  ├───────────────────┼────────┼────────────────────────────────────────────┤
+  │                   │ ⚠️     │ repo 里没实现。但机器上跑着一个            │
+  │ notify_human（Tel │ 不在本 │ claude-to-im 守护进程（已运行 61           │
+  │ egram 优先）      │  repo  │ 天）——是个 claude→即时通讯通知器，算外部替 │
+  │                   │        │ 代品，但没跟流水线挂钩                     │
+  ├───────────────────┼────────┼────────────────────────────────────────────┤
+  │ consultation      │ ❌     │ —                                          │
+  │ 模板库            │ 没有   │                                            │
+  ├───────────────────┼────────┼────────────────────────────────────────────┤
+  │ 咨询预算管理      │ ❌     │ —                                          │
+  │                   │ 没有   │                                            │
+  ├───────────────────┼────────┼────────────────────────────────────────────┤
+  │ launch_agents.sh  │ ❌     │ 只有 pause/resume/status/attach/trace，无  │
+  │ 咨询子命令        │ 没有   │ consult/notify                             │
+  └───────────────────┴────────┴────────────────────────────────────────────┘
+
+  但"人机协作"这一半，换了个更轻的形式真的落地了——就是 human_review.md
+  机制：贯穿 Step 3（方法选择 override）、Step 10（数值门 override）、Step
+  14（摘要直接覆盖）等。人写一个 human_review.md，agent
+  按段落优先采纳，CLAUDE.md 里也强制 render 预读它。够用，但不是阶段 4
+  设想的那套完整协议。
+
+  一个容易踩的坑（顺带提醒）
+
+  阶段 4 的 "consultation" 和当前系统里的 "consultation" 不是一回事：
+  - 阶段 4 计划里的 consultation = 人机/外部专家咨询协议；
+  - 当前系统里的 "consultation"（即 no_consult 消融关掉的那个）= Step 1 的 web 
+  文献检索（run_paper.sh:1252 删掉"用 web 检索拿到主文献"那句）。
+
+  所以你在阶段 5.4 看到的
+  cumcm2024b_no_consult_rep1，消融的是网络文献检索，不是阶段 4
+  那个没做的人机咨询协议——分析消融结果时别把两者混了。
+
+  底线
+
+  阶段 4 被有意轻量化/跳过了：人机协作半边 → 用 human_review.md
+  以更轻方式实现；外部咨询协议 + pause/notify/budget/模板/子命令一整套 →
+  没做。这不影响你现在跑阶段 5，因为评估实验本来就不依赖那套咨询基础设施。
+
+  要不要我顺手把"阶段4=deferred stub、当前 consultation≠计划
+  consultation"这条写进 memory？它跟已有的消融那条 memory
+  直接相关，能防止以后误读 no_consult 的含义。
+
+✻ Brewed for 2m 32s
+
+❯ 我在后续实际竞赛的时候会使用gpt pro和Gemini                                   
+  deepthink进行建模等工作，你认为可以做什么                                     
+
+  Thought for 4m 18s (ctrl+o to expand)
+
+● 这是个很关键的转向问题，值得先把底层逻辑说清楚，因为它会改变整个项目对你的价值
+  定位。
+
+  先说一个判断：竞赛场景下，"自动工厂"要翻转成"人驾驶的座舱"
+
+  现在的 paper_factory 是个全自主流水线——codex/claude/agy agent 跑 8+ 小时、16
+  步无人值守出论文。但你描述的实际竞赛是另一回事：
+
+  - 3 天限时，你（人）全程在场，用 GPT Pro / Gemini Deep Think 
+  交互式做最硬的建模思考；
+  - GPT Pro 基本是 ChatGPT UI 专属（Pro 推理模式没有好用的 API），Gemini Deep
+  Think 也是 app 里的交互重推理模式——都不适合塞进 run_paper.sh 
+  那种自主循环（慢、贵、限流、UI-only）；
+  - 竞赛里你最怕的恰恰是工厂的短板：黑盒跑半天、还可能撞上那两个 runner 挂起
+  bug。
+
+  所以结论是：别想着把 GPT Pro/Gemini Deep Think 接进自主流水线。
+  而是把工厂里与模型无关的那部分资产抽出来，做成一套"人 +
+  前沿模型"在竞赛里能快速调用的工具箱。前沿模型负责"想"，工厂资产负责"结构化 +
+  兜底 + 出活"。
+
+  工厂里哪些资产值得抽出来（都是模型无关的）
+
+  资产: prompts/step*.txt + STEPS.md（16步契约）
+  现状: 为自主 runner 写的
+  竞赛里的用法: → 改造成可复制粘贴的 chat prompt，喂给 GPT Pro/Gemini
+  ────────────────────────────────────────
+  资产: method_library/（HMML-lite）+ method_retrieve.py
+  现状: agent 内部用
+  竞赛里的用法: → 导成 digest 贴进模型 context，防方法幻觉/悬空引用（就是
+    no_methodlib 那个失败模式，只是现在防的是人这边）
+  ────────────────────────────────────────
+  资产: verify_numbers.py / verify_symbols.py /
+    evaluate_modeling_project.py(precheck)
+  现状: 自主门
+  竞赛里的用法: → 本地确定性校验网，抓 GPT Pro/Gemini
+    也查不出的数值/符号/引用错。消融研究已证明这是最硬的信号
+  ────────────────────────────────────────
+  资产: compile_paper.sh + cumcmthesis/mcmthesis 模板 + 摘要 detokenize 约定
+  现状: 工厂用
+  竞赛里的用法: → 开箱即用 LaTeX 套件，GPT 写的内容首次编译就过（xelatex/CJK
+    那些坑工厂已经踩平）
+  ────────────────────────────────────────
+  资产: 校准过的评委（Gemini-2.5-pro 能区分）
+  现状: §5.4 用
+  竞赛里的用法: → 提交前自评，告诉你哪个维度最弱、先补哪里
+  ────────────────────────────────────────
+  资产: solver_submit.sh / package_submission.py
+  现状: 工厂用
+  竞赛里的用法: → 跑 GPT 写的求解代码（带超时、可复现）+ 一键打提交包
+
+  我建议的几个具体产物（按竞赛性价比排）
+
+  1. 竞赛 Prompt 包 + 3 天作战手册（最高即时价值、最省力）：把 16 步蒸馏成喂给
+  GPT Pro/Gemini Deep Think 的有序 prompt，配一张现实时间线（D1 读题+选方法+建模
+  / D2 全解+灵敏度+图 / D3 写作+校验+润色+提交）。把自主流水线变成人驾驶的 
+  checklist + prompt 库。
+  2. 本地校验安全网（一键脚本）：给定草稿目录，连跑 verify_numbers +
+  verify_symbols + precheck + 编译 +
+  自评，打印"哪里坏了"清单。这是前沿模型也给不了的确定性兜底。
+  3. LaTeX 模板套件：cumcmthesis/mcmthesis 起步包 + compile 封装 + 摘要
+  detokenize 预置，GPT 写的内容直接灌。
+  4. 方法库 context 包：method_library 导成可粘贴
+  digest，开局就给模型一份"已验证方法清单"。
+
+  一个诚实的提醒
+
+  GPT Pro 实质是 UI-only，做不出"GPT Pro 驱动的全自动流水线"；Gemini 这边
+  gemini-2.5-pro 已经接进评委（GEMINI_API_KEY），若 Deep Think 有 API
+  模式可以接成建模 agent，但 Deep Think 通常也是 app
+  交互模式。所以现实路线就是上面那套"人+UI 模型做思考、本地工具兜底出活"。
+
+  你想我先从哪块动手？这几条不互斥：
+
+● User answered Claude's questions:
+  ⎿  · 竞赛实战工具箱，先做哪几块？（可多选） → Prompt包+3天作战手册
+  Thought for 1m 8s (ctrl+o to expand)
+
+● 你选了 Prompt 包 + 3 
+  天作战手册。这是个有分量的新产物，我得先吃透工厂里真正的工作流知识（16
+  步契约、方法库硬门、符号表纪律、校验门、那些已踩平的坑），再据此蒸馏——而不是写
+  一堆泛泛建议。先做 grounding。
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "=== prompts/ 目录（step 文件 + 大小）==="…)
+  ⎿  === prompts/ 目录（step 文件 + 大小）===
+     -rw-rw-r-- 1 tfisher tfisher 11717  6月 6日 00:39 prompts/step0_proble
+     m_parsing.txt
+     … +92 lines (ctrl+o to expand)
+
+  Thought for 48s, read 1 file (ctrl+o to expand)
+
+● STEPS.md gives me the full 16-step contract. Now the load-bearing detail — the
+  style/execution contract and the richest step prompts (model construction,
+  paper structure, the judge rubric).
+
+  Thought for 40s, read 1 file (ctrl+o to expand)
+
+● modeling_guide.md is exactly the transferable gold. Now the three richest step
+  prompts — model construction, paper draft (the detokenize trap lives here),
+  and the judge rubric.
+
+  Thought for 47s, read 1 file (ctrl+o to expand)
+
+● Two more — the paper-draft LaTeX skeleton and the judge rubric — then I'll
+  have everything to design the kit.
+
+  Thought for 1m 34s, read 2 files (ctrl+o to expand)
+
+● I now have deep grounding: the 16-step contract (STEPS.md), the full
+  style/execution conventions (modeling_guide.md), the model-construction
+  discipline (Step 4), the LaTeX skeleton + ABSTRACT_PLACEHOLDER/detokenize
+  convention (Step 9), and the 6-dimension judge rubric (Step 13). Plus the
+  hard-won traps from memory (sensitivity is mandatory, page-count≠quality,
+  every number must trace).
+
+  This is a sizable multi-file deliverable and you've been precise about
+  direction, so let me plan the structure and show you a worked sample prompt
+  before writing the whole pack.
+
+● Entered plan mode
+  Claude is now exploring and designing an implementation approach.
+
+  Thought for 4m 18s (ctrl+o to expand)
+
+● I've already read the load-bearing files directly (STEPS.md,
+  modeling_guide.md, Steps 4/9/13, method_library structure), so I have the full
+  grounding — no need to fan out Explore agents to re-read what's already in
+  context. The remaining work is design, which is mine to make. Let me write the
+  plan, including a fully worked sample prompt so you can judge the style
+  before I write all eleven.
+
+● Updated plan
+  ⎿  /plan to preview
+
+  Thought for 39s (ctrl+o to expand)
+
+● The plan is written to the plan file with a fully worked sample prompt so you
+  can judge the style. Summary of what I'm proposing:
+
+  - New top-level competition_kit/ (zero changes to existing code/contracts)
+  containing a 3-day battle plan, a model-agnostic cheatsheet (paste into GPT
+  Pro / Gemini Deep Think at session start), and 11 copy-paste prompts distilled
+  from the 16-step workflow.
+  - Each prompt = role + paste-here inputs + output contract + quality gates +
+  known traps + handoff to the next step — so the frontier model does the
+  thinking and you don't drop steps or hit the known traps
+  (sensitivity-mandatory, symbol discipline, \detokenize{ABSTRACT_PLACEHOLDER},
+  every number traceable, no page-count tricks).
+  - CUMCM-primary (Chinese) with MCM/ICM adaptation notes folded in;
+  model-routing hints (Deep Think for divergent method/modeling exploration, GPT
+  Pro for rigorous derivation/code/writing/self-score).
+
+  The plan file has the full directory layout, the phase→step→hour→gate
+  timeline, and the worked 00_读题解析 sample.
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ 竞赛实战包：Prompt 包 + 3 天作战手册                                    │
+     │                                                                         │
+     │ Context（为什么做这个）                                                 │
+     │                                                                         │
+     │ paper_factory 现在是个全自主流水线（codex/claude/agy agent 无人值守跑   │
+     │ 8+ 小时出论文）。但用户在实际 CUMCM 竞赛里会亲自驾驶 GPT Pro / Gemini   │
+     │ Deep Think 做建模——这两个是 UI-only                                     │
+     │ 的交互式重推理工具，塞不进自主流水线。                                  │
+     │                                                                         │
+     │ 所以要把流水线里与模型无关的工作流知识（16 步契约 STEPS.md、风格圣经    │
+     │ modeling_guide.md、方法库、评分细则、那些已踩平的坑）蒸馏成一套人能在   │
+     │ 74 小时竞赛里照着用的交互式 Prompt 包 +                                 │
+     │ 时间线。前沿模型负责"想"，这套包负责"结构化 + 不漏步 + 不踩坑 + 出活"。 │
+     │                                                                         │
+     │ 本次只做用户选定的「Prompt 包 + 3                                       │
+     │ 天作战手册」，不构建本地校验安全网（那是另一块，仅在 prompt             │
+     │ 里留可选指针）。                                                        │
+     │                                                                         │
+     │ 范围与默认决策                                                          │
+     │                                                                         │
+     │ - 语言：中文主（CUMCM 国赛 + 用户母语 + repo 既有 prompt                │
+     │ 都是中文）。美赛 MCM/ICM 的差异（mcmthesis、25 页上限、英文 summary     │
+     │ sheet）在 battle_plan.md / cheatsheet.md                                │
+     │ 各开一个"美赛适配"小节覆盖，不另起一套英文 prompt 文件。                │
+     │ - 落位：新建顶层目录 competition_kit/（与 prompts/、method_library/     │
+     │ 平级，不动现有 agent 契约文件）。                                       │
+     │ - 不改动：STEPS.md、modeling_guide.md、prompts/step*.txt、run_paper.sh  │
+     │ 等——本次纯新增文档，零风险。                                            │
+     │                                                                         │
+     │ 目录结构                                                                │
+     │                                                                         │
+     │ competition_kit/                                                        │
+     │ ├── README.md            座舱总览：人驾驶 GPT Pro/Gemini Deep Think     │
+     │ 的工作模式；                                                            │
+     │ │                                                                       │
+     │ 这套包是什么/怎么开一局；与本地校验脚本的可选桥接                       │
+     │ ├── battle_plan.md       3                                              │
+     │ 天作战手册：阶段→对应16步→工时预算→每阶段"完成判据"门；                 │
+     │ │                        模型路由建议（何时用 Deep Think 发散 / 何时用  │
+     │ GPT Pro 求严谨）                                                        │
+     │ ├── cheatsheet.md        模型无关速查卡（开局粘进模型                   │
+     │ context）：评分6维度+等级换算 /                                         │
+     │ │                        12强制章节 / 符号约定 / 图表配色palette /      │
+     │ 表格booktabs规则 /                                                      │
+     │ │                        LaTeX 坑(detokenize/xelatex/缺图=0分) /        │
+     │ 红线don'ts                                                              │
+     │ └── prompts/             11 个可复制提示词，每个 =                      │
+     │ 角色+你粘贴这些+产出契约+质量门+陷阱+交棒                               │
+     │     ├── 00_读题解析.md          ← Step 0                                │
+     │     ├── 01_方法选型.md          ← Step 1+2+3（含方法库 digest 作        │
+     │ context）                                                               │
+     │     ├── 02_完整建模.md          ← Step                                  │
+     │ 4（核心重推理；数学契约+符号表+假设登记+代码骨架）                      │
+     │     ├── 03_求解.md              ← Step 5                                │
+     │     ├── 04_灵敏度与稳健性.md    ← Step 6（强制，CUMCM 已知扣分陷阱）    │
+     │     ├── 05_模型评价.md          ← Step 7                                │
+     │     ├── 06_图表规范.md          ← Step 8（套 modeling_guide 配色）      │
+     │     ├── 07_论文起草.md          ← Step 9（12章节 LaTeX 骨架 +           │
+     │ ABSTRACT_PLACEHOLDER + detokenize）                                     │
+     │     ├── 08_数字核对与自评.md    ← Step 10+13（每数字可追溯 +            │
+     │ 三评委自评打分）                                                        │
+     │     ├── 09_摘要.md              ← Step 14（4段式，高权重）              │
+     │     └── 10_润色与编译提交.md    ← Step                                  │
+     │ 15+16（去机器味+引用审计+编译+打包）                                    │
+     │                                                                         │
+     │ 3 天作战手册（CUMCM 74h，周四18:00 → 周日20:00）                        │
+     │                                                                         │
+     │ ┌─────┬─────────────┬────────┬──────┬────────────────────────────────── │
+     │ ──┐                                                                     │
+     │ │ 阶  │    时段     │ 对应步 │ 提示 │           完成判据（门）          │
+     │  │                                                                      │
+     │ │ 段  │             │   骤   │  词  │                                   │
+     │  │                                                                      │
+     │ ├─────┼─────────────┼────────┼──────┼────────────────────────────────── │
+     │ ──┤                                                                     │
+     │ │ 立  │ 周四        │ Step   │ P00, │ 子问题分解+评分倾向+候选方法清单+ │
+     │  │                                                                      │
+     │ │ 项  │ 18:00–24:00 │ 0–3    │  P01 │ 选定主/辅方法                     │
+     │  │                                                                      │
+     │ ├─────┼─────────────┼────────┼──────┼────────────────────────────────── │
+     │ ──┤                                                                     │
+     │ │ 建  │ 周五 全天   │ Step 4 │ P02  │ 完整数学契约 + 符号表(全符号登记) │
+     │  │                                                                      │
+     │ │ 模  │             │        │      │ + 假设登记簿 + 代码骨架           │
+     │  │                                                                      │
+     │ ├─────┼─────────────┼────────┼──────┼────────────────────────────────── │
+     │ ──┤                                                                     │
+     │ │ 求  │ 周五晚–周六 │ Step 5 │ P03  │                                   │
+     │ 每个子问题结果落盘(JSON)，每个数字 │                                    │
+     │ │ 解  │ 中午        │        │      │ 可追溯到 results                  │
+     │  │                                                                      │
+     │ ├─────┼─────────────┼────────┼──────┼────────────────────────────────── │
+     │ ──┤                                                                     │
+     │ │     │             │        │ P04, │                                   │
+     │  │                                                                      │
+     │ │ 分  │ 周六下午–晚 │ Step   │      │ 灵敏度(龙卷风+情景图)齐 +         │
+     │ 模型评价 │                                                              │
+     │ │ 析  │             │ 6–8    │ P05, │  + 图表合规                       │
+     │  │                                                                      │
+     │ │     │             │        │  P06 │                                   │
+     │  │                                                                      │
+     │ ├─────┼─────────────┼────────┼──────┼────────────────────────────────── │
+     │ ──┤                                                                     │
+     │ │ 写  │ 周日        │ Step   │ P07, │ 12章节齐全 + 编译过 + 数字核对过  │
+     │ + │                                                                     │
+     │ │ 作  │ 08:00–16:00 │ 9–13   │  P08 │  自评≥良                          │
+     │  │                                                                      │
+     │ ├─────┼─────────────┼────────┼──────┼────────────────────────────────── │
+     │ ──┤                                                                     │
+     │ │ 收  │ 周日        │ Step   │ P09, │ 摘要填好 + 去机器味 + 引用全实 +  │
+     │  │                                                                      │
+     │ │ 尾  │ 16:00–20:00 │ 14–16  │  P10 │ PDF+提交包就绪                    │
+     │  │                                                                      │
+     │ └─────┴─────────────┴────────┴──────┴────────────────────────────────── │
+     │ ──┘                                                                     │
+     │                                                                         │
+     │ 模型路由建议（写进 battle_plan.md）：Gemini Deep Think                  │
+     │ 用于方法发散/多假设并行探索（P01 候选流、P02 建模思路）；GPT Pro        │
+     │ 用于严谨推导/写代码/逐章写作/自评（P02                                  │
+     │ 公式、P03、P07、P08）；关键数字与公式两边交叉验证。                     │
+     │                                                                         │
+     │ 每个提示词的统一骨架                                                    │
+     │                                                                         │
+     │ 角色框定（CUMCM 队友，stateless 对话，要把上下文喂全）                  │
+     │ → 你粘贴这些（本步输入：题目 / 上一步产出）                             │
+     │ → 产出契约（明确 markdown/LaTeX 结构，便于复制进项目笔记往下传）        │
+     │ → 质量门（本步必须满足的硬条件，对齐 STEPS.md 的 ready 判据）           │
+     │ → 已知陷阱（对齐 memory + modeling_guide 的 don'ts）                    │
+     │ → 交棒（哪段输出要留给下一个提示词）                                    │
+     │                                                                         │
+     │ 一个完整样例（00_读题解析）——判断风格用                                 │
+     │                                                                         │
+     │ ▎ 用法：新开对话，先粘 cheatsheet.md，再粘下面这段，最后附题目。        │
+     │                                                                         │
+     │ 你是我的数学建模竞赛(CUMCM 国赛)队友,负责"读题与立项"。赛题原文在最后。 │
+     │ 严格按产出契约输出,不跳步、不寒暄。                                     │
+     │                                                                         │
+     │ 【任务】把赛题解析成可执行的建模起点,产出 5 块(markdown 标题分隔):      │
+     │                                                                         │
+     │ ## 1. 问题重述                                                          │
+     │ 用你自己的话复述(评委对照抄敏感),point-form 列出背景、目标、约束。      │
+     │                                                                         │
+     │ ## 2. 子问题分解                                                        │
+     │ 拆成 N                                                                  │
+     │ 个子问题(通常2–4个),每个给:编号、一句话目标、依赖哪些前置子问题、       │
+     │ CUMCM 评分上的分量预估。                                                │
+     │                                                                         │
+     │ ## 3. 术语精确定义表(≥5条)                                              │
+     │ 题目里每个含糊/可多解术语 →                                             │
+     │ 你采用的精确定义。后续建模/写作以本表为准,不许再造词。                  │
+     │                                                                         │
+     │ ## 4. 数据盘点                                                          │
+     │ 附件给了哪些数据(逐个列);哪些关键参数题目没给、需合理假设或查外部源补   │
+     │ (标出来,后面要在假设登记簿登记)。                                       │
+     │                                                                         │
+     │ ## 5. 评分倾向与硬性扣分项                                              │
+     │ 基于 CUMCM 6                                                            │
+     │ 维度(模型合理性20/求解正确性20/创新性20/写作清晰度15/结果说服力15/      │
+     │ 灵敏度分析10),判断这题最吃分的维度;列已知硬扣分陷阱(灵敏度缺失/符号一符 │
+     │ 多义/                                                                   │
+     │ 数字不可追溯/引用不存在的图致编译失败)。                                │
+     │                                                                         │
+     │ 【纪律】不现在建模或给公式(这步只解析);不臆造题目没说的约束,不确定处标" │
+     │ 待确认假设";                                                            │
+     │ 输出要能直接复制进项目笔记。                                            │
+     │                                                                         │
+     │ 【赛题原文】                                                            │
+     │ <粘贴题目文字/截图>                                                     │
+     │ 交棒：把「子问题分解 + 数据盘点 + 评分倾向」整段留好，喂给 P01          │
+     │ 方法选型。                                                              │
+     │                                                                         │
+     │ 其余 10 个提示词同骨架展开。两个最吃重的：                              │
+     │ - P02 完整建模：要求模型按 model.md 的 §1–§15 结构产出完整数学契约 +    │
+     │ 符号表(每个符号登记、一符一义) + 假设登记簿(PROTECTED/CRITICAL 标签) +  │
+     │ 可跑代码骨架(固定随机种子/求解器版本)。                                 │
+     │ - P07 论文起草：内嵌 12 章节 CUMCM LaTeX 骨架(ctexart+xeCJK             │
+     │ 兜底/cumcmthesis)，摘要位置写 \detokenize{ABSTRACT_PLACEHOLDER}（memory │
+     │ 记录的编译坑），每个数字从 results 取不转抄，引用的图必须真实存在。     │
+     │                                                                         │
+     │ 验证方式                                                                │
+     │                                                                         │
+     │ 1. 内部一致性：battle_plan 的阶段 ↔ prompts 的 11 个文件 ↔ STEPS.md 的  │
+     │ 16 步三者编号对得上；cheatsheet                                         │
+     │ 的事实(6维度权重/配色RGB/12章节/detokenize)与                           │
+     │ STEPS.md+modeling_guide.md+memory 逐条核对无矛盾。                      │
+     │ 2. 实跑一次：拿 benchmark/cumcm_2024/B题/ 真题，把 cheatsheet + P00     │
+     │ 粘进 GPT Pro 或 Gemini，确认产出 5 块结构符合契约、能直接喂             │
+     │ P01（dry-run 一步即可，不必跑完全程）。                                 │
+     │ 3. 交棒链路：通读 11                                                    │
+     │ 个提示词的"交棒"段，确认前一步的产出正好是后一步的输入,无断链。         │
+     │                                                                         │
+     │ 工作量                                                                  │
+     │                                                                         │
+     │ 纯新增 14 个 markdown 文件，零改动现有代码/契约。先写 README +          │
+     │ battle_plan + cheatsheet（骨架），再逐个写 11 个提示词。                │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+❯ 我希望的是在该自动流程的基础上添加我手动填写gptpro和Gemini                    
+  deepthink的结果，我想在自动流程开始前或遇到难以判断的问题时给出一个手动操控的 
+  窗口，便于给出这些模型的结果                                                  
+
+  Thought for 3m 59s (ctrl+o to expand)
+
+● 明白了——我之前理解偏了。你要的不是一套脱离工厂的独立 prompt
+  包，而是在现有自动流水线基础上，加一个"人工操控窗口"：让你在(1)流程启动前、(2)
+  流程遇到难判断的决策点时，把 GPT Pro / Gemini Deep Think
+  的结果喂回流水线，再让它继续自动跑。
+
+  这其实正是被跳过的**阶段
+  4「人机协作与外部咨询协议」**的核心——pause_for_consultation 原语 +
+  notify_human。而且工厂里已经有可复用的底座：human_review.md 覆盖机制、.paused
+  暂停标记、还有机器上跑着的 claude-to-im 通知守护进程。
+
+  这是对 run_paper.sh（agent 契约文件，CLAUDE.md
+  警告别乱改）的真实改动，我得先把现有的暂停/人工覆盖/挂起检测机制的精确接线摸清
+  楚再设计——尤其要保证"等人咨询"不会被挂起检测当成 hang 杀掉（memory
+  里记着这个坑）。先派一个 Explore 把接线图摸出来。
+
+● Explore(Map consultation/pause machinery)
+  ⎿  Done (0 tool uses · 0 tokens · 3m 53s)
+  (ctrl+o to expand)
+
+  Thought for 41s (ctrl+o to expand)
+
+● The Explore agent hit a 429. I'll map the wiring myself with targeted greps —
+  I know exactly what to look for.
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "######## launch_agents.sh: pause/resume/kill/new/seed ########"…)
+  ⎿  ######## launch_agents.sh: pause/resume/kill/new/seed ########
+     11:PAUSE_MARKER=".paused"
+     12:KILL_MARKER=".killed"
+     … +31 lines (ctrl+o to expand)
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "######## activity monitor / hang detection ########"…)
+  ⎿  Error: claude-opus-4-8[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "######## main dispatch loop + infer_step + run_step functions
+      ########"…)
+  ⎿  ######## main dispatch loop + infer_step + run_step functions ########
+     107:is_modeling_input() {
+     120:# legacy social-science pipeline.  Used by infer_step's modeling-m
+     … +41 lines (ctrl+o to expand)
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "######## claude-to-im daemon interface ########"…)
+  ⎿  Error: claude-opus-4-8[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+  Thought for 52s (ctrl+o to expand)
+
+● The Bash safety classifier is having an outage (claude-opus-4-8[1m] 
+  temporarily unavailable), but read-only tools (Grep/Read/Glob) don't need it.
+  Let me continue the mapping with those.
+
+  Thought for 3m 13s, searched for 3 patterns, read 1 file (ctrl+o to expand)
+● Grep/Glob aren't exposed and the Bash classifier is mid-outage, but Read works
+  and doesn't need the classifier. Key finding already: .paused
+  (run_paper.sh:736) makes the runner exit at startup, and launch_agents.sh
+  pause does kill -KILL the runner (126) — so today's "pause" is
+  kill-and-relaunch, not a clean step-boundary pause. Let me read the main loop,
+  dispatcher, render preamble, and the activity monitor.
+
+  Thought for 51s, read 1 file (ctrl+o to expand)
+
+● Critical finding on the activity monitor (1117-1197): it declares a step alive
+  only if logs/traces/files are changing; a runner that simply waits (for a
+  human to paste an answer) would update nothing → heartbeat goes stale → it
+  gets reclaimed as a hung runner. That's the exact hang-bug family from memory.
+  So a consultation pause must exit cleanly and resume (like .paused), not
+  block on a live waiting process. Let me read the render body, the dispatcher,
+  the step functions, and the main loop.
+
+  Thought for 52s, read 1 file (ctrl+o to expand)
+
+● Major discovery: get_user_note() (1273-1289) already reads web/notes.json
+  keyed by [base][step_N] and injects it into each step's prompt as NOTE FROM 
+  THE RESEARCHER: (used in run_codex 1339 and run_codex_parallel 1712). So a
+  per-step injection channel already exists — what's missing is the
+  pause-ask-wait-resume loop and notification. Let me read the per-step
+  human-override handling (Step 3/4) and the main driver loop where a
+  consultation gate would slot in.
+
+  Thought for 47s, read 1 file (ctrl+o to expand)
+
+● Now the main driver loop — where the consultation gate would slot in. Let me
+  read from run_step_16 to the end of the file.
+
+  Thought for 3m 25s, read 1 file (ctrl+o to expand)
+
+● The main loop (2289–2404) is the seam: each iteration does NEXT=STEP+1 → start
+  activity monitor → case NEXT dispatch → verify → advance. The gate-2 reopen
+  logic (2344–2374) already shows the pattern for a step writing a control token
+  (VERDICT:) that reroutes the loop. A consultation gate slots cleanly at the
+  top of the loop (before dispatch) for pre-planned pauses, and after verify for
+  agent-initiated ones — and per the activity-monitor finding, it must write 
+  request → notify → exit 0 → resume, never block live.
+
+  Let me confirm the web/notes.json format (the existing injection channel I'd
+  reuse) and retry the claude-to-im interface check.
+
+  Thought for 34s, read 1 file (ctrl+o to expand)
+
+● Bash(cd /home/tfisher/paper_factory
+      echo "=== web/ exists? ==="; ls -la web/ 2>/dev/null || echo "(no web/ dir
+      — notes.json mechanism supported but unused)"…)
+  ⎿  Error: claude-opus-4-8[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+  Thought for 26s (ctrl+o to expand)
+
+● Bash still down. Let me try reading the claude-to-im docs directly by likely
+  path (Read doesn't need the classifier).
+
+  Thought for 1m 53s, read 1 file (ctrl+o to expand)
+
+● 读完了 claude-to-im 的 README——它是 IM↔agent 双向聊天桥（Telegram/Discord/飞书
+  /QQ/微信），不是简单的"发条通知"CLI；要用它推送得直接拿它配置里的 bot token 去
+  curl sendMessage。
+
+  至此地形摸清了。好消息：你要的"人工操控窗口"，工厂里已有 70% 的底座可复用：
+
+  1. web/notes.json → get_user_note()（run_paper.sh:1273）已经把 [base][step_N]
+  的笔记自动注入每一步的 prompt（"NOTE FROM THE RESEARCHER:"）。文件现在不存在 =
+  机制在、但没启用。
+  2. human_review.md：所有 agent 经 preamble（1228）当最高优先级读取；多步已有
+  ## Step N …: 覆盖段。
+  3. .paused（736 退出）+ launcher pause/resume。
+  4. 主循环（2289–2404）：Gate-2 已经示范了"agent 写控制 token（VERDICT:）→
+  改主循环走向"的成熟模式。
+
+  关键约束（决定设计形态）：
+  活动监视器（1117–1197）只认"日志/trace/文件在动"，纯等待会被当成 hang 
+  回收（正是 memory 记的挂起 bug）。所以咨询暂停必须是 写请求 → 通知 → exit 0 → 
+  你回填 → resume，绝不能挂一个活进程死等。
+
+  拟议设计（建在现有流程上）
+
+  新增一个咨询关卡原语
+  maybe_consult，插在主循环派发前：若当前步是咨询点且还没有你的答案 → 写
+  consultation/step<N>_request.md（含该步要决策的问题 + 上下文）+ 落
+  .awaiting_consultation 标记 + 通知你 + exit 0。你看请求、问 GPT Pro / Gemini
+  Deep Think、把结果回填、resume；重启后 maybe_consult
+  见答案就放行，答案经现有通道注入该步 prompt。启动前 seed = 同一通道预填（new 
+  --no-start → 填好 → 跑）。动态求助（可选）= agent 在难判断时写
+  CONSULT:，主循环 verify 后检测到就走同一暂停流程。
+
+  三个设计点需要你拍板（它们直接改动 run_paper.sh 这个 agent
+  契约文件，我想按你的偏好来）：
+  ⎿  Invalid tool parameters
+
+  Thought for 46s (ctrl+o to expand)
+
+● Let me re-issue that with proper formatting (and fix a typo).
+
+● User answered Claude's questions:
+  ⎿  · 咨询窗口在哪些时机打开？（可多选；决定流水线会在哪里停下来等你喂结果） → 
+     启动前 seed, 任意步 agent 主动求助, Step4 建模定型前
+     · 你把 GPT Pro/Gemini 的结果怎么填回去最顺手？ → human_review.md 段落
+     · 流水线停下等咨询时，怎么通知你？ → 
+     终端提醒及手机提醒，手机可以先略过，用telegram通知
+  ⎿  Interrupted · What should Claude do instead?

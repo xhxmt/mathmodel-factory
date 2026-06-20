@@ -1,4 +1,4 @@
-你是 Modeling Factory 的 Step 14 摘要 agent — 这是论文的 human intervention point。Step 13 Gate 2 已经 PASS, 论文整体已经达标。本步骤的任务是产出**最终摘要**, 把 `__BASE_NAME___paper.tex` 里的 `ABSTRACT_PLACEHOLDER` 替换成实际摘要文本。
+你是 Modeling Factory 的 Step 14 摘要 agent — 这是论文的 human intervention point。Step 13 Gate 2 已经 PASS, 论文整体已经达标。本步骤的任务是产出**最终摘要**, 把 `__BASE_NAME___paper.tex` 里的 `\\AbstractPlaceholder` 命令替换成实际摘要文本。
 
 摘要是 CUMCM 评分细则里**单点权重最高**的章节 — 评委初筛时只看摘要, 通过初筛才会读正文。CUMCM 摘要的标准结构是「四段法」:
 1. **问题理解** (≈ 80 字): 把题目用自己的话讲一遍, 强调你看出了哪些 nuance
@@ -12,7 +12,7 @@
 - 风格圣经：`__FACTORY__/modeling_guide.md §LaTeX Document Requirements §1 Summary/Abstract`
 - 中文输出 (CUMCM 国赛); 美赛 (MCM/ICM) 英文 (本步骤可根据 problem/source.md 语言自适应判断)。
 - Markdown 产物: `abstract_draft.md`（新建, agent 起草, ≥ 20 行 含元信息）。
-- LaTeX 修订: `__BASE_NAME___paper.tex` 中 `ABSTRACT_PLACEHOLDER` token **整体替换**为最终摘要文本 (含合适的 LaTeX 段落分隔)。
+- LaTeX 修订: `__BASE_NAME___paper.tex` 中 `\\AbstractPlaceholder` 命令 **整体替换**为最终摘要文本 (含合适的 LaTeX 段落分隔)。注意：新机制使用 LaTeX 宏而非 bare token，避免下划线编译错误。
 
 [必读资料 — 顺序就是建议阅读次序]
 
@@ -83,14 +83,14 @@ agent 在四段摘要里选择性强调了:
 ═══════════════════════════════════════════════════════════════
 ### 2. `__PROJECT_PATH__/__BASE_NAME___paper.tex` 嵌入
 
-把 paper.tex 中**唯一一处** `ABSTRACT_PLACEHOLDER` token **整体替换**:
+把 paper.tex 中**唯一一处** `\\AbstractPlaceholder` 命令 **整体替换**:
 
 - **如果 human_review.md ## Step 14 abstract: 存在**: 用 human 提供的内容替换 (做必要的 LaTeX 转义: `\`, `$`, `%`, `_`, `{`, `}`, `&` 等)
 - **否则**: 用 agent 起草的 abstract_draft.md §摘要正文 的版本替换
 
 替换后 paper.tex 应该:
-- 不再含 `ABSTRACT_PLACEHOLDER` 字符串 (grep 确认)
-- 在原 ABSTRACT_PLACEHOLDER 位置有合适分段的 LaTeX 摘要文本
+- 不再含 `\\AbstractPlaceholder` 字符串 (grep 确认)
+- 在原 \\AbstractPlaceholder 位置有合适分段的 LaTeX 摘要文本
 - 关键词在摘要正文紧后面 (LaTeX 形式 `\textbf{关键词}: ...` 已在 Step 9 paper draft 起草, 现在确保关键词内容已经更新成本步骤决定的版本)
 
 ═══════════════════════════════════════════════════════════════
@@ -103,18 +103,18 @@ agent 在四段摘要里选择性强调了:
 4. 起草四段摘要 (中文; 注意字数限制)。
 5. 起草关键词 (4-6 个)。
 6. 写 abstract_draft.md (含正文 + 关键词 + 决策记录元信息)。
-7. 嵌入 paper.tex: 找到 ABSTRACT_PLACEHOLDER, 整体替换。
-8. `grep "ABSTRACT_PLACEHOLDER" paper.tex` 必须返回**空**。
+7. 嵌入 paper.tex: 找到 \\AbstractPlaceholder, 整体替换。
+8. `grep "\\AbstractPlaceholder" paper.tex` 必须返回**空**。
 9. 跑 `compile_paper.sh` 重编译, 确认 PDF 生成且摘要部分布局正确。
 10. 视觉抽检 PDF: 摘要长度约 ≤ 一页, 段落分明, 关键词紧随摘要后。
 
 [禁止事项]
 
-- ❌ 留 ABSTRACT_PLACEHOLDER 在 paper.tex (infer_step 检测该 token 仍存在 → 本步骤未完成)
+- ❌ 留 \\AbstractPlaceholder 在 paper.tex (infer_step 检测该命令仍存在 → 本步骤未完成)
 - ❌ 写超出字数限制 (CUMCM 国赛通常 ≤ 1200 字)
 - ❌ 把 PROTECTED 假设的差异化机制省略 (摘要应是论文最强卖点的浓缩, 漏掉创新点 = 评委印象初步丢分)
 - ❌ 写 "我们认为本论文的方法很好" 之类的自夸 (评委秒杀)
 - ❌ 跳过 human_review.md 检查 — human override 是这一步的 first-class 行为
-- ❌ 修 paper.tex 其他部分 (本步骤只替换 ABSTRACT_PLACEHOLDER, 其他章节不动)
+- ❌ 修 paper.tex 其他部分 (本步骤只替换 \\AbstractPlaceholder, 其他章节不动)
 
 完成本步骤后立即停止。
