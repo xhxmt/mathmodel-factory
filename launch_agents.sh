@@ -2,6 +2,11 @@
 set -euo pipefail
 
 FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 🔒 Load secrets from GCP Secret Manager
+if [[ -f "$FACTORY/scripts/load_secrets.sh" ]]; then
+    source "$FACTORY/scripts/load_secrets.sh" 2>/dev/null || echo "Warning: Failed to load secrets from Secret Manager" >&2
+fi
 REGISTRY="$FACTORY/run_state/process_registry"
 PAPER_STY="$FACTORY/resources/style/paper.sty"
 BIB_BST="$FACTORY/resources/bib/bibliography.bst"

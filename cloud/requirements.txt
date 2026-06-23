@@ -1,0 +1,13 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+google-cloud-storage==2.14.0
+numpy==1.26.3
+scipy==1.12.0
+pandas==2.2.0
+sympy==1.12
+matplotlib==3.8.2
+psutil==5.9.8
+aiofiles==23.2.1
+python-multipart==0.0.6

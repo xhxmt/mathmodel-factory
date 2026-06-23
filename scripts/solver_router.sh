@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Solver Router - decides whether to run solver locally or on Cloud Run
+# Usage: solver_router.sh --type python --max-time 600 script.py
+
+set -euo pipefail
+
+# Configuration
+USE_CLOUD="${USE_CLOUD_SOLVER:-false}"
+CLOUD_THRESHOLD_TIME="${CLOUD_THRESHOLD_TIME:-300}"  # Use cloud for jobs > 5 min
+CLOUD_SOLVER_TYPES="${CLOUD_SOLVER_TYPES:-python,julia,matlab,R}"
+
+# Parse arguments to extract max-time
+MAX_TIME=1800
+SOLVER_TYPE=""
+prev_arg=""
+
+for arg in "$@"; do
+    if [[ "$prev_arg" == "--max-time" ]]; then
+        MAX_TIME="$arg"
+    fi
+    if [[ "$prev_arg" == "--type" ]]; then
+        SOLVER_TYPE="$arg"
+    fi
+    prev_arg="$arg"
+done
+
+# Decision logic
+use_cloud=false
+
+# Check if cloud solver is globally enabled
+if [[ "$USE_CLOUD" == "true" ]]; then
+    # Check if this solver type is supported on cloud
+    if [[ ",$CLOUD_SOLVER_TYPES," == *",$SOLVER_TYPE,"* ]]; then
+        # Check if job is long enough to warrant cloud execution
+        if (( MAX_TIME >= CLOUD_THRESHOLD_TIME )); then
+            use_cloud=true
+        fi
+    fi
+fi
+
+# Route to appropriate backend
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FACTORY="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [[ "$use_cloud" == "true" ]]; then
+    echo "[solver_router] Routing to Cloud Run (max_time=${MAX_TIME}s)" >&2
+    exec "$SCRIPT_DIR/gcp_solver_client.sh" "$@"
+else
+    echo "[solver_router] Routing to local solver" >&2
+    exec "$FACTORY/solver_submit.sh" "$@"
+fi

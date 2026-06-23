@@ -52,6 +52,11 @@ __pycache__/
 !.env.example
 .claude/settings.local.json
 
+# Document archives (organized historical docs)
+/docs/sessions/
+/web/docs/archive/
+/archive/
+
 # Editor and OS files
 .DS_Store
 .idea/
