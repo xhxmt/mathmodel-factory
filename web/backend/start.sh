@@ -4,6 +4,11 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# 🔒 Load secrets from GCP Secret Manager
+if [[ -f "$SCRIPT_DIR/../../scripts/load_secrets.sh" ]]; then
+    source "$SCRIPT_DIR/../../scripts/load_secrets.sh" 2>/dev/null || echo "Warning: Failed to load secrets from Secret Manager" >&2
+fi
+
 # Check if virtual environment exists
 if [[ ! -d "venv" ]]; then
     echo "Creating virtual environment..."
