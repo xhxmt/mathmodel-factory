@@ -128,6 +128,15 @@ Each figure must read independently of the paper text (caption tells the full st
 
 See `docs/guides/EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md` for full selection criteria.
 
+### Step 8.5: Reviewer Entry Design
+
+Produce:
+- `reviewer_entry_map.md`
+- `anchor_figure_plan.md`
+- `entry_gate.md`
+
+This is an editorial gate inserted between Step 8 and Step 9. It does not renumber the main 16-step workflow. Its job is to align abstract skeleton, visual anchors, and section-opening paragraphs before paper drafting begins.
+
 ### Step 9: Paper Draft
 
 Produce:
@@ -142,7 +151,7 @@ Produce:
 
 **Prohibited in main narrative**: internal process terms (`m1`/`m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache`) except in appendix code listing or when referring to required submission files (`result*.xlsx`).
 
-Pull content from: `problem/`, `model.md`, `symbol_table.md`, `assumption_ledger.md`, `results/`, `sensitivity_report.md`, `evaluation.md`, `visualization_log.md`. Cite via `references.bib`.
+Pull content from: `reviewer_entry_map.md`, `anchor_figure_plan.md`, `entry_gate.md`, `problem/`, `model.md`, `symbol_table.md`, `assumption_ledger.md`, `results/`, `sensitivity_report.md`, `evaluation.md`, `visualization_log.md`. Cite via `references.bib`.
 
 See `docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` for full writing criteria.
 

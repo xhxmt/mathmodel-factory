@@ -143,7 +143,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 ## 工作流概览
 
-活跃的建模工作流包含设置步骤以及后续的1-16个步骤：
+活跃的建模工作流包含设置步骤、后续的 1-16 个主步骤，以及插入在 Step 8 和 Step 9 之间的 Step 8.5 辅助 gate：
 
 - 设置 / Step 0：将赛题解析至 `problem/` 目录。
 - Step 1：背景调研及方法预选。
@@ -154,6 +154,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 - Step 6：敏感性与鲁棒性分析。
 - Step 7：模型评估。
 - Step 8：数据可视化润色。
+- Step 8.5：阅卷入口设计。为每个子问题定义评委入口三句式、主图/主表锚点和正文首段承接提纲。
 - Step 9：撰写论文初稿。
 - Step 10：门禁1 - 数值与代码一致性检查。
 - Step 11：建设性审稿。
