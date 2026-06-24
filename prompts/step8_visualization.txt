@@ -111,6 +111,7 @@ figures/
 ## 给 Step 9 (paper draft) 的指引
 
 - 每张图在论文里出现的标号 (Step 9 起稿时分配)
+- 若某问已有明显主图 / 主表候选，在备注中标明“候选主锚点”，供 Step 8.5 直接消费。
 - 每张图的 LaTeX 嵌入模板:
   ```latex
   \begin{figure}[H]
@@ -134,7 +135,8 @@ figures/
 5. 评估论文 §问题分析 / §模型建立 是否需要补「概念图 / 系统结构图 / 子问题依赖 DAG / 几何判据图」 —— 如果需要（绝大多数 CUMCM 题目都需要），用 matplotlib / TikZ 画 `figures/concept_*.pdf`。
 6. 评估 §模型评价 是否需要对照图 (`figures/compare_*`)；若是退化解/失败分支/未采信方案，只能标为 `show_limitation`。
 7. 给每张图写 caption 起草 (≥ 50 字, 自含); 录入 `visualization_log.md` 表格，并写明叙事角色和依据来源。
-8. **sanity check**:
+8. 若某问已经出现明显主图 / 主表候选，在 `visualization_log.md` 对应备注里显式标注“候选主锚点”，供 Step 8.5 生成 `anchor_figure_plan.md`。
+9. **sanity check**:
    - `ls figures/*.{pdf,png}` —— 数量 ≥ 5 张（通常 8-15 张）
    - `wc -l visualization_log.md` —— ≥ 20 行
    - 每张图都在 visualization_log.md 表格里有一行

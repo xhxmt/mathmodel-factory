@@ -19,14 +19,15 @@
 [必读资料 — 顺序就是建议阅读次序]
 
 1. `__PROJECT_PATH__/human_review.md`（如存在）—— **首先检查** `## Step 14 abstract:` 段落 (不区分大小写)。若存在, 这是最终摘要文本, agent 不创作。
-2. `__PROJECT_PATH__/judge_evaluation.md` —— §给 Step 14 摘要 段落已经为本步骤准备好了素材。如果 Step 13 verdict 是 PASS, 先读取此处素材，再按 CUMCM 分问结构重排为“总述 + 逐问交付”。
-3. `__PROJECT_PATH__/evaluation.md` §1 优点 §3 推广潜力 —— §亮点 段的核心素材。
-4. `__PROJECT_PATH__/solve_log.md` §关键发现 —— §结果 段可以引用的反直觉数值现象。
-5. `__PROJECT_PATH__/sensitivity_report.md` §4. 定性翻转记录 —— §结果 段中关于鲁棒性的关键结论。
-6. `__PROJECT_PATH__/__BASE_NAME___paper.tex` —— 全文阅读 (尤其 §1 §2 §6 §7 §8), 确保摘要不会与正文冲突。
-7. `__PROJECT_PATH__/problem/source.md` —— 判断 CUMCM 国赛 (中文摘要) vs 美赛 (英文 Summary)。
-8. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— § 提交格式硬约束 §摘要 / 字数限制。
-9. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 摘要结构和禁用工程痕迹的写作基准。
+2. `__PROJECT_PATH__/reviewer_entry_map.md` —— 摘要压缩版和总体主线的第一来源。
+3. `__PROJECT_PATH__/judge_evaluation.md` —— §给 Step 14 摘要 段落用于补强亮点和评委视角，不替代 `reviewer_entry_map.md`。
+4. `__PROJECT_PATH__/evaluation.md` §1 优点 §3 推广潜力 —— §亮点 段的核心素材。
+5. `__PROJECT_PATH__/solve_log.md` §关键发现 —— §结果 段可以引用的反直觉数值现象。
+6. `__PROJECT_PATH__/sensitivity_report.md` §4. 定性翻转记录 —— §结果 段中关于鲁棒性的关键结论。
+7. `__PROJECT_PATH__/__BASE_NAME___paper.tex` —— 全文阅读 (尤其 §1 §2 §6 §7 §8), 确保摘要不会与正文冲突。
+8. `__PROJECT_PATH__/problem/source.md` —— 判断 CUMCM 国赛 (中文摘要) vs 美赛 (英文 Summary)。
+9. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— § 提交格式硬约束 §摘要 / 字数限制。
+10. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 摘要结构和禁用工程痕迹的写作基准。
 
 [输出契约 — runner 用磁盘文件判定本步骤是否 ready]
 
@@ -102,14 +103,15 @@ agent 在摘要里选择性强调了:
 
 1. 检查 `human_review.md` — 这是关键分支点。如有 `## Step 14 abstract:` 段落, 把 agent 起草降级为 fallback。
 2. 通读 paper.tex 把握当前论文叙事重心 (尤其 §问题分析 / §模型建立 / §模型求解 §灵敏度分析 / §模型评价)。
-3. 从 judge_evaluation.md §给 Step 14 摘要 段落取素材, 按题目子问题重排为“总述 + 逐问交付”结构。
-4. 起草摘要 (中文; 注意字数限制; 每问先给最终结果, 不让诊断和风险抢占摘要)。
-5. 起草关键词 (4-6 个)。
-6. 写 abstract_draft.md (含正文 + 关键词 + 决策记录元信息)。
-7. 嵌入 paper.tex: 找到 \\AbstractPlaceholder, 整体替换。
-8. `grep "\\AbstractPlaceholder" paper.tex` 必须返回**空**。
-9. 跑 `compile_paper.sh` 重编译, 确认 PDF 生成且摘要部分布局正确。
-10. 视觉抽检 PDF: 摘要长度约 ≤ 一页, 段落分明, 关键词紧随摘要后。
+3. 优先压缩 `reviewer_entry_map.md` 的“摘要压缩版”和“总体主线”，按题目子问题重排为“总述 + 逐问交付”结构。
+4. `judge_evaluation.md` 只用于补强亮点和评委视角，不反客为主替代 `reviewer_entry_map.md`。
+5. 起草摘要 (中文; 注意字数限制; 每问先给最终结果, 不让诊断和风险抢占摘要)。
+6. 起草关键词 (4-6 个)。
+7. 写 abstract_draft.md (含正文 + 关键词 + 决策记录元信息)。
+8. 嵌入 paper.tex: 找到 \\AbstractPlaceholder, 整体替换。
+9. `grep "\\AbstractPlaceholder" paper.tex` 必须返回**空**。
+10. 跑 `compile_paper.sh` 重编译, 确认 PDF 生成且摘要部分布局正确。
+11. 视觉抽检 PDF: 摘要长度约 ≤ 一页, 段落分明, 关键词紧随摘要后。
 
 [禁止事项]
 

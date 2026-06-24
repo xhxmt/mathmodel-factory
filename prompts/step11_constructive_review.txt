@@ -37,9 +37,11 @@ Issue 严重度:
 7. `__PROJECT_PATH__/problem/source.md` (题目原文) —— 论文 §问题重述 章节是否准确转述题意。
 8. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 对照优秀论文写作基准，检查摘要素材、问题分析、结果口径、验证措辞和工程痕迹。
 9. `__FACTORY__/docs/guides/EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md` —— 对照优秀论文可视化基准，检查图表角色、主图位置、视觉锚点和局限图后置。
-10. `__PROJECT_PATH__/visualization_log.md`（如存在）—— 检查图表是否有叙事角色、依据来源和自含 caption。
-11. `__PROJECT_PATH__/audit_issue_ledger.md` (如存在) —— Step 4 起的跨步骤 issue ledger; 本步骤 issue 必须追加到这里。
-12. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 11 review:` 段落, 最高优先级指令。
+10. `__PROJECT_PATH__/reviewer_entry_map.md`（如存在）—— 检查每问交付是否真的落进正文首段。
+11. `__PROJECT_PATH__/anchor_figure_plan.md`（如存在）—— 检查主锚点是否真的放到评委优先看到的位置。
+12. `__PROJECT_PATH__/visualization_log.md`（如存在）—— 检查图表是否有叙事角色、依据来源和自含 caption。
+13. `__PROJECT_PATH__/audit_issue_ledger.md` (如存在) —— Step 4 起的跨步骤 issue ledger; 本步骤 issue 必须追加到这里。
+14. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 11 review:` 段落, 最高优先级指令。
 
 [输出契约 — runner 用磁盘文件判定本步骤是否 ready]
 
@@ -136,6 +138,8 @@ issue-level 审稿报告。结构:
 - §问题分析是否逐问说明难点、建模对象/变量、方法和输出: <yes/no>
 - §模型求解是否先报最终采信口径, 把粗网格/退化/失败分支后置: <yes/no>
 - 正文主线是否清除了内部工程痕迹 (`m1/m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache`): <yes/no>
+- `reviewer_entry_map.md` 的每问交付是否真的被 Step 9 写进了正文首段: <yes/no>
+- `anchor_figure_plan.md` 的主锚点是否真的被放到评委优先看到的位置: <yes/no>
 
 (Step 15 的 polish 会修这些, 但 Step 11 提前标出更省事)
 
