@@ -868,6 +868,14 @@ checkpoint_step() {
         | grep -oP -- '-?\d+' | head -1 || echo -1
 }
 
+_set_checkpoint_step() {
+    local step="$1"
+    sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: $step/" \
+        "$PROJECT/checkpoint.md" 2>/dev/null || true
+    sed -i "s/\*\*Timestamp\*\*: .*/\*\*Timestamp\*\*: $(date '+%Y-%m-%d %H:%M')/" \
+        "$PROJECT/checkpoint.md" 2>/dev/null || true
+}
+
 get_question() {
     grep "Research question" "$PROJECT/checkpoint.md" 2>/dev/null \
         | sed 's/.*\*\*: //'
@@ -2511,8 +2519,9 @@ run_backend() {
 # Args: <prompt_file> <timeout> <hang_timeout> <default_fn>
 dispatch_step() {
     local prompt_file="$1" timeout="$2" hang="$3" default_fn="$4"
+    local step_key="${5:-$NEXT}"
     local ids primary fallback
-    ids="$(get_step_model_ids "$NEXT")"
+    ids="$(get_step_model_ids "$step_key")"
     if [[ -z "$ids" ]]; then
         "$default_fn" "$prompt_file" "$timeout" "$hang"
         return $?
@@ -2965,7 +2974,36 @@ run_step_6()  { dispatch_step step6_sensitivity.txt 10800 3600 run_codex_then_cl
 
 run_step_7()  { dispatch_step step7_model_eval.txt 7200 1800 run_claude_then_codex; }
 run_step_8()  { dispatch_step step8_visualization.txt 10800 3600 run_claude_then_codex; }
-run_step_9()  { dispatch_step step9_paper_draft.txt 14400 3600 run_claude_then_codex; }
+
+# Step 8.5 is implemented as a pre-Step-9 editorial gate.
+# We do not renumber the integer main loop. Instead, Step 9 refuses to draft
+# the paper until reviewer_entry_map.md + anchor_figure_plan.md + entry_gate.md
+# exist and entry_gate.md says VERDICT: PASS.
+step8_5_verdict() {
+    python3 "$FACTORY/scripts/step8_5_gate.py" "$PROJECT" --verdict 2>/dev/null || true
+}
+
+step8_5_passed() {
+    [[ "$(step8_5_verdict)" == "PASS" ]]
+}
+
+run_step_8_5() {
+    dispatch_step step8_5_reviewer_entry.txt 7200 1800 run_claude_then_codex 8_5
+}
+
+run_step_9() {
+    if ! step8_5_passed; then
+        log "   Step 9 preflight: running Step 8.5 Reviewer Entry Design"
+        run_step_8_5 || return $?
+        local verdict
+        verdict="$(step8_5_verdict)"
+        if [[ "$verdict" != "PASS" ]]; then
+            log "   Step 8.5 verdict ${verdict:-<missing>} — stop before paper draft"
+            return 42
+        fi
+    fi
+    dispatch_step step9_paper_draft.txt 14400 3600 run_claude_then_codex
+}
 
 run_step_10() { dispatch_step step10_gate1_numerical.txt 10800 3600 run_codex_then_claude; }
 
@@ -3076,6 +3114,7 @@ while (( STEP < 16 )); do
             15) run_step_15 ;;
             16) run_step_16 ;;
         esac
+        STEP_RC=$?
         set -e
 
         # Stop activity monitor
@@ -3084,6 +3123,13 @@ while (( STEP < 16 )); do
 
         # Kill lingering child processes
         cleanup_children
+
+        if (( NEXT == 9 )) && (( STEP_RC == 42 )); then
+            log "   Step 8.5 requires revision — leaving checkpoint at Step 8"
+            _set_checkpoint_step 8
+            echo "AWAITING_STEP8_5:8 $(date +%s)" > "$PROJECT/.heartbeat"
+            exit 1
+        fi
 
         # Agent-initiated consultation (dynamic gate): an agent that hit a hard
         # judgment call wrote consultation/REQUEST.md and left the step
