@@ -11,6 +11,15 @@ def write_file(path: Path, text: str) -> None:
 
 def load_app_module():
     sys.modules.pop("web.backend.app", None)
+    sys.modules.pop("pydantic", None)
+    sys.modules.pop("dotenv", None)
+    sys.modules.pop("fastapi", None)
+    sys.modules.pop("fastapi.middleware.cors", None)
+    sys.modules.pop("fastapi.responses", None)
+    sys.modules.pop("fastapi.security", None)
+
+    import os
+    os.environ["JWT_SECRET"] = "test-secret"
 
     fastapi = types.ModuleType("fastapi")
 
@@ -79,6 +88,7 @@ def load_app_module():
             return self.__dict__.copy()
 
     pydantic.BaseModel = BaseModel
+    pydantic.field_validator = lambda *args, **kwargs: (lambda fn: fn)
     sys.modules["pydantic"] = pydantic
 
     dotenv = types.ModuleType("dotenv")
