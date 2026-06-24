@@ -103,11 +103,15 @@ def load_recent_events(project_dir: str | Path, limit: int = 5) -> list[dict]:
     path = _events_path(project_dir)
     if not path.is_file():
         return []
-    rows = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = []
+    for idx, line in enumerate(lines):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            if idx == len(lines) - 1:
+                break
+            raise
     return rows[-limit:]
 
 
