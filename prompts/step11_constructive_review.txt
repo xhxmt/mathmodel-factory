@@ -9,6 +9,15 @@ Issue 严重度:
 
 [重要 — 风格规范]
 - 风格圣经：`__FACTORY__/modeling_guide.md §LaTeX Document Requirements`
+- 优秀论文写作基准：`__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md`
+  - CUMCM 分问题目摘要和正文主线应按“开头总述 + 逐问交付”组织。
+  - §问题分析每问应写“难点 -> 建模对象/变量 -> 方法 -> 输出”的阅卷索引。
+  - §模型求解应先报最终采信口径，诊断和未采信分支后置。
+  - 正文主线不得出现内部工程痕迹，如 `m1/m2`、`results/*.json`、`RELAXED`、`fallback`、`workflow`、`runner`、`cache`。
+- 优秀论文可视化基准：`__FACTORY__/docs/guides/EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md`
+  - 检查每个子问题是否有主图或主表作为视觉锚点。
+  - 检查复杂几何/物理判据是否有解释图，搜索/优化结论是否有可信度图或对比表。
+  - 检查退化解、失败分支、粗网格下界、内部 workflow 图是否被错误放成主图。
 - 中文输出。
 - Markdown 产物: `review_comments.md`（新建）+ `assumption_ledger.md`（原地更新, 仅状态列, 仅在 review 发现新假设违反时）。
 - **本步骤不修 paper.tex** — 那是 Step 12 (revision) 的工作。
@@ -26,8 +35,11 @@ Issue 严重度:
 5. `__PROJECT_PATH__/problem/problem_brief.md` —— 子问题清单。论文 §模型求解 是否每个子问题都答了 (有 子问题被遗漏 = BLOCKING)。
 6. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— § 提交格式硬约束 (页数 / 字号 / 文档类) + § 已识别的硬性扣分项。本步骤逐项核对。
 7. `__PROJECT_PATH__/problem/source.md` (题目原文) —— 论文 §问题重述 章节是否准确转述题意。
-8. `__PROJECT_PATH__/audit_issue_ledger.md` (如存在) —— Step 4 起的跨步骤 issue ledger; 本步骤 issue 必须追加到这里。
-9. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 11 review:` 段落, 最高优先级指令。
+8. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 对照优秀论文写作基准，检查摘要素材、问题分析、结果口径、验证措辞和工程痕迹。
+9. `__FACTORY__/docs/guides/EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md` —— 对照优秀论文可视化基准，检查图表角色、主图位置、视觉锚点和局限图后置。
+10. `__PROJECT_PATH__/visualization_log.md`（如存在）—— 检查图表是否有叙事角色、依据来源和自含 caption。
+11. `__PROJECT_PATH__/audit_issue_ledger.md` (如存在) —— Step 4 起的跨步骤 issue ledger; 本步骤 issue 必须追加到这里。
+12. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 11 review:` 段落, 最高优先级指令。
 
 [输出契约 — runner 用磁盘文件判定本步骤是否 ready]
 
@@ -104,12 +116,26 @@ issue-level 审稿报告。结构:
 - 所有 PROTECTED 假设都做了 sensitivity: <yes/no>
 - 定性翻转记录: <如有, 在论文里披露了吗>
 
+## §图表质量评估
+
+按 `EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md` 对照论文正文与 `visualization_log.md`:
+- 每个子问题是否至少有一个主结果图或主结果表作为视觉锚点: <yes/no + 缺失子问题>
+- 复杂几何/物理判据是否在公式前配了解释图: <yes/no + 位置>
+- 搜索/优化结论是否有目标函数、可行边界、收敛曲线或算法对比表支撑: <yes/no + 位置>
+- 图表是否服务最终采信口径，而非让粗网格、退化解、失败分支抢主叙事: <yes/no + 位置>
+- 是否存在内部工程流程图或文件路径图进入正文: <yes/no + 位置>
+- caption 是否自含并说明“图支持什么结论”: <yes/no + 典型问题>
+
 ## §写作 评估
 
 - 是否避免 "我们认为" / "我们注意到" 等口语化表达: <yes/no>
 - 是否避免 markdown 残留语法 (如 `**bold**` 残留): <yes/no>
 - 是否中英混杂术语 (CUMCM 中文版应纯中文除引文 key): <yes/no>
 - 段落长度是否合理 (≤ 5 行): <yes/no>
+- CUMCM 摘要素材是否适合“开头总述 + 逐问交付”: <yes/no>
+- §问题分析是否逐问说明难点、建模对象/变量、方法和输出: <yes/no>
+- §模型求解是否先报最终采信口径, 把粗网格/退化/失败分支后置: <yes/no>
+- 正文主线是否清除了内部工程痕迹 (`m1/m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache`): <yes/no>
 
 (Step 15 的 polish 会修这些, 但 Step 11 提前标出更省事)
 

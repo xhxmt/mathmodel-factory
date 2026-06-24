@@ -162,8 +162,12 @@ scoring penalty.
 A modeling-competition paper, regardless of contest, must include:
 
 1. **Summary / Abstract** — usually a separate page; the most
-   high-leverage single artifact in the paper. Four parts: problem
-   understanding, approach, key results, distinguishing features.
+   high-leverage single artifact in the paper. It must cover problem
+   understanding, approach, key results, and distinguishing features.
+   For CUMCM problems with explicit sub-questions, prefer the excellent
+   paper pattern: a short opening setup followed by one paragraph per
+   sub-question, each paragraph reporting model/algorithm, key result,
+   and verification or required attachment.
 2. **Problem Restatement** — paraphrase the problem in your own words.
 3. **Problem Analysis** — break the problem into sub-questions, explain
    the modeling choices at a high level.
@@ -186,6 +190,28 @@ A modeling-competition paper, regardless of contest, must include:
 
 All figures must follow this style. The palette is academic, distinct
 from the original Paper Factory's commercial blue/magenta.
+
+### Figure Selection
+
+Excellent CUMCM papers use figures sparingly but purposefully. Before
+drawing a figure, assign it one primary narrative role:
+
+- `explain_model`: explain geometry, physical mechanism, variables,
+  regions, or sub-problem dependencies before formulas.
+- `report_result`: present the final result, path, key state, or main
+  output for a sub-problem.
+- `validate_result`: justify why the adopted result is credible, for
+  example by showing convergence, a feasibility boundary, a tight
+  constraint, sensitivity, or an independent algorithm comparison.
+- `show_limitation`: show a rejected branch, failure mode, or limitation.
+  These figures belong in sensitivity analysis, model evaluation, or
+  appendix, not as the main result figure.
+
+Every sub-problem should have at least one visual anchor: either a main
+result figure or a main result table. Complex geometric or physical
+criteria should be preceded by an explanatory diagram. Search and
+optimization results should include a curve, boundary, convergence plot,
+or comparison table that supports the final adopted value.
 
 ### Canvas and Export
 
