@@ -110,17 +110,41 @@ Produce:
 
 Produce:
 - regenerated `figures/*.{pdf,png}` conforming to `modeling_guide.md` color palette, typography, and self-contained-caption rule
-- `visualization_log.md` — figure inventory: file, what it shows, which sub-problem it supports, caption draft
+- `visualization_log.md` — figure inventory with mandatory columns: file, paper section, sub-problem, **narrative role** (`explain_model`/`report_result`/`validate_result`/`show_limitation`), **evidence source**, caption draft (≥50 chars, self-contained)
+
+**Narrative roles** (introduced 2026-06-24):
+- `explain_model`: explain geometry, mechanism, variables, or sub-problem dependencies before formulas
+- `report_result`: present final result, key state, or main output for a sub-problem
+- `validate_result`: justify credibility via convergence, boundary, sensitivity, or algorithm comparison
+- `show_limitation`: show rejected branch, failure mode, or limitation (must defer to sensitivity/evaluation/appendix, NOT main result position)
+
+**Selection rules** (aligned with excellent CUMCM papers):
+- Every sub-problem requires at least one visual anchor (main result figure OR main result table)
+- Complex geometric/physical criteria require explanatory diagrams before formulas
+- Search/optimization conclusions require credibility evidence: objective curve, feasibility boundary, convergence plot, or algorithm comparison table
+- Figures serve final adopted solutions; coarse-grid baselines, failure branches, and degenerate solutions may only appear as validation/limitation figures
 
 Each figure must read independently of the paper text (caption tells the full story). Independent step rather than merged with Step 5–6 because CUMCM scoring weights figure quality heavily.
+
+See `docs/guides/EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md` for full selection criteria.
 
 ### Step 9: Paper Draft
 
 Produce:
 - `{base}_paper.tex` — full LaTeX draft containing the canonical CUMCM sections per `modeling_guide.md` (摘要 / 问题重述 / 问题分析 / 模型假设 / 符号说明 / 模型建立 / 模型求解 / 灵敏度分析 / 模型评价 / 参考文献 / 附录)
-- Leave `ABSTRACT_PLACEHOLDER` literal at the abstract location — filled in Step 14
+- Leave `\AbstractPlaceholder` command at the abstract location — filled in Step 14
+
+**Writing structure** (aligned with excellent CUMCM papers, introduced 2026-06-24):
+- **Abstract materials**: for CUMCM with explicit sub-questions, prepare materials in "opening setup + per-question delivery" format, NOT generic four-paragraph prose
+- **Problem Analysis**: each sub-question follows "difficulty → objects/variables → method → output" indexing pattern
+- **Model Solution**: report final adopted results first; defer diagnostics, rejected branches, and internal paths to validation/sensitivity/limitations
+- **Figures**: place by narrative role from `visualization_log.md` — `explain_model` in Problem Analysis/Model Formulation, `report_result` in Model Solution, `validate_result` in Sensitivity/Verification, `show_limitation` in Evaluation/Limitations/Appendix
+
+**Prohibited in main narrative**: internal process terms (`m1`/`m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache`) except in appendix code listing or when referring to required submission files (`result*.xlsx`).
 
 Pull content from: `problem/`, `model.md`, `symbol_table.md`, `assumption_ledger.md`, `results/`, `sensitivity_report.md`, `evaluation.md`, `visualization_log.md`. Cite via `references.bib`.
+
+See `docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` for full writing criteria.
 
 ### Step 10: Gate 1 — Numerical & Code Consistency Check
 
@@ -151,16 +175,27 @@ Produce:
 - `judge_evaluation.md` — three independent judge agents grade the paper against the CUMCM official rubric. Each judge writes: 6 dimension scores (建模合理性 20% / 求解正确性 20% / 创新性 20% / 写作清晰度 15% / 结果说服力 15% / 灵敏度分析 10%), per-dimension comments, top-3 improvement suggestions. Aggregate score + per-dimension mean reported at top.
 - One verdict line at the very top:
   - `VERDICT: PASS` (aggregate ≥ threshold, no BLOCKING gaps) — continue to Step 14
-  - `VERDICT: REOPEN_STEP12_TEXT` (writing / formatting issues only — rewind to Step 12 once, gated by `.step13_reopened_once`)
-  - `VERDICT: REOPEN_STEP12_MODEL` (substantive modeling / solving issues — rewind to Step 12 once, may cascade rerun of Step 5/6 outputs)
+  - `VERDICT: REOPEN_REVISION_TEXT` (writing / formatting issues only — rewind to Step 12 once, gated by `.step13_reopened_once`)
+  - `VERDICT: REOPEN_REVISION_MODEL` (substantive modeling / solving issues — rewind to Step 12 once, may cascade rerun of Step 5/6 outputs)
+
+**Quality checks** (introduced 2026-06-24):
+- **Excellent paper writing benchmark**: abstract structure (opening + per-question delivery), problem analysis indexing, result presentation order (adopted solution first), validation phrasing (support credibility, not amplify uncertainty), internal traces removal
+- **Excellent paper visualization benchmark**: visual anchor per sub-question, explanatory diagrams for complex criteria, credibility figures for search/optimization, main-result figure placement, limitation figure deferral
+
+Runner allows one reopen; second reopen proceeds by policy to avoid loops. Evaluator cache (`scripts/step13_judge_cache.py`) prevents redundant re-evaluation of unchanged papers.
 
 Modeled on the original Step 11 reopen-gate; allowed at most once.
 
 ### Step 14: Abstract (human intervention point)
 
 Produce:
-- `abstract_draft.md` — strict four-paragraph CUMCM format: 问题理解 / 方法 / 结果 / 亮点
-- `ABSTRACT_PLACEHOLDER` in `{base}_paper.tex` replaced with the final abstract
+- `abstract_draft.md` — agent-drafted abstract (≥ 20 lines with metadata)
+- `\AbstractPlaceholder` in `{base}_paper.tex` replaced with the final abstract
+
+**Abstract structure** (aligned with excellent CUMCM papers, introduced 2026-06-24):
+- For CUMCM with explicit sub-questions (Problem 1/2/3...), prefer "opening setup + per-question delivery" format
+- Each sub-question paragraph: model/algorithm → key result → validation or attachment reference
+- NOT generic four-paragraph prose (problem/method/result/highlights) unless problem structure demands it
 
 **Human gate**: abstract carries disproportionate weight in CUMCM scoring. If `human_review.md` contains a `## Step 14 abstract:` section, that text overrides the agent draft. Otherwise the agent proposes and a critic loop produces ≥ 2 candidate drafts before picking one.
 
@@ -171,6 +206,10 @@ Single-step polish bundle (formerly three separate steps in the social-science v
 - cleaned table `.tex` files (booktabs, `esttab ... booktabs fragment nomtitles label compress nonotes` where applicable; LaTeX owns the table environment)
 - `derobotification.md` — list of prose smells removed (e.g., "首先...其次...最后" laundry lists, hedge stacking, redundant restatements)
 - final-prose `{base}_paper.tex`
+
+**Polish targets** (introduced 2026-06-24):
+- **Internal traces removal**: `m1`/`m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache` → rewrite to paper-readable model/validation language (required submission files like `result*.xlsx` may remain)
+- **Risk phrasing rewrite**: "脆弱"/"翻转"/"风险暴露"/"乐观上界" → "抽样加密验证"/"步长收敛性"/"独立算法复核"/"稳定性检验"
 
 ### Step 16: Compile + Appendix + Package
 
