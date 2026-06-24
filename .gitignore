@@ -27,6 +27,7 @@
 
 # Benchmark problems — fetched via scripts/fetch_benchmark.sh, not committed
 /benchmark/
+/.worktrees/
 
 # Python artifacts
 __pycache__/
