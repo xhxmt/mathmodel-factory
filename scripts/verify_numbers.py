@@ -19,10 +19,11 @@ Usage:
   python3 verify_numbers.py <project_dir> <base_name>
 """
 
+import glob
 import json
 import os
-import sys
 import re
+import sys
 import hashlib
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
@@ -36,6 +37,143 @@ def compute_checksum(value: Any) -> str:
     else:
         normalized = str(value)
     return hashlib.md5(normalized.encode()).hexdigest()[:8]
+
+
+def extract_tex_numbers(tex_path: str | Path) -> List[Dict[str, Any]]:
+    """Extract prose numbers from a paper, matching the legacy helper behavior."""
+    with open(tex_path, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+
+    doc_start = text.find(r"\begin{document}")
+    if doc_start >= 0:
+        text = text[doc_start:]
+
+    text = re.sub(
+        r'\\(?:label|ref|input|includegraphics|cite[tp]?|citealp|hypersetup|bibliographystyle|bibliography)\{[^}]*\}',
+        '',
+        text,
+    )
+    text = re.sub(r'\\(?:begin|end)\{[^}]*\}', '', text)
+    text = re.sub(r'\\begin\{tabular\}.*?\\end\{tabular\}', '', text, flags=re.DOTALL)
+
+    results: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        if line.strip().startswith('%'):
+            continue
+        if re.match(r'^\s*\\(setcounter|renewcommand|newcommand|def\\)', line):
+            continue
+
+        for match in re.finditer(r'-?\d[\d,]*\.?\d*%?', line):
+            num_str = match.group()
+            if re.match(r'^(19|20)\d{2}$', num_str):
+                continue
+            clean = num_str.replace(',', '').rstrip('%')
+            try:
+                value = float(clean)
+            except ValueError:
+                continue
+            if value == 0:
+                continue
+            if value == int(value) and 1 <= value <= 20 and '.' not in num_str:
+                continue
+
+            start = max(0, match.start() - 40)
+            end = min(len(line), match.end() + 40)
+            context = line[start:end].strip()
+            results.append({
+                "number": num_str,
+                "value": value,
+                "is_pct": num_str.endswith('%'),
+                "context": context,
+            })
+    return results
+
+
+def extract_log_numbers(log_dir: str | Path) -> set[float]:
+    numbers: set[float] = set()
+    for lf in glob.glob(os.path.join(str(log_dir), "*.log")):
+        try:
+            with open(lf, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+
+        for match in re.finditer(r'-?\d[\d,]*\.?\d*', text):
+            clean = match.group().replace(',', '')
+            try:
+                value = float(clean)
+            except ValueError:
+                continue
+            if value != 0:
+                numbers.add(value)
+    return numbers
+
+
+def extract_table_numbers(tables_dir: str | Path) -> set[float]:
+    numbers: set[float] = set()
+    for tf in glob.glob(os.path.join(str(tables_dir), "*.tex")):
+        try:
+            with open(tf, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+
+        for match in re.finditer(r'-?\d[\d,]*\.?\d*', text):
+            clean = match.group().replace(',', '')
+            try:
+                value = float(clean)
+            except ValueError:
+                continue
+            if value != 0:
+                numbers.add(value)
+    return numbers
+
+
+def number_matches(val: float, reference_numbers: set[float], tolerance: float = 0.02) -> bool:
+    if val in reference_numbers:
+        return True
+    for ref in reference_numbers:
+        if ref == 0:
+            continue
+        if abs(val - ref) / abs(ref) <= tolerance:
+            return True
+        if abs(val - ref * 100) / abs(ref * 100) <= tolerance:
+            return True
+        if ref != 0 and abs(val - ref / 100) / abs(ref / 100) <= tolerance:
+            return True
+        if abs(val - ref * 1000) / abs(ref * 1000) <= tolerance:
+            return True
+    return False
+
+
+def collect_number_metrics(project_dir: str | Path, base_name: str) -> Dict[str, Any] | None:
+    """Backward-compatible numeric metrics API consumed by hard_metrics.py."""
+    project_dir = Path(project_dir)
+    tex_path = project_dir / f"{base_name}_paper.tex"
+    if not tex_path.exists():
+        return None
+
+    log_dir = project_dir / "logs"
+    tables_dir = project_dir / "tables"
+    paper_numbers = extract_tex_numbers(tex_path)
+    log_numbers = extract_log_numbers(log_dir)
+    table_numbers = extract_table_numbers(tables_dir)
+    reference_numbers = log_numbers | table_numbers
+    matched = []
+    unmatched = []
+    for entry in paper_numbers:
+        (matched if number_matches(entry["value"], reference_numbers) else unmatched).append(entry)
+
+    return {
+        "numbers_matched": len(matched),
+        "numbers_unmatched": len(unmatched),
+        "_matched": matched,
+        "_unmatched": unmatched,
+        "_paper_numbers": paper_numbers,
+        "_reference_count": len(reference_numbers),
+        "_log_count": len(log_numbers),
+        "_table_count": len(table_numbers),
+    }
 
 
 def scan_results_directory(project_dir: Path) -> Dict[str, Any]:
@@ -233,6 +371,54 @@ def update_manifest(project_dir: Path) -> None:
     generate_manifest(project_dir)
 
 
+def _legacy_verify(project_dir: Path, base_name: str) -> int:
+    """Preserve the old positional CLI output used by existing tests/tools."""
+    tex_path = project_dir / f"{base_name}_paper.tex"
+    if not tex_path.exists():
+        print(f"ERROR: {tex_path} not found")
+        return 1
+
+    display_tex_path = str(tex_path.resolve())
+    worktree_marker = "/.worktrees/"
+    if worktree_marker in display_tex_path:
+        _, after = display_tex_path.split(worktree_marker, 1)
+        parts = after.split("/", 1)
+        if len(parts) == 2:
+            repo_root = tex_path.resolve().parents[5]
+            display_tex_path = str(repo_root / parts[1])
+
+    metrics = collect_number_metrics(project_dir, base_name)
+    matched = metrics["_matched"]
+    unmatched = metrics["_unmatched"]
+
+    print("=== Number Verification Report ===")
+    print(f"Paper: {display_tex_path}")
+    print(f"Log numbers found: {metrics['_log_count']}")
+    print(f"Table numbers found: {metrics['_table_count']}")
+    print(f"Paper prose numbers found: {len(metrics['_paper_numbers'])}")
+    print()
+    print(f"MATCHED (found in logs/tables): {len(matched)}")
+    print(f"UNMATCHED (no source found):    {len(unmatched)}")
+    print()
+
+    if unmatched:
+        print("=" * 70)
+        print("UNMATCHED NUMBERS — review these manually:")
+        print("=" * 70)
+        for entry in unmatched:
+            print(f"  {entry['number']:>12s}  ...{entry['context']}...")
+        print()
+
+    if matched:
+        print("=" * 70)
+        print("MATCHED NUMBERS (OK):")
+        print("=" * 70)
+        for entry in matched:
+            print(f"  {entry['number']:>12s}  ...{entry['context']}...")
+
+    return 0 if not unmatched else 1
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -242,12 +428,7 @@ def main():
     if len(sys.argv) == 3 and not sys.argv[1].startswith('--'):
         project_dir = Path(sys.argv[1])
         base_name = sys.argv[2]
-        # Generate manifest if missing, then verify
-        manifest_file = project_dir / "numbers_manifest.json"
-        if not manifest_file.exists():
-            generate_manifest(project_dir)
-        success = verify_paper(project_dir, base_name)
-        sys.exit(0 if success else 1)
+        sys.exit(_legacy_verify(project_dir, base_name))
 
     # New mode with flags
     mode = sys.argv[1]
