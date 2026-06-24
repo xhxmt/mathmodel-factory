@@ -517,6 +517,10 @@ STEP_ARTIFACTS = {
 }
 
 
+def _valid_model_step_key(step_key: str) -> bool:
+    return bool(re.fullmatch(r"step_(?:\d+|8_5)", step_key))
+
+
 def _file_type(p: Path) -> str:
     ext = p.suffix.lower()
     if ext in IMAGE_EXTS:
@@ -628,6 +632,33 @@ def list_artifacts(project: Path) -> List[dict]:
     return out
 
 
+def _read_editorial_gate(project: Path) -> dict:
+    files = ["reviewer_entry_map.md", "anchor_figure_plan.md", "entry_gate.md"]
+    artifacts = []
+    for rel in files:
+        p = project / rel
+        if p.is_file():
+            artifacts.append(_meta(project, p, "step"))
+
+    verdict = None
+    entry_gate = project / "entry_gate.md"
+    if entry_gate.is_file():
+        m = re.search(
+            r"(?m)^VERDICT:\s*(PASS|REVISE)\s*$",
+            entry_gate.read_text(errors="ignore"),
+        )
+        if m:
+            verdict = m.group(1)
+
+    return {
+        "key": "8_5",
+        "verdict": verdict,
+        "ready": verdict == "PASS",
+        "artifacts": artifacts,
+        "present": len(artifacts) == 3,
+    }
+
+
 def get_steps(project: Path, base_name: str) -> dict:
     """Per-step status derived from checkpoint + artifacts, plus gate signals."""
     cp = read_checkpoint(project)
@@ -657,10 +688,12 @@ def get_steps(project: Path, base_name: str) -> dict:
             r'(?im)^\s*[-|*].*\b(open|blocking|unresolved|未解决|阻塞|待处理)\b', txt))
 
     paper = _find_paper(project, base_name)
+    editorial_gate = _read_editorial_gate(project)
 
     return {
         "current_step": current,
         "steps": steps,
+        "editorial_gate": editorial_gate,
         "verdict": verdict,
         "open_issues": open_issues,
         "paper_available": paper is not None,
@@ -1154,7 +1187,7 @@ async def put_model_config(
     known_ids = {m["id"] for m in load_model_registry()}
     cleaned: Dict[str, dict] = {}
     for step_key, asg in payload.steps.items():
-        if not re.fullmatch(r"step_\d+", step_key):
+        if not _valid_model_step_key(step_key):
             raise HTTPException(status_code=400, detail=f"非法步骤键：{step_key}")
         primary = asg.primary.strip()
         fallback = asg.fallback.strip()
