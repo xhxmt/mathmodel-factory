@@ -87,7 +87,7 @@ import ArtifactBrowser from './ArtifactBrowser.vue'
 import ConsultationPanel from './ConsultationPanel.vue'
 import ModelManager from './ModelManager.vue'
 import { Projects, Models, relativeTime } from '../lib/api.js'
-import { STEPS, stepByIndex } from '../lib/steps.js'
+import { stepByIndex, stepConfigKey } from '../lib/steps.js'
 import { useToasts } from '../composables/useToasts.js'
 
 const STATUS_LABEL = {
@@ -121,7 +121,9 @@ export default {
     canResume() { return ['paused', 'ready', 'awaiting_consultation'].includes(this.project.status) },
     stepLabel() {
       const c = this.project.current_step
+      const gate = this.stepsData?.editorial_gate
       if (c >= 16) return 'STEP 16 / 16 · 已完成'
+      if (c === 8 && gate && !gate.ready) return 'STEP 8.5 / 16 · 阅卷入口设计'
       const active = stepByIndex(Math.min(16, c + 1))
       return `STEP ${Math.max(0, c + 1)} / 16 · ${active ? active.name : ''}`
     },
@@ -158,10 +160,10 @@ export default {
       try { this.modelsData = await Models.get() }
       catch (e) { /* models optional; keep prior */ }
     },
-    // PipelineTimeline asks to set step <index> primary/fallback for THIS project.
-    async onAssign(index, assignment) {
+    // PipelineTimeline asks to set step primary/fallback for THIS project.
+    async onAssign(step, assignment) {
       const steps = JSON.parse(JSON.stringify(this.projectAssignments))
-      const key = 'step_' + index
+      const key = stepConfigKey(step)
       const primary = (assignment.primary || '').trim()
       const fallback = (assignment.fallback || '').trim()
       if (!primary && !fallback) delete steps[key]
@@ -173,7 +175,7 @@ export default {
       try {
         await Models.saveConfig(this.project.base_name, steps)
         await this.fetchModels()
-        useToasts().success(`步骤 ${index} 模型已更新`)
+        useToasts().success(`步骤 ${step.key === '8_5' ? '8.5' : step.index} 模型已更新`)
       } catch (e) {
         useToasts().error(e.response?.data?.detail || '保存模型选择失败')
         await this.fetchModels()

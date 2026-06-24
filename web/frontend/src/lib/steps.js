@@ -20,6 +20,15 @@ export const STEPS = [
   { index: 16, kind: 'normal', name: '编译·打包',        en: 'Compile',              icon: 'package' },
 ]
 
+export const EDITORIAL_GATE_STEP = {
+  key: '8_5',
+  index: 8.5,
+  kind: 'gate',
+  name: '阅卷入口设计',
+  en: 'Reviewer Entry',
+  icon: 'eye',
+}
+
 export const TOTAL_STEPS = 16
 
 // status of a step given the "last completed step" index from the backend.
@@ -32,6 +41,11 @@ export function stepStatus(index, currentStep) {
 
 export function stepByIndex(index) {
   return STEPS[index] || null
+}
+
+export function stepConfigKey(step) {
+  if (step && step.key) return `step_${step.key}`
+  return `step_${step.index}`
 }
 
 export const VERDICT_LABEL = {
@@ -56,6 +70,7 @@ export const STEP_MODEL_META = {
   6:  { overridable: true,  apiOk: false, default: 'Codex → Claude' },
   7:  { overridable: true,  apiOk: true,  default: 'Claude → Codex' },
   8:  { overridable: true,  apiOk: false, default: 'Claude → Codex' },
+  '8_5': { overridable: true, apiOk: false, default: 'Claude → Codex' },
   9:  { overridable: true,  apiOk: false, default: 'Claude → Codex' },
   10: { overridable: true,  apiOk: false, default: 'Codex → Claude' },
   11: { overridable: true,  apiOk: true,  default: 'Codex → Claude' },
@@ -67,5 +82,5 @@ export const STEP_MODEL_META = {
 }
 
 export function stepModelMeta(index) {
-  return STEP_MODEL_META[index] || { overridable: true, apiOk: false, default: '' }
+  return STEP_MODEL_META[index] || STEP_MODEL_META[String(index)] || { overridable: true, apiOk: false, default: '' }
 }

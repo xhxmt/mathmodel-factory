@@ -26,18 +26,18 @@
     <div class="track-scroll">
       <div class="track">
         <div
-          v-for="s in STEPS"
-          :key="s.index"
+          v-for="s in timelineSteps"
+          :key="s.key || s.index"
           class="col"
-          :class="{ 'seg-on': s.index <= currentStep && s.index > 0 }"
+          :class="{ 'seg-on': isSegmentOn(s) }"
         >
           <button
             class="node"
-            :class="['st-' + state(s), 'kind-' + s.kind, { sel: s.index === selectedIndex }]"
+            :class="['st-' + state(s), 'kind-' + s.kind, { sel: stepId(s) === selectedIndex }]"
             :title="tip(s)"
-            @click="select(s.index)"
+            @click="select(stepId(s))"
           >
-            <span class="num">{{ s.index }}</span>
+            <span class="num">{{ s.key === '8_5' ? '8.5' : s.index }}</span>
           </button>
           <div class="cap" :class="{ show: capFor(s) }">{{ capFor(s) }}</div>
         </div>
@@ -48,7 +48,7 @@
     <div class="detail" :key="selectedIndex">
       <div class="d-left">
         <div class="d-badge" :class="'kind-' + sel.kind">
-          <span class="mono">{{ sel.index }}</span>
+          <span class="mono">{{ sel.key === '8_5' ? '8.5' : sel.index }}</span>
         </div>
         <div class="d-titles">
           <div class="d-name">
@@ -122,7 +122,7 @@
 
 <script>
 import Icon from './Icon.vue'
-import { STEPS, stepStatus, VERDICT_LABEL, stepModelMeta } from '../lib/steps.js'
+import { STEPS, EDITORIAL_GATE_STEP, stepStatus, VERDICT_LABEL, stepModelMeta, stepConfigKey } from '../lib/steps.js'
 
 export default {
   name: 'PipelineTimeline',
@@ -136,7 +136,7 @@ export default {
   },
   emits: ['open-file', 'open-paper', 'assign', 'manage-models'],
   data() {
-    return { STEPS, selectedIndex: this.defaultIndex(), userPicked: false }
+    return { selectedIndex: this.defaultIndex(), userPicked: false }
   },
   computed: {
     displayStep() { return this.currentStep },
@@ -145,12 +145,16 @@ export default {
     verdictClass() { return this.verdict === 'PASS' ? 'tag-ok' : 'tag-amber' },
     openIssues() { return this.stepsData?.open_issues || 0 },
     paperAvailable() { return !!this.stepsData?.paper_available },
-    sel() { return STEPS[this.selectedIndex] || STEPS[0] },
-    selArtifacts() {
-      return this.stepsData?.steps?.[this.selectedIndex]?.artifacts || []
+    timelineSteps() {
+      return [...STEPS.slice(0, 9), EDITORIAL_GATE_STEP, ...STEPS.slice(9)]
     },
-    selMeta() { return stepModelMeta(this.selectedIndex) },
-    selAssign() { return this.assignments?.['step_' + this.selectedIndex] || {} },
+    sel() { return this.timelineSteps.find((s) => this.stepId(s) === this.selectedIndex) || this.timelineSteps[0] },
+    selArtifacts() {
+      if (this.sel.key === '8_5') return this.stepsData?.editorial_gate?.artifacts || []
+      return this.stepsData?.steps?.[this.sel.index]?.artifacts || []
+    },
+    selMeta() { return stepModelMeta(this.sel.key || this.sel.index) },
+    selAssign() { return this.assignments?.[stepConfigKey(this.sel)] || {} },
     // Models offerable for the selected step: enabled, plus API backends only
     // where the step accepts a non-agentic model.
     pickableModels() {
@@ -163,10 +167,18 @@ export default {
   },
   watch: {
     currentStep() { if (!this.userPicked) this.selectedIndex = this.defaultIndex() },
+    stepsData() { if (!this.userPicked) this.selectedIndex = this.defaultIndex() },
   },
   methods: {
+    stepId(s) { return s.key || s.index },
+    isSegmentOn(s) {
+      if (s.key === '8_5') return this.currentStep >= 8
+      return s.index <= this.currentStep && s.index > 0
+    },
     defaultIndex() {
       const c = this.currentStep
+      const gate = this.stepsData?.editorial_gate
+      if (c === 8 && gate && !gate.ready) return '8_5'
       if (c >= 16) return 16
       return Math.min(16, Math.max(0, c + 1))
     },
@@ -176,9 +188,16 @@ export default {
       cur[field] = val
       // Clearing the primary clears the whole override for this step.
       if (field === 'primary' && !val) cur.fallback = ''
-      this.$emit('assign', this.selectedIndex, cur)
+      this.$emit('assign', this.sel, cur)
     },
     state(s) {
+      if (s.key === '8_5') {
+        const gate = this.stepsData?.editorial_gate
+        if (!gate) return 'pending'
+        if (gate.ready) return 'done'
+        if (this.currentStep >= 8) return this.awaiting ? 'attention' : 'live'
+        return 'pending'
+      }
       const st = stepStatus(s.index, this.currentStep)
       if (st === 'active') return this.awaiting ? 'attention' : 'live'
       return st
@@ -190,6 +209,7 @@ export default {
       return { done: 'ok', live: 'live', attention: 'amber', pending: '' }[st] || ''
     },
     capFor(s) {
+      if (s.key === '8_5') return 'ENTRY'
       if (s.index === 10) return 'GATE 1'
       if (s.index === 13) return 'GATE 2'
       if (s.index === 3) return '选型'
@@ -200,7 +220,8 @@ export default {
     },
     tip(s) {
       const k = { gate: ' · 质检关卡', human: ' · 人工介入' }[s.kind] || ''
-      return `Step ${s.index} · ${s.name} (${s.en})${k}`
+      const id = s.key === '8_5' ? '8.5' : s.index
+      return `Step ${id} · ${s.name} (${s.en})${k}`
     },
     iconFor(t) {
       return { image: 'image', pdf: 'file-text', csv: 'table', json: 'code', code: 'code', markdown: 'file-text', text: 'file-text' }[t] || 'file'

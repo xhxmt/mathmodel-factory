@@ -86,22 +86,22 @@
         </p>
 
         <div class="rows">
-          <div v-for="s in overridableSteps" :key="s.index" class="row">
+          <div v-for="s in overridableSteps" :key="s.key || s.index" class="row">
             <div class="row-id">
-              <span class="ri-n mono">{{ String(s.index).padStart(2, '0') }}</span>
+              <span class="ri-n mono">{{ s.key === '8_5' ? '8.5' : String(s.index).padStart(2, '0') }}</span>
               <div class="ri-tx">
-                <div class="ri-name">{{ s.name }}<span v-if="meta(s.index).apiOk" class="api-ok" title="此步骤可用 API 模型">API✓</span></div>
-                <div class="ri-def mono">内置: {{ meta(s.index).default }}</div>
+                <div class="ri-name">{{ s.name }}<span v-if="meta(s.key || s.index).apiOk" class="api-ok" title="此步骤可用 API 模型">API✓</span></div>
+                <div class="ri-def mono">内置: {{ meta(s.key || s.index).default }}</div>
               </div>
             </div>
             <div class="row-sel">
-              <select class="field sel" :value="defGet(s.index, 'primary')" @change="defSet(s.index, 'primary', $event.target.value)">
+              <select class="field sel" :value="defGet(s, 'primary')" @change="defSet(s, 'primary', $event.target.value)">
                 <option value="">— 主：内置默认 —</option>
-                <option v-for="m in pickable(s.index)" :key="m.id" :value="m.id">{{ m.label }}</option>
+                <option v-for="m in pickable(s)" :key="m.id" :value="m.id">{{ m.label }}</option>
               </select>
-              <select class="field sel" :value="defGet(s.index, 'fallback')" @change="defSet(s.index, 'fallback', $event.target.value)">
+              <select class="field sel" :value="defGet(s, 'fallback')" @change="defSet(s, 'fallback', $event.target.value)">
                 <option value="">— 备用：无 —</option>
-                <option v-for="m in pickable(s.index)" :key="m.id" :value="m.id">{{ m.label }}</option>
+                <option v-for="m in pickable(s)" :key="m.id" :value="m.id">{{ m.label }}</option>
               </select>
             </div>
           </div>
@@ -122,7 +122,7 @@
 <script>
 import Icon from './Icon.vue'
 import { Models } from '../lib/api.js'
-import { STEPS, stepModelMeta } from '../lib/steps.js'
+import { STEPS, EDITORIAL_GATE_STEP, stepModelMeta, stepConfigKey } from '../lib/steps.js'
 import { useToasts } from '../composables/useToasts.js'
 
 export default {
@@ -139,7 +139,13 @@ export default {
     }
   },
   computed: {
-    overridableSteps() { return STEPS.filter((s) => stepModelMeta(s.index).overridable) },
+    overridableSteps() {
+      return [
+        ...STEPS.filter((s) => stepModelMeta(s.index).overridable).slice(0, 9),
+        EDITORIAL_GATE_STEP,
+        ...STEPS.filter((s) => stepModelMeta(s.index).overridable).slice(9),
+      ]
+    },
     enabledModels() { return this.models.filter((m) => m.enabled && m.id) },
   },
   async mounted() { await this.load() },
@@ -162,8 +168,8 @@ export default {
       }
     },
     // models usable for a given step: API backends only where the step supports them
-    pickable(index) {
-      const apiOk = stepModelMeta(index).apiOk
+    pickable(step) {
+      const apiOk = stepModelMeta(step.key || step.index).apiOk
       return this.enabledModels.filter((m) => apiOk || this.agentic(m.backend))
     },
     addModel() {
@@ -188,9 +194,9 @@ export default {
         this.saving = false
       }
     },
-    defGet(index, field) { return this.defaultSteps['step_' + index]?.[field] || '' },
-    defSet(index, field, val) {
-      const key = 'step_' + index
+    defGet(step, field) { return this.defaultSteps[stepConfigKey(step)]?.[field] || '' },
+    defSet(step, field, val) {
+      const key = stepConfigKey(step)
       const cur = { ...(this.defaultSteps[key] || {}) }
       cur[field] = val
       if (!cur.primary && !cur.fallback) delete this.defaultSteps[key]
