@@ -121,15 +121,18 @@
 
 <script>
 import Icon from './Icon.vue'
-import { Models } from '../lib/api.js'
 import { STEPS, EDITORIAL_GATE_STEP, stepModelMeta, stepConfigKey } from '../lib/steps.js'
 import { useToasts } from '../composables/useToasts.js'
+import { useModels } from '../composables/useModels.js'
 
 export default {
   name: 'ModelManager',
   components: { Icon },
   emits: ['close', 'saved'],
-  setup() { return { toasts: useToasts() } },
+  setup() {
+    const m = useModels()
+    return { toasts: useToasts(), _models: m.models, _loadModels: m.load, _saveRegistry: m.saveRegistry, _saveConfig: m.saveConfig }
+  },
   data() {
     return {
       tab: 'registry', loading: true, saving: false, error: '',
@@ -152,15 +155,21 @@ export default {
   methods: {
     meta: stepModelMeta,
     agentic(b) { return this.agenticBackends.includes(b) },
+    // Populate local form state from the shared models cache. Deep-clones the
+    // registry/default preset because the template binds v-model directly to
+    // these — binding to the singleton would mutate shared state across components.
+    hydrate(d) {
+      this.models = (d.registry || []).map((m) => ({ effort: '', model: '', base_url: '', key_env: '', builtin: false, ...m }))
+      this.config = d.config || {}
+      if (Array.isArray(d.agentic_backends) && d.agentic_backends.length) this.agenticBackends = d.agentic_backends
+      if (Array.isArray(d.valid_backends) && d.valid_backends.length) this.validBackends = d.valid_backends
+      this.defaultSteps = JSON.parse(JSON.stringify(this.config._default || {}))
+    },
     async load() {
       this.loading = true
       try {
-        const d = await Models.get()
-        this.models = (d.registry || []).map((m) => ({ effort: '', model: '', base_url: '', key_env: '', builtin: false, ...m }))
-        this.config = d.config || {}
-        if (Array.isArray(d.agentic_backends) && d.agentic_backends.length) this.agenticBackends = d.agentic_backends
-        if (Array.isArray(d.valid_backends) && d.valid_backends.length) this.validBackends = d.valid_backends
-        this.defaultSteps = JSON.parse(JSON.stringify(this.config._default || {}))
+        await this._loadModels()
+        this.hydrate(this._models)
       } catch (e) {
         this.error = e.response?.data?.detail || '加载模型配置失败'
       } finally {
@@ -184,10 +193,10 @@ export default {
       }
       this.saving = true
       try {
-        await Models.saveRegistry(this.models)
+        await this._saveRegistry(this.models)
         this.toasts.success('模型库已保存')
         this.$emit('saved')
-        await this.load()
+        this.hydrate(this._models)
       } catch (e) {
         this.error = e.response?.data?.detail || '保存失败'
       } finally {
@@ -206,10 +215,10 @@ export default {
       this.error = ''
       this.saving = true
       try {
-        await Models.saveConfig('_default', this.defaultSteps)
+        await this._saveConfig('_default', this.defaultSteps)
         this.toasts.success('默认预设已保存（应用于新建项目）')
         this.$emit('saved')
-        await this.load()
+        this.hydrate(this._models)
       } catch (e) {
         this.error = e.response?.data?.detail || '保存失败'
       } finally {

@@ -233,6 +233,11 @@ if [[ "${1:-}" == "status" ]]; then
                 local cstep
                 cstep=$(grep -oP 'STEP:\K[0-9]+' "$dir/.awaiting_consultation" 2>/dev/null | head -1)
                 process="CONSULT(${cstep:-?})"
+            elif grep -q '^AWAITING_STEP8_5:' "$dir/.heartbeat" 2>/dev/null; then
+                # Step 8.5 editorial gate blocked paper drafting (entry_gate.md
+                # verdict not PASS). Runner exited cleanly (exit 0) and leaves
+                # this heartbeat; show it as a deliberate wait, not EXITED.
+                process="AWAIT_8.5"
             else
                 pid=""
                 [[ -f "$dir/.runner.pid" ]] && pid="$(cat "$dir/.runner.pid" 2>/dev/null || true)"

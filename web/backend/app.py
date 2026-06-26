@@ -15,11 +15,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depe
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import subprocess
 import re
 import jwt
-import hashlib
+import bcrypt
 import secrets
 from dotenv import load_dotenv
 
@@ -42,6 +42,10 @@ LAUNCH_SCRIPT = FACTORY_ROOT / "launch_agents.sh"
 UPLOAD_DIR = FACTORY_ROOT / "uploads"
 PAPERS_DIR = FACTORY_ROOT / "papers"
 
+# Project base_name must be a single safe path segment (no traversal/separators).
+# Reused by NewProjectRequest validation and _resolve_project (path-traversal guard).
+_BASE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
 # Model registry + per-step model assignment (read by run_paper.sh; see its
 # "Model registry & per-step model dispatch" section). Kept under web/ next to
 # notes.json so the runner and dashboard share one location.
@@ -61,7 +65,12 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 
 # Authentication configuration
-JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_urlsafe(32))
+JWT_SECRET = os.getenv("JWT_SECRET") or os.getenv("JWT_SECRET_KEY")
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET 未配置:请在 web/.env 设置 JWT_SECRET(生成命令: openssl rand -hex 32)。"
+        " 未配置时旧实现每次启动随机生成密钥,会导致所有已签发 token 在重启后失效。"
+    )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
@@ -69,7 +78,10 @@ JWT_EXPIRATION_HOURS = 24
 # Password is hashed with SHA256
 USERS_DB = {
     "admin": {
-        "password_hash": hashlib.sha256(os.getenv("ADMIN_PASSWORD", "admin123").encode()).hexdigest(),
+        # bcrypt hash computed once at startup from ADMIN_PASSWORD (salted, slow KDF).
+        "password_hash": bcrypt.hashpw(
+            os.getenv("ADMIN_PASSWORD", "admin123").encode(), bcrypt.gensalt()
+        ),
         "username": "admin",
         "role": "admin"
     }
@@ -124,13 +136,11 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "https://tfisher.de",
-        "http://tfisher.de",
         "https://www.tfisher.de",
-        "http://www.tfisher.de"
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # ============================================================================
@@ -154,6 +164,13 @@ class NewProjectRequest(BaseModel):
     problem_path: str
     no_start: bool = False
     consult: bool = False
+
+    @field_validator("base_name")
+    @classmethod
+    def _check_base_name(cls, v: str) -> str:
+        if not _BASE_NAME_RE.fullmatch(v):
+            raise ValueError("base_name 仅允许字母、数字、下划线、连字符")
+        return v
 
 class ProjectStatus(BaseModel):
     base_name: str
@@ -264,9 +281,12 @@ def get_current_user(payload: dict = Depends(verify_token)) -> UserInfo:
     """Get current authenticated user"""
     return UserInfo(username=payload["sub"], role=payload["role"])
 
-def hash_password(password: str) -> str:
-    """Hash password using SHA256"""
-    return hashlib.sha256(password.encode()).hexdigest()
+def verify_password(password: str, password_hash: bytes) -> bool:
+    """Verify a plaintext password against its bcrypt hash."""
+    try:
+        return bcrypt.checkpw(password.encode(), password_hash)
+    except (ValueError, TypeError):
+        return False
 
 # ============================================================================
 # Helper Functions
@@ -542,6 +562,8 @@ def _file_type(p: Path) -> str:
 
 def _resolve_project(base_name: str) -> Path:
     """Resolve a project to its ongoing or completed directory."""
+    if not _BASE_NAME_RE.fullmatch(base_name):
+        raise HTTPException(status_code=400, detail="Invalid base_name")
     for root in (ONGOING_DIR, COMPLETE_DIR):
         cand = root / base_name
         if cand.is_dir():
@@ -712,7 +734,7 @@ async def login(request: LoginRequest):
     """Authenticate user and return JWT token"""
     user = USERS_DB.get(request.username)
 
-    if not user or user["password_hash"] != hash_password(request.password):
+    if not user or not verify_password(request.password, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"
@@ -740,23 +762,31 @@ async def upload_problem_file(
     file: UploadFile = File(...),
     current_user: UserInfo = Depends(get_current_user)
 ):
-    """Upload a problem file (PDF or Markdown)"""
+    """Upload a problem file (PDF, Markdown, or compressed archive with problem file)"""
+    import tarfile
+    import zipfile
+    import shutil
+
     try:
         # Validate file extension
-        allowed_extensions = {'.pdf', '.md', '.PDF', '.MD'}
-        file_ext = Path(file.filename).suffix
-        if file_ext not in allowed_extensions:
+        allowed_extensions = {'.pdf', '.md', '.PDF', '.MD', '.zip', '.tar', '.gz', '.bz2', '.xz', '.tgz', '.tar.gz', '.tar.bz2', '.tar.xz'}
+        file_ext = Path(file.filename).suffix.lower()
+        filename_lower = file.filename.lower()
+
+        # Check for compound extensions like .tar.gz
+        is_archive = (
+            file_ext in {'.zip', '.tar', '.tgz'} or
+            filename_lower.endswith(('.tar.gz', '.tar.bz2', '.tar.xz'))
+        )
+        is_problem_file = file_ext in {'.pdf', '.md'}
+
+        if not (is_archive or is_problem_file):
             raise HTTPException(
                 status_code=400,
-                detail=f"不支持的文件格式：{file_ext}。仅支持 PDF 或 Markdown 文件"
+                detail=f"不支持的文件格式：{file_ext}。支持 PDF、Markdown 或压缩包（.zip, .tar.gz, .tar.bz2, .tar.xz）"
             )
 
-        # Generate unique filename with timestamp
-        timestamp = datetime.now(BEIJING_TZ).strftime("%Y%m%d_%H%M%S")
-        safe_filename = f"{timestamp}_{file.filename}"
-        file_path = UPLOAD_DIR / safe_filename
-
-        # Read and save file
+        # Read file content
         content = await file.read()
 
         # Check file size
@@ -766,17 +796,91 @@ async def upload_problem_file(
                 detail=f"文件过大。最大支持 {MAX_UPLOAD_SIZE // (1024*1024)} MB"
             )
 
-        # Save file
-        with open(file_path, "wb") as f:
-            f.write(content)
+        # Generate unique directory/filename with timestamp
+        timestamp = datetime.now(BEIJING_TZ).strftime("%Y%m%d_%H%M%S")
 
-        return {
-            "status": "ok",
-            "message": "文件上传成功",
-            "file_path": str(file_path),
-            "filename": safe_filename,
-            "size": len(content)
-        }
+        if is_archive:
+            # Extract archive to a dedicated directory
+            extract_dir = UPLOAD_DIR / f"{timestamp}_{Path(file.filename).stem}"
+            extract_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save archive temporarily
+            archive_path = extract_dir / file.filename
+            with open(archive_path, "wb") as f:
+                f.write(content)
+
+            # Extract based on type
+            try:
+                if file_ext == '.zip' or filename_lower.endswith('.zip'):
+                    with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+                        zip_ref.extractall(extract_dir)
+                elif file_ext == '.tar' or filename_lower.endswith(('.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tar.xz')):
+                    with tarfile.open(archive_path, 'r:*') as tar_ref:
+                        tar_ref.extractall(extract_dir)
+                else:
+                    raise ValueError(f"Unsupported archive format: {file.filename}")
+
+                # Remove the archive file after extraction
+                archive_path.unlink()
+
+                # Find problem file (PDF or MD) in extracted contents
+                problem_file = None
+                for root, dirs, files in os.walk(extract_dir):
+                    for fname in files:
+                        if fname.lower().endswith(('.pdf', '.md')):
+                            candidate = Path(root) / fname
+                            # Prefer files with "problem", "题目", "question" in name
+                            if any(keyword in fname.lower() for keyword in ['problem', '题目', 'question', '题', 'problem']):
+                                problem_file = candidate
+                                break
+                            # Otherwise, use first PDF/MD found
+                            if not problem_file:
+                                problem_file = candidate
+                    if problem_file:
+                        break
+
+                if not problem_file:
+                    # Clean up and report error
+                    shutil.rmtree(extract_dir)
+                    raise HTTPException(
+                        status_code=400,
+                        detail="压缩包中未找到题目文件（PDF 或 Markdown）"
+                    )
+
+                return {
+                    "status": "ok",
+                    "message": "压缩包上传并解压成功",
+                    "file_path": str(problem_file),
+                    "filename": problem_file.name,
+                    "size": len(content),
+                    "extracted_dir": str(extract_dir),
+                    "archive_name": file.filename
+                }
+
+            except (zipfile.BadZipFile, tarfile.TarError) as e:
+                # Clean up on extraction failure
+                if extract_dir.exists():
+                    shutil.rmtree(extract_dir)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"压缩包解压失败：{str(e)}"
+                )
+        else:
+            # Handle single problem file (existing logic)
+            safe_filename = f"{timestamp}_{file.filename}"
+            file_path = UPLOAD_DIR / safe_filename
+
+            # Save file
+            with open(file_path, "wb") as f:
+                f.write(content)
+
+            return {
+                "status": "ok",
+                "message": "文件上传成功",
+                "file_path": str(file_path),
+                "filename": safe_filename,
+                "size": len(content)
+            }
 
     except HTTPException:
         raise
@@ -806,13 +910,16 @@ async def create_new_project(
             cmd.append("--consult")
         cmd.extend([request.base_name, str(problem_path.resolve())])
 
-        # Execute command
+        # Execute command with full PATH environment
+        env = os.environ.copy()
+        env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=30,
-            cwd=FACTORY_ROOT
+            cwd=FACTORY_ROOT,
+            env=env
         )
 
         if result.returncode != 0:
@@ -889,21 +996,153 @@ async def get_recent_logs(
     if not logs_dir.exists():
         return {"logs": []}
 
-    # Find most recent log file
-    log_files = sorted(logs_dir.glob("step_*.log"), key=lambda f: f.stat().st_mtime, reverse=True)
+    # Find most recent log file (including claude/codex/agy variants)
+    log_patterns = [
+        "step_*.log",
+        "step_*_claude_*.log",
+        "step_*_codex_*.log",
+        "step_*_agy_*.log"
+    ]
+
+    all_logs = []
+    for pattern in log_patterns:
+        all_logs.extend(logs_dir.glob(pattern))
+
+    # Sort by modification time, newest first
+    log_files = sorted(all_logs, key=lambda f: f.stat().st_mtime, reverse=True)
+
+    # Filter out empty files and prefer files with actual content
+    non_empty_logs = [f for f in log_files if f.stat().st_size > 0]
+    if non_empty_logs:
+        log_files = non_empty_logs
+
     if not log_files:
-        return {"logs": []}
+        # Fallback to runner.log if no step logs available
+        runner_log = logs_dir / "runner.log"
+        if runner_log.exists() and runner_log.stat().st_size > 0:
+            log_files = [runner_log]
+        else:
+            return {"logs": []}
 
     recent_log = log_files[0]
     try:
+        env = os.environ.copy()
+        env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         result = subprocess.run(
             ["tail", "-n", str(lines), str(recent_log)],
             capture_output=True,
-            text=True
+            text=True,
+            env=env
         )
         return {
             "logs": result.stdout.split("\n"),
             "file": recent_log.name
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/projects/{base_name}/runner-log")
+async def get_runner_log(
+    base_name: str,
+    lines: int = 100,
+    current_user: UserInfo = Depends(get_current_user)
+):
+    """Get runner.log entries (main orchestration log)"""
+    project_path = ONGOING_DIR / base_name
+    if not project_path.exists():
+        project_path = COMPLETE_DIR / base_name
+
+    runner_log = project_path / "logs" / "runner.log"
+    if not runner_log.exists():
+        return {"logs": [], "file": "runner.log"}
+
+    try:
+        env = os.environ.copy()
+        env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        result = subprocess.run(
+            ["tail", "-n", str(lines), str(runner_log)],
+            capture_output=True,
+            text=True,
+            env=env
+        )
+        return {
+            "logs": result.stdout.split("\n"),
+            "file": "runner.log"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/projects/{base_name}/issues")
+async def get_project_issues(
+    base_name: str,
+    current_user: UserInfo = Depends(get_current_user)
+):
+    """Get audit issue ledger"""
+    project_path = ONGOING_DIR / base_name
+    if not project_path.exists():
+        project_path = COMPLETE_DIR / base_name
+
+    if not project_path.exists():
+        raise HTTPException(status_code=404, detail=f"Project {base_name} not found")
+
+    ail = project_path / "audit_issue_ledger.md"
+    if not ail.exists():
+        return {
+            "exists": False,
+            "issues": [],
+            "blocking": 0,
+            "major": 0,
+            "minor": 0
+        }
+
+    try:
+        content = ail.read_text()
+
+        # Parse markdown table
+        lines = content.split('\n')
+        issues = []
+        blocking_count = 0
+        major_count = 0
+        minor_count = 0
+
+        # Find table rows (skip header and separator)
+        in_table = False
+        for line in lines:
+            if line.startswith('| id |'):
+                in_table = True
+                continue
+            if in_table and line.startswith('|---'):
+                continue
+            if in_table and line.startswith('|'):
+                parts = [p.strip() for p in line.split('|')[1:-1]]
+                if len(parts) >= 7:
+                    issue = {
+                        "id": parts[0],
+                        "step": parts[1],
+                        "severity": parts[2],
+                        "status": parts[3],
+                        "location": parts[4],
+                        "issue": parts[5],
+                        "required_fix": parts[6]
+                    }
+                    issues.append(issue)
+
+                    # Count by severity
+                    if parts[2] == "BLOCKING":
+                        blocking_count += 1
+                    elif parts[2] == "MAJOR":
+                        major_count += 1
+                    elif parts[2] == "MINOR":
+                        minor_count += 1
+
+        return {
+            "exists": True,
+            "content": content,
+            "issues": issues,
+            "blocking": blocking_count,
+            "major": major_count,
+            "minor": minor_count,
+            "total": len(issues)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -986,8 +1225,10 @@ async def project_action(
 ):
     """Execute project action (resume/pause/kill)"""
     try:
+        env = os.environ.copy()
+        env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         cmd = ["/usr/bin/bash", str(LAUNCH_SCRIPT), action.action, base_name]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=env)
 
         await manager.broadcast({
             "type": "project_action",
@@ -1226,6 +1467,140 @@ async def websocket_endpoint(websocket: WebSocket):
             })
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+# ============================================================================
+# Cloud Run Acceleration API
+# ============================================================================
+
+class CloudStatus(BaseModel):
+    available: bool
+    region: Optional[str] = None
+    project_id: Optional[str] = None
+    service_name: Optional[str] = None
+    max_instances: Optional[int] = None
+    solvers: List[str] = []
+    error: Optional[str] = None
+
+
+@app.get("/api/cloud/status")
+async def cloud_status(creds: HTTPAuthorizationCredentials = Depends(security)):
+    """Check GCP Cloud Run solver service availability"""
+    verify_token(creds.credentials)
+
+    try:
+        # Check if gcloud is installed
+        result = subprocess.run(
+            ["gcloud", "version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode != 0:
+            return CloudStatus(available=False, error="gcloud CLI not installed")
+
+        # Read GCP configuration
+        project_id = os.getenv("GCP_PROJECT_ID", "level-night-476302-k0")
+        region = os.getenv("GCP_REGION", "europe-west4")
+        service_name = os.getenv("GCP_SOLVER_SERVICE", "solver-api")
+
+        # Check if service exists
+        result = subprocess.run(
+            [
+                "gcloud", "run", "services", "describe", service_name,
+                f"--region={region}",
+                f"--project={project_id}",
+                "--format=json"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode != 0:
+            return CloudStatus(
+                available=False,
+                region=region,
+                project_id=project_id,
+                error=f"Service {service_name} not found"
+            )
+
+        # Parse service info
+        service_info = json.loads(result.stdout)
+        max_instances = 10  # Default, can parse from service_info if needed
+
+        return CloudStatus(
+            available=True,
+            region=region,
+            project_id=project_id,
+            service_name=service_name,
+            max_instances=max_instances,
+            solvers=["python", "julia", "matlab", "R"]
+        )
+
+    except subprocess.TimeoutExpired:
+        return CloudStatus(available=False, error="gcloud command timeout")
+    except Exception as e:
+        return CloudStatus(available=False, error=str(e))
+
+
+@app.get("/api/cloud/config")
+async def cloud_config(creds: HTTPAuthorizationCredentials = Depends(security)):
+    """Get current cloud solver configuration"""
+    verify_token(creds.credentials)
+
+    return {
+        "use_cloud": os.getenv("USE_CLOUD_SOLVER", "false"),
+        "threshold_time": int(os.getenv("CLOUD_THRESHOLD_TIME", "300")),
+        "solver_types": os.getenv("CLOUD_SOLVER_TYPES", "python,julia,matlab,R").split(","),
+        "project_id": os.getenv("GCP_PROJECT_ID", ""),
+        "region": os.getenv("GCP_REGION", "europe-west4"),
+        "service_name": os.getenv("GCP_SOLVER_SERVICE", "solver-api"),
+    }
+
+
+@app.post("/api/projects/{base_name}/cloud/enable")
+async def enable_cloud_solver(
+    base_name: str,
+    creds: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Enable cloud solver for a specific project"""
+    verify_token(creds.credentials)
+    project_path = _resolve_project(base_name)
+
+    # Create project-specific .env file or update existing
+    env_file = project_path / ".env.cloud"
+    env_file.write_text(f"""# Cloud Run solver configuration
+USE_CLOUD_SOLVER=true
+CLOUD_THRESHOLD_TIME=300
+CLOUD_SOLVER_TYPES=python,julia,matlab,R
+GCP_PROJECT_ID={os.getenv('GCP_PROJECT_ID', 'level-night-476302-k0')}
+GCP_REGION={os.getenv('GCP_REGION', 'europe-west4')}
+GCP_SOLVER_SERVICE={os.getenv('GCP_SOLVER_SERVICE', 'solver-api')}
+""")
+
+    return {"status": "enabled", "base_name": base_name}
+
+
+@app.post("/api/projects/{base_name}/cloud/disable")
+async def disable_cloud_solver(
+    base_name: str,
+    creds: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Disable cloud solver for a specific project"""
+    verify_token(creds.credentials)
+    project_path = _resolve_project(base_name)
+
+    env_file = project_path / ".env.cloud"
+    if env_file.exists():
+        env_file.unlink()
+
+    return {"status": "disabled", "base_name": base_name}
+
+
+# ============================================================================
+# Main
+# ============================================================================
 
 if __name__ == "__main__":
     import uvicorn

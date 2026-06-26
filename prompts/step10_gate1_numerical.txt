@@ -166,6 +166,19 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
    - 把验证报告 `number_verification.md` 的内容拷贝到 code_review.md §1 数字审计 段
    - **重要**：如果 Step 6 重新运行（灵敏度分析更新），必须先 `--update` 更新 manifest，否则会出现 checksum 不匹配
 
+2.5. **数字传递链审计**（新增 — 硬信号检查项）：
+   ```bash
+   python3 __FACTORY__/scripts/verify_number_chain.py __PROJECT_PATH__ __BASE_NAME__
+   ```
+   该脚本追踪 `results/*` 中的关键数字是否一路传递到论文正文与结论（`CHAIN_BREAKS` = "进了正文却没进结论"的关键数字个数）。把输出整合到 code_review.md §1.5：
+   ```markdown
+   ## 1.5 数字传递链完整性（关键结果有没有讲到结论）
+   - 关键数字总数 / 进入正文 / 进入结论: N / M / K
+   - CHAIN_BREAKS: W
+   - 判定: [PASS（W=0）/ WARNING（W>0，逐条说明为何关键结果未在结论复述，或补写结论）]
+   ```
+   `CHAIN_BREAKS > 0` 记 **WARNING**（不直接 FAIL）：关键结果未在结论复述可能是合理的结构选择，但必须在 §1.5 给出理由或补写，不能无视。
+
 3. 对每个数字, 用 python 读 results/<sub>/values.json 或 results/sensitivity/*.json, 核对（如果 verify_numbers.py 未覆盖的特殊情况）。
 4. 把核对结果填进 code_review.md §1 表格。
 5. 对每个 discrepancy: 写到 §2 详细诊断, 直接修 paper.tex, 在 §5 修订摘要记一笔。
@@ -173,6 +186,7 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
 7. 写 §6 Gate 1 verdict — 必须满足：
    - 符号覆盖率 ≥ 0.7（或 ≥ 0.5 但所有泄漏符号已在 code_review.md 中列出补登记方案）
    - 数字通过率 100%（任何凭空数字 / 未修 discrepancy = FAIL）
+   - 数字传递链：CHAIN_BREAKS=0，或 §1.5 已对每个断链给出理由 / 补写结论（WARNING 可放行，但不能无视）
    - 编译成功
 
 [禁止事项]

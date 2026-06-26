@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # state_manager.sh — Unified state management for Paper Factory projects
 #
+# ⚠️  PARTIALLY INTEGRATED (as of 2026-06-20).
+#     run_paper.sh now SOURCES this file and DUAL-WRITES .state.json at key state
+#     transitions (state_init at startup; progress.last_completed_step on every
+#     _set_checkpoint_step call). HOWEVER .state.json is still only a MIRROR — the
+#     authoritative project state remains file-state inference (infer_step) plus
+#     the dispersed markers: checkpoint.md, .heartbeat, .runner.lock, .paused,
+#     .killed, .review_state.json. No reader (infer_step / launch_agents /
+#     dashboard) consumes .state.json yet. Therefore:
+#       - DO NOT yet treat .state.json as the source of truth.
+#     Migrating readers onto it (so the markers can retire) is the remaining
+#     higher-risk work. launch_agents.sh does NOT source this file.
+#
 # Provides a single-file-of-truth (.state.json) to replace dispersed state
 # across checkpoint.md, marker files, heartbeat, lock files, etc.
 #

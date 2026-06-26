@@ -34,8 +34,8 @@
       </div>
       <template v-else>
         <div
-          v-for="(ln, i) in filtered"
-          :key="i"
+          v-for="ln in filtered"
+          :key="ln.n"
           class="ll"
           :class="'lv-' + level(ln.text)"
         >
@@ -64,6 +64,14 @@ export default {
     active: { type: Boolean, default: true },
   },
   setup() { return { toasts: useToasts() } },
+  created() {
+    // Non-reactive instance caches (not rendered → kept out of data()).
+    this._seq = 0       // monotonic line number, per base session
+    this._lastSig = ''  // cheap change token: file|len|first|last
+    this._lastFile = ''
+    this._abort = null  // AbortController for in-flight fetch
+    this._visH = null   // visibilitychange handler
+  },
   data() {
     return { lines: [], file: '', loading: false, following: true, query: '', wrap: false, atBottom: true, timer: null }
   },
@@ -76,27 +84,82 @@ export default {
   },
   watch: {
     active(v) { v ? this.start() : this.stop() },
-    base() { this.lines = []; this.fetchNow() },
+    base() { this.stop(); this.lines = []; this._seq = 0; this._lastSig = ''; this._lastFile = ''; this.fetchNow(); if (this.active) this.start() },
   },
-  mounted() { this.fetchNow(); if (this.active) this.start() },
+  mounted() { if (this.active) this.start(); this.fetchNow() },
   beforeUnmount() { this.stop() },
   methods: {
-    start() { this.stop(); this.timer = setInterval(() => { if (this.following) this.fetchNow() }, 3000) },
-    stop() { if (this.timer) { clearInterval(this.timer); this.timer = null } },
-    async fetchNow() {
-      this.loading = true
+    start() {
+      this.stop()
+      this.timer = setInterval(() => {
+        if (this.following && !document.hidden) this.fetchNow(true)
+      }, 3000)
+      this._visH = () => {
+        if (document.hidden) {
+          if (this._abort) { try { this._abort.abort() } catch (e) { /* */ } }
+        } else if (this.active) {
+          this.fetchNow(true)
+        }
+      }
+      document.addEventListener('visibilitychange', this._visH)
+    },
+    stop() {
+      if (this.timer) { clearInterval(this.timer); this.timer = null }
+      if (this._abort) { try { this._abort.abort() } catch (e) { /* */ } }
+      if (this._visH) { document.removeEventListener('visibilitychange', this._visH); this._visH = null }
+    },
+    async fetchNow(silent = false) {
+      if (!silent) this.loading = true
+      // Abort any in-flight poll before starting a new one.
+      if (this._abort) { try { this._abort.abort() } catch (e) { /* */ } }
+      const ac = new AbortController()
+      this._abort = ac
       try {
-        const d = await Projects.logs(this.base, 400)
-        this.file = d.file || ''
-        const raw = (d.logs || [])
-        // drop a single trailing empty line from tail()
+        const d = await Projects.logs(this.base, 400, ac.signal)
+        this._abort = null
+        const raw = (d.logs || []).slice()
+        // drop trailing empty line(s) from tail()
         while (raw.length && raw[raw.length - 1] === '') raw.pop()
-        this.lines = raw.map((text, i) => ({ n: i + 1, text }))
+        const file = d.file || ''
+        // Cheap "nothing changed" short-circuit: same file + length + first/last line.
+        const sig = `${file}${raw.length}${raw[0] ?? ''}${raw[raw.length - 1] ?? ''}`
+        if (sig === this._lastSig && file === this._lastFile) return
+        this._lastSig = sig
+        this._lastFile = file
+        this.file = file
+        // Tail-overlap diff: tail -400 is a suffix of the full log; our buffer
+        // is also a suffix. Find the largest m where raw[0:m] matches the
+        // buffer's trailing m lines, then append only the genuinely new lines.
+        const bufTexts = this.lines.map((l) => l.text)
+        let m = 0
+        if (bufTexts.length) {
+          const maxM = Math.min(raw.length, bufTexts.length, 400)
+          for (let k = maxM; k > 0; k--) {
+            let ok = true
+            for (let i = 0; i < k; i++) {
+              if (raw[i] !== bufTexts[bufTexts.length - k + i]) { ok = false; break }
+            }
+            if (ok) { m = k; break }
+          }
+        }
+        if (m === 0) {
+          // No overlap (log rotation / first load) → reseed, keep _seq climbing.
+          this.lines = raw.map((t) => ({ n: ++this._seq, text: t }))
+        } else {
+          const fresh = raw.slice(m)
+          if (fresh.length) {
+            const cap = 1000
+            const next = this.lines.concat(fresh.map((t) => ({ n: ++this._seq, text: t })))
+            if (next.length > cap) next.splice(0, next.length - cap) // drop oldest; stable keys survive
+            this.lines = next
+          }
+        }
         this.$nextTick(() => { if (this.following && this.atBottom) this.scrollBottom() })
       } catch (e) {
+        if (e?.code === 'ERR_CANCELED') return // aborted by a newer poll / hide / unmount
         // keep prior lines; surface only on explicit refresh
       } finally {
-        this.loading = false
+        if (!silent) this.loading = false
       }
     },
     level(text) {

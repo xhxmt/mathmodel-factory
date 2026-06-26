@@ -11,7 +11,9 @@
 
 ### 🚀 Web 界面创建项目
 - 无需命令行，直接在网页上新建项目
-- 指定项目名称和赛题 PDF 路径
+- **支持上传题目文件**：PDF、Markdown 或**完整压缩包**（ZIP、TAR.GZ 等）
+- **压缩包智能识别**：自动解压并查找题目文件，保留所有数据文件
+- 指定项目名称和赛题 PDF 路径（或服务器路径）
 - 可选：仅创建不自动启动、启用人工咨询模式
 
 ### 🧠 模型管理与逐步选模型
@@ -87,12 +89,23 @@ cd web
 1. 登录后，点击右上角 **"➕ 新建项目"** 按钮
 2. 填写项目信息：
    - **项目名称**：例如 `cumcm2024_a`（只能包含字母、数字、下划线和连字符）
-   - **题目文件路径**：例如 `/home/user/problems/2024_A.pdf`
+   - **题目文件**：支持两种方式
+     - **上传文件**：拖拽或点击上传
+       - 单个题目文件：PDF 或 Markdown
+       - **完整压缩包**：ZIP、TAR.GZ、TAR.BZ2、TAR.XZ（包含题目+数据+附件）
+       - 压缩包会自动解压并智能识别题目文件
+     - **服务器路径**：输入服务器上文件的绝对路径（如 `/home/user/problems/2024_A.pdf`）
    - **选项**：
      - ☑️ 仅创建项目，不自动开始执行
      - ☑️ 启用人工咨询模式
 3. 点击 **"创建项目"**
 4. 项目创建成功后会自动出现在列表中
+
+**💡 压缩包上传提示**：
+- 竞赛题目通常包含多个附件，推荐使用压缩包一次性上传
+- 系统会自动识别名称包含"题目"、"problem"、"question"的文件
+- 所有数据文件会保留在解压目录，供后续步骤使用
+- 详细说明见 [压缩包上传快速开始](ARCHIVE_UPLOAD_QUICKSTART.md)
 
 ### 监控项目
 
@@ -143,6 +156,18 @@ Authorization: Bearer <your_token>
 
 - `GET /api/projects` - 获取所有项目列表
 - `POST /api/projects/new` - 创建新项目
+- `POST /api/upload/problem` - 上传题目文件或压缩包（返回文件路径）
+  - 支持格式：`.pdf`, `.md`, `.zip`, `.tar.gz`, `.tar.bz2`, `.tar.xz`
+  - 压缩包会自动解压并识别题目文件
+  - 返回示例：
+    ```json
+    {
+      "status": "ok",
+      "file_path": "/path/to/uploads/20260621_123456_archive/题目.pdf",
+      "filename": "题目.pdf",
+      "extracted_dir": "/path/to/uploads/20260621_123456_archive"
+    }
+    ```
 - `GET /api/projects/{base_name}/status` - 获取项目状态
 - `GET /api/projects/{base_name}/checkpoint` - 获取 checkpoint 内容
 - `GET /api/projects/{base_name}/logs?lines=100` - 获取日志

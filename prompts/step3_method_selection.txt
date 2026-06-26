@@ -59,6 +59,19 @@ AUXILIARY 的选择规则（重要——不要随便加，加了会拉低 Step 4
 - 若决策池里所有候选流方法族相同，或剩余流的边际价值低，`AUXILIARY=NONE` 是合理结论，不要硬凑。
 - 即使设了 AUXILIARY，**Step 4 仍以 PRIMARY 为主线**，AUXILIARY 仅在 Step 5/6 作对照求解或敏感性 baseline，不写第二套完整 LaTeX 推导。这一点要在 §辅流程定位与边界 里说清楚。
 
+[反例库交叉检查 — 弱信号参考，不阻断]
+
+对你倾向选为 PRIMARY（以及 AUXILIARY，如有）的流，取其在 `viable_streams.md` 里登记的 `method_library/<dir>/<method>.md` 路径，跑一次历史反例检查：
+
+```bash
+python3 __FACTORY__/scripts/method_antipatterns.py --check __PROJECT_PATH__ <method_library 路径>
+```
+
+- 退出码 1 / `has_antipattern=true`：历史上"相似题目特征 + 该方法"出现过失败（求解发散 / 低分 / 被 abandoned）。
+- 这是**弱信号**（反例库基于少量历史项目、特征提取粗糙），**不得据此自动改判**主辅选择。
+- 若命中，在 `method_decision.md` §风险与未解决问题 增记一条：`反例库提示：<pattern_id / failure_reason / 证据项目>；本流仍可用的理由：<针对该失败模式，Step 4 将如何规避>`。
+- 若你基于文献与题目契合度的判断足够强，可照常选用，但必须显式回应该提示，不能无视。
+
 [输出契约 — 产生 2 个文件，runner 用磁盘文件判定本步骤是否 ready]
 
 ═══════════════════════════════════════════════════════════════

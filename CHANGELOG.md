@@ -67,16 +67,16 @@
 
 ### 参考材料
 
-本次改进基于 `external/` 下载的跨年优秀论文深度分析：
+本次改进基于优秀论文深度分析（数据由 `scripts/dxs_*.py` 下载至本地 `external/`，分析文稿见 `docs/reference/`）：
 - **2024A**: A163, A242, A016, A053（板凳龙题）
 - **2025A**: A196（烟幕弹题）
 - **2023A**: A0165（定日镜题）
 
 分析报告见：
 - `evaluation/recent_runs_vs_excellent_papers_diagnosis.md` - 最近运行与优秀论文对比诊断
-- `external/2024A_writing_comparison.md` - 2024A 写作对标
-- `external/2023_2025A_writing_commonality.md` - 跨年优秀论文写作共性
-- `external/excellent_paper_visualization_study.md` - 优秀论文可视化方案学习
+- `docs/reference/2024A_writing_comparison.md` - 2024A 写作对标
+- `docs/reference/2023_2025A_writing_commonality.md` - 跨年优秀论文写作共性
+- `docs/reference/excellent_paper_visualization_study.md` - 优秀论文可视化方案学习
 
 ### 预期效果
 

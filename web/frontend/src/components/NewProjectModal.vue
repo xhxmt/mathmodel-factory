@@ -2,8 +2,8 @@
   <div class="ov" @click.self="$emit('close')" @dragover.prevent="onModalDragOver" @drop.prevent="onModalDrop">
     <div v-if="modalDrag" class="dragmask" @dragleave.prevent="modalDrag = false" @drop.prevent="onModalDrop">
       <Icon name="upload" :size="40" />
-      <div class="dm-t">释放以上传题目文件</div>
-      <div class="dm-s mono">PDF / Markdown</div>
+      <div class="dm-t">释放以上传题目文件或压缩包</div>
+      <div class="dm-s mono">PDF / Markdown / ZIP / TAR.GZ</div>
     </div>
 
     <div class="modal panel rise">
@@ -28,10 +28,10 @@
 
           <div v-if="method === 'file'">
             <div v-if="!file" class="drop" :class="{ over: drag }" @click="$refs.fi.click()" @dragover.prevent="drag = true" @dragleave.prevent="drag = false" @drop.prevent="onDrop">
-              <input ref="fi" type="file" accept=".pdf,.md,.PDF,.MD" hidden @change="onPick" />
+              <input ref="fi" type="file" accept=".pdf,.md,.PDF,.MD,.zip,.tar,.gz,.bz2,.xz,.tgz,.tar.gz,.tar.bz2,.tar.xz" hidden @change="onPick" />
               <Icon name="file-text" :size="26" />
-              <div class="drop-t">点击或拖拽题目文件</div>
-              <div class="drop-s mono">PDF / Markdown</div>
+              <div class="drop-t">点击或拖拽题目文件/压缩包</div>
+              <div class="drop-s mono">PDF / Markdown / ZIP / TAR.GZ</div>
             </div>
             <div v-else class="picked">
               <Icon :name="file.name.toLowerCase().endsWith('.pdf') ? 'file-text' : 'file'" :size="18" />
@@ -83,9 +83,9 @@ export default {
     onModalDragOver(e) { if (e.dataTransfer?.types?.includes('Files')) this.modalDrag = true },
     onModalDrop(e) { this.modalDrag = false; const f = e.dataTransfer.files?.[0]; if (f) this.accept(f) },
     accept(f) {
-      if (!/\.(pdf|md)$/i.test(f.name)) { this.error = '仅支持 PDF 或 Markdown 文件'; return }
+      if (!/\.(pdf|md|zip|tar|gz|bz2|xz|tgz)$/i.test(f.name)) { this.error = '仅支持 PDF、Markdown 或压缩包（.zip, .tar.gz 等）'; return }
       this.file = f; this.method = 'file'; this.error = ''
-      if (!this.form.base_name) this.form.base_name = f.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_')
+      if (!this.form.base_name) this.form.base_name = f.name.replace(/\.(tar\.(gz|bz2|xz)|[^/.]+)$/i, '').replace(/[^a-zA-Z0-9_-]/g, '_')
     },
     clearFile() { this.file = null; this.progress = 0; if (this.$refs.fi) this.$refs.fi.value = '' },
     async upload(file) {
