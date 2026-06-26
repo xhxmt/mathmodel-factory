@@ -28,6 +28,15 @@
 # Benchmark problems — fetched via scripts/fetch_benchmark.sh, not committed
 /benchmark/
 
+# Excellent-paper galleries — fetched via scripts/dxs_*.py, not committed
+# (markdown analysis lives in docs/reference/)
+/external/
+
+# Local agent / brainstorming workspace (not part of the factory)
+.superpowers/
+
+/.worktrees/
+
 # Python artifacts
 __pycache__/
 *.py[cod]
@@ -56,6 +65,13 @@ __pycache__/
 /docs/sessions/
 /web/docs/archive/
 /archive/
+
+# Web build artifacts and editor backups
+web/**/*.tar.gz
+*.backup
+
+# Local scratch / one-off test output
+/fibonacci_results.txt
 
 # Editor and OS files
 .DS_Store

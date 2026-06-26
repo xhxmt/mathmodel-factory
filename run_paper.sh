@@ -22,6 +22,9 @@ set -euo pipefail
 FACTORY="${FACTORY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 SKILL="$FACTORY/STEPS.md"
 MAX_RETRIES=5
+# Step 6/13 定制化重试限制(消融实验显示这两步容易进入重试循环)
+MAX_RETRIES_STEP6=3  # 敏感性分析: 降低重试次数,快速失败并诊断
+MAX_RETRIES_STEP13=2 # 评委打分: 最多 2 次尝试,避免无效循环
 REGISTRY="$FACTORY/run_state/process_registry"
 KILL_MARKER=".killed"
 REVIEW_STATE_FILE=".review_state.json"
@@ -39,6 +42,11 @@ if [[ -f "$FACTORY/.env" ]]; then
 fi
 
 export PATH="$HOME/local/node/bin:$PATH"
+
+if [[ -f "$FACTORY/scripts/runner_diagnostics.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$FACTORY/scripts/runner_diagnostics.sh"
+fi
 
 # ── Ablation toggles (experiments/) ──────────────────────────────────
 #
@@ -279,43 +287,37 @@ print("%s %s" % (step, ts))
 PY
 }
 
-infer_step() {
-    local P="$1" base="$2"
-    local paper="$P/${base}_paper.tex"
-    local reopen_marker="$P/.step11_reopen_to_step10"
-    local review_resume_step=0
-    local review_requested_at=0
-
-    read -r review_resume_step review_requested_at < <(review_cycle_info "$P")
-
-    _review_step_is_fresh() {
-        local step_num="$1"
-        shift
-        if (( review_resume_step <= 0 || review_requested_at <= 0 || step_num < review_resume_step )); then
+# True if a step's output is "fresh" relative to an active review/reopen cycle.
+# Extracted from infer_step (was a nested function redefined on every call). It
+# reads `review_resume_step` / `review_requested_at` from its CALLER's locals via
+# bash dynamic scope, so it must only be called from within infer_step (verified
+# sole caller). Semantics unchanged: with no active review cycle (resume_step<=0 /
+# requested_at<=0) or for steps below the resume point, output counts as fresh;
+# otherwise at least one given file must be newer than the reopen-request epoch.
+_review_step_is_fresh() {
+    local step_num="$1"
+    shift
+    if (( review_resume_step <= 0 || review_requested_at <= 0 || step_num < review_resume_step )); then
+        return 0
+    fi
+    local f mt
+    for f in "$@"; do
+        [[ -e "$f" ]] || continue
+        mt=$(_mtime "$f")
+        if (( mt > review_requested_at )); then
             return 0
         fi
-        local f mt
-        for f in "$@"; do
-            [[ -e "$f" ]] || continue
-            mt=$(_mtime "$f")
-            if (( mt > review_requested_at )); then
-                return 0
-            fi
-        done
-        return 1
-    }
+    done
+    return 1
+}
 
-    # Killed projects stop before Step 1 completes.
-    [[ -f "$P/$KILL_MARKER" ]] && echo 0 && return
-
-    # 16: final PDF and submission bundle delivered to papers/
-    [[ -f "$FACTORY/papers/${base}_paper.pdf" && -f "$FACTORY/papers/${base}_submission.zip" ]] && echo 16 && return
-
-    # Modeling-mode step inference — short-circuits when the project has a
-    # problem/ directory (set by Step 0 problem parsing).  Modeling artifacts
-    # for Steps 5-16 are checked descending so the latest completed step is
-    # reported even when older artifacts remain on disk.
-    if is_modeling_project "$P"; then
+# Modeling-mode step inference, extracted from infer_step (body moved verbatim).
+# Echoes the matched step number to stdout, or nothing if no modeling step matches.
+# Called only from infer_step via $(...); the subshell inherits infer_step's
+# review_resume_step / review_requested_at locals, which _review_step_is_fresh reads
+# through bash dynamic scope.
+_infer_step_modeling() {
+    local P="$1" base="$2" paper="$3"
         local gate2_marker="$P/.gate2_reopen_to_revision"
 
         # 15: citation_audit.md + derobotification.md + final paper.tex
@@ -495,8 +497,39 @@ infer_step() {
             echo 1
             return
         fi
+}
+
+infer_step() {
+    local P="$1" base="$2"
+    local paper="$P/${base}_paper.tex"
+    local reopen_marker="$P/.step11_reopen_to_step10"
+    local review_resume_step=0
+    local review_requested_at=0
+
+    # review_resume_step / review_requested_at feed the module-level
+    # _review_step_is_fresh (defined above) via bash dynamic scope — they must
+    # stay local to infer_step.
+    read -r review_resume_step review_requested_at < <(review_cycle_info "$P")
+
+    # Killed projects stop before Step 1 completes.
+    [[ -f "$P/$KILL_MARKER" ]] && echo 0 && return
+
+    # 16: final PDF and submission bundle delivered to papers/
+    [[ -f "$FACTORY/papers/${base}_paper.pdf" && -f "$FACTORY/papers/${base}_submission.zip" ]] && echo 16 && return
+
+    # Modeling-mode step inference — short-circuits when the project has a
+    # problem/ directory (set by Step 0 problem parsing).  Modeling artifacts
+    # for Steps 5-16 are checked descending so the latest completed step is
+    # reported even when older artifacts remain on disk.
+    if is_modeling_project "$P"; then
+        local _m; _m="$(_infer_step_modeling "$P" "$base" "$paper")"
+        [[ -n "$_m" ]] && echo "$_m" && return
     fi
 
+    # Legacy social-science step inference — kept INLINE (not extracted like the
+    # modeling branch above) because it has no characterization-test coverage;
+    # extracting it without a safety net is deferred. Active domain is modeling
+    # (see CLAUDE.md); this path serves old social-science projects only.
     local has_analysis_data=0
     project_has_analysis_ready_data "$P" && has_analysis_data=1
 
@@ -686,6 +719,18 @@ fi
 
 trap 'echo "$(date '\''+%Y-%m-%d %H:%M:%S'\'') [$BASE] ERR at line $LINENO (exit $?)" >> "$PROJECT/logs/runner.log"' ERR
 
+# Integrate state_manager (P1-1): source once, then dual-write .state.json at key
+# state transitions. NOTE: .state.json is currently a MIRROR — readers (infer_step,
+# launch_agents, dashboard) are NOT yet migrated to consume it; that migration is a
+# separate, higher-risk follow-up. Sourcing is safe: zero symbol clashes with
+# run_paper.sh, both use `set -euo pipefail`, and state_manager.sh has no top-level
+# side effects. Dual-writes are best-effort (no-op via `declare -F` guards if jq is
+# missing or the source failed).
+if [[ -f "$FACTORY/scripts/state_manager.sh" ]]; then
+    source "$FACTORY/scripts/state_manager.sh"
+    state_init "$PROJECT" 2>/dev/null || true
+fi
+
 project_is_killed() {
     local proj_dir="${1:-$PROJECT}"
     [[ -f "$proj_dir/$KILL_MARKER" ]]
@@ -705,15 +750,38 @@ step1_viability_verdict() {
         | tr -d '\r'
 }
 
+# Atomically rewrite checkpoint.md's "Last completed step" (and "Timestamp")
+# in a single temp-file+rename, instead of two separate in-place `sed -i` calls
+# that leave a brief window where step is updated but timestamp is not. No-op if
+# checkpoint.md is missing. checkpoint.md is display-only (file-state is
+# authoritative), so a missed timestamp is harmless; a torn file is not.
+_set_checkpoint_step() {
+    local step="$1"
+    local cp="$PROJECT/checkpoint.md"
+    [[ -f "$cp" ]] || return 0
+    local ts tmp
+    ts="$(date '+%Y-%m-%d %H:%M')"
+    tmp="$(mktemp "${cp}.XXXXXX")" || return 0
+    if sed -e "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: ${step}/" \
+           -e "s/\*\*Timestamp\*\*: .*/\*\*Timestamp\*\*: ${ts}/" \
+           "$cp" > "$tmp" 2>/dev/null; then
+        mv -f "$tmp" "$cp"
+    else
+        rm -f "$tmp"
+    fi
+    # Dual-write the step to the .state.json mirror (best-effort; readers not yet
+    # migrated). No-op when state_manager wasn't sourced (e.g. jq missing).
+    if declare -F state_update >/dev/null 2>&1; then
+        state_update "$PROJECT" "progress.last_completed_step" "$step" 2>/dev/null || true
+    fi
+}
+
 mark_project_killed() {
     local timestamp
     timestamp=$(date +%s)
     touch "$PROJECT/$KILL_MARKER"
     echo "KILLED:1 $timestamp" > "$PROJECT/.heartbeat"
-    sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: 0/" \
-        "$PROJECT/checkpoint.md" 2>/dev/null || true
-    sed -i "s/\*\*Timestamp\*\*: .*/\*\*Timestamp\*\*: $(date '+%Y-%m-%d %H:%M')/" \
-        "$PROJECT/checkpoint.md" 2>/dev/null || true
+    _set_checkpoint_step 0
     if grep -q "Termination status" "$PROJECT/checkpoint.md" 2>/dev/null; then
         sed -i "s/\*\*Termination status\*\*: .*/\*\*Termination status\*\*: KILLED at Step 1 viability gate/" \
             "$PROJECT/checkpoint.md" 2>/dev/null || true
@@ -800,9 +868,13 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
         HB_FILE="$PROJECT/.heartbeat"
         if ! $stale && [[ -f "$HB_FILE" ]]; then
             read -r hb_step hb_ts < "$HB_FILE" 2>/dev/null || true
-            hb_step="${hb_step#STUCK:}"   # strip prefix if stuck
-            hb_step="${hb_step#ACTIVE:}"  # strip prefix if active
-            if [[ -n "$hb_ts" && "$hb_ts" =~ ^[0-9]+$ ]]; then
+            hb_step="${hb_step#STUCK:}"              # strip prefix if stuck
+            hb_step="${hb_step#ACTIVE:}"             # strip prefix if active
+            hb_step="${hb_step#AWAITING_STEP8_5:}"   # strip prefix if awaiting 8.5 gate
+            # Guard the arithmetic: an unknown prefix (or a future marker)
+            # would otherwise throw a bash syntax error in $(( hb_step + 1 )).
+            # Non-numeric hb_step falls through to the lock-age fallback below.
+            if [[ -n "$hb_ts" && "$hb_ts" =~ ^[0-9]+$ && "$hb_step" =~ ^[0-9]+$ ]]; then
                 next_step=$(( hb_step + 1 ))
                 max_wait=$(( $(step_timeout "$next_step") + 1800 ))
                 hb_age=$(( $(date +%s) - hb_ts ))
@@ -842,6 +914,10 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
                     | tee -a "$PROJECT/logs/runner.log"
                 exit 0
             fi
+            diag_event "$PROJECT" "${next_step:-0}" lock_stale_reclaimed LOCK_STALE_RECLAIMED \
+                "Stale lock reclaimed: $stale_reason" "logs/runner.log"
+            diag_status "$PROJECT" waiting "${next_step:-0}" lock_recovery LOCK_STALE_RECLAIMED \
+                "检测到陈旧锁并已回收" "open_runner_log,refresh_status" "file:logs/runner.log"
         else
             echo "$(date '+%Y-%m-%d %H:%M:%S') [${BASE}] Another runner is active (lock exists). Exiting." \
                 | tee -a "$PROJECT/logs/runner.log"
@@ -866,6 +942,14 @@ log() {
 checkpoint_step() {
     grep "Last completed step" "$PROJECT/checkpoint.md" 2>/dev/null \
         | grep -oP -- '-?\d+' | head -1 || echo -1
+}
+
+_set_checkpoint_step() {
+    local step="$1"
+    sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: $step/" \
+        "$PROJECT/checkpoint.md" 2>/dev/null || true
+    sed -i "s/\*\*Timestamp\*\*: .*/\*\*Timestamp\*\*: $(date '+%Y-%m-%d %H:%M')/" \
+        "$PROJECT/checkpoint.md" 2>/dev/null || true
 }
 
 get_question() {
@@ -1031,8 +1115,9 @@ verify_step() {
 
 # Gate 2 (Step 13 in modeling mode; was Step 11 in the legacy social-science
 # pipeline).  Reads VERDICT line from judge_evaluation.md and, if it requests
-# a reopen, drops a marker so the runner rewinds to Step 12 (revision) once.
-# The .gate2_reopened_once file prevents an infinite reopen loop.
+# a reopen, drops a marker so the runner rewinds to Step 11 (which then re-runs
+# the Step 12 revision) once. The .gate2_reopened_once file prevents an
+# infinite reopen loop.
 gate2_reopen_marker() {
     echo "$PROJECT/.gate2_reopen_to_revision"
 }
@@ -1107,6 +1192,7 @@ QUESTION=$(get_question)
 log "========================================"
 log "Runner starting"
 log "  file-state: step $INFERRED | checkpoint: step $FROM_CP | resuming from: step $STEP"
+diag_status "$PROJECT" running "$STEP" bootstrap runner_start "" "" ""
 {
     _active_ablations=""
     _ablate_on "$ABLATE_NO_CONSULTATION"       && _active_ablations+=" no-consultation"
@@ -1125,10 +1211,7 @@ log "  question: ${QUESTION:0:120}..."
 # File-state is authoritative; correct checkpoint drift in either direction.
 if (( INFERRED != FROM_CP )); then
     log "  checkpoint disagrees with file-state ($FROM_CP vs $INFERRED) — correcting"
-    sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: $INFERRED/" \
-        "$PROJECT/checkpoint.md"
-    sed -i "s/\*\*Timestamp\*\*: .*/\*\*Timestamp\*\*: $(date '+%Y-%m-%d %H:%M')/" \
-        "$PROJECT/checkpoint.md"
+    _set_checkpoint_step "$INFERRED"
 fi
 
 # Write heartbeat immediately so the lock staleness check always has a
@@ -1222,8 +1305,7 @@ Do not inspect, reference, reuse, or mention completed projects unless the human
     # gate below and infer_step() agree on step 0. Gated on the modeling brief
     # so social-mode setup (whose agent writes its own checkpoint) is untouched.
     if [[ -f "$PROJECT/problem/problem_brief.md" ]]; then
-        sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: 0/" \
-            "$PROJECT/checkpoint.md" 2>/dev/null || true
+        _set_checkpoint_step 0
     fi
 
     if project_setup_complete "$PROJECT"; then
@@ -1338,6 +1420,12 @@ _start_activity_monitor() {
             if [[ -n "$newest_file" ]]; then
                 alive=true
             fi
+        fi
+
+        if ! $alive; then
+            diag_status "$proj_dir" waiting "$step" activity_monitor NO_LOG_PROGRESS \
+                "日志暂未增长，runner 仍在等待新活动信号" \
+                "open_runner_log,refresh_status" "file:logs/runner.log"
         fi
 
         if $alive; then
@@ -1736,6 +1824,12 @@ maybe_consult() {
 
     echo "GATE:${gate} STEP:${step} TS:$(date +%s)" > "$CONSULT_AWAIT_MARKER"
     echo "CONSULT:${step} $(date +%s)" > "$PROJECT/.heartbeat"
+    diag_event "$PROJECT" "$step" consultation_requested CONSULTATION_PENDING \
+        "Runner paused for human consultation" "consultation/${gate}_request.md"
+    diag_status "$PROJECT" waiting "$step" consultation_wait CONSULTATION_PENDING \
+        "等待人工咨询回填" \
+        "open_consultation_request,open_human_review,refresh_status" \
+        "file:consultation/${gate}_request.md,file:human_review.md"
 
     local msg="🛑 [paper_factory] ${BASE} 在 Step ${step} 暂停，等待人工咨询：${title}
 请阅读 ${req}
@@ -1790,6 +1884,35 @@ find_codex_trace() {
 }
 
 # Run a single Codex agent with shell-level hang detection.
+# Shared hang check for run_codex / run_agy (this block was byte-identical in
+# both functions). Returns 1 when the process is NOT (yet) considered hung —
+# either stale_since hasn't exceeded hang_timeout, or it has but the process
+# still has direct children (treated as waiting on a long job; stale_since is
+# deliberately NOT reset, so a second quiet window will fire the kill). Returns
+# 0 after killing+reaping a process judged hung (stale + no children).
+# NOTE: this uses a simple `pgrep -P` child count, NOT the full descendant-tree
+# walk run_codex_parallel uses. Per that function's comment, the
+# subshell→timeout→codex tree means a simple count almost always finds the
+# `timeout` child, so this heuristic rarely fires a kill. Behaviour is preserved
+# verbatim here; reconciling the two kill heuristics is a separate behavioural
+# change, intentionally NOT part of this DRY extraction.
+_maybe_kill_hung() {
+    local pid="$1" stale_since="$2" hang_timeout="$3" label="$4"
+    local now
+    now=$(date +%s)
+    (( now - stale_since > hang_timeout )) || return 1
+    local children
+    children=$(pgrep -P "$pid" 2>/dev/null | wc -l)
+    if (( children > 0 )); then
+        log "   $label stale ${hang_timeout}s but has $children child processes — not hung"
+        return 1
+    fi
+    log "   $label stale for ${hang_timeout}s — killing (hung)"
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 0
+}
+
 # Usage: run_codex <prompt_file> <timeout_secs> [hang_timeout_secs]
 # Returns: 0=success, 1=timeout/error, 2=hung(killed)
 run_codex() {
@@ -1850,24 +1973,8 @@ NOTE FROM THE RESEARCHER: $note"
             fi
         fi
 
-        local now
-        now=$(date +%s)
-        if (( now - stale_since > hang_timeout )); then
-            # Before killing, check if Codex has active child processes
-            # (e.g., stata, python). If children are running, the agent
-            # is waiting on a long job, not hung.
-            local children
-            children=$(pgrep -P "$codex_pid" 2>/dev/null | wc -l)
-            if (( children > 0 )); then
-                log "   Codex trace stale ${hang_timeout}s but has $children child processes — not hung"
-                # Don't reset stale_since: if children also go quiet
-                # for another hang_timeout period, we'll kill then
-            else
-                log "   Codex trace stale for ${hang_timeout}s — killing (hung)"
-                kill "$codex_pid" 2>/dev/null || true
-                wait "$codex_pid" 2>/dev/null || true
-                return 2
-            fi
+        if _maybe_kill_hung "$codex_pid" "$stale_since" "$hang_timeout" "Codex trace"; then
+            return 2
         fi
     done
 
@@ -1969,19 +2076,8 @@ NOTE FROM THE RESEARCHER: $note"
             stale_since=$(date +%s)
         fi
 
-        local now
-        now=$(date +%s)
-        if (( now - stale_since > hang_timeout )); then
-            local children
-            children=$(pgrep -P "$agy_pid" 2>/dev/null | wc -l)
-            if (( children > 0 )); then
-                log "   Agy log stale ${hang_timeout}s but has $children child processes — not hung"
-            else
-                log "   Agy log stale for ${hang_timeout}s — killing (hung)"
-                kill "$agy_pid" 2>/dev/null || true
-                wait "$agy_pid" 2>/dev/null || true
-                return 2
-            fi
+        if _maybe_kill_hung "$agy_pid" "$stale_since" "$hang_timeout" "Agy log"; then
+            return 2
         fi
     done
 
@@ -2511,8 +2607,9 @@ run_backend() {
 # Args: <prompt_file> <timeout> <hang_timeout> <default_fn>
 dispatch_step() {
     local prompt_file="$1" timeout="$2" hang="$3" default_fn="$4"
+    local step_key="${5:-$NEXT}"
     local ids primary fallback
-    ids="$(get_step_model_ids "$NEXT")"
+    ids="$(get_step_model_ids "$step_key")"
     if [[ -z "$ids" ]]; then
         "$default_fn" "$prompt_file" "$timeout" "$hang"
         return $?
@@ -2913,9 +3010,9 @@ run_step_3() {
 }
 
 run_step_4() {
-    # Modeling-mode Step 4: full model construction.  Single Agy worker
-    # (Claude fallback) reads chosen_method.md to identify PRIMARY (and
-    # optional AUXILIARY), expands m{primary}_spec.md into the canonical
+    # Modeling-mode Step 4: full model construction.  Changed to Claude primary
+    # (Codex fallback) to avoid Agy. Reads chosen_method.md to identify PRIMARY
+    # (and optional AUXILIARY), expands m{primary}_spec.md into the canonical
     # cross-step trio (model.md / symbol_table.md / assumption_ledger.md)
     # plus runnable code under models/m{primary}_<short>/.  AUXILIARY gets
     # scaffold-only (README + stub + entry comment); full impl deferred to
@@ -2935,8 +3032,8 @@ run_step_4() {
         return 0
     fi
 
-    log "   Step 4: full model construction (Agy → Claude fallback)"
-    dispatch_step step4_model_construction.txt 14400 3600 run_agy_then_claude || true
+    log "   Step 4: full model construction (Claude → Codex fallback, Agy disabled)"
+    dispatch_step step4_model_construction.txt 14400 3600 run_claude_then_codex || true
 
     if [[ ! -f "$mdl" ]] || (( $(_lines "$mdl") < 100 )); then
         log "   Step 4: model.md missing or < 100 lines"
@@ -2961,11 +3058,66 @@ run_step_5() {
     # (CLAUDE.md hang-detection rule).
     dispatch_step step5_full_solve.txt 14400 3600 run_codex_then_claude
 }
-run_step_6()  { dispatch_step step6_sensitivity.txt 10800 3600 run_codex_then_claude; }
+run_step_6() {
+    # Step 6 预检查: 确保 Step 5 产物完整,避免进入重试循环后才发现基础数据缺失
+    log "   Running Step 6 coverage precheck"
+    if [[ -x "$FACTORY/scripts/step6_coverage_precheck.py" ]]; then
+        if "$FACTORY/scripts/step6_coverage_precheck.py" "$PROJECT" >> "$PROJECT/logs/runner.log" 2>&1; then
+            log "   Step 6 precheck PASS"
+        else
+            local exit_code=$?
+            if (( exit_code == 2 )); then
+                log "   Step 6 precheck BLOCKED — missing Step 5 outputs, aborting"
+                return 1
+            else
+                log "   Step 6 precheck WARNING — continuing with caution"
+            fi
+        fi
+    else
+        log "   WARNING: step6_coverage_precheck.py not found, skipping precheck"
+    fi
+
+    dispatch_step step6_sensitivity.txt 10800 3600 run_codex_then_claude
+}
 
 run_step_7()  { dispatch_step step7_model_eval.txt 7200 1800 run_claude_then_codex; }
 run_step_8()  { dispatch_step step8_visualization.txt 10800 3600 run_claude_then_codex; }
-run_step_9()  { dispatch_step step9_paper_draft.txt 14400 3600 run_claude_then_codex; }
+
+# Step 8.5 is implemented as a pre-Step-9 editorial gate.
+# We do not renumber the integer main loop. Instead, Step 9 refuses to draft
+# the paper until reviewer_entry_map.md + anchor_figure_plan.md + entry_gate.md
+# exist and entry_gate.md says VERDICT: PASS.
+step8_5_verdict() {
+    python3 "$FACTORY/scripts/step8_5_gate.py" "$PROJECT" --verdict 2>/dev/null || true
+}
+
+step8_5_passed() {
+    [[ "$(step8_5_verdict)" == "PASS" ]]
+}
+
+run_step_8_5() {
+    dispatch_step step8_5_reviewer_entry.txt 7200 1800 run_claude_then_codex 8_5
+}
+
+run_step_9() {
+    if ! step8_5_passed; then
+        log "   Step 9 preflight: running Step 8.5 Reviewer Entry Design"
+        run_step_8_5 || return $?
+        local verdict
+        verdict="$(step8_5_verdict)"
+        if [[ "$verdict" != "PASS" ]]; then
+            log "   Step 8.5 verdict ${verdict:-<missing>} — stop before paper draft"
+            diag_event "$PROJECT" 8 gate_blocked AWAITING_STEP8_5 \
+                "Step 8.5 verdict is not PASS" "entry_gate.md"
+            diag_status "$PROJECT" waiting 8 step8_5_gate_review AWAITING_STEP8_5 \
+                "Step 8.5 未通过，等待补足 reviewer entry 材料" \
+                "open_entry_gate,open_reviewer_entry_artifacts,refresh_status" \
+                "file:entry_gate.md,file:reviewer_entry_map.md,file:anchor_figure_plan.md"
+            return 42
+        fi
+    fi
+    dispatch_step step9_paper_draft.txt 14400 3600 run_claude_then_codex
+}
 
 run_step_10() { dispatch_step step10_gate1_numerical.txt 10800 3600 run_codex_then_claude; }
 
@@ -2978,7 +3130,47 @@ run_step_13() {
         _write_judge_stub
         return 0
     fi
+
+    # Step 13 缓存检查: 如果论文内容未变,直接复用缓存的评分结果
+    log "   Checking Step 13 judge evaluation cache"
+    if [[ -x "$FACTORY/scripts/step13_judge_cache.py" ]]; then
+        if "$FACTORY/scripts/step13_judge_cache.py" "$PROJECT" --check >> "$PROJECT/logs/runner.log" 2>&1; then
+            log "   Step 13 cache HIT — reusing cached evaluation"
+            # 缓存命中(exit 0),judge_evaluation.md 应该已存在,直接验证即可
+            if [[ -f "$PROJECT/judge_evaluation.md" ]]; then
+                return 0
+            else
+                log "   WARNING: cache hit but judge_evaluation.md missing, re-evaluating"
+            fi
+        else
+            local cache_exit=$?
+            if (( cache_exit == 1 )); then
+                log "   Step 13 cache PARTIAL HIT — evaluating changed sections"
+            else
+                log "   Step 13 cache MISS — full evaluation needed"
+            fi
+        fi
+    fi
+
     dispatch_step step13_gate2_judge.txt 10800 3600 run_codex_then_claude
+
+    # 评分完成后保存到缓存
+    if [[ -f "$PROJECT/judge_evaluation.md" ]] && [[ -x "$FACTORY/scripts/step13_judge_cache.py" ]]; then
+        local verdict=""
+        local score=0
+        verdict=$(awk -F': *' '/^VERDICT:/{print $2; exit}' "$PROJECT/judge_evaluation.md" 2>/dev/null | tr -d ' ')
+        score=$(grep -oP '整体得分[：:]\s*\K[\d.]+' "$PROJECT/judge_evaluation.md" 2>/dev/null | head -1 || echo "0")
+
+        if [[ -n "$verdict" ]] && [[ -n "$score" ]]; then
+            local reopen_cycle=1
+            [[ -f "$(gate2_reopened_once_file)" ]] && reopen_cycle=2
+
+            "$FACTORY/scripts/step13_judge_cache.py" "$PROJECT" --save \
+                --verdict "$verdict" --score "$score" --reopen-cycle "$reopen_cycle" \
+                >> "$PROJECT/logs/runner.log" 2>&1 || true
+            log "   Step 13 evaluation cached (verdict=$verdict, score=$score)"
+        fi
+    fi
 }
 
 run_step_14() { dispatch_step step14_abstract.txt 7200 1800 run_claude_then_codex; }
@@ -3017,8 +3209,7 @@ run_step_16() {
         log "   WARNING: cleanup_project_artifacts.py not found or not executable"
     fi
     # Update checkpoint
-    sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: 16/" \
-        "$PROJECT/checkpoint.md" 2>/dev/null || true
+    _set_checkpoint_step 16
 }
 
 # ── Main step loop ────────────────────────────────────────────────────
@@ -3037,18 +3228,27 @@ while (( STEP < 16 )); do
     RETRIES=0
     TIMEOUT=$(step_timeout "$NEXT")
 
+    # 步骤特定的重试限制
+    local STEP_MAX_RETRIES=$MAX_RETRIES
+    case "$NEXT" in
+        6)  STEP_MAX_RETRIES=$MAX_RETRIES_STEP6 ;;
+        13) STEP_MAX_RETRIES=$MAX_RETRIES_STEP13 ;;
+    esac
+
     # Pre-Step-4 consultation: confirm the modeling route before the full
     # model is constructed.  No-op unless opted in + the `step4` gate active.
     if (( NEXT == 4 )); then
         maybe_consult step4 4 "建模定型前：确认 model.md 的建模路线（贴前沿模型的建模方案）"
     fi
 
-    while (( RETRIES < MAX_RETRIES )); do
-        log "-- Step $NEXT | attempt $((RETRIES + 1))/$MAX_RETRIES | timeout ${TIMEOUT}s --"
+    while (( RETRIES < STEP_MAX_RETRIES )); do
+        log "-- Step $NEXT | attempt $((RETRIES + 1))/$STEP_MAX_RETRIES | timeout ${TIMEOUT}s --"
 
         STEP_LOG="$PROJECT/logs/step_${NEXT}_$(date +%Y%m%d_%H%M%S).log"
         log "   log: $STEP_LOG"
         touch "$STEP_LOG"
+        diag_event "$PROJECT" "$NEXT" step_started "" "Step $NEXT started" "$STEP_LOG"
+        diag_status "$PROJECT" running "$NEXT" step_dispatch "" "" "" "file:$STEP_LOG"
 
         echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
 
@@ -3076,6 +3276,7 @@ while (( STEP < 16 )); do
             15) run_step_15 ;;
             16) run_step_16 ;;
         esac
+        STEP_RC=$?
         set -e
 
         # Stop activity monitor
@@ -3084,6 +3285,16 @@ while (( STEP < 16 )); do
 
         # Kill lingering child processes
         cleanup_children
+
+        if (( NEXT == 9 )) && (( STEP_RC == 42 )); then
+            log "   Step 8.5 requires revision — leaving checkpoint at Step 8"
+            _set_checkpoint_step 8
+            echo "AWAITING_STEP8_5:8 $(date +%s)" > "$PROJECT/.heartbeat"
+            # Exit cleanly, mirroring the consultation-gate pattern (CLAUDE.md:
+            # awaiting states exit 0 so the activity monitor never treats them
+            # as a hang/crash and launch_agents.sh status shows AWAIT_8.5).
+            exit 0
+        fi
 
         # Agent-initiated consultation (dynamic gate): an agent that hit a hard
         # judgment call wrote consultation/REQUEST.md and left the step
@@ -3129,10 +3340,7 @@ while (( STEP < 16 )); do
                         log "   Step 13 verdict $verdict — reopening Step 12 once"
                         STEP=11
                         echo "$STEP $(date +%s)" > "$PROJECT/.heartbeat"
-                        sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: $STEP/" \
-                            "$PROJECT/checkpoint.md" 2>/dev/null || true
-                        sed -i "s/\*\*Timestamp\*\*: .*/\*\*Timestamp\*\*: $(date '+%Y-%m-%d %H:%M')/" \
-                            "$PROJECT/checkpoint.md" 2>/dev/null || true
+                        _set_checkpoint_step "$STEP"
                         break
                     else
                         log "   Step 13 verdict $verdict after prior reopen — proceeding to Step 14 per policy"
@@ -3144,14 +3352,16 @@ while (( STEP < 16 )); do
                 fi
             fi
 
+            diag_event "$PROJECT" "$NEXT" step_completed "" "Step $NEXT verified" "$STEP_LOG"
+            diag_status "$PROJECT" running "$NEXT" step_complete "" "" "" "file:$STEP_LOG"
+            if (( NEXT == 16 )); then
+                diag_status "$PROJECT" completed 16 delivery_complete "" "项目已完成" "" "file:logs/runner.log"
+            fi
             log "   Step $NEXT VERIFIED"
             STEP=$NEXT
             echo "$STEP $(date +%s)" > "$PROJECT/.heartbeat"
             # Update checkpoint.md from shell (don't rely on LLM)
-            sed -i "s/\*\*Last completed step\*\*: .*/\*\*Last completed step\*\*: $STEP/" \
-                "$PROJECT/checkpoint.md" 2>/dev/null || true
-            sed -i "s/\*\*Timestamp\*\*: .*/\*\*Timestamp\*\*: $(date '+%Y-%m-%d %H:%M')/" \
-                "$PROJECT/checkpoint.md" 2>/dev/null || true
+            _set_checkpoint_step "$STEP"
             break
         else
             RETRIES=$((RETRIES + 1))
@@ -3162,20 +3372,37 @@ while (( STEP < 16 )); do
 
             log "   Step $NEXT NOT VERIFIED (expected output files missing or invalid)"
             log "   Error classification: $err_class"
+            diag_event "$PROJECT" "$NEXT" verification_failed VERIFY_OUTPUT_FAILED \
+                "Step $NEXT output missing or invalid" "$STEP_LOG"
+            diag_status "$PROJECT" retrying "$NEXT" verification VERIFY_OUTPUT_FAILED \
+                "Step $NEXT 产物校验未通过，等待重试" \
+                "open_runner_log,refresh_status" "file:$STEP_LOG"
 
             # Permanent errors: stop immediately
             if [[ "$err_class" == PERMANENT_* ]]; then
                 log "   PERMANENT error detected — stopping retries"
-                RETRIES=$MAX_RETRIES
+                RETRIES=$STEP_MAX_RETRIES
             fi
 
-            if (( RETRIES < MAX_RETRIES )); then
+            # Step 6/13 快速失败诊断
+            if (( NEXT == 6 || NEXT == 13 )) && (( RETRIES >= 1 )); then
+                log "   Step $NEXT failed $((RETRIES)) times — entering diagnostic mode"
+                if (( NEXT == 6 )); then
+                    log "   Hint: Check solve_log.md §Step 6 接力 for sweep list"
+                    log "   Hint: Run 'python3 scripts/step6_coverage_precheck.py $PROJECT' for details"
+                elif (( NEXT == 13 )); then
+                    log "   Hint: Check judge_evaluation.md structure and VERDICT line"
+                    log "   Hint: Ensure paper PDF compiles successfully"
+                fi
+            fi
+
+            if (( RETRIES < STEP_MAX_RETRIES )); then
                 # Exponential backoff: 30s, 60s, 120s, 300s, 600s
                 local delays=(30 60 120 300 600)
                 local delay_idx=$((RETRIES - 1))
                 local delay=${delays[$delay_idx]:-600}
 
-                log "   Retrying in ${delay}s (attempt $((RETRIES + 1))/$MAX_RETRIES)..."
+                log "   Retrying in ${delay}s (attempt $((RETRIES + 1))/$STEP_MAX_RETRIES)..."
                 sleep "$delay"
             fi
         fi
@@ -3185,8 +3412,8 @@ while (( STEP < 16 )); do
         break
     fi
 
-    if (( RETRIES >= MAX_RETRIES )); then
-        log "FATAL: Step $NEXT failed after $MAX_RETRIES attempts. Stopping."
+    if (( RETRIES >= STEP_MAX_RETRIES )); then
+        log "FATAL: Step $NEXT failed after $STEP_MAX_RETRIES attempts. Stopping."
         echo "STUCK:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
         exit 1
     fi

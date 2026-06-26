@@ -104,6 +104,7 @@ import ModelManager from './components/ModelManager.vue'
 import { Projects, authMe, setUnauthorizedHandler } from './lib/api.js'
 import { useTheme } from './composables/useTheme.js'
 import { useToasts, notifyDesktop } from './composables/useToasts.js'
+import { useModels } from './composables/useModels.js'
 
 export default {
   name: 'App',
@@ -111,6 +112,7 @@ export default {
   setup() {
     const { theme, toggle: toggleTheme } = useTheme()
     const toasts = useToasts()
+    const { invalidate: invalidateModels, load: loadModels } = useModels()
 
     const isAuthenticated = ref(false)
     const username = ref('')
@@ -127,6 +129,17 @@ export default {
     let ws = null
     let reconnect = null
     let awaitingSeen = null // Set, null until seeded
+
+    // Per-project fingerprint for a cheap "nothing changed" short-circuit on the
+    // 2s full-list WS push. Covers every field ProjectCard renders, so an
+    // unchanged project is never re-rendered.
+    const fp = (p) => `${p.status}|${p.current_step}|${p.progress_percent}|${p.pid}|${p.consultation_pending}|${p.consultation_gate}|${p.last_updated}`
+    let lastListFp = ''
+    // WS reconnect: exponential backoff + intentional-close flag (stops the
+    // socket from reconnecting after logout/unmount).
+    let reconnectDelay = 1000
+    let intentionalClose = false
+    const BACKOFF_MAX = 15000
 
     const filterChips = [
       { key: 'all', label: '全部' },
@@ -154,21 +167,67 @@ export default {
     }))
     const selectedProject = computed(() => projects.value.find((p) => p.base_name === selectedBase.value) || null)
 
-    function applyProjects(list) {
-      projects.value = list
-      // detect newly-awaiting projects → notify (skip on first seed)
+    function notifyNewlyAwaiting(list) {
       const nowAwaiting = list.filter((p) => p.consultation_pending).map((p) => p.base_name)
-      if (awaitingSeen === null) {
-        awaitingSeen = new Set(nowAwaiting)
-      } else {
-        for (const b of nowAwaiting) {
-          if (!awaitingSeen.has(b)) {
-            toasts.warn(`项目 ${b} 需要你的决策`, '人工咨询')
-            notifyDesktop('Paper Factory · 需要你决策', `${b} 已在关卡处暂停`)
-          }
+      if (awaitingSeen === null) { awaitingSeen = new Set(nowAwaiting); return }
+      for (const b of nowAwaiting) {
+        if (!awaitingSeen.has(b)) {
+          toasts.warn(`项目 ${b} 需要你的决策`, '人工咨询')
+          notifyDesktop('Paper Factory · 需要你决策', `${b} 已在关卡处暂停`)
         }
-        awaitingSeen = new Set(nowAwaiting)
       }
+      awaitingSeen = new Set(nowAwaiting)
+    }
+
+    // Single-project patch for the `project_updated` WS message (carries a full
+    // ProjectStatus dict). In-place Object.assign on the deep-reactive element
+    // re-renders only that one card + the aggregate computeds; no array swap.
+    function patchProject(newP) {
+      const arr = projects.value
+      const idx = arr.findIndex((p) => p.base_name === newP.base_name)
+      if (idx === -1) {
+        projects.value = [...arr, newP]
+      } else if (fp(arr[idx]) !== fp(newP)) {
+        Object.assign(arr[idx], newP)
+      }
+      lastListFp = projects.value.map(fp).join('')
+      // Notify on a fresh false→true consultation flip (only after the first seed,
+      // so the initial batch of pending projects doesn't fire a storm).
+      if (awaitingSeen !== null) {
+        if (newP.consultation_pending && !awaitingSeen.has(newP.base_name)) {
+          toasts.warn(`项目 ${newP.base_name} 需要你的决策`, '人工咨询')
+          notifyDesktop('Paper Factory · 需要你决策', `${newP.base_name} 已在关卡处暂停`)
+          awaitingSeen.add(newP.base_name)
+        } else if (!newP.consultation_pending) {
+          awaitingSeen.delete(newP.base_name)
+        }
+      }
+    }
+
+    function applyProjects(list) {
+      const agg = list.map(fp).join('')
+      // First seed: full assign + seed awaitingSeen, no notifications.
+      if (awaitingSeen === null) {
+        projects.value = list
+        lastListFp = agg
+        awaitingSeen = new Set(list.filter((p) => p.consultation_pending).map((p) => p.base_name))
+        return
+      }
+      // Aggregate unchanged → zero re-render (the common case on the 2s push).
+      if (agg === lastListFp) return
+      lastListFp = agg
+      // Per-project diff/patch so only changed cards re-render.
+      const cur = projects.value
+      const byBase = new Map(list.map((p) => [p.base_name, p]))
+      for (const newP of list) {
+        const idx = cur.findIndex((p) => p.base_name === newP.base_name)
+        if (idx === -1) cur.push(newP)
+        else if (fp(cur[idx]) !== fp(newP)) Object.assign(cur[idx], newP)
+      }
+      // Drop removed projects (rare) — needs a new array to shrink reactively.
+      const next = cur.filter((p) => byBase.has(p.base_name))
+      if (next.length !== cur.length) projects.value = next
+      notifyNewlyAwaiting(list)
     }
 
     async function fetchProjects() {
@@ -184,15 +243,39 @@ export default {
     function connectWS() {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       ws = new WebSocket(`${proto}//${window.location.host}/ws`)
-      ws.onopen = () => { wsConnected.value = true }
+      ws.onopen = () => { wsConnected.value = true; reconnectDelay = 1000 }
       ws.onmessage = (ev) => {
         try {
           const d = JSON.parse(ev.data)
-          if (d.type === 'status_update' && d.projects) applyProjects(d.projects)
-          else fetchProjects()
+          switch (d.type) {
+            case 'status_update':
+              if (d.projects) applyProjects(d.projects)
+              break
+            case 'project_updated':
+              // carries a full ProjectStatus dict → patch in place, no refetch
+              if (d.status) patchProject(d.status)
+              break
+            case 'models_updated':
+              invalidateModels()
+              break
+            case 'project_created':
+            case 'project_action':
+            case 'consultation_answered':
+              // hint-only payloads → refetch the full list
+              fetchProjects()
+              break
+            default:
+              /* ignore unknown */
+              break
+          }
         } catch (e) { /* ignore */ }
       }
-      ws.onclose = () => { wsConnected.value = false; reconnect = setTimeout(connectWS, 3000) }
+      ws.onclose = () => {
+        wsConnected.value = false
+        if (intentionalClose) { intentionalClose = false; return }
+        reconnect = setTimeout(connectWS, reconnectDelay)
+        reconnectDelay = Math.min(reconnectDelay * 2, BACKOFF_MAX)
+      }
       ws.onerror = () => { try { ws.close() } catch (e) { /* */ } }
     }
 
@@ -202,6 +285,7 @@ export default {
       username.value = data.username
       loading.value = true
       fetchProjects()
+      loadModels()
       connectWS()
     }
     function logout() {
@@ -210,6 +294,7 @@ export default {
       isAuthenticated.value = false
       username.value = ''
       selectedBase.value = null
+      intentionalClose = true
       if (ws) { try { ws.close() } catch (e) { /* */ } }
     }
     setUnauthorizedHandler(logout)
@@ -223,6 +308,7 @@ export default {
         isAuthenticated.value = true
         username.value = u
         fetchProjects()
+        loadModels()
         connectWS()
       } catch (e) {
         logout(); loading.value = false
@@ -281,6 +367,7 @@ export default {
       window.addEventListener('keydown', onKey)
     })
     onUnmounted(() => {
+      intentionalClose = true
       if (ws) ws.close()
       if (reconnect) clearTimeout(reconnect)
       window.removeEventListener('hashchange', readHash)

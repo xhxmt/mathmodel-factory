@@ -166,6 +166,9 @@ def evaluate(project: Path, root: Path) -> Evaluation:
         "sensitivity_report.md",
         "evaluation.md",
         "visualization_log.md",
+        "reviewer_entry_map.md",
+        "anchor_figure_plan.md",
+        "entry_gate.md",
         "code_review.md",
         "review_comments.md",
         "revision_summary.md",
@@ -181,6 +184,14 @@ def evaluate(project: Path, root: Path) -> Evaluation:
         "gate1_numeric_trace",
         bool(gate1_text.strip()) and not re.search(r"\b(BLOCKING|UNRESOLVED)\b", gate1_text, re.I),
         "code_review exists and has no obvious unresolved marker" if gate1_text.strip() else "code_review missing/empty",
+    )
+
+    entry_gate = project / "entry_gate.md"
+    gate_text = read_text(entry_gate) if entry_gate.is_file() else ""
+    ev.add(
+        "entry_gate_verdict",
+        "VERDICT: PASS" in gate_text,
+        "entry_gate PASS" if "VERDICT: PASS" in gate_text else "entry_gate missing or not PASS",
     )
 
     verdict = first_verdict(project / "judge_evaluation.md")

@@ -27,6 +27,33 @@ python3 __FACTORY__/scripts/method_retrieve.py \
   --top-k 8 > __PROJECT_PATH__/problem/method_retrieval.md
 ```
 
+**数据可行性预警（新增）**：在确定候选方法前，运行数据匹配度评分工具，提前发现数据缺失风险：
+
+```bash
+python3 __FACTORY__/scripts/method_data_matcher.py __PROJECT_PATH__ --top 10 \
+  > __PROJECT_PATH__/data_feasibility_warnings.txt 2>&1 || true
+```
+
+生成的 `data_feasibility_warnings.txt` 会列出：
+- 每个方法所需的数据类型（如"历史时间序列"、"成本参数"、"空间坐标"）
+- 与 `problem/data_inventory.md` 的匹配度评分(0-100)
+- 普遍缺失的数据需求（影响多个方法）
+
+**如何使用预警结果**：
+1. 匹配度 ≥80% 的方法：数据完备，可直接列入 `viable_streams.md`
+2. 匹配度 50-80% 的方法：在 `research_brief.md` 中明确说明需要补充的数据及来源（外部数据集/假设/简化）
+3. 匹配度 <50% 的方法：除非有明确的数据补充方案，否则不应进入 `viable_streams.md`
+
+**重要**：数据匹配度评分是辅助工具，最终决策仍需基于你的专业判断。评分工具使用关键词匹配，可能误判，需人工核验。
+
+可选 — 方法匹配评分（弱信号参考，不替代你的判断）：基于历史完成项目"题目特征 → 论文质量"的经验关联，给候选方法一个拟合分。仅供设计 `viable_streams.md` 时多一条证据，**不得作为选方法的唯一依据**（模型只用少量历史项目训练，信号弱）。
+
+```bash
+python3 __FACTORY__/scripts/method_fit_score.py __PROJECT_PATH__ \
+  > __PROJECT_PATH__/method_fit_suggestions.json 2>/dev/null || true
+```
+若 `method_fit_suggestions.json` 生成成功，读其 `top_recommendations` 当作一条额外证据；与你基于文献的判断冲突时，以文献和题目契合度为准，并可在 `research_brief.md` §方法对比表 里备注分歧。
+
 [文献检索原则]
 - 只引可验证的真实文献（期刊、教材、政府报告、行业白皮书、官方手册）。**严禁伪造引用**。CUMCM 论文里的假引用是一票否决项。
 - 中外文献都可以，CUMCM 评委习惯看到中文教材（如姜启源、司守奎）作为方法层引用，国际期刊（OR、EJOR、Production and Operations Management 等）作为方法溯源。

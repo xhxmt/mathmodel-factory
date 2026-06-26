@@ -4,6 +4,8 @@ Step 12 同时也是 **Gate 2 reopen 着陆点** — 如果 Step 13 的 Gate 2 j
 
 [重要 — 风格规范]
 - 风格圣经：`__FACTORY__/modeling_guide.md §LaTeX Document Requirements + §Cross-step state files`
+- 优秀论文写作基准：`__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md`
+  - 修订摘要素材、问题分析、模型求解、灵敏度、模型评价和结论时，优先对齐“开头总述 + 逐问交付”“最终采信口径先行”“验证支撑可信度”“删除内部工程痕迹”四类规则。
 - 中文输出。
 - 产物:
   - `__BASE_NAME___paper.tex`（原地修订, 文字段落 + 数字 + 表格 + 章节结构 都可改）
@@ -22,7 +24,8 @@ Step 12 同时也是 **Gate 2 reopen 着陆点** — 如果 Step 13 的 Gate 2 j
 5. `__PROJECT_PATH__/assumption_ledger.md` —— 修订时若新增 / 调整假设, 在此追加; PROTECTED 永不动。
 6. `__PROJECT_PATH__/audit_issue_ledger.md`（如存在）—— 跨步骤 issue ledger。
 7. 所有 Step 4-8 的素材文件 (`model.md` / `solve_log.md` / `sensitivity_report.md` / `evaluation.md` / `visualization_log.md`) —— 修订时可能需要回查素材源。
-8. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 12 revision:` 段落, 最高优先级指令。
+8. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 优秀论文写作基准；用于判断应如何重排摘要素材、问题分析和结果口径。
+9. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 12 revision:` 段落, 最高优先级指令。
 
 [输出契约 — runner 用磁盘文件判定本步骤是否 ready]
 
@@ -47,6 +50,8 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 - 修 `\cite{}` 引用 + 添加新引文到 references.bib
 - 调整章节结构 / 添加新 \subsection / 删除冗余段落
 - 重新嵌入图（图本身仍由 Step 8 / 13 提供, 本步骤不重画图）
+- 按优秀论文写作基准重排段落顺序: 每问先报最终采信结果, 粗网格/退化/失败分支后置到验证、灵敏度或局限性
+- 删除或改写正文主线中的内部工程痕迹: `m1/m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache`
 
 **不允许的操作**:
 - 改 `\\detokenize{ABSTRACT_PLACEHOLDER}` 区块（那是 Step 14 的工作; 本步骤的 paper.tex 必须**仍含 \\detokenize{ABSTRACT_PLACEHOLDER}**, infer_step 据此识别仍未进 Step 14）
@@ -141,5 +146,14 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 - ❌ 减章节数到 modeling_guide.md §LaTeX Document Requirements 列出的 11 个章节以下
 - ❌ 修改 figures/* 文件 (本步骤不重画图; 如果某图必须重画, 在 revision_summary.md §未处理 issue 标注 + 给 Step 13 Gate 2 提示)
 - ❌ 提交时未跑 `compile_paper.sh` 验证 — paper.tex 编译挂掉 = Gate 2 直接 FAIL
+- ❌ 擅自修改任何数值 / 表格里的结果数字（即使看着像笔误）—— 数值的真相源是 `results/*`，改数值是 Step 5/6 的事，不是文字修订
+
+[改文字不改底层 — 数值完整性红线]
+
+本步骤修的是**表述**（文字 / 表格排版 / 引用 / 章节衔接），不是**数据**：
+- ✅ 改写句子、补充解释、调整段落顺序、修 `\cite{}` key、合并或重排表格行（数值不变）。
+- ❌ 改任何来自 `results/*` 的数值；删除或替换图表（Step 8 已定稿）。
+- 若某条 review issue 的根因是"结果本身有问题 / 灵敏度结论站不住 / 数字与模型对不上"——这**不能靠改论文措辞解决**。在 `revision_summary.md §未处理 issue` 记一条并标注"需回 Step 5/6 重跑"，交给 Step 13 Gate 2 判定（可能触发 `REOPEN_REVISION_MODEL`）。绝不允许"改论文描述去迎合一个错的数字"。
+- 修订后，§模型求解 / 灵敏度 表格里的数值应与 `results/*` 仍然一致（上方 item 5 的数字 sanity check 会复核）。
 
 完成本步骤后立即停止。

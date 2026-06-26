@@ -41,6 +41,7 @@ cd web
 - `evaluation/`：评分解析器以及针对外部大语言模型（LLM）裁判的基准校准脚本。
 - `experiments/`：消融实验测试工具，用于测试不同流程机制对结果的影响。
 - `xhxmt.github.io/`：交互式的项目演示前端界面，用于展示多智能体工作流的运行过程与结果。
+- **`docs/guides/`**：优秀论文基准文档（可视化与写作规范）
 
 诸如 `analysis_guide.md`、`stata_submit.sh` 和 `stata_wrapper.sh` 等旧文件仅为保持跨模式兼容性而保留。新建模项目请遵循 `modeling_guide.md` 规范并使用 `solver_submit.sh`。
 
@@ -75,6 +76,19 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 - `logs/` 和 `run_state/`：进程状态与日志。
 
 这些运行输出会被 Git 自动忽略。
+
+## 最新更新 (2026-06-24)
+
+### 🎯 优秀论文可视化与写作框架系统性改进
+
+本次更新系统性地将优秀论文的可视化和写作模式固化到工作流中：
+
+- **可视化架构改进**: 引入四类叙事角色（explain_model/report_result/validate_result/show_limitation），强制每个子问题配置视觉锚点
+- **写作框架重构**: 摘要改为"开头总述 + 逐问交付"结构，问题分析写成阅卷索引，模型求解先报采信口径
+- **工程痕迹清理**: 系统性清理内部过程词（m1/m2/RELAXED/fallback/workflow）
+- **全流程闭环**: Step 8-15 全流程按优秀论文基准执行
+
+详见 [CHANGELOG.md](CHANGELOG.md) 和 `docs/guides/` 下的基准文档。
 
 ## 创建建模项目
 
@@ -129,7 +143,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 ## 工作流概览
 
-活跃的建模工作流包含设置步骤以及后续的1-16个步骤：
+活跃的建模工作流包含设置步骤、后续的 1-16 个主步骤，以及插入在 Step 8 和 Step 9 之间的 Step 8.5 辅助 gate：
 
 - 设置 / Step 0：将赛题解析至 `problem/` 目录。
 - Step 1：背景调研及方法预选。
@@ -140,6 +154,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 - Step 6：敏感性与鲁棒性分析。
 - Step 7：模型评估。
 - Step 8：数据可视化润色。
+- Step 8.5：阅卷入口设计。为每个子问题定义评委入口三句式、主图/主表锚点和正文首段承接提纲。
 - Step 9：撰写论文初稿。
 - Step 10：门禁1 - 数值与代码一致性检查。
 - Step 11：建设性审稿。

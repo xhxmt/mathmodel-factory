@@ -86,22 +86,22 @@
         </p>
 
         <div class="rows">
-          <div v-for="s in overridableSteps" :key="s.index" class="row">
+          <div v-for="s in overridableSteps" :key="s.key || s.index" class="row">
             <div class="row-id">
-              <span class="ri-n mono">{{ String(s.index).padStart(2, '0') }}</span>
+              <span class="ri-n mono">{{ s.key === '8_5' ? '8.5' : String(s.index).padStart(2, '0') }}</span>
               <div class="ri-tx">
-                <div class="ri-name">{{ s.name }}<span v-if="meta(s.index).apiOk" class="api-ok" title="此步骤可用 API 模型">API✓</span></div>
-                <div class="ri-def mono">内置: {{ meta(s.index).default }}</div>
+                <div class="ri-name">{{ s.name }}<span v-if="meta(s.key || s.index).apiOk" class="api-ok" title="此步骤可用 API 模型">API✓</span></div>
+                <div class="ri-def mono">内置: {{ meta(s.key || s.index).default }}</div>
               </div>
             </div>
             <div class="row-sel">
-              <select class="field sel" :value="defGet(s.index, 'primary')" @change="defSet(s.index, 'primary', $event.target.value)">
+              <select class="field sel" :value="defGet(s, 'primary')" @change="defSet(s, 'primary', $event.target.value)">
                 <option value="">— 主：内置默认 —</option>
-                <option v-for="m in pickable(s.index)" :key="m.id" :value="m.id">{{ m.label }}</option>
+                <option v-for="m in pickable(s)" :key="m.id" :value="m.id">{{ m.label }}</option>
               </select>
-              <select class="field sel" :value="defGet(s.index, 'fallback')" @change="defSet(s.index, 'fallback', $event.target.value)">
+              <select class="field sel" :value="defGet(s, 'fallback')" @change="defSet(s, 'fallback', $event.target.value)">
                 <option value="">— 备用：无 —</option>
-                <option v-for="m in pickable(s.index)" :key="m.id" :value="m.id">{{ m.label }}</option>
+                <option v-for="m in pickable(s)" :key="m.id" :value="m.id">{{ m.label }}</option>
               </select>
             </div>
           </div>
@@ -121,15 +121,18 @@
 
 <script>
 import Icon from './Icon.vue'
-import { Models } from '../lib/api.js'
-import { STEPS, stepModelMeta } from '../lib/steps.js'
+import { STEPS, EDITORIAL_GATE_STEP, stepModelMeta, stepConfigKey } from '../lib/steps.js'
 import { useToasts } from '../composables/useToasts.js'
+import { useModels } from '../composables/useModels.js'
 
 export default {
   name: 'ModelManager',
   components: { Icon },
   emits: ['close', 'saved'],
-  setup() { return { toasts: useToasts() } },
+  setup() {
+    const m = useModels()
+    return { toasts: useToasts(), _models: m.models, _loadModels: m.load, _saveRegistry: m.saveRegistry, _saveConfig: m.saveConfig }
+  },
   data() {
     return {
       tab: 'registry', loading: true, saving: false, error: '',
@@ -139,22 +142,34 @@ export default {
     }
   },
   computed: {
-    overridableSteps() { return STEPS.filter((s) => stepModelMeta(s.index).overridable) },
+    overridableSteps() {
+      return [
+        ...STEPS.filter((s) => stepModelMeta(s.index).overridable).slice(0, 9),
+        EDITORIAL_GATE_STEP,
+        ...STEPS.filter((s) => stepModelMeta(s.index).overridable).slice(9),
+      ]
+    },
     enabledModels() { return this.models.filter((m) => m.enabled && m.id) },
   },
   async mounted() { await this.load() },
   methods: {
     meta: stepModelMeta,
     agentic(b) { return this.agenticBackends.includes(b) },
+    // Populate local form state from the shared models cache. Deep-clones the
+    // registry/default preset because the template binds v-model directly to
+    // these — binding to the singleton would mutate shared state across components.
+    hydrate(d) {
+      this.models = (d.registry || []).map((m) => ({ effort: '', model: '', base_url: '', key_env: '', builtin: false, ...m }))
+      this.config = d.config || {}
+      if (Array.isArray(d.agentic_backends) && d.agentic_backends.length) this.agenticBackends = d.agentic_backends
+      if (Array.isArray(d.valid_backends) && d.valid_backends.length) this.validBackends = d.valid_backends
+      this.defaultSteps = JSON.parse(JSON.stringify(this.config._default || {}))
+    },
     async load() {
       this.loading = true
       try {
-        const d = await Models.get()
-        this.models = (d.registry || []).map((m) => ({ effort: '', model: '', base_url: '', key_env: '', builtin: false, ...m }))
-        this.config = d.config || {}
-        if (Array.isArray(d.agentic_backends) && d.agentic_backends.length) this.agenticBackends = d.agentic_backends
-        if (Array.isArray(d.valid_backends) && d.valid_backends.length) this.validBackends = d.valid_backends
-        this.defaultSteps = JSON.parse(JSON.stringify(this.config._default || {}))
+        await this._loadModels()
+        this.hydrate(this._models)
       } catch (e) {
         this.error = e.response?.data?.detail || '加载模型配置失败'
       } finally {
@@ -162,8 +177,8 @@ export default {
       }
     },
     // models usable for a given step: API backends only where the step supports them
-    pickable(index) {
-      const apiOk = stepModelMeta(index).apiOk
+    pickable(step) {
+      const apiOk = stepModelMeta(step.key || step.index).apiOk
       return this.enabledModels.filter((m) => apiOk || this.agentic(m.backend))
     },
     addModel() {
@@ -178,19 +193,19 @@ export default {
       }
       this.saving = true
       try {
-        await Models.saveRegistry(this.models)
+        await this._saveRegistry(this.models)
         this.toasts.success('模型库已保存')
         this.$emit('saved')
-        await this.load()
+        this.hydrate(this._models)
       } catch (e) {
         this.error = e.response?.data?.detail || '保存失败'
       } finally {
         this.saving = false
       }
     },
-    defGet(index, field) { return this.defaultSteps['step_' + index]?.[field] || '' },
-    defSet(index, field, val) {
-      const key = 'step_' + index
+    defGet(step, field) { return this.defaultSteps[stepConfigKey(step)]?.[field] || '' },
+    defSet(step, field, val) {
+      const key = stepConfigKey(step)
       const cur = { ...(this.defaultSteps[key] || {}) }
       cur[field] = val
       if (!cur.primary && !cur.fallback) delete this.defaultSteps[key]
@@ -200,10 +215,10 @@ export default {
       this.error = ''
       this.saving = true
       try {
-        await Models.saveConfig('_default', this.defaultSteps)
+        await this._saveConfig('_default', this.defaultSteps)
         this.toasts.success('默认预设已保存（应用于新建项目）')
         this.$emit('saved')
-        await this.load()
+        this.hydrate(this._models)
       } catch (e) {
         this.error = e.response?.data?.detail || '保存失败'
       } finally {

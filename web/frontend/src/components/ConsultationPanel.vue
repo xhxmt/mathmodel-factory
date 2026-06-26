@@ -44,6 +44,56 @@
         <div class="md" v-html="md(req.content)"></div>
       </section>
 
+      <!-- AI工具快捷入口 -->
+      <section class="sec ai-tools">
+        <div class="sec-h label">AI 工具快捷入口</div>
+        <div class="tools-grid">
+          <a
+            href="https://chatgpt.com/?model=gpt-4o"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="tool-card"
+          >
+            <div class="tool-icon gpt"><Icon name="cpu" :size="18" /></div>
+            <div class="tool-info">
+              <div class="tool-name">ChatGPT Pro</div>
+              <div class="tool-desc">GPT-4 with extended thinking</div>
+            </div>
+            <Icon name="external-link" :size="14" class="tool-ext" />
+          </a>
+          <a
+            href="https://gemini.google.com/app"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="tool-card"
+          >
+            <div class="tool-icon gemini"><Icon name="zap" :size="18" /></div>
+            <div class="tool-info">
+              <div class="tool-name">Gemini Deep Think</div>
+              <div class="tool-desc">Google's advanced reasoning model</div>
+            </div>
+            <Icon name="external-link" :size="14" class="tool-ext" />
+          </a>
+          <a
+            href="https://claude.ai/new"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="tool-card"
+          >
+            <div class="tool-icon claude"><Icon name="message-circle" :size="18" /></div>
+            <div class="tool-info">
+              <div class="tool-name">Claude Code</div>
+              <div class="tool-desc">Coding and analysis assistance</div>
+            </div>
+            <Icon name="external-link" :size="14" class="tool-ext" />
+          </a>
+        </div>
+        <div class="tools-hint">
+          <Icon name="lightbulb" :size="14" />
+          <span>点击打开对应 AI 工具，将咨询内容粘贴进行分析，然后将结论粘贴到下方表单提交。</span>
+        </div>
+      </section>
+
       <section v-if="req.suggestions" class="sec">
         <div class="sec-h label">回答建议</div>
         <div class="md" v-html="md(req.suggestions)"></div>
@@ -225,4 +275,20 @@ export default {
 .md :deep(.md-table) { border-collapse: collapse; margin: 0.8em 0; font-size: 0.9em; }
 .md :deep(.md-table th), .md :deep(.md-table td) { border: 1px solid var(--line); padding: 6px 10px; }
 .md :deep(.md-table th) { background: var(--panel); }
+
+/* AI tools section */
+.ai-tools { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r); padding: 16px; }
+.tools-grid { display: grid; gap: 10px; margin-bottom: 12px; }
+.tool-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); text-decoration: none; color: var(--ink); transition: all 0.2s var(--ease); cursor: pointer; }
+.tool-card:hover { background: var(--panel-3); border-color: var(--live); transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.tool-icon { width: 36px; height: 36px; border-radius: var(--r); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.tool-icon.gpt { background: linear-gradient(135deg, #10a37f, #1a7f64); color: white; }
+.tool-icon.gemini { background: linear-gradient(135deg, #4285f4, #34a853); color: white; }
+.tool-icon.claude { background: linear-gradient(135deg, #cc785c, #d4a574); color: white; }
+.tool-info { flex: 1; min-width: 0; }
+.tool-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.tool-desc { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.tool-ext { color: var(--ink-3); flex-shrink: 0; }
+.tools-hint { display: flex; align-items: flex-start; gap: 8px; padding: 10px; background: var(--amber-dim); border: 1px solid var(--amber-line); border-radius: var(--r-sm); font-size: 12px; line-height: 1.5; color: var(--ink-2); }
+.tools-hint svg { flex-shrink: 0; margin-top: 2px; color: var(--amber); }
 </style>

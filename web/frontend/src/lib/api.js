@@ -37,8 +37,8 @@ export const Projects = {
   list: () => api.get('/api/projects').then((r) => r.data),
   status: (b) => api.get(`/api/projects/${b}/status`).then((r) => r.data),
   checkpoint: (b) => api.get(`/api/projects/${b}/checkpoint`).then((r) => r.data),
-  logs: (b, lines = 250) => api.get(`/api/projects/${b}/logs`, { params: { lines } }).then((r) => r.data),
-  steps: (b) => api.get(`/api/projects/${b}/steps`).then((r) => r.data),
+  logs: (b, lines = 250, signal) => api.get(`/api/projects/${b}/logs`, { params: { lines }, signal }).then((r) => r.data),
+  steps: (b, signal) => api.get(`/api/projects/${b}/steps`, { signal }).then((r) => r.data),
   files: (b) => api.get(`/api/projects/${b}/files`).then((r) => r.data),
   file: (b, path) => api.get(`/api/projects/${b}/file`, { params: { path } }).then((r) => r.data),
   consultation: (b) => api.get(`/api/projects/${b}/consultation`).then((r) => r.data),
@@ -63,6 +63,14 @@ export const Models = {
   saveRegistry: (models) => api.put('/api/models/registry', { models }).then((r) => r.data),
   // scope = project base_name, or "_default"; steps = { step_N: {primary, fallback} }
   saveConfig: (scope, steps) => api.put('/api/models/config', { scope, steps }).then((r) => r.data),
+}
+
+// ---- cloud (GCP Cloud Run solver acceleration) ----
+export const Cloud = {
+  status: () => api.get('/api/cloud/status').then((r) => r.data),
+  enable: (b) => api.post(`/api/projects/${b}/cloud/enable`).then((r) => r.data),
+  disable: (b) => api.post(`/api/projects/${b}/cloud/disable`).then((r) => r.data),
+  config: () => api.get('/api/cloud/config').then((r) => r.data),
 }
 
 // ---- formatters ----

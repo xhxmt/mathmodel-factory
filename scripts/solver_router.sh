@@ -29,11 +29,18 @@ use_cloud=false
 
 # Check if cloud solver is globally enabled
 if [[ "$USE_CLOUD" == "true" ]]; then
-    # Check if this solver type is supported on cloud
-    if [[ ",$CLOUD_SOLVER_TYPES," == *",$SOLVER_TYPE,"* ]]; then
-        # Check if job is long enough to warrant cloud execution
-        if (( MAX_TIME >= CLOUD_THRESHOLD_TIME )); then
-            use_cloud=true
+    # Check for fallback marker (set by cloud_solver_monitor.py when health checks fail)
+    FALLBACK_MARKER="$FACTORY/run_state/cloud_solver_fallback.marker"
+    if [[ -f "$FALLBACK_MARKER" ]]; then
+        echo "[solver_router] Cloud Solver fallback active - routing to local" >&2
+        use_cloud=false
+    else
+        # Check if this solver type is supported on cloud
+        if [[ ",$CLOUD_SOLVER_TYPES," == *",$SOLVER_TYPE,"* ]]; then
+            # Check if job is long enough to warrant cloud execution
+            if (( MAX_TIME >= CLOUD_THRESHOLD_TIME )); then
+                use_cloud=true
+            fi
         fi
     fi
 fi

@@ -6,6 +6,8 @@
 
 [重要 — 风格规范]
 - 风格圣经：`__FACTORY__/modeling_guide.md §LaTeX Document Requirements + §Table Conventions + §Figure Style`
+- 优秀论文写作基准：`__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md`
+  - 本步骤必须清理正文主线中的内部工程痕迹，并将“脆弱/风险暴露”式表达改成“验证/收敛/复核支撑最终口径”的论文语言。
 - 中文输出。
 - Markdown 产物: `citation_audit.md`（新建）+ `derobotification.md`（新建）。
 - LaTeX 修订: `__BASE_NAME___paper.tex`（原地修订, 仅 polish, 不动数字 / 不动公式 / 不动 figures 引用）。
@@ -19,7 +21,8 @@
 3. `__PROJECT_PATH__/judge_evaluation.md` §写作清晰度 —— Step 13 Gate 2 评委指出的写作 issue 是本步骤的重点修复对象。
 4. `__PROJECT_PATH__/review_comments.md` §m? MINOR —— Step 11 标为 MINOR 的写作 issue, Step 12 deferred 的, 本步骤处理。
 5. `__PROJECT_PATH__/revision_summary.md` §未处理 issue —— 上轮 deferred 到 polish 的 issue 清单。
-6. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 15 polish:` 段落, 最高优先级指令。
+6. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 用于检查优秀论文风格、工程痕迹、结果口径和验证措辞。
+7. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 15 polish:` 段落, 最高优先级指令。
 
 [输出契约 — runner 用磁盘文件判定本步骤是否 ready]
 
@@ -120,6 +123,17 @@ formatting issues (bib entry 字段格式问题, 如缺 year / author): <数量>
 - `paper.tex:行号` `(SPRT)` 残留英文应为 `(序贯概率比检验, SPRT)` 或直接用中文
 - ...
 
+### 6. 内部工程痕迹
+
+逐条:
+- `paper.tex:行号` `m1/m2`、`results/*.json`、`RELAXED`、`fallback`、`workflow`、`runner`、`cache` 等内部过程词 -> 改写为论文可读的模型/验证语言
+- 题目要求的 `result*.xlsx` 可保留；其他内部路径原则上移到附录或删除。
+
+### 7. 风险措辞重写
+
+逐条:
+- `paper.tex:行号` “脆弱”“翻转”“风险暴露”“乐观上界” 等过度审计化标题或句子 -> 改写为“抽样加密验证”“步长收敛性”“独立算法复核”“稳定性检验”等支撑最终口径的表达。
+
 ## 未修订的机器味 (defer to next round / future)
 
 如果发现机器味但不修 (例如太多, 这一轮不及做完):
@@ -171,6 +185,7 @@ formatting issues (bib entry 字段格式问题, 如缺 year / author): <数量>
 
 3. **去机器味**:
    - 通读论文 §问题分析 / §模型求解 / §模型评价 (这些章节机器味最浓), 找列表化 / hedging / 冗余 / markdown 残留。
+   - 按优秀论文写作基准额外检查内部工程痕迹和风险措辞。
    - 修. 写 derobotification.md, 给具体修订前后样本 (至少 5 处)。
 
 4. 跑 `compile_paper.sh` 验证 LaTeX 仍能编译。

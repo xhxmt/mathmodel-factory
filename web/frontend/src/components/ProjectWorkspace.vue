@@ -75,7 +75,16 @@
       </div>
     </div>
 
-    <ModelManager v-if="showModels" @close="showModels = false" @saved="fetchModels" />
+    <ModelManager v-if="showModels" @close="showModels = false" />
+    <CloudAcceleratorDialog
+      v-if="showCloudDialog"
+      :base="project.base_name"
+      :step="project.current_step || 0"
+      :estimated-local="cloudEstimate.local"
+      :estimated-cloud="cloudEstimate.cloud"
+      @close="showCloudDialog = false"
+      @enabled="onCloudEnabled"
+    />
   </div>
 </template>
 
@@ -86,9 +95,11 @@ import LogConsole from './LogConsole.vue'
 import ArtifactBrowser from './ArtifactBrowser.vue'
 import ConsultationPanel from './ConsultationPanel.vue'
 import ModelManager from './ModelManager.vue'
-import { Projects, Models, relativeTime } from '../lib/api.js'
-import { STEPS, stepByIndex } from '../lib/steps.js'
+import CloudAcceleratorDialog from './CloudAcceleratorDialog.vue'
+import { Projects, relativeTime } from '../lib/api.js'
+import { stepByIndex, stepConfigKey } from '../lib/steps.js'
 import { useToasts } from '../composables/useToasts.js'
+import { useModels } from '../composables/useModels.js'
 
 const STATUS_LABEL = {
   running: '运行中', paused: '已暂停', completed: '已完成',
@@ -98,20 +109,32 @@ const STATUS_LABEL = {
 
 export default {
   name: 'ProjectWorkspace',
-  components: { Icon, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, ModelManager },
+  components: { Icon, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, ModelManager, CloudAcceleratorDialog },
   props: { project: { type: Object, required: true } },
   emits: ['close', 'action', 'refresh'],
+  setup() {
+    const m = useModels()
+    return { _models: m.models, _loadModels: m.load, _saveConfig: m.saveConfig }
+  },
+  created() {
+    // Non-reactive step-poll caches (not rendered → kept out of data()).
+    this._stepsAbort = null
+    this._stepsFp = ''
+    this._stepsPromise = null
+    this._visH = null
+  },
   data() {
     return {
       stepsData: null, loading: false, artifactRequest: null, killArm: false,
-      nonce: 0, timer: null, showModels: false, modelsData: null,
+      nonce: 0, timer: null, showModels: false,
+      showCloudDialog: false, cloudEstimate: { local: 8, cloud: 2 }, lastStep: null,
     }
   },
   computed: {
     statusLabel() { return STATUS_LABEL[this.project.status] || this.project.status },
-    modelRegistry() { return this.modelsData?.registry || [] },
+    modelRegistry() { return this._models?.registry || [] },
     // This project's own per-step overrides ({ step_N: {primary, fallback} }).
-    projectAssignments() { return this.modelsData?.config?.[this.project.base_name] || {} },
+    projectAssignments() { return this._models?.config?.[this.project.base_name] || {} },
     dotClass() {
       return {
         running: 'live', awaiting_consultation: 'amber', completed: 'ok',
@@ -121,47 +144,89 @@ export default {
     canResume() { return ['paused', 'ready', 'awaiting_consultation'].includes(this.project.status) },
     stepLabel() {
       const c = this.project.current_step
+      const gate = this.stepsData?.editorial_gate
       if (c >= 16) return 'STEP 16 / 16 · 已完成'
+      if (c === 8 && gate && !gate.ready) return 'STEP 8.5 / 16 · 阅卷入口设计'
       const active = stepByIndex(Math.min(16, c + 1))
       return `STEP ${Math.max(0, c + 1)} / 16 · ${active ? active.name : ''}`
     },
   },
   watch: {
-    'project.base_name'() { this.stepsData = null; this.fetchSteps() },
-    'project.current_step'() { this.fetchSteps() },
+    'project.base_name'() { this.stepsData = null; this._stepsFp = ''; this.fetchSteps() },
+    'project.current_step'(newStep) {
+      this.fetchSteps()
+      this.checkCloudAccelerator(newStep)
+    },
   },
   mounted() {
     this.fetchSteps()
-    this.fetchModels()
-    this.timer = setInterval(() => { if (this.project.is_running) this.fetchSteps() }, 8000)
+    this._loadModels()
+    this.timer = setInterval(() => {
+      if (this.project.is_running && !document.hidden) this.fetchSteps()
+    }, 8000)
+    this._visH = () => {
+      if (document.hidden) {
+        if (this._stepsAbort) { try { this._stepsAbort.abort() } catch (e) { /* */ } }
+      } else if (this.project.is_running) {
+        this.fetchSteps()
+      }
+    }
+    document.addEventListener('visibilitychange', this._visH)
     window.addEventListener('keydown', this.onEsc)
+    this.lastStep = this.project.current_step
   },
   beforeUnmount() {
     if (this.timer) clearInterval(this.timer)
+    if (this._stepsAbort) { try { this._stepsAbort.abort() } catch (e) { /* */ } }
+    if (this._visH) { document.removeEventListener('visibilitychange', this._visH); this._visH = null }
     window.removeEventListener('keydown', this.onEsc)
   },
   methods: {
     rel: relativeTime,
     onEsc(e) { if (e.key === 'Escape' && !this.killArm) this.$emit('close') },
+    // Fingerprint covering everything PipelineTimeline renders, so an unchanged
+    // steps payload skips the re-assignment (and the timeline re-render).
+    stepsFp(s) {
+      if (!s) return ''
+      const a = s.steps.map((st) =>
+        st.artifacts.length + '/' +
+        st.artifacts.reduce((mx, o) => Math.max(mx, o.mtime ? Date.parse(o.mtime.replace(' ', 'T')) : 0), 0) + '/' +
+        st.artifacts.reduce((sum, o) => sum + (o.size || 0), 0)
+      ).join(',')
+      const g = s.editorial_gate
+      return `${s.current_step}|${s.verdict}|${s.open_issues}|${s.paper_available}|${g?.ready}|${g?.verdict}|${a}`
+    },
     async fetchSteps() {
+      // Coalesce timer + watcher firing near-simultaneously into one request.
+      if (this._stepsPromise) return this._stepsPromise
+      if (this._stepsAbort) { try { this._stepsAbort.abort() } catch (e) { /* */ } }
+      const ac = new AbortController()
+      this._stepsAbort = ac
       this.loading = true
-      try { this.stepsData = await Projects.steps(this.project.base_name) }
-      catch (e) { /* keep prior */ }
-      finally { this.loading = false }
+      this._stepsPromise = (async () => {
+        try {
+          const s = await Projects.steps(this.project.base_name, ac.signal)
+          this._stepsAbort = null
+          const fp = this.stepsFp(s)
+          if (fp !== this._stepsFp) { this._stepsFp = fp; this.stepsData = s }
+        } catch (e) {
+          if (e?.code !== 'ERR_CANCELED') { /* keep prior stepsData */ }
+        } finally {
+          this.loading = false
+          this._stepsPromise = null
+        }
+      })()
+      return this._stepsPromise
     },
     refresh() { this.fetchSteps(); this.$emit('refresh') },
     act(a) { this.killArm = false; this.$emit('action', this.project, a) },
     requestFile(f) { this.artifactRequest = { ...f, _n: ++this.nonce } },
     requestPaper() { this.artifactRequest = { __paper: true, _n: ++this.nonce } },
     onAnswered() { this.$emit('refresh'); this.fetchSteps() },
-    async fetchModels() {
-      try { this.modelsData = await Models.get() }
-      catch (e) { /* models optional; keep prior */ }
-    },
-    // PipelineTimeline asks to set step <index> primary/fallback for THIS project.
-    async onAssign(index, assignment) {
+    // PipelineTimeline asks to set step primary/fallback for THIS project.
+    async onAssign(step, assignment) {
       const steps = JSON.parse(JSON.stringify(this.projectAssignments))
-      const key = 'step_' + index
+      const key = stepConfigKey(step)
       const primary = (assignment.primary || '').trim()
       const fallback = (assignment.fallback || '').trim()
       if (!primary && !fallback) delete steps[key]
@@ -171,13 +236,36 @@ export default {
         steps[key] = entry
       }
       try {
-        await Models.saveConfig(this.project.base_name, steps)
-        await this.fetchModels()
-        useToasts().success(`步骤 ${index} 模型已更新`)
+        await this._saveConfig(this.project.base_name, steps)
+        useToasts().success(`步骤 ${step.key === '8_5' ? '8.5' : step.index} 模型已更新`)
       } catch (e) {
         useToasts().error(e.response?.data?.detail || '保存模型选择失败')
-        await this.fetchModels()
       }
+    },
+    checkCloudAccelerator(currentStep) {
+      // Trigger cloud dialog for compute-intensive steps
+      if (this.lastStep !== null && currentStep !== this.lastStep) {
+        const COMPUTE_STEPS = [5, 6] // Step 5: full solve, Step 6: sensitivity
+        if (COMPUTE_STEPS.includes(currentStep)) {
+          // Estimate based on step type
+          if (currentStep === 5) {
+            this.cloudEstimate = { local: 6, cloud: 1.5 }
+          } else if (currentStep === 6) {
+            this.cloudEstimate = { local: 8, cloud: 2 }
+          }
+          // Show dialog after a short delay (let step start first)
+          setTimeout(() => {
+            if (this.project.is_running && !this.showCloudDialog) {
+              this.showCloudDialog = true
+            }
+          }, 5000)
+        }
+      }
+      this.lastStep = currentStep
+    },
+    onCloudEnabled() {
+      this.$emit('refresh')
+      this.fetchSteps()
     },
   },
 }

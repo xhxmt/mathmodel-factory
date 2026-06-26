@@ -608,5 +608,196 @@
             "非单调函数",
             "多峰问题"
         ]
+    },
+    {
+        "domain": "statistics",
+        "subdomain": "inference",
+        "method": "HypothesisTesting",
+        "name_zh": "假设检验",
+        "path": "method_library/statistics/hypothesis_testing.md",
+        "keywords": [
+            "t检验",
+            "方差分析",
+            "ANOVA",
+            "卡方检验",
+            "Mann-Whitney",
+            "显著性",
+            "p值",
+            "效应量",
+            "多重比较"
+        ],
+        "applicable_problem_types": [
+            "组间差异性论证",
+            "相关性分析",
+            "分布与独立性检验",
+            "处理效果验证"
+        ],
+        "required_data": [
+            "分组样本数据",
+            "或分类计数/列联表"
+        ],
+        "solver_stack": [
+            "scipy",
+            "statsmodels"
+        ],
+        "failure_modes": [
+            "未做正态性/方差齐性前置检验",
+            "只报p值不报效应量",
+            "多重比较不校正",
+            "把不显著当作无差异"
+        ]
+    },
+    {
+        "domain": "statistics",
+        "subdomain": "bayesian",
+        "method": "BayesianInference",
+        "name_zh": "贝叶斯推断",
+        "path": "method_library/statistics/bayesian_inference.md",
+        "keywords": [
+            "贝叶斯",
+            "先验",
+            "后验",
+            "共轭",
+            "MCMC",
+            "Metropolis",
+            "可信区间",
+            "不确定性量化",
+            "PyMC"
+        ],
+        "applicable_problem_types": [
+            "小样本参数估计",
+            "不确定性量化",
+            "融合先验知识",
+            "序贯更新"
+        ],
+        "required_data": [
+            "观测数据",
+            "可辩护的先验信息"
+        ],
+        "solver_stack": [
+            "numpy",
+            "scipy",
+            "pymc"
+        ],
+        "failure_modes": [
+            "先验拍脑袋且不做敏感性分析",
+            "MCMC未收敛就用后验",
+            "burn-in未丢弃",
+            "强先验掩盖数据"
+        ]
+    },
+    {
+        "domain": "prediction",
+        "subdomain": "regression",
+        "method": "RegressionModels",
+        "name_zh": "回归模型(线性/逻辑/正则化)",
+        "path": "method_library/prediction/regression_models.md",
+        "keywords": [
+            "线性回归",
+            "逻辑回归",
+            "Ridge",
+            "Lasso",
+            "ElasticNet",
+            "正则化",
+            "特征选择",
+            "多重共线性",
+            "分类"
+        ],
+        "applicable_problem_types": [
+            "连续值预测",
+            "影响因素分析",
+            "二分类判别",
+            "高维特征选择"
+        ],
+        "required_data": [
+            "特征矩阵",
+            "连续或二分类目标变量"
+        ],
+        "solver_stack": [
+            "scikit-learn",
+            "statsmodels"
+        ],
+        "failure_modes": [
+            "正则化前不标准化",
+            "共线性下解读OLS系数",
+            "数据泄漏高估性能",
+            "分类误用R²评估",
+            "过拟合不评样本外"
+        ]
+    },
+    {
+        "domain": "prediction",
+        "subdomain": "time series",
+        "method": "ExponentialSmoothing",
+        "name_zh": "指数平滑/Holt-Winters",
+        "path": "method_library/prediction/exponential_smoothing.md",
+        "keywords": [
+            "指数平滑",
+            "Holt-Winters",
+            "ETS",
+            "趋势",
+            "季节",
+            "时间序列",
+            "加法季节",
+            "乘法季节",
+            "阻尼趋势"
+        ],
+        "applicable_problem_types": [
+            "含趋势季节的时序预测",
+            "ARIMA对照基线",
+            "时序分量拆解"
+        ],
+        "required_data": [
+            "单变量时间序列(>=2个季节周期)"
+        ],
+        "solver_stack": [
+            "statsmodels",
+            "pandas"
+        ],
+        "failure_modes": [
+            "加法/乘法季节选错",
+            "乘法模型遇非正值",
+            "季节周期s设错",
+            "不评样本外",
+            "线性趋势远期发散"
+        ]
+    },
+    {
+        "domain": "optimization",
+        "subdomain": "graph/network flow",
+        "method": "GraphNetwork",
+        "name_zh": "图论与网络流",
+        "path": "method_library/optimization/graph_network.md",
+        "keywords": [
+            "最短路",
+            "Dijkstra",
+            "最大流",
+            "最小割",
+            "最小费用流",
+            "二分匹配",
+            "最小生成树",
+            "指派",
+            "网络"
+        ],
+        "applicable_problem_types": [
+            "路径规划",
+            "网络流量与瓶颈",
+            "带成本运输调度",
+            "任务指派",
+            "连通成本最小化"
+        ],
+        "required_data": [
+            "点边结构(权重/容量/成本)"
+        ],
+        "solver_stack": [
+            "networkx",
+            "scipy"
+        ],
+        "failure_modes": [
+            "Dijkstra用于负权图",
+            "有向无向混淆",
+            "复杂约束硬塞网络流应改MILP",
+            "多源多汇不加超级源汇"
+        ]
     }
 ]
