@@ -45,7 +45,8 @@ export PATH="$HOME/local/node/bin:$PATH"
 
 if [[ -f "$FACTORY/scripts/runner_diagnostics.sh" ]]; then
     # shellcheck disable=SC1091
-    source "$FACTORY/scripts/runner_diagnostics.sh"
+source "$FACTORY/scripts/runner_diagnostics.sh"
+source "$FACTORY/scripts/runner_state.sh"
 fi
 
 # ── Ablation toggles (experiments/) ──────────────────────────────────
@@ -1193,6 +1194,7 @@ log "========================================"
 log "Runner starting"
 log "  file-state: step $INFERRED | checkpoint: step $FROM_CP | resuming from: step $STEP"
 diag_status "$PROJECT" running "$STEP" bootstrap runner_start "" "" ""
+runner_mark_running "$PROJECT" "$STEP" bootstrap
 {
     _active_ablations=""
     _ablate_on "$ABLATE_NO_CONSULTATION"       && _active_ablations+=" no-consultation"
@@ -1830,6 +1832,7 @@ maybe_consult() {
         "等待人工咨询回填" \
         "open_consultation_request,open_human_review,refresh_status" \
         "file:consultation/${gate}_request.md,file:human_review.md"
+    runner_mark_consultation "$PROJECT" "$step" "$gate"
 
     local msg="🛑 [paper_factory] ${BASE} 在 Step ${step} 暂停，等待人工咨询：${title}
 请阅读 ${req}
