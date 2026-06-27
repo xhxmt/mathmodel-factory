@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 
-VERSION = 1
+VERSION = 2
 STATUS_FILE = "status.json"
 EVENTS_FILE = "events.jsonl"
 
@@ -42,6 +42,10 @@ def write_status(
     state: str,
     current_step: int,
     current_action: str,
+    display_status: str = "",
+    consultation_gate: str | None = None,
+    pid: int | None = None,
+    updated_at: int | None = None,
     reason_code: str = "",
     reason_summary: str = "",
     suggested_actions: list[str] | None = None,
@@ -56,10 +60,14 @@ def write_status(
         "state": state,
         "current_step": current_step,
         "current_action": current_action,
+        "display_status": display_status,
+        "consultation_gate": consultation_gate,
+        "pid": pid,
+        "updated_at": now if updated_at is None else updated_at,
         "reason_code": reason_code,
         "reason_summary": reason_summary,
-        "since": since or now,
-        "last_event_at": last_event_at or now,
+        "since": now if since is None else since,
+        "last_event_at": now if last_event_at is None else last_event_at,
         "suggested_actions": suggested_actions or [],
         "evidence": evidence or [],
     }
@@ -124,6 +132,10 @@ def main() -> int:
     status_cmd.add_argument("--state", required=True)
     status_cmd.add_argument("--step", required=True, type=int)
     status_cmd.add_argument("--action", required=True)
+    status_cmd.add_argument("--display-status", default="")
+    status_cmd.add_argument("--consultation-gate", default=None)
+    status_cmd.add_argument("--pid", type=int, default=None)
+    status_cmd.add_argument("--updated-at", type=int, default=None)
     status_cmd.add_argument("--reason-code", default="")
     status_cmd.add_argument("--reason-summary", default="")
     status_cmd.add_argument("--since", type=int, default=None)
@@ -152,6 +164,10 @@ def main() -> int:
             state=args.state,
             current_step=args.step,
             current_action=args.action,
+            display_status=args.display_status,
+            consultation_gate=args.consultation_gate,
+            pid=args.pid,
+            updated_at=args.updated_at,
             reason_code=args.reason_code,
             reason_summary=args.reason_summary,
             suggested_actions=args.suggested_action,
