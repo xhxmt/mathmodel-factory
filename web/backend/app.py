@@ -6,10 +6,11 @@ except ImportError:
     from pathlib import Path
 
     HERE = Path(__file__).resolve().parent
-    if str(HERE) not in sys.path:
-        sys.path.insert(0, str(HERE))
-    from main import _valid_model_step_key, app, settings  # type: ignore
-    from project_api import get_steps as _project_get_steps  # type: ignore
+    ROOT = HERE.parents[1]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from web.backend.main import _valid_model_step_key, app, settings  # type: ignore
+    from web.backend.project_api import get_steps as _project_get_steps  # type: ignore
 
 
 def get_steps(project, base_name):
