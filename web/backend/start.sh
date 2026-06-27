@@ -3,6 +3,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+export PYTHONPATH="$SCRIPT_DIR/../..:${PYTHONPATH:-}"
 
 # 🔒 Load secrets from GCP Secret Manager
 if [[ -f "$SCRIPT_DIR/../../scripts/load_secrets.sh" ]]; then
@@ -25,4 +26,4 @@ pip install -q -r requirements.txt
 
 # Start server
 echo "Starting Paper Factory Dashboard backend on http://127.0.0.1:8000"
-python3 app.py
+python3 -m web.backend.main

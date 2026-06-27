@@ -3,6 +3,9 @@ import importlib
 import os
 import sys
 import types
+from pathlib import Path
+
+from project_diagnostics import write_status
 
 
 def load_main_module():
@@ -115,3 +118,94 @@ def test_project_action_raises_on_failed_control_command(monkeypatch):
         assert "cannot kill" in exc.detail
     else:
         raise AssertionError("expected HTTPException")
+
+
+def test_main_module_exposes_runtime_api_surface():
+    mod = load_main_module()
+
+    required = [
+        "login",
+        "get_me",
+        "logout",
+        "issue_ws_ticket",
+        "upload_problem_file",
+        "create_new_project",
+        "get_projects",
+        "get_single_project_status",
+        "get_checkpoint",
+        "get_recent_logs",
+        "get_project_steps",
+        "get_files",
+        "get_file_content",
+        "get_raw_file",
+        "get_paper",
+        "get_consultation",
+        "submit_consultation_answer",
+        "get_models",
+        "put_model_registry",
+        "put_model_config",
+        "cloud_status",
+        "cloud_config",
+        "enable_cloud_solver",
+        "disable_cloud_solver",
+        "websocket_endpoint",
+    ]
+
+    missing = [name for name in required if not hasattr(mod, name)]
+    assert missing == []
+
+
+def test_issue_ws_ticket_is_single_use():
+    mod = load_main_module()
+    user = mod.UserInfo(username="admin", role="admin")
+
+    response = asyncio.run(mod.issue_ws_ticket(current_user=user))
+    ticket = response.ticket if hasattr(response, "ticket") else response["ticket"]
+
+    first = mod.ticket_store.consume(ticket)
+    second = mod.ticket_store.consume(ticket)
+
+    assert first == {"sub": "admin", "role": "admin"}
+    assert second is None
+
+
+def test_get_projects_formats_runtime_status_for_frontend(tmp_path, monkeypatch):
+    mod = load_main_module()
+    user = mod.UserInfo(username="admin", role="admin")
+
+    project = tmp_path / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    (project / "checkpoint.md").write_text("- **Last completed step**: 4\n", encoding="utf-8")
+    write_status(
+        project,
+        state="running",
+        current_step=5,
+        current_action="agent_run",
+        display_status="Running Step 5",
+        updated_at=1700000000,
+    )
+
+    monkeypatch.setattr(
+        mod,
+        "settings",
+        mod.settings.__class__(
+            jwt_secret="0123456789abcdef0123456789abcdef",
+            admin_password="strong-password",
+            factory_root=tmp_path,
+            jwt_hours=24,
+        ),
+    )
+
+    payload = asyncio.run(mod.get_projects(current_user=user))
+    assert len(payload) == 1
+
+    first = payload[0]
+    base_name = first.base_name if hasattr(first, "base_name") else first["base_name"]
+    status = first.status if hasattr(first, "status") else first["status"]
+    display_status = first.display_status if hasattr(first, "display_status") else first["display_status"]
+    last_updated = first.last_updated if hasattr(first, "last_updated") else first["last_updated"]
+
+    assert base_name == "demo"
+    assert status == "running"
+    assert display_status == "Running Step 5"
+    assert isinstance(last_updated, str)

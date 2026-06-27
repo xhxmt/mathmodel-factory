@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib
+import importlib.util
 import sys
 import types
 
@@ -19,7 +20,8 @@ def load_app_module():
     sys.modules.pop("fastapi.security", None)
 
     import os
-    os.environ["JWT_SECRET"] = "test-secret"
+    os.environ["JWT_SECRET"] = "0123456789abcdef0123456789abcdef"
+    os.environ["ADMIN_PASSWORD"] = "strong-password"
 
     fastapi = types.ModuleType("fastapi")
 
@@ -34,6 +36,9 @@ def load_app_module():
             pass
 
         def add_middleware(self, *args, **kwargs):
+            return None
+
+        def include_router(self, *args, **kwargs):
             return None
 
         def get(self, *args, **kwargs):
@@ -52,6 +57,7 @@ def load_app_module():
             return lambda fn: fn
 
     fastapi.FastAPI = DummyFastAPI
+    fastapi.APIRouter = DummyFastAPI
     fastapi.WebSocket = type("WebSocket", (), {})
     fastapi.WebSocketDisconnect = type("WebSocketDisconnect", (Exception,), {})
     fastapi.HTTPException = HTTPException
@@ -118,3 +124,19 @@ def test_valid_step_key_accepts_step_8_5():
     assert mod._valid_model_step_key("step_8_5") is True
     assert mod._valid_model_step_key("step_9") is True
     assert mod._valid_model_step_key("step_nine") is False
+
+
+def test_app_shim_reexports_main_app():
+    mod = load_app_module()
+
+    assert hasattr(mod, "app")
+
+
+def test_backend_main_loads_as_top_level_script_module():
+    sys.modules.pop("main", None)
+    main_path = Path(__file__).resolve().parents[1] / "web" / "backend" / "main.py"
+    spec = importlib.util.spec_from_file_location("web.backend.main", main_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    assert hasattr(module, "app")
