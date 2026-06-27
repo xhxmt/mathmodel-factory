@@ -7,65 +7,16 @@ FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$FACTORY/scripts/load_secrets.sh" ]]; then
     source "$FACTORY/scripts/load_secrets.sh" 2>/dev/null || echo "Warning: Failed to load secrets from Secret Manager" >&2
 fi
-REGISTRY="$FACTORY/run_state/process_registry"
 PAPER_STY="$FACTORY/resources/style/paper.sty"
 BIB_BST="$FACTORY/resources/bib/bibliography.bst"
 STYLE_JSON="$FACTORY/resources/style/model_papers_style.json"
 ANALYSIS_GUIDE="$FACTORY/analysis_guide.md"
 MODELING_GUIDE="$FACTORY/modeling_guide.md"
-PAUSE_MARKER=".paused"
-KILL_MARKER=".killed"
 
 mkdir -p "$FACTORY/run_state" "$FACTORY/logs" "$FACTORY/ongoing" "$FACTORY/complete" "$FACTORY/papers"
 
 project_dir() {
     echo "$FACTORY/ongoing/$1"
-}
-
-pause_file() {
-    echo "$(project_dir "$1")/$PAUSE_MARKER"
-}
-
-kill_file() {
-    echo "$(project_dir "$1")/$KILL_MARKER"
-}
-
-pid_file() {
-    echo "$(project_dir "$1")/.runner.pid"
-}
-
-is_pid_live() {
-    local pid="${1:-}"
-    [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || return 1
-    kill -0 "$pid" 2>/dev/null
-}
-
-get_registered_pid() {
-    local proj="$1"
-    grep "^${proj} " "$REGISTRY" 2>/dev/null | awk '{print $2}' | tail -1 || true
-}
-
-update_registry_entry() {
-    local proj="$1" pid="$2"
-    mkdir -p "$(dirname "$REGISTRY")"
-    touch "$REGISTRY"
-    local tmp="${REGISTRY}.tmp.$$"
-    grep -v "^${proj} " "$REGISTRY" > "$tmp" 2>/dev/null || true
-    if [[ -n "$pid" ]]; then
-        echo "$proj $pid" >> "$tmp"
-    fi
-    mv "$tmp" "$REGISTRY"
-}
-
-remove_registry_entry() {
-    update_registry_entry "$1" ""
-}
-
-cleanup_project_lock() {
-    local proj_dir="$1"
-    rm -f "$proj_dir/.runner.lock.info" 2>/dev/null || true
-    rm -f "$proj_dir/.runner.lock/info" 2>/dev/null || true
-    rmdir "$proj_dir/.runner.lock" 2>/dev/null || true
 }
 
 submit_project() {
@@ -78,13 +29,6 @@ submit_project() {
         return 1
     fi
 
-    local current_pid
-    current_pid="$(get_registered_pid "$proj")"
-    if is_pid_live "$current_pid"; then
-        echo "  $proj already running (pid $current_pid)"
-        return 0
-    fi
-
     mkdir -p "$FACTORY/logs" "$proj_dir/logs"
 
     local out
@@ -92,72 +36,11 @@ submit_project() {
     (
         cd "$FACTORY"
         nohup "$FACTORY/run_paper.sh" "$proj_dir" >> "$out" 2>&1 &
-        echo $! > "$(pid_file "$proj")"
+        echo $! > "$proj_dir/.runner.pid"
     )
-
     local pid
-    pid="$(cat "$(pid_file "$proj")")"
-    update_registry_entry "$proj" "$pid"
+    pid="$(cat "$proj_dir/.runner.pid")"
     echo "  $proj -> pid $pid"
-}
-
-pause_project() {
-    local proj="$1"
-    local proj_dir
-    proj_dir="$(project_dir "$proj")"
-
-    if [[ ! -f "$proj_dir/checkpoint.md" ]]; then
-        echo "ERROR: No checkpoint.md in $proj_dir"
-        return 1
-    fi
-
-    touch "$(pause_file "$proj")"
-
-    local pid=""
-    if [[ -f "$(pid_file "$proj")" ]]; then
-        pid="$(cat "$(pid_file "$proj")" 2>/dev/null || true)"
-    fi
-    [[ -z "$pid" ]] && pid="$(get_registered_pid "$proj")"
-
-    if is_pid_live "$pid"; then
-        kill "$pid" 2>/dev/null || true
-        for _ in {1..10}; do
-            if ! is_pid_live "$pid"; then
-                break
-            fi
-            sleep 1
-        done
-        if is_pid_live "$pid"; then
-            kill -KILL "$pid" 2>/dev/null || true
-        fi
-    fi
-
-    remove_registry_entry "$proj"
-    rm -f "$(pid_file "$proj")" 2>/dev/null || true
-    cleanup_project_lock "$proj_dir"
-    rm -f "$proj_dir/.heartbeat" 2>/dev/null || true
-    echo "  $proj paused"
-}
-
-resume_project() {
-    local proj="$1"
-    local proj_dir
-    proj_dir="$(project_dir "$proj")"
-
-    if [[ ! -f "$proj_dir/checkpoint.md" ]]; then
-        echo "ERROR: No checkpoint.md in $proj_dir"
-        return 1
-    fi
-
-    if [[ -f "$(kill_file "$proj")" ]]; then
-        echo "ERROR: $proj was killed by the viability gate and will not be resumed"
-        return 1
-    fi
-
-    rm -f "$(pause_file "$proj")"
-    cleanup_project_lock "$proj_dir"
-    rm -f "$proj_dir/.heartbeat" 2>/dev/null || true
-    submit_project "$proj"
 }
 
 usage() {
@@ -167,6 +50,7 @@ Usage:
   ./launch_agents.sh <project> [project2] ...
   ./launch_agents.sh resume <project> [project2] ...
   ./launch_agents.sh pause <project> [project2] ...
+  ./launch_agents.sh kill <project> [project2] ...
   ./launch_agents.sh run <project>
   ./launch_agents.sh consult <project>
   ./launch_agents.sh attach <project>
@@ -195,68 +79,7 @@ if [[ "${1:-}" == "attach" ]]; then
 fi
 
 if [[ "${1:-}" == "status" ]]; then
-    echo ""
-    echo "=== Modeling Factory Status ==="
-
-    _print_projects() {
-        local section="$1" search_dir="$2"
-        [[ -d "$search_dir" ]] || return
-        local found=false
-        for dir in "$search_dir"/*/; do
-            [[ -d "$dir" ]] || continue
-            local proj
-            proj=$(basename "$dir")
-            [[ -f "$dir/checkpoint.md" ]] || continue
-            if ! $found; then
-                echo ""
-                echo "  $section"
-                printf "  %-25s %-10s %-12s %-18s %s\n" \
-                    "PROJECT" "INFERRED" "CHECKPOINT" "PROCESS" "TIMESTAMP"
-                printf "  %-25s %-10s %-12s %-18s %s\n" \
-                    "-------" "--------" "----------" "-------" "---------"
-                found=true
-            fi
-
-            local inferred cp_step ts process pid
-            inferred=$("$FACTORY/run_paper.sh" --infer-step "$dir" 2>/dev/null || echo "?")
-            cp_step=$(grep "Last completed step" "$dir/checkpoint.md" 2>/dev/null \
-                | grep -oP -- '-?\d+' | head -1 || echo "?")
-            ts=$(grep "Timestamp" "$dir/checkpoint.md" 2>/dev/null \
-                | sed 's/.*: //' || echo "")
-
-            process="stopped"
-            if [[ -f "$dir/$KILL_MARKER" ]]; then
-                process="KILLED"
-            elif [[ -f "$dir/.paused" ]]; then
-                process="PAUSED"
-            elif [[ -f "$dir/.awaiting_consultation" ]]; then
-                local cstep
-                cstep=$(grep -oP 'STEP:\K[0-9]+' "$dir/.awaiting_consultation" 2>/dev/null | head -1)
-                process="CONSULT(${cstep:-?})"
-            elif grep -q '^AWAITING_STEP8_5:' "$dir/.heartbeat" 2>/dev/null; then
-                # Step 8.5 editorial gate blocked paper drafting (entry_gate.md
-                # verdict not PASS). Runner exited cleanly (exit 0) and leaves
-                # this heartbeat; show it as a deliberate wait, not EXITED.
-                process="AWAIT_8.5"
-            else
-                pid=""
-                [[ -f "$dir/.runner.pid" ]] && pid="$(cat "$dir/.runner.pid" 2>/dev/null || true)"
-                [[ -z "$pid" ]] && pid="$(get_registered_pid "$proj")"
-                if is_pid_live "$pid"; then
-                    process="RUNNING($pid)"
-                elif [[ -n "$pid" ]]; then
-                    process="EXITED($pid)"
-                fi
-            fi
-
-            printf "  %-25s %-10s %-12s %-18s %s\n" \
-                "$proj" "$inferred" "$cp_step" "$process" "$ts"
-        done
-    }
-
-    _print_projects "ONGOING" "$FACTORY/ongoing"
-    _print_projects "COMPLETE" "$FACTORY/complete"
-    echo ""
+    exec python3 "$FACTORY/scripts/project_ctl.py" status --factory-root "$FACTORY"
     exit 0
 fi
 
@@ -292,7 +115,25 @@ if [[ "${1:-}" == "pause" ]]; then
     echo ""
     echo "Pausing $# project(s)..."
     for proj in "$@"; do
-        pause_project "$proj"
+        proj_dir="$(project_dir "$proj")"
+        [[ -f "$proj_dir/checkpoint.md" ]] || { echo "ERROR: No checkpoint.md in $proj_dir"; exit 1; }
+        python3 "$FACTORY/scripts/project_ctl.py" pause "$proj_dir" "$proj" --factory-root "$FACTORY" >/dev/null
+        echo "  $proj paused"
+    done
+    echo ""
+    exit 0
+fi
+
+if [[ "${1:-}" == "kill" ]]; then
+    shift
+    [[ $# -gt 0 ]] || { echo "Usage: $0 kill <project> [project2 ...]"; exit 1; }
+    echo ""
+    echo "Killing $# project(s)..."
+    for proj in "$@"; do
+        proj_dir="$(project_dir "$proj")"
+        [[ -f "$proj_dir/checkpoint.md" ]] || { echo "ERROR: No checkpoint.md in $proj_dir"; exit 1; }
+        python3 "$FACTORY/scripts/project_ctl.py" kill "$proj_dir" --factory-root "$FACTORY" >/dev/null
+        echo "  $proj killed"
     done
     echo ""
     exit 0
@@ -404,7 +245,9 @@ fi
 echo ""
 echo "Starting ${#PROJECTS[@]} project(s)..."
 for proj in "${PROJECTS[@]}"; do
-    resume_project "$proj"
+    proj_dir="$(project_dir "$proj")"
+    [[ -f "$proj_dir/checkpoint.md" ]] || { echo "ERROR: No checkpoint.md in $proj_dir"; exit 1; }
+    python3 "$FACTORY/scripts/project_ctl.py" resume "$proj_dir" "$proj" --factory-root "$FACTORY" >/dev/null
 done
 echo ""
 echo "Commands:"
