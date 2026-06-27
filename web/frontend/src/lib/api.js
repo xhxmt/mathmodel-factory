@@ -31,6 +31,10 @@ export async function authMe() {
   const { data } = await api.get('/api/auth/me')
   return data
 }
+export async function authWsTicket() {
+  const { data } = await api.post('/api/auth/ws-ticket')
+  return data
+}
 
 // ---- projects ----
 export const Projects = {

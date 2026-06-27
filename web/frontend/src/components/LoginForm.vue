@@ -41,7 +41,7 @@
       </form>
 
       <div class="bc-foot mono">
-        默认 <b>admin</b> / <b>admin123</b> · 可经 ADMIN_PASSWORD 修改
+        请使用 <b>web/.env</b> 中显式配置的管理员口令登录
       </div>
     </div>
   </div>

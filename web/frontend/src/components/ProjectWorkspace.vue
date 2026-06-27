@@ -100,12 +100,7 @@ import { Projects, relativeTime } from '../lib/api.js'
 import { stepByIndex, stepConfigKey } from '../lib/steps.js'
 import { useToasts } from '../composables/useToasts.js'
 import { useModels } from '../composables/useModels.js'
-
-const STATUS_LABEL = {
-  running: '运行中', paused: '已暂停', completed: '已完成',
-  awaiting_consultation: '等待咨询', ready: '就绪', setup: '初始化',
-  failed: '失败', killed: '已终止',
-}
+import { statusLabel as mapStatusLabel } from '../lib/status.js'
 
 export default {
   name: 'ProjectWorkspace',
@@ -131,7 +126,7 @@ export default {
     }
   },
   computed: {
-    statusLabel() { return STATUS_LABEL[this.project.status] || this.project.status },
+    statusLabel() { return mapStatusLabel(this.project.status) },
     modelRegistry() { return this._models?.registry || [] },
     // This project's own per-step overrides ({ step_N: {primary, fallback} }).
     projectAssignments() { return this._models?.config?.[this.project.base_name] || {} },
@@ -160,7 +155,7 @@ export default {
   },
   mounted() {
     this.fetchSteps()
-    this._loadModels()
+    this._loadModels().catch(() => {})
     this.timer = setInterval(() => {
       if (this.project.is_running && !document.hidden) this.fetchSteps()
     }, 8000)

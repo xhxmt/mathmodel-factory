@@ -39,11 +39,7 @@ import Icon from './Icon.vue'
 import StepRail from './StepRail.vue'
 import { relativeTime } from '../lib/api.js'
 import { stepByIndex } from '../lib/steps.js'
-
-const STATUS_LABEL = {
-  running: '运行中', paused: '已暂停', completed: '已完成', awaiting_consultation: '等待咨询',
-  ready: '就绪', setup: '初始化', failed: '失败', killed: '已终止',
-}
+import { statusLabel as mapStatusLabel } from '../lib/status.js'
 
 export default {
   name: 'ProjectCard',
@@ -51,7 +47,7 @@ export default {
   props: { project: { type: Object, required: true } },
   emits: ['open', 'action'],
   computed: {
-    statusLabel() { return STATUS_LABEL[this.project.status] || this.project.status },
+    statusLabel() { return mapStatusLabel(this.project.status) },
     dotClass() {
       return { running: 'live', awaiting_consultation: 'amber', completed: 'ok', paused: 'paused', failed: 'bad', killed: 'bad' }[this.project.status] || ''
     },
