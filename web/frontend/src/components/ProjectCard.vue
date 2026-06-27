@@ -3,6 +3,7 @@
     <div class="c-top">
       <span class="dot" :class="dotClass"></span>
       <span class="c-name mono">{{ project.base_name }}</span>
+      <span v-if="diagnosticBadge" class="tag diag-tag">{{ diagnosticBadge }}</span>
       <span class="spacer"></span>
       <span class="tag" :class="'st-' + project.status">{{ statusLabel }}</span>
     </div>
@@ -38,6 +39,7 @@
 import Icon from './Icon.vue'
 import StepRail from './StepRail.vue'
 import { relativeTime } from '../lib/api.js'
+import { badgeText } from '../lib/diagnostics.js'
 import { stepByIndex } from '../lib/steps.js'
 import { statusLabel as mapStatusLabel } from '../lib/status.js'
 
@@ -48,6 +50,7 @@ export default {
   emits: ['open', 'action'],
   computed: {
     statusLabel() { return mapStatusLabel(this.project.status) },
+    diagnosticBadge() { return badgeText(this.project) },
     dotClass() {
       return { running: 'live', awaiting_consultation: 'amber', completed: 'ok', paused: 'paused', failed: 'bad', killed: 'bad' }[this.project.status] || ''
     },
@@ -108,4 +111,5 @@ export default {
 .st-completed { color: var(--ok); border-color: var(--ok-dim); background: var(--ok-dim); }
 .st-paused { color: var(--paused); }
 .st-failed, .st-killed { color: var(--bad); border-color: var(--bad-dim); background: var(--bad-dim); }
+.diag-tag { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
 </style>

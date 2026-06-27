@@ -72,6 +72,9 @@ class ProjectStatus(BaseModel):
     reason_summary: str = ""
     suggested_actions: list[str] = []
     evidence: list[dict] = []
+    diagnostic_reason_code: str | None = None
+    diagnostic_badge: str | None = None
+    diagnostic_priority: int = 999
 
 
 class ConsultationRequest(BaseModel):

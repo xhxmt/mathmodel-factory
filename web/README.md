@@ -33,6 +33,8 @@
 - 状态跟踪：运行中、暂停、等待咨询、已完成等
 - 进度可视化：步骤进度条（Step X/16）和百分比
 - 工作台时间线会在 Step 8 和 Step 9 之间显示一个虚拟的 `8.5` 节点，用于提示“阅卷入口设计”是否完成
+- 列表页可直接看到诊断徽章，例如“等待人工”“等待 8.5 门禁”“静默过久”
+- 工作台顶部会显示诊断卡，包含主结论、最近关键事件和一键动作
 - WebSocket 实时更新：无需刷新页面
 
 ### 2. 项目管理
@@ -136,6 +138,29 @@ Dashboard 显示所有项目的实时状态：
 - **恢复**：恢复暂停的项目
 - **终止**：完全停止项目
 
+### 诊断能力
+
+- 列表页会展示项目诊断徽章，快速说明当前阻塞类型或风险状态。
+- 工作台会展示诊断卡，汇总 `reason_code`、最近事件和可执行动作。
+- 诊断动作不会引入新的控制面入口，统一复用已有日志、产物和项目控制能力。
+- 新增接口：`GET /api/projects/{base_name}/diagnostics`
+
+返回示例：
+
+```json
+{
+  "source": "runner",
+  "status": {
+    "reason_code": "AWAITING_STEP8_5",
+    "reason_summary": "Step 8.5 未通过，等待补足 reviewer entry 材料"
+  },
+  "actions": [
+    { "id": "open_entry_gate" },
+    { "id": "refresh_status" }
+  ]
+}
+```
+
 ## API 端点
 
 ### 认证
@@ -169,6 +194,7 @@ Authorization: Bearer <your_token>
     }
     ```
 - `GET /api/projects/{base_name}/status` - 获取项目状态
+- `GET /api/projects/{base_name}/diagnostics` - 获取项目诊断摘要、最近事件和动作建议
 - `GET /api/projects/{base_name}/checkpoint` - 获取 checkpoint 内容
 - `GET /api/projects/{base_name}/logs?lines=100` - 获取日志
 - `POST /api/projects/{base_name}/action` - 执行操作（pause/resume/kill）

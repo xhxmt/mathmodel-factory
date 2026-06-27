@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from .auth import get_current_user
 from .config import Settings
 from .consultation_service import write_consultation_answer
+from .diagnostics_service import build_project_diagnostics, summarize_project_diagnostics
 from .project_actions import run_action
 from .schemas import (
     ConsultationAnswer,
@@ -95,6 +96,15 @@ ARTIFACT_GROUPS = {
         "derobotification.md",
     ],
     "paper": ["abstract_draft.md", "references.bib"],
+    "diagnostics": [
+        "entry_gate.md",
+        "reviewer_entry_map.md",
+        "anchor_figure_plan.md",
+        "human_review.md",
+        "logs/runner.log",
+        "diagnostics/status.json",
+        "diagnostics/events.jsonl",
+    ],
 }
 
 STEP_ARTIFACTS = {
@@ -207,6 +217,7 @@ def _resolve_project(settings: Settings, base_name: str) -> Path:
 
 
 def _runtime_to_project_status(runtime: dict[str, Any]) -> ProjectStatus:
+    diag_summary = summarize_project_diagnostics({"status": runtime})
     return ProjectStatus(
         base_name=runtime["base_name"],
         status=runtime["status"],
@@ -223,6 +234,9 @@ def _runtime_to_project_status(runtime: dict[str, Any]) -> ProjectStatus:
         reason_summary=runtime.get("reason_summary", ""),
         suggested_actions=list(runtime.get("suggested_actions", [])),
         evidence=list(runtime.get("evidence", [])),
+        diagnostic_reason_code=diag_summary["diagnostic_reason_code"],
+        diagnostic_badge=diag_summary["diagnostic_badge"],
+        diagnostic_priority=diag_summary["diagnostic_priority"],
     )
 
 
@@ -613,6 +627,22 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
     ):
         del current_user
         return _runtime_to_project_status(read_runtime_status(_resolve_project(settings, base_name), base_name))
+
+    @router.get("/api/projects/{base_name}/diagnostics")
+    async def get_project_diagnostics(
+        base_name: str,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        del current_user
+        project = _resolve_project(settings, base_name)
+        status_payload = read_runtime_status(project, base_name)
+        return build_project_diagnostics(
+            project,
+            base_name,
+            is_running=bool(status_payload.get("is_running")),
+            consultation_pending=bool(status_payload.get("consultation_pending")),
+            consultation_gate=status_payload.get("consultation_gate"),
+        )
 
     @router.get("/api/projects/{base_name}/checkpoint")
     async def get_checkpoint(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):

@@ -68,6 +68,13 @@
         @manage-models="showModels = true"
       />
 
+      <DiagnosticsCard
+        v-if="diagnostics && diagnostics.status && diagnostics.status.reason_code"
+        class="rise"
+        :diagnostics="diagnostics"
+        @action="onDiagnosticsAction"
+      />
+
       <!-- logs ∥ artifacts -->
       <div class="ws-split rise">
         <LogConsole class="ws-logs" :base="project.base_name" :active="true" />
@@ -94,6 +101,7 @@ import PipelineTimeline from './PipelineTimeline.vue'
 import LogConsole from './LogConsole.vue'
 import ArtifactBrowser from './ArtifactBrowser.vue'
 import ConsultationPanel from './ConsultationPanel.vue'
+import DiagnosticsCard from './DiagnosticsCard.vue'
 import ModelManager from './ModelManager.vue'
 import CloudAcceleratorDialog from './CloudAcceleratorDialog.vue'
 import { Projects, relativeTime } from '../lib/api.js'
@@ -104,7 +112,7 @@ import { statusLabel as mapStatusLabel } from '../lib/status.js'
 
 export default {
   name: 'ProjectWorkspace',
-  components: { Icon, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, ModelManager, CloudAcceleratorDialog },
+  components: { Icon, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog },
   props: { project: { type: Object, required: true } },
   emits: ['close', 'action', 'refresh'],
   setup() {
@@ -122,6 +130,7 @@ export default {
     return {
       stepsData: null, loading: false, artifactRequest: null, killArm: false,
       nonce: 0, timer: null, showModels: false,
+      diagnostics: null, diagnosticsLoading: false,
       showCloudDialog: false, cloudEstimate: { local: 8, cloud: 2 }, lastStep: null,
     }
   },
@@ -147,23 +156,35 @@ export default {
     },
   },
   watch: {
-    'project.base_name'() { this.stepsData = null; this._stepsFp = ''; this.fetchSteps() },
+    'project.base_name'() {
+      this.stepsData = null
+      this._stepsFp = ''
+      this.diagnostics = null
+      this.fetchSteps()
+      this.fetchDiagnostics()
+    },
     'project.current_step'(newStep) {
       this.fetchSteps()
+      this.fetchDiagnostics()
       this.checkCloudAccelerator(newStep)
     },
   },
   mounted() {
     this.fetchSteps()
+    this.fetchDiagnostics()
     this._loadModels().catch(() => {})
     this.timer = setInterval(() => {
-      if (this.project.is_running && !document.hidden) this.fetchSteps()
+      if (this.project.is_running && !document.hidden) {
+        this.fetchSteps()
+        this.fetchDiagnostics()
+      }
     }, 8000)
     this._visH = () => {
       if (document.hidden) {
         if (this._stepsAbort) { try { this._stepsAbort.abort() } catch (e) { /* */ } }
       } else if (this.project.is_running) {
         this.fetchSteps()
+        this.fetchDiagnostics()
       }
     }
     document.addEventListener('visibilitychange', this._visH)
@@ -213,11 +234,43 @@ export default {
       })()
       return this._stepsPromise
     },
-    refresh() { this.fetchSteps(); this.$emit('refresh') },
+    async fetchDiagnostics() {
+      this.diagnosticsLoading = true
+      try {
+        this.diagnostics = await Projects.diagnostics(this.project.base_name)
+      } catch (e) {
+        this.diagnostics = null
+      } finally {
+        this.diagnosticsLoading = false
+      }
+    },
+    refresh() { this.fetchSteps(); this.fetchDiagnostics(); this.$emit('refresh') },
     act(a) { this.killArm = false; this.$emit('action', this.project, a) },
     requestFile(f) { this.artifactRequest = { ...f, _n: ++this.nonce } },
     requestPaper() { this.artifactRequest = { __paper: true, _n: ++this.nonce } },
-    onAnswered() { this.$emit('refresh'); this.fetchSteps() },
+    onAnswered() { this.$emit('refresh'); this.fetchSteps(); this.fetchDiagnostics() },
+    onDiagnosticsAction(actionId) {
+      if (actionId === 'refresh_status') {
+        this.fetchDiagnostics()
+        this.fetchSteps()
+        this.$emit('refresh')
+        return
+      }
+      if (actionId === 'resume_project') {
+        this.act('resume')
+        return
+      }
+      const evidenceMap = {
+        open_runner_log: { path: 'logs/runner.log', type: 'text', name: 'runner.log' },
+        open_entry_gate: { path: 'entry_gate.md', type: 'markdown', name: 'entry_gate.md' },
+        open_reviewer_entry_artifacts: { path: 'reviewer_entry_map.md', type: 'markdown', name: 'reviewer_entry_map.md' },
+        open_consultation_request: { path: `consultation/${this.project.consultation_gate || 'dynamic'}_request.md`, type: 'markdown', name: 'consultation request' },
+        open_human_review: { path: 'human_review.md', type: 'markdown', name: 'human_review.md' },
+        open_failed_artifact: { path: 'logs/runner.log', type: 'text', name: 'runner.log' },
+      }
+      const req = evidenceMap[actionId]
+      if (req) this.requestFile(req)
+    },
     // PipelineTimeline asks to set step primary/fallback for THIS project.
     async onAssign(step, assignment) {
       const steps = JSON.parse(JSON.stringify(this.projectAssignments))

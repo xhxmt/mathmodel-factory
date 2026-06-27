@@ -40,6 +40,7 @@ export async function authWsTicket() {
 export const Projects = {
   list: () => api.get('/api/projects').then((r) => r.data),
   status: (b) => api.get(`/api/projects/${b}/status`).then((r) => r.data),
+  diagnostics: (b) => api.get(`/api/projects/${b}/diagnostics`).then((r) => r.data),
   checkpoint: (b) => api.get(`/api/projects/${b}/checkpoint`).then((r) => r.data),
   logs: (b, lines = 250, signal) => api.get(`/api/projects/${b}/logs`, { params: { lines }, signal }).then((r) => r.data),
   steps: (b, signal) => api.get(`/api/projects/${b}/steps`, { signal }).then((r) => r.data),

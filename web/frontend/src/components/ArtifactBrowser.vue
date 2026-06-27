@@ -98,9 +98,10 @@ const GROUP_META = {
   figures: { label: '图表', icon: 'image' },
   evaluation: { label: '评估 · 评审', icon: 'check-circle' },
   paper: { label: '论文', icon: 'book-open' },
+  diagnostics: { label: '诊断 · DIAGNOSTICS', icon: 'alert-triangle' },
   code: { label: '模型代码', icon: 'code' },
 }
-const GROUP_ORDER = ['problem', 'method', 'model', 'solve', 'results', 'figures', 'evaluation', 'paper', 'code']
+const GROUP_ORDER = ['problem', 'method', 'model', 'solve', 'results', 'figures', 'evaluation', 'paper', 'diagnostics', 'code']
 
 export default {
   name: 'ArtifactBrowser',
