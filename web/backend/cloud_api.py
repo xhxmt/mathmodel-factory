@@ -2,13 +2,35 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
 from .auth import get_current_user
 from .config import Settings
 from .schemas import UserInfo
+
+
+def _resolve_gcloud_binary() -> str | None:
+    env_override = (os.getenv("GCLOUD_BIN") or "").strip()
+    if env_override:
+        return env_override
+
+    path_hit = shutil.which("gcloud")
+    if path_hit:
+        return path_hit
+
+    home_sdk = Path.home() / "google-cloud-sdk" / "bin" / "gcloud"
+    if home_sdk.is_file():
+        return str(home_sdk)
+
+    tfisher_sdk = Path("/home/tfisher/google-cloud-sdk/bin/gcloud")
+    if tfisher_sdk.is_file():
+        return str(tfisher_sdk)
+
+    return None
 
 
 def create_cloud_router(settings: Settings) -> APIRouter:
@@ -18,8 +40,12 @@ def create_cloud_router(settings: Settings) -> APIRouter:
     async def cloud_status(current_user: UserInfo = Depends(get_current_user(settings))):
         del current_user
         try:
+            gcloud_bin = _resolve_gcloud_binary()
+            if not gcloud_bin:
+                return {"available": False, "error": "gcloud CLI not installed"}
+
             result = subprocess.run(
-                ["gcloud", "version"],
+                [gcloud_bin, "version"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -33,7 +59,7 @@ def create_cloud_router(settings: Settings) -> APIRouter:
             service_name = settings.gcp_solver_service
             result = subprocess.run(
                 [
-                    "gcloud",
+                    gcloud_bin,
                     "run",
                     "services",
                     "describe",
