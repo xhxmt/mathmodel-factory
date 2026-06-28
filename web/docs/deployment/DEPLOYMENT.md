@@ -58,9 +58,9 @@ Paper Factory Web Dashboard 已成功部署到域名：**https://tfisher.de**
 
 ### 用户访问
 1. 打开浏览器访问：https://tfisher.de
-2. 使用默认账号登录：
+2. 使用 `web/.env` 中配置的管理员账号登录：
    - 用户名：`admin`
-   - 密码：`admin123`
+   - 密码：以 `ADMIN_PASSWORD` 当前值为准
 3. 点击"➕ 新建项目"创建建模任务
 
 ### 管理员操作

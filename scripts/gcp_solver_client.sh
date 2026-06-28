@@ -10,10 +10,40 @@ REGION="${GCP_REGION:-europe-west4}"
 SERVICE_NAME="${GCP_SOLVER_SERVICE:-solver-api}"
 BUCKET="${GCP_SOLVER_BUCKET:-${PROJECT_ID}-solver-jobs}"
 
+resolve_binary() {
+    local env_value="$1"
+    local name="$2"
+    local home_sdk="$HOME/google-cloud-sdk/bin/$name"
+    local tfisher_sdk="/home/tfisher/google-cloud-sdk/bin/$name"
+
+    if [[ -n "$env_value" ]]; then
+        echo "$env_value"
+        return 0
+    fi
+    if command -v "$name" >/dev/null 2>&1; then
+        command -v "$name"
+        return 0
+    fi
+    if [[ -x "$home_sdk" ]]; then
+        echo "$home_sdk"
+        return 0
+    fi
+    if [[ -x "$tfisher_sdk" ]]; then
+        echo "$tfisher_sdk"
+        return 0
+    fi
+    echo "Error: $name not found" >&2
+    exit 1
+}
+
+GCLOUD_BIN_RESOLVED="$(resolve_binary "${GCLOUD_BIN:-}" gcloud)"
+GSUTIL_BIN_RESOLVED="$(resolve_binary "${GSUTIL_BIN:-}" gsutil)"
+
 # Get Cloud Run service URL
 get_service_url() {
-    gcloud run services describe "$SERVICE_NAME" \
+    "$GCLOUD_BIN_RESOLVED" run services describe "$SERVICE_NAME" \
         --region="$REGION" \
+        --project="$PROJECT_ID" \
         --format="value(status.url)" 2>/dev/null || {
         echo "Error: Cloud Run service '$SERVICE_NAME' not found in region '$REGION'" >&2
         exit 1
@@ -126,7 +156,7 @@ REQUEST_JSON=$(jq -n \
 echo "Submitting job $JOB_ID to Cloud Run..." >&2
 SUBMIT_RESPONSE=$(curl -s -X POST \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+    -H "Authorization: Bearer $("$GCLOUD_BIN_RESOLVED" auth print-identity-token)" \
     -d "$REQUEST_JSON" \
     "${SERVICE_URL}/solve/${SOLVER_TYPE}")
 
@@ -143,7 +173,7 @@ fi
 echo "Polling job status..." >&2
 while true; do
     STATUS_RESPONSE=$(curl -s \
-        -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+        -H "Authorization: Bearer $("$GCLOUD_BIN_RESOLVED" auth print-identity-token)" \
         "${SERVICE_URL}/jobs/${JOB_ID}/status")
 
     STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status')
@@ -171,7 +201,7 @@ STDOUT_URL=$(echo "$STATUS_RESPONSE" | jq -r '.stdout_url')
 if [[ -n "$STDOUT_URL" && "$STDOUT_URL" != "null" ]]; then
     STDOUT_LOCAL="${SCRIPT_PATH}.log"
     echo "Downloading stdout to $STDOUT_LOCAL..." >&2
-    gsutil cp "$STDOUT_URL" "$STDOUT_LOCAL" 2>/dev/null || {
+    "$GSUTIL_BIN_RESOLVED" cp "$STDOUT_URL" "$STDOUT_LOCAL" 2>/dev/null || {
         echo "Warning: failed to download stdout" >&2
     }
 fi
@@ -181,7 +211,7 @@ STDERR_URL=$(echo "$STATUS_RESPONSE" | jq -r '.stderr_url')
 if [[ -n "$STDERR_URL" && "$STDERR_URL" != "null" ]]; then
     STDERR_LOCAL="${SCRIPT_PATH}.err"
     echo "Downloading stderr to $STDERR_LOCAL..." >&2
-    gsutil cp "$STDERR_URL" "$STDERR_LOCAL" 2>/dev/null || {
+    "$GSUTIL_BIN_RESOLVED" cp "$STDERR_URL" "$STDERR_LOCAL" 2>/dev/null || {
         echo "Warning: failed to download stderr" >&2
     }
 fi
@@ -193,7 +223,7 @@ if [[ -n "$RESULT_FILES" ]]; then
     echo "Downloading result files to $SCRIPT_DIR..." >&2
     for url in $RESULT_FILES; do
         filename=$(basename "$url")
-        gsutil cp "$url" "$SCRIPT_DIR/$filename" 2>/dev/null || {
+        "$GSUTIL_BIN_RESOLVED" cp "$url" "$SCRIPT_DIR/$filename" 2>/dev/null || {
             echo "Warning: failed to download $filename" >&2
         }
     done

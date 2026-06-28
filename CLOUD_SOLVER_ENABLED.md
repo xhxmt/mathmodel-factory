@@ -14,6 +14,7 @@
 USE_CLOUD_SOLVER=true           # 已启用
 CLOUD_THRESHOLD_TIME=300        # 5 分钟阈值
 CLOUD_SOLVER_TYPES=python,julia,matlab,R
+CLOUD_RUN_URL=https://solver-api-144584367563.europe-west4.run.app
 ```
 
 **Cloud Run 服务状态:**
@@ -28,16 +29,17 @@ CLOUD_SOLVER_TYPES=python,julia,matlab,R
 
 ### 自动路由逻辑
 
-`solver_router.sh` 会根据任务执行时间自动选择执行位置：
+`solver_submit.sh` 是工作流主入口；它会读取项目目录向上的 `.env.cloud`，并根据任务执行时间自动选择执行位置。`scripts/solver_router.sh` 保留为手动路由入口。
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  用户提交任务 (solver_submit.sh 或 router)     │
+│  用户提交任务 (solver_submit.sh)              │
 └────────────────┬────────────────────────────────┘
                  │
                  ▼
         ┌────────────────────┐
-        │ solver_router.sh   │
+        │ solver_submit.sh   │
+        │ 读取 .env.cloud    │
         │ 检查 max-time      │
         └────────┬───────────┘
                  │
@@ -65,7 +67,7 @@ CLOUD_SOLVER_TYPES=python,julia,matlab,R
 - ✅ Julia (`--type julia`)
 - ✅ MATLAB (`--type matlab`)
 - ✅ R (`--type R`)
-- ✅ Gurobi (`--type gurobi`)
+- Gurobi 可通过 `CLOUD_SOLVER_TYPES` 显式加入（默认项目开关写入 `python,julia,matlab,R`）
 
 ---
 
@@ -87,15 +89,14 @@ COMPLETED
 ### 测试 2: 长任务（400秒）→ Cloud Run 执行
 
 ```bash
-$ USE_CLOUD_SOLVER=true ./scripts/solver_router.sh --type python --max-time 400 test_cloud_solver.py
-[solver_router] Routing to Cloud Run (max_time=400s)
-Using Cloud Run service: https://solver-api-chqc6lw4sa-ez.a.run.app
-Submitting job job-20260623-134741-2024699 to Cloud Run...
-Job submitted successfully: job-20260623-134741-2024699
-Polling job status...
-...
-Job finished with status: completed
-Job completed successfully
+$ ./solver_submit.sh --type python --max-time 400 test_cloud_solver.py
+[solver_submit] Loaded cloud config: /path/to/project/.env.cloud
+[solver_submit] Routing to Cloud Run (max_time=400s)
+cloud_python_20260628010101_12345
+
+$ ./solver_submit.sh --wait cloud_python_20260628010101_12345
+RUNNING
+COMPLETED
 ```
 
 ✅ **长任务正确路由到 Cloud Run**
@@ -124,7 +125,7 @@ Job completed successfully
 # 短任务（本地执行）
 ./solver_submit.sh --type python --max-time 60 script.py
 
-# 长任务（自动上云）
+# 长任务（项目 `.env.cloud` 启用时自动上云）
 ./solver_submit.sh --type python --max-time 600 script.py
 
 # 检查状态
@@ -139,7 +140,7 @@ Job completed successfully
 ```bash
 # 临时强制上云（忽略阈值）
 USE_CLOUD_SOLVER=true CLOUD_THRESHOLD_TIME=0 \
-  ./scripts/solver_router.sh --type python --max-time 60 script.py
+  ./solver_submit.sh --type python --max-time 60 script.py
 ```
 
 ---
@@ -249,8 +250,8 @@ echo $USE_CLOUD_SOLVER  # 应为 true
 echo $CLOUD_THRESHOLD_TIME  # 应为 300
 
 # 确认任务时间超过阈值
-./scripts/solver_router.sh --type python --max-time 400 script.py
-# 应看到 "[solver_router] Routing to Cloud Run"
+./solver_submit.sh --type python --max-time 400 script.py
+# 应看到 "[solver_submit] Routing to Cloud Run" 并返回 cloud_* jobid
 ```
 
 **解决：**

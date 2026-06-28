@@ -19,7 +19,7 @@
 | Web Backend (FastAPI) | ✅ 运行中 | `:8000` (uvicorn) |
 | Web Frontend (Vue3) | ✅ 运行中 | `:5173` (Vite/Node) |
 | Paper Factory Runner | ✅ 本地 bash | `launch_agents.sh` |
-| Cloud Solver 路由 | 🔴 **未启用** | `USE_CLOUD_SOLVER=false` |
+| Cloud Solver 路由 | ✅ **已启用** | `solver_submit.sh` 读取项目 `.env.cloud`；长任务返回 `cloud_*` jobid |
 
 ### 🔴 未使用的 GCP 服务
 
@@ -35,7 +35,7 @@
 
 ### 1. **启用 Cloud Run Solver 自动路由** ⚡
 
-**现状：** Cloud Run Solver API 已部署并健康运行，但 `solver_router.sh` 默认关闭。
+**现状：** Cloud Run Solver API 已部署并健康运行。Web 控制台会为项目写入 `.env.cloud`，`solver_submit.sh` 会读取该文件并在长任务达到阈值时提交到 Cloud Run。
 
 **操作步骤：**
 
@@ -49,6 +49,7 @@ cat >> /home/tfisher/paper_factory/.env <<'EOF'
 USE_CLOUD_SOLVER=true
 CLOUD_THRESHOLD_TIME=300        # 5分钟以上任务自动上云
 CLOUD_SOLVER_TYPES=python,julia,matlab,R
+CLOUD_RUN_URL=https://solver-api-144584367563.europe-west4.run.app
 
 # GCP 配置（已自动推断，可覆盖）
 GCP_PROJECT_ID=level-night-476302-k0

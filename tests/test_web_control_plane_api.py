@@ -146,6 +146,7 @@ def test_main_module_exposes_runtime_api_surface():
         "put_model_config",
         "cloud_status",
         "cloud_config",
+        "project_cloud_config",
         "enable_cloud_solver",
         "disable_cloud_solver",
         "websocket_endpoint",
@@ -209,3 +210,56 @@ def test_get_projects_formats_runtime_status_for_frontend(tmp_path, monkeypatch)
     assert status == "running"
     assert display_status == "Running Step 5"
     assert isinstance(last_updated, str)
+
+
+def test_project_cloud_config_reflects_enable_disable_state(tmp_path):
+    mod = load_main_module()
+    from web.backend import cloud_api
+
+    settings = mod.settings.__class__(
+        jwt_secret="0123456789abcdef0123456789abcdef",
+        admin_password="strong-password",
+        factory_root=tmp_path,
+        jwt_hours=24,
+        gcp_project_id="level-night-476302-k0",
+        gcp_region="europe-west4",
+        gcp_solver_service="solver-api",
+    )
+    project = settings.ongoing_dir / "demo"
+    project.mkdir(parents=True)
+
+    initial = cloud_api.project_cloud_config(settings, "demo")
+    assert initial["enabled"] is False
+    assert initial["env_file"] == str(project / ".env.cloud")
+
+    cloud_api.set_project_cloud_enabled(settings, "demo", True)
+    enabled = cloud_api.project_cloud_config(settings, "demo")
+    assert enabled["enabled"] is True
+    assert "USE_CLOUD_SOLVER=true" in (project / ".env.cloud").read_text(encoding="utf-8")
+
+    cloud_api.set_project_cloud_enabled(settings, "demo", False)
+    disabled = cloud_api.project_cloud_config(settings, "demo")
+    assert disabled["enabled"] is False
+    assert not (project / ".env.cloud").exists()
+
+
+def test_project_cloud_config_rejects_unknown_project(tmp_path):
+    mod = load_main_module()
+    from web.backend import cloud_api
+
+    settings = mod.settings.__class__(
+        jwt_secret="0123456789abcdef0123456789abcdef",
+        admin_password="strong-password",
+        factory_root=tmp_path,
+        jwt_hours=24,
+    )
+
+    try:
+        cloud_api.set_project_cloud_enabled(settings, "missing", True)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 404
+        assert "Project not found" in str(getattr(exc, "detail", ""))
+    else:
+        raise AssertionError("expected HTTPException")
+
+    assert not (settings.ongoing_dir / "missing").exists()

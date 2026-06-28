@@ -46,6 +46,84 @@ FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JOB_DIR="$FACTORY/run_state/solver_jobs"
 mkdir -p "$JOB_DIR"
 
+find_project_cloud_env() {
+    local dir="$1"
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        if [[ -f "$dir/.env.cloud" ]]; then
+            echo "$dir/.env.cloud"
+            return 0
+        fi
+        if [[ "$dir" == "$FACTORY" ]]; then
+            break
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+load_project_cloud_env() {
+    local workdir="$1"
+    local env_file
+    env_file="$(find_project_cloud_env "$workdir" 2>/dev/null || true)"
+    if [[ -n "$env_file" ]]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "$env_file"
+        set +a
+        echo "[solver_submit] Loaded cloud config: $env_file" >&2
+    fi
+}
+
+should_use_cloud() {
+    local type="$1" max_time="$2"
+    local use_cloud="${USE_CLOUD_SOLVER:-false}"
+    local threshold="${CLOUD_THRESHOLD_TIME:-300}"
+    local solver_types="${CLOUD_SOLVER_TYPES:-python,julia,matlab,R}"
+    local fallback_marker="$FACTORY/run_state/cloud_solver_fallback.marker"
+
+    [[ "$use_cloud" == "true" ]] || return 1
+    [[ ! -f "$fallback_marker" ]] || return 1
+    [[ ",$solver_types," == *",$type,"* ]] || return 1
+    [[ "$max_time" =~ ^[0-9]+$ ]] || return 1
+    (( max_time >= threshold ))
+}
+
+route_to_cloud() {
+    local type="$1" max_time="$2" script="$3"
+    local cloud_client="${CLOUD_SOLVER_CLIENT:-$FACTORY/scripts/gcp_solver_client.sh}"
+    local stdout_log="$WORKDIR/${SCRIPT_STEM}.log"
+    local stderr_log="$WORKDIR/logs/${SCRIPT_STEM}_stderr.log"
+    local jobid="cloud_${type}_$(date +%Y%m%d%H%M%S)_$$"
+    local exit_file="$JOB_DIR/${jobid}.exit"
+    local meta_file
+    meta_file="$(job_meta "$jobid")"
+    local solver_wrapper="$FACTORY/solver_wrapper.sh"
+
+    echo "[solver_submit] Routing to Cloud Run (max_time=${max_time}s)" >&2
+    mkdir -p "$WORKDIR/logs"
+    (
+        cd "$WORKDIR"
+        setsid "$solver_wrapper" "$exit_file" "$cloud_client" --type "$type" --max-time "$max_time" "$script" \
+            > "$stdout_log" 2> "$stderr_log" < /dev/null &
+        bg_pid=$!
+        {
+            echo "pid=$bg_pid"
+            echo "type=$type"
+            echo "backend=cloud_run"
+            echo "script=$script"
+            echo "workdir=$WORKDIR"
+            echo "stdout_log=$stdout_log"
+            echo "stderr_log=$stderr_log"
+            echo "exit_code_file=$exit_file"
+            echo "max_time=$max_time"
+            echo "started=$(date +%s)"
+        } > "$meta_file"
+        disown "$bg_pid" 2>/dev/null || true
+    )
+    echo "$jobid"
+    exit 0
+}
+
 usage() {
     cat <<'EOF'
 Usage:
@@ -67,7 +145,7 @@ Options:
   --dry-run          Print what would run, don't launch.
 
 Returns:
-  On submit: prints a jobid on stdout (local_<TYPE>_<TS>_<PID>).
+  On submit: prints a jobid on stdout (local_<TYPE>_<TS>_<PID> or cloud_<TYPE>_<TS>_<PID>).
   On --status: prints one of RUNNING / COMPLETED / FAILED / TIMEOUT / EXITED / UNKNOWN.
   On --wait: polls every 5s and prints state changes; exit 0 if final state COMPLETED,
              else nonzero.
@@ -208,6 +286,12 @@ fi
 WORKDIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
 SCRIPT_BASE="$(basename "$SCRIPT")"
 SCRIPT_STEM="${SCRIPT_BASE%.*}"
+EFFECTIVE_MAX_TIME="${MAX_TIME:-1800}"
+load_project_cloud_env "$WORKDIR"
+
+if should_use_cloud "$TYPE" "$EFFECTIVE_MAX_TIME"; then
+    route_to_cloud "$TYPE" "$EFFECTIVE_MAX_TIME" "$SCRIPT"
+fi
 
 # Parse extra args (split on whitespace; agents passing complex argv
 # should use --args "a b 'c d'" — quoting is left to shell expansion).

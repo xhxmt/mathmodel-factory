@@ -71,7 +71,7 @@ VERDICT: ABANDONED
 [立即致命问题 → REVISE 或 ABANDONED]
 - memo 与 demo 不一致：spec 声称目标值在 $10^5$ 量级，JSON 里却是 $10^{-3}$
 - demo 数据规模与 spec 描述对不上（spec 说 n=50，JSON 写 n=5000——可能 demo 跑的不是 demo）
-- 求解器调用没走 `solver_submit.sh`（log 里没有 `local_*` 形式的 jobid，或 `run_state/solver_jobs/` 里查无此号）
+- 求解器调用没走 `solver_submit.sh`（log 里没有 `local_*` 或 `cloud_*` 形式的 jobid，或 `run_state/solver_jobs/` 里查无此号）
 - 关键约束写错（如目标是最大化但写成 min、容量约束方向写反）—— 这种是 REVISE，proposal agent 能改
 - 假设过强到把题目变了样：如题目要求"动态决策"，spec 用"静态一次性决策"绕开
 - spec 直接抄 `method_library/<>.md` 的玩具数据没改成本题情境

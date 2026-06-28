@@ -148,6 +148,7 @@ JSON 必含字段（示例）：
    - 求解器调用按 method_library 模板
    - **结果序列化到 JSON**（绝对路径写 `__PROJECT_PATH__/__STREAM_PREFIX___demo_result.json`）
 6. 提交：`__FACTORY__/solver_submit.sh --type python --max-time 900 models/__STREAM_PREFIX___<short>/demo.py`，记下 JOBID。如有多个独立 demo（如多个 sub-problem），并行提交。
+   - JOBID 可能以 `local_` 或 `cloud_` 开头；两者都必须能在 `__FACTORY__/run_state/solver_jobs/<jobid>.meta` 查到。
 7. `--wait $JOBID`，看 status：
    - COMPLETED：读 `models/__STREAM_PREFIX___<short>/demo.log`，把关键数填回 JSON 的 `objective`、`runtime_sec`、`sanity_checks`
    - FAILED / TIMEOUT：先看是不是公式错（如 LP infeasible 是真问题），改公式或换数据规模重跑；**不要**把 FAILED 状态写进 JSON 就交差

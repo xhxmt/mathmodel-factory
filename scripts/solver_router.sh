@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FACTORY="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 # Configuration
 USE_CLOUD="${USE_CLOUD_SOLVER:-false}"
 CLOUD_THRESHOLD_TIME="${CLOUD_THRESHOLD_TIME:-300}"  # Use cloud for jobs > 5 min
@@ -45,13 +48,10 @@ if [[ "$USE_CLOUD" == "true" ]]; then
     fi
 fi
 
-# Route to appropriate backend
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FACTORY="$(cd "$SCRIPT_DIR/.." && pwd)"
-
 if [[ "$use_cloud" == "true" ]]; then
     echo "[solver_router] Routing to Cloud Run (max_time=${MAX_TIME}s)" >&2
-    exec "$SCRIPT_DIR/gcp_solver_client.sh" "$@"
+    CLOUD_CLIENT="${CLOUD_SOLVER_CLIENT:-$SCRIPT_DIR/gcp_solver_client.sh}"
+    exec "$CLOUD_CLIENT" "$@"
 else
     echo "[solver_router] Routing to local solver" >&2
     exec "$FACTORY/solver_submit.sh" "$@"

@@ -6,11 +6,67 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from .auth import get_current_user
 from .config import Settings
 from .schemas import UserInfo
+
+
+CLOUD_ENV_NAME = ".env.cloud"
+
+
+def _project_cloud_env_file(settings: Settings, base_name: str) -> Path:
+    for root in (settings.ongoing_dir, settings.complete_dir):
+        candidate = root / base_name
+        if candidate.is_dir():
+            return candidate / CLOUD_ENV_NAME
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project not found: {base_name}")
+
+
+def _env_flag_enabled(path: Path, key: str) -> bool:
+    if not path.is_file():
+        return False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip() == f"{key}=true":
+            return True
+    return False
+
+
+def project_cloud_config(settings: Settings, base_name: str) -> dict:
+    env_file = _project_cloud_env_file(settings, base_name)
+    return {
+        "enabled": _env_flag_enabled(env_file, "USE_CLOUD_SOLVER"),
+        "env_file": str(env_file),
+        "threshold_time": 300,
+        "solver_types": ["python", "julia", "matlab", "R"],
+        "project_id": settings.gcp_project_id or "level-night-476302-k0",
+        "region": settings.gcp_region,
+        "service_name": settings.gcp_solver_service,
+    }
+
+
+def set_project_cloud_enabled(settings: Settings, base_name: str, enabled: bool) -> dict:
+    env_file = _project_cloud_env_file(settings, base_name)
+    if enabled:
+        env_file.write_text(
+            "\n".join(
+                [
+                    "# Cloud Run solver configuration",
+                    "USE_CLOUD_SOLVER=true",
+                    "CLOUD_THRESHOLD_TIME=300",
+                    "CLOUD_SOLVER_TYPES=python,julia,matlab,R",
+                    f"GCP_PROJECT_ID={settings.gcp_project_id or 'level-night-476302-k0'}",
+                    f"GCP_REGION={settings.gcp_region}",
+                    f"GCP_SOLVER_SERVICE={settings.gcp_solver_service}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        env_file.unlink(missing_ok=True)
+    return project_cloud_config(settings, base_name)
 
 
 def _resolve_gcloud_binary() -> str | None:
@@ -114,30 +170,22 @@ def create_cloud_router(settings: Settings) -> APIRouter:
             "service_name": settings.gcp_solver_service,
         }
 
+    @router.get("/api/projects/{base_name}/cloud/config")
+    async def get_project_cloud_config(
+        base_name: str,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        del current_user
+        return project_cloud_config(settings, base_name)
+
     @router.post("/api/projects/{base_name}/cloud/enable")
     async def enable_cloud_solver(
         base_name: str,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
         del current_user
-        project_path = settings.ongoing_dir / base_name
-        env_file = project_path / ".env.cloud"
-        env_file.write_text(
-            "\n".join(
-                [
-                    "# Cloud Run solver configuration",
-                    "USE_CLOUD_SOLVER=true",
-                    "CLOUD_THRESHOLD_TIME=300",
-                    "CLOUD_SOLVER_TYPES=python,julia,matlab,R",
-                    f"GCP_PROJECT_ID={settings.gcp_project_id or 'level-night-476302-k0'}",
-                    f"GCP_REGION={settings.gcp_region}",
-                    f"GCP_SOLVER_SERVICE={settings.gcp_solver_service}",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return {"status": "enabled", "base_name": base_name}
+        config = set_project_cloud_enabled(settings, base_name, True)
+        return {"status": "enabled", "base_name": base_name, "config": config}
 
     @router.post("/api/projects/{base_name}/cloud/disable")
     async def disable_cloud_solver(
@@ -145,8 +193,7 @@ def create_cloud_router(settings: Settings) -> APIRouter:
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
         del current_user
-        env_file = settings.ongoing_dir / base_name / ".env.cloud"
-        env_file.unlink(missing_ok=True)
-        return {"status": "disabled", "base_name": base_name}
+        config = set_project_cloud_enabled(settings, base_name, False)
+        return {"status": "disabled", "base_name": base_name, "config": config}
 
     return router

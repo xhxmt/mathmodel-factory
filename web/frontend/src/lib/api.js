@@ -73,6 +73,7 @@ export const Models = {
 // ---- cloud (GCP Cloud Run solver acceleration) ----
 export const Cloud = {
   status: () => api.get('/api/cloud/status').then((r) => r.data),
+  projectConfig: (b) => api.get(`/api/projects/${b}/cloud/config`).then((r) => r.data),
   enable: (b) => api.post(`/api/projects/${b}/cloud/enable`).then((r) => r.data),
   disable: (b) => api.post(`/api/projects/${b}/cloud/disable`).then((r) => r.data),
   config: () => api.get('/api/cloud/config').then((r) => r.data),

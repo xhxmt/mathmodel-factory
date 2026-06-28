@@ -11,7 +11,8 @@
 
 ### 2. 本地客户端脚本 ✅
 - **`scripts/gcp_solver_client.sh`** - 调用 Cloud Run API 的客户端
-- **`scripts/solver_router.sh`** - 本地/云端路由决策层
+- **`solver_submit.sh`** - 统一求解入口，读取项目 `.env.cloud` 后在本地/Cloud Run 间路由
+- **`scripts/solver_router.sh`** - 手动路由入口（兼容保留）
 - **`.env.gcp`** - GCP 配置文件（已填入你的项目信息）
 - **`.env.gcp.example`** - 配置模板
 
@@ -93,6 +94,7 @@ curl ${SERVICE_URL}/health
 ```bash
 # 修改这一行
 USE_CLOUD_SOLVER=true
+CLOUD_RUN_URL=https://solver-api-144584367563.europe-west4.run.app
 ```
 
 然后在启动项目时加载配置：
@@ -107,24 +109,19 @@ source .env.gcp
 ### 当前工作流
 ```
 run_paper.sh 
-  → solver_submit.sh (本地执行)
-    → Python/Julia/MATLAB 脚本
-```
-
-### 云端增强工作流
-```
-run_paper.sh 
-  → solver_router.sh (路由决策)
-    ├─ 本地路径 → solver_submit.sh
+  → solver_submit.sh (统一入口)
+    ├─ 本地路径 → Python/Julia/MATLAB/R/Gurobi 脚本
     └─ 云端路径 → gcp_solver_client.sh
                    → Cloud Run API
                      → 容器化求解器
                        → 结果上传到 GCS
 ```
 
+云端路径仍会返回 `cloud_<type>_<timestamp>_<pid>` jobid，并写入 `run_state/solver_jobs/<jobid>.meta`，因此 `--status` / `--wait` 与本地 job 一致。
+
 ### 路由决策逻辑
 
-`solver_router.sh` 根据以下条件决定是否使用云端：
+`solver_submit.sh` 根据以下条件决定是否使用云端：
 
 1. **`USE_CLOUD_SOLVER=true`** 全局开关
 2. **`max_time >= 300`** 任务时长 ≥ 5 分钟
@@ -189,16 +186,13 @@ gcloud run services update solver-api \
 
 ## 后续优化
 
-### 1. 集成到 run_paper.sh（当前手动）
-
-修改 `run_paper.sh` 中的 solver 调用：
+### 1. 验证统一入口路由
 
 ```bash
-# 现在
+# 项目目录存在 .env.cloud 且 USE_CLOUD_SOLVER=true 时，
+# 长任务会自动返回 cloud_* jobid
 ../../solver_submit.sh --type python --max-time 600 script.py
-
-# 改为
-../../solver_router.sh --type python --max-time 600 script.py
+../../solver_submit.sh --wait <cloud_jobid>
 ```
 
 ### 2. 并行化多问题求解

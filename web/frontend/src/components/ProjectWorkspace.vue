@@ -20,6 +20,19 @@
       </div>
 
       <div class="wh-right">
+        <button
+          class="cloud-switch"
+          :class="{ on: cloudEnabled, busy: cloudSaving }"
+          role="switch"
+          :aria-checked="cloudEnabled ? 'true' : 'false'"
+          :disabled="cloudSaving || cloudConfigLoading"
+          :title="cloudSwitchTitle"
+          @click="toggleCloudAcceleration"
+        >
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+          <Icon name="zap" :size="14" />
+          <span class="hide-xs">{{ cloudSwitchLabel }}</span>
+        </button>
         <button class="btn btn-sm btn-ghost" @click="refresh" title="刷新">
           <Icon name="refresh" :size="14" :class="{ spin: loading }" />
         </button>
@@ -104,7 +117,7 @@ import ConsultationPanel from './ConsultationPanel.vue'
 import DiagnosticsCard from './DiagnosticsCard.vue'
 import ModelManager from './ModelManager.vue'
 import CloudAcceleratorDialog from './CloudAcceleratorDialog.vue'
-import { Projects, relativeTime } from '../lib/api.js'
+import { Cloud, Projects, relativeTime } from '../lib/api.js'
 import { stepByIndex, stepConfigKey } from '../lib/steps.js'
 import { useToasts } from '../composables/useToasts.js'
 import { useModels } from '../composables/useModels.js'
@@ -132,6 +145,7 @@ export default {
       nonce: 0, timer: null, showModels: false,
       diagnostics: null, diagnosticsLoading: false,
       showCloudDialog: false, cloudEstimate: { local: 8, cloud: 2 }, lastStep: null,
+      cloudConfig: null, cloudConfigLoading: false, cloudSaving: false,
     }
   },
   computed: {
@@ -146,6 +160,15 @@ export default {
       }[this.project.status] || ''
     },
     canResume() { return ['paused', 'ready', 'awaiting_consultation'].includes(this.project.status) },
+    cloudEnabled() { return this.cloudConfig?.enabled || false },
+    cloudSwitchLabel() {
+      if (this.cloudSaving) return '保存中'
+      if (this.cloudConfigLoading && !this.cloudConfig) return '云端...'
+      return this.cloudEnabled ? '云端开启' : '云端关闭'
+    },
+    cloudSwitchTitle() {
+      return this.cloudEnabled ? '关闭本项目云端加速' : '开启本项目云端加速'
+    },
     stepLabel() {
       const c = this.project.current_step
       const gate = this.stepsData?.editorial_gate
@@ -162,6 +185,7 @@ export default {
       this.diagnostics = null
       this.fetchSteps()
       this.fetchDiagnostics()
+      this.fetchCloudConfig()
     },
     'project.current_step'(newStep) {
       this.fetchSteps()
@@ -172,6 +196,7 @@ export default {
   mounted() {
     this.fetchSteps()
     this.fetchDiagnostics()
+    this.fetchCloudConfig()
     this._loadModels().catch(() => {})
     this.timer = setInterval(() => {
       if (this.project.is_running && !document.hidden) {
@@ -244,7 +269,32 @@ export default {
         this.diagnosticsLoading = false
       }
     },
-    refresh() { this.fetchSteps(); this.fetchDiagnostics(); this.$emit('refresh') },
+    async fetchCloudConfig() {
+      this.cloudConfigLoading = true
+      try {
+        this.cloudConfig = await Cloud.projectConfig(this.project.base_name)
+      } catch (e) {
+        this.cloudConfig = { enabled: false }
+      } finally {
+        this.cloudConfigLoading = false
+      }
+    },
+    async toggleCloudAcceleration() {
+      if (this.cloudSaving || this.cloudConfigLoading) return
+      this.cloudSaving = true
+      try {
+        const response = this.cloudEnabled
+          ? await Cloud.disable(this.project.base_name)
+          : await Cloud.enable(this.project.base_name)
+        this.cloudConfig = response.config || await Cloud.projectConfig(this.project.base_name)
+        useToasts().success(this.cloudEnabled ? '云端加速已开启' : '云端加速已关闭', this.project.base_name)
+      } catch (e) {
+        useToasts().error(e.response?.data?.detail || '云端加速设置失败')
+      } finally {
+        this.cloudSaving = false
+      }
+    },
+    refresh() { this.fetchSteps(); this.fetchDiagnostics(); this.fetchCloudConfig(); this.$emit('refresh') },
     act(a) { this.killArm = false; this.$emit('action', this.project, a) },
     requestFile(f) { this.artifactRequest = { ...f, _n: ++this.nonce } },
     requestPaper() { this.artifactRequest = { __paper: true, _n: ++this.nonce } },
@@ -314,6 +364,7 @@ export default {
     onCloudEnabled() {
       this.$emit('refresh')
       this.fetchSteps()
+      this.fetchCloudConfig()
     },
   },
 }
@@ -348,6 +399,43 @@ export default {
 .wh-time, .wh-pid { font-size: 11px; color: var(--ink-3); }
 .wh-right { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
 .spin { animation: spin 0.7s linear infinite; }
+.cloud-switch {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font: 600 12px/1 var(--sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cloud-switch:hover:not(:disabled) { border-color: var(--live-line); color: var(--ink); }
+.cloud-switch.on { color: var(--live); border-color: var(--live-line); background: var(--live-dim); }
+.cloud-switch:disabled { opacity: 0.65; cursor: wait; }
+.switch-track {
+  width: 28px;
+  height: 16px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--line);
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.16s var(--ease);
+}
+.switch-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  transform: translateX(0);
+  transition: transform 0.16s var(--ease), background 0.16s var(--ease);
+}
+.cloud-switch.on .switch-track { background: var(--live-line); }
+.cloud-switch.on .switch-thumb { background: var(--live); transform: translateX(12px); }
 
 .ws-scroll { flex: 1; overflow-y: auto; padding: 18px 20px 32px; display: flex; flex-direction: column; gap: 16px; }
 
@@ -368,5 +456,6 @@ export default {
 }
 @media (max-width: 640px) {
   .wh-right .btn span { display: none; }
+  .cloud-switch { padding-right: 5px; }
 }
 </style>

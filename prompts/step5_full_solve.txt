@@ -111,7 +111,7 @@ __PROJECT_PATH__/results/
 ### problem1: <小标题原文>
 
 - **求解器调用**: `../../solver_submit.sh --type python --max-time 1800 models/m{N}_<short>/03_solve.py --sub=problem1`
-- **jobid**: `local_python_<timestamp>_<pid>` （元信息在 `run_state/solver_jobs/<jobid>.meta`）
+- **jobid**: `local_python_<timestamp>_<pid>` 或 `cloud_python_<timestamp>_<pid>`（若项目启用 Cloud Run 且超过阈值）；元信息在 `run_state/solver_jobs/<jobid>.meta`
 - **runtime**: <wall-clock 秒数>
 - **status**: <OPTIMAL / FEASIBLE / ...>
 - **objective**: <数值> （单位说明）

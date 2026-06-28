@@ -82,7 +82,7 @@ show_summary() {
     echo "════════════════════════════════════════"
     echo ""
     echo "🌐 访问地址：https://tfisher.de"
-    echo "🔐 默认登录：admin / admin123"
+    echo "🔐 登录账号由 web/.env 中的管理员配置决定"
     echo ""
     echo "管理命令："
     echo "  查看日志：sudo journalctl -u paper-factory-api -f"
