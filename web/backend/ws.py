@@ -66,11 +66,13 @@ def create_ws_router(settings: Settings, ticket_store, manager: ConnectionManage
     @router.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         ticket = websocket.query_params.get("ticket")
-        if ticket:
-            payload = ticket_store.consume(ticket)
-            if payload is None:
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
+        if not ticket:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        payload = ticket_store.consume(ticket)
+        if payload is None:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
 
         await manager.connect(websocket)
         try:

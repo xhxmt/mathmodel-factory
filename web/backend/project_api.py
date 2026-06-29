@@ -332,6 +332,13 @@ def _safe_path(project: Path, rel: str) -> Path:
     return target
 
 
+def _safe_upload_filename(filename: str) -> str:
+    name = Path(filename.replace("\\", "/")).name
+    if not name or name in {".", ".."}:
+        raise ValueError("Invalid filename")
+    return name
+
+
 def _find_paper(settings: Settings, project: Path, base_name: str) -> Path | None:
     packaged = settings.papers_dir / f"{base_name}_paper.pdf"
     if packaged.is_file():
@@ -531,7 +538,10 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
             )
 
         timestamp = datetime.now(BEIJING_TZ).strftime("%Y%m%d_%H%M%S")
-        filename = file.filename
+        try:
+            filename = _safe_upload_filename(file.filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         lower = filename.lower()
         ext = Path(filename).suffix.lower()
         is_archive = ext in {".zip", ".tar", ".tgz"} or lower.endswith((".tar.gz", ".tar.bz2", ".tar.xz"))

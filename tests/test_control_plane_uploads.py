@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from web.backend.upload_service import ArchiveTraversalError, extract_archive, find_problem_file
+from web.backend.project_api import _safe_upload_filename
 
 
 def test_extract_archive_rejects_zip_traversal(tmp_path):
@@ -37,3 +38,13 @@ def test_find_problem_file_prefers_problem_named_pdf(tmp_path):
     found = find_problem_file(tmp_path)
 
     assert found.name == "题目_problem.pdf"
+
+
+def test_upload_filename_is_reduced_to_safe_basename():
+    assert _safe_upload_filename("../escape.pdf") == "escape.pdf"
+    assert _safe_upload_filename("nested/../../problem.md") == "problem.md"
+
+
+def test_upload_filename_rejects_empty_basename():
+    with pytest.raises(ValueError):
+        _safe_upload_filename("../")

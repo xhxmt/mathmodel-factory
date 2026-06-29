@@ -154,9 +154,15 @@ REQUEST_JSON=$(jq -n \
 
 # Submit job
 echo "Submitting job $JOB_ID to Cloud Run..." >&2
+SUBMIT_HEADERS=(
+    -H "Content-Type: application/json"
+    -H "Authorization: Bearer $("$GCLOUD_BIN_RESOLVED" auth print-identity-token)"
+)
+if [[ -n "${SOLVER_API_TOKEN:-}" ]]; then
+    SUBMIT_HEADERS+=(-H "X-Solver-Token: ${SOLVER_API_TOKEN}")
+fi
 SUBMIT_RESPONSE=$(curl -s -X POST \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $("$GCLOUD_BIN_RESOLVED" auth print-identity-token)" \
+    "${SUBMIT_HEADERS[@]}" \
     -d "$REQUEST_JSON" \
     "${SERVICE_URL}/solve/${SOLVER_TYPE}")
 
@@ -172,8 +178,14 @@ fi
 # Poll for completion
 echo "Polling job status..." >&2
 while true; do
+    STATUS_HEADERS=(
+        -H "Authorization: Bearer $("$GCLOUD_BIN_RESOLVED" auth print-identity-token)"
+    )
+    if [[ -n "${SOLVER_API_TOKEN:-}" ]]; then
+        STATUS_HEADERS+=(-H "X-Solver-Token: ${SOLVER_API_TOKEN}")
+    fi
     STATUS_RESPONSE=$(curl -s \
-        -H "Authorization: Bearer $("$GCLOUD_BIN_RESOLVED" auth print-identity-token)" \
+        "${STATUS_HEADERS[@]}" \
         "${SERVICE_URL}/jobs/${JOB_ID}/status")
 
     STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status')
