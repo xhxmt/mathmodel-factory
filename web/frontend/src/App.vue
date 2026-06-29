@@ -92,16 +92,16 @@
 </template>
 
 <script>
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import Icon from './components/Icon.vue'
 import Toasts from './components/Toasts.vue'
 import LoginForm from './components/LoginForm.vue'
 import ProjectCard from './components/ProjectCard.vue'
-import ProjectWorkspace from './components/ProjectWorkspace.vue'
 import NewProjectModal from './components/NewProjectModal.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ModelManager from './components/ModelManager.vue'
-import { Projects, setUnauthorizedHandler } from './lib/api.js'
+import { Projects, setUnauthorizedHandler, setServerErrorHandler } from './lib/api.js'
 import { useTheme } from './composables/useTheme.js'
 import { useToasts, notifyDesktop } from './composables/useToasts.js'
 import { useModels } from './composables/useModels.js'
@@ -110,11 +110,29 @@ import { useProjects } from './composables/useProjects.js'
 import { useRealtime } from './composables/useRealtime.js'
 import { runAuthenticatedStartup, runLoginFlow } from './lib/appStartup.js'
 
+// Lazy-loaded overlay: only mounted when a project is opened. Pulls the whole
+// ProjectWorkspace subtree (and KaTeX, via markdown.js) out of the initial bundle.
+const ProjectWorkspace = defineAsyncComponent({
+  loader: () => import('./components/ProjectWorkspace.vue'),
+  loadingComponent: { template: '<div class="ws-overlay-loading"><div class="spinner"></div></div>' },
+  delay: 120,
+})
+
+const AsyncOverlayFallback = {
+  template: '<div class="overlay-loading panel"><div class="spinner"></div></div>',
+}
+
+const AsyncNewProjectModal = defineAsyncComponent({ loader: () => import('./components/NewProjectModal.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
+const AsyncCommandPalette = defineAsyncComponent({ loader: () => import('./components/CommandPalette.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
+const AsyncModelManager = defineAsyncComponent({ loader: () => import('./components/ModelManager.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
+
 export default {
   name: 'App',
-  components: { Icon, Toasts, LoginForm, ProjectCard, ProjectWorkspace, NewProjectModal, CommandPalette, ModelManager },
+  components: { Icon, Toasts, LoginForm, ProjectCard, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager },
   setup() {
     const { theme, toggle: toggleTheme } = useTheme()
+    const route = useRoute()
+    const router = useRouter()
     const toasts = useToasts()
     const { invalidate: invalidateModels, load: loadModels } = useModels()
     const { isAuthenticated, username, bootstrap, login, logout: clearAuth } = useAuth()
@@ -209,6 +227,7 @@ export default {
       resetProjects()
     }
     setUnauthorizedHandler(logout)
+    setServerErrorHandler((msg) => toasts.error(msg || '服务暂时不可用'))
 
     async function checkAuth() {
       try {
@@ -253,36 +272,36 @@ export default {
     function openNew() { showNew.value = true; showPalette.value = false }
     function jumpNeeds() { if (needsYou.value.length) openProject(needsYou.value[0]) }
 
-    function syncHash() {
-      const want = selectedBase.value ? `#/p/${selectedBase.value}` : ''
-      if (location.hash !== want) {
-        if (want) location.hash = want
-        else history.replaceState(null, '', location.pathname + location.search)
-      }
-    }
-    function readHash() {
-      const m = location.hash.match(/^#\/p\/(.+)$/)
-      selectedBase.value = m ? decodeURIComponent(m[1]) : null
-    }
-
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault(); showPalette.value = !showPalette.value
       }
     }
 
-    // keep the URL hash in sync with the selected project (deep-linkable)
-    watch(selectedBase, syncHash)
+    let syncingRoute = false
+    watch(
+      () => route.params.baseName,
+      (baseName) => {
+        const next = baseName ? String(baseName) : null
+        if (selectedBase.value === next) return
+        syncingRoute = true
+        selectedBase.value = next
+        syncingRoute = false
+      },
+      { immediate: true },
+    )
+    watch(selectedBase, (baseName) => {
+      if (syncingRoute) return
+      const target = baseName ? { name: 'project', params: { baseName } } : { name: 'dashboard' }
+      router.replace(target).catch(() => {})
+    })
 
     onMounted(async () => {
-      readHash()
       await checkAuth()
-      window.addEventListener('hashchange', readHash)
       window.addEventListener('keydown', onKey)
     })
     onUnmounted(() => {
       close()
-      window.removeEventListener('hashchange', readHash)
       window.removeEventListener('keydown', onKey)
     })
 

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Paper Factory — 建模工坊控制台</title>
   <meta name="color-scheme" content="dark light">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <!-- Self-hosted Latin font subsets (woff2). CJK glyphs fall through the --sans stack to system fonts, so the console works offline. -->
+  <link rel="preload" href="/fonts/fonts.css" as="style">
+  <link rel="stylesheet" href="/fonts/fonts.css">
   <style>
     /* ===================================================================
        PAPER FACTORY · "Control Room / Telemetry"
@@ -52,7 +52,7 @@
       --paused-dim:rgba(138,146,155,0.13);
 
       --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-      --sans: 'Hanken Grotesk', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --sans: 'Hanken Grotesk', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
       --r-xs: 3px; --r-sm: 5px; --r: 7px; --r-lg: 10px; --r-xl: 14px;
       --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -256,6 +256,15 @@
     .katex { font-size: 1.04em; }
     .katex-display { overflow-x: auto; overflow-y: hidden; margin: 0.9em 0; padding: 2px 0; }
     .md-mathraw { color: var(--amber); font-family: var(--mono); font-size: 0.9em; }
+
+    /* Full-screen loading shim shown while async overlay chunks (ProjectWorkspace
+       subtree, modals) are being fetched. */
+    .ws-overlay-loading, .overlay-loading {
+      position: fixed; inset: 0; z-index: 200;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg);
+    }
+    .tab-fallback { display: flex; align-items: center; justify-content: center; min-height: 200px; }
 
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {

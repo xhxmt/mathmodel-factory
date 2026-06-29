@@ -4,13 +4,44 @@
 // Math and code are extracted to sentinel tokens BEFORE inline processing so their
 // contents (*, _, <, >, &) are never mangled. Underscore-emphasis is intentionally
 // unsupported so snake_case identifiers and file_names stay intact.
+//
+// KaTeX JS is imported statically (it is real JS, fine in any runtime). Its CSS is
+// loaded lazily on first render via a dynamic import so it lands in this module's
+// chunk and stays out of the initial dashboard bundle. In a non-bundler runtime
+// (the node test harness) the dynamic CSS import rejects and is silently ignored.
 import katex from 'katex'
+
+let katexCssLoaded = false
+function loadKatexCss() {
+  if (katexCssLoaded) return
+  katexCssLoaded = true
+  import('katex/dist/katex.min.css').then(() => {}, () => {})
+}
 
 function esc(s) {
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+}
+
+function safeHref(raw) {
+  const value = String(raw || '').trim()
+  if (!value) return null
+  const lower = value.toLowerCase()
+  if (
+    lower.startsWith('http://') ||
+    lower.startsWith('https://') ||
+    lower.startsWith('mailto:')
+  ) {
+    return encodeURI(value)
+      .replace(/"/g, '%22')
+      .replace(/'/g, '%27')
+      .replace(/=/g, '%3D')
+      .replace(/</g, '%3C')
+      .replace(/>/g, '%3E')
+  }
+  return null
 }
 
 function renderMath(tex, display) {
@@ -31,7 +62,11 @@ function inline(t) {
     .replace(/`([^`]+)`/g, '<code class="md-code">$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, href) => {
+      const safe = safeHref(href)
+      if (!safe) return label
+      return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    })
 }
 
 function splitRow(line) {
@@ -40,6 +75,7 @@ function splitRow(line) {
 
 export function renderMarkdown(src) {
   if (!src) return ''
+  loadKatexCss()
   src = String(src).replace(/\r\n/g, '\n')
 
   // 1) pull fenced code blocks out first (so $ inside code is not treated as math)

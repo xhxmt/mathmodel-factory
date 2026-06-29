@@ -9,11 +9,6 @@ export function buildWsUrl(ticket) {
   return `${proto}//${window.location.host}/ws?ticket=${encodeURIComponent(ticket)}`
 }
 
-function buildLegacyWsUrl() {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${window.location.host}/ws`
-}
-
 export function useRealtime() {
   let ws = null
   let reconnect = null
@@ -22,14 +17,8 @@ export function useRealtime() {
   const BACKOFF_MAX = 15000
 
   async function connect(onMessage) {
-    const connectUrl = await (async () => {
-      try {
-        const { ticket } = await authWsTicket()
-        return buildWsUrl(ticket)
-      } catch (error) {
-        return buildLegacyWsUrl()
-      }
-    })()
+    const { ticket } = await authWsTicket()
+    const connectUrl = buildWsUrl(ticket)
 
     ws = new WebSocket(connectUrl)
     ws.onopen = () => {

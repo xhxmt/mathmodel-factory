@@ -1,7 +1,16 @@
 // Centralized API client, endpoint helpers, and formatters.
 import axios from 'axios'
+import {
+  normalizeArtifact,
+  normalizeCloudConfig,
+  normalizeProjectStatus,
+  normalizeStepsPayload,
+} from './contracts.js'
 
 const api = axios.create()
+
+// Hard ceiling so a hung backend cannot leave requests pending forever.
+api.defaults.timeout = 15000
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token')
@@ -12,10 +21,25 @@ api.interceptors.request.use((config) => {
 let onUnauthorized = () => {}
 export function setUnauthorizedHandler(fn) { onUnauthorized = fn }
 
+// Surfaced for 5xx / network / timeout failures so the UI can toast a single
+// generic message. Callers may still inspect the rejected error themselves.
+let onServerError = () => {}
+export function setServerErrorHandler(fn) { onServerError = fn }
+
+function serverErrorMessage(err) {
+  if (err?.response?.data?.detail) return err.response.data.detail
+  if (err?.code === 'ECONNABORTED') return '请求超时，请稍后重试'
+  if (err?.code === 'ERR_NETWORK') return '网络连接失败'
+  return '服务暂时不可用'
+}
+
 api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err.response?.status === 401) onUnauthorized()
+    else if (err.response?.status >= 500 || err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK') {
+      onServerError(serverErrorMessage(err))
+    }
     return Promise.reject(err)
   }
 )
@@ -38,13 +62,16 @@ export async function authWsTicket() {
 
 // ---- projects ----
 export const Projects = {
-  list: () => api.get('/api/projects').then((r) => r.data),
-  status: (b) => api.get(`/api/projects/${b}/status`).then((r) => r.data),
+  list: () => api.get('/api/projects').then((r) => (Array.isArray(r.data) ? r.data.map(normalizeProjectStatus) : [])),
+  status: (b) => api.get(`/api/projects/${b}/status`).then((r) => normalizeProjectStatus(r.data)),
   diagnostics: (b) => api.get(`/api/projects/${b}/diagnostics`).then((r) => r.data),
   checkpoint: (b) => api.get(`/api/projects/${b}/checkpoint`).then((r) => r.data),
   logs: (b, lines = 250, signal) => api.get(`/api/projects/${b}/logs`, { params: { lines }, signal }).then((r) => r.data),
-  steps: (b, signal) => api.get(`/api/projects/${b}/steps`, { signal }).then((r) => r.data),
-  files: (b) => api.get(`/api/projects/${b}/files`).then((r) => r.data),
+  steps: (b, signal) => api.get(`/api/projects/${b}/steps`, { signal }).then((r) => normalizeStepsPayload(r.data)),
+  files: (b) => api.get(`/api/projects/${b}/files`).then((r) => ({
+    ...r.data,
+    files: Array.isArray(r.data?.files) ? r.data.files.map(normalizeArtifact) : [],
+  })),
   file: (b, path) => api.get(`/api/projects/${b}/file`, { params: { path } }).then((r) => r.data),
   consultation: (b) => api.get(`/api/projects/${b}/consultation`).then((r) => r.data),
   answer: (b, answer) => api.post(`/api/projects/${b}/consultation/answer`, { answer }).then((r) => r.data),
@@ -73,7 +100,7 @@ export const Models = {
 // ---- cloud (GCP Cloud Run solver acceleration) ----
 export const Cloud = {
   status: () => api.get('/api/cloud/status').then((r) => r.data),
-  projectConfig: (b) => api.get(`/api/projects/${b}/cloud/config`).then((r) => r.data),
+  projectConfig: (b) => api.get(`/api/projects/${b}/cloud/config`).then((r) => normalizeCloudConfig(r.data)),
   enable: (b) => api.post(`/api/projects/${b}/cloud/enable`).then((r) => r.data),
   disable: (b) => api.post(`/api/projects/${b}/cloud/disable`).then((r) => r.data),
   config: () => api.get('/api/cloud/config').then((r) => r.data),

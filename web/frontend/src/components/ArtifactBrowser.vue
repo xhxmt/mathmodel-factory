@@ -15,6 +15,24 @@
         <div v-if="loading && !files.length" class="tree-empty">加载产物…</div>
         <div v-else-if="!files.length" class="tree-empty">暂无产物文件</div>
 
+        <div v-if="keyArtifacts.length" class="pinned">
+          <div class="pinned-h">
+            <Icon name="pin" :size="12" />
+            <span>关键产物</span>
+          </div>
+          <button
+            v-for="f in keyArtifacts"
+            :key="'pinned-' + f.path"
+            class="fitem pinitem"
+            :class="{ active: current && current.path === f.path }"
+            :title="f.path"
+            @click="openFile(f)"
+          >
+            <Icon :name="iconFor(f.type)" :size="13" class="fic" />
+            <span class="fname">{{ f.name }}</span>
+          </button>
+        </div>
+
         <div v-for="g in grouped" :key="g.key" class="grp">
           <button class="grp-head" @click="toggle(g.key)">
             <Icon :name="expanded.has(g.key) ? 'chevron-down' : 'chevron-right'" :size="13" />
@@ -84,9 +102,11 @@
 </template>
 
 <script>
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from './Icon.vue'
 import { Projects, fetchBlobUrl, formatBytes } from '../lib/api.js'
 import { renderMarkdown } from '../lib/markdown.js'
+import { priorityArtifacts } from '../lib/workspaceUi.js'
 import { useToasts } from '../composables/useToasts.js'
 
 const GROUP_META = {
@@ -109,127 +129,191 @@ export default {
   props: {
     base: { type: String, required: true },
     requested: { type: Object, default: null },
+    currentStep: { type: Number, default: -1 },
   },
-  setup() { return { toasts: useToasts() } },
-  data() {
-    return {
-      files: [], loading: false,
-      current: null, content: '', csv: { head: [], rows: [], truncated: false },
-      blobUrl: '', vLoading: false, vError: '',
-      expanded: new Set(),
-    }
-  },
-  computed: {
-    grouped() {
+  setup(props) {
+    const toasts = useToasts()
+    const files = ref([])
+    const loading = ref(false)
+    const current = ref(null)
+    const content = ref('')
+    const csv = ref({ head: [], rows: [], truncated: false })
+    const blobUrl = ref('')
+    const vLoading = ref(false)
+    const vError = ref('')
+    const expanded = ref(new Set())
+
+    const grouped = computed(() => {
       const by = {}
-      for (const f of this.files) (by[f.group] = by[f.group] || []).push(f)
+      for (const f of files.value) (by[f.group] = by[f.group] || []).push(f)
       return GROUP_ORDER.filter((k) => by[k]).map((k) => ({
         key: k, label: GROUP_META[k]?.label || k, icon: GROUP_META[k]?.icon || 'folder', files: by[k],
       }))
-    },
-    hasPaper() { return this.files.some((f) => f.type === 'pdf' && f.group === 'paper') },
-    isText() { return this.current && ['markdown', 'text', 'csv', 'json', 'code'].includes(this.current.type) },
-    rendered() { return this.current?.type === 'markdown' ? renderMarkdown(this.content) : '' },
-  },
-  watch: {
-    base() { this.reset(); this.loadFiles() },
-    requested(v) { if (v) this.handleRequest(v) },
-  },
-  mounted() { this.loadFiles() },
-  beforeUnmount() { this.revoke() },
-  methods: {
-    fmtBytes: formatBytes,
-    iconFor(t) {
+    })
+    const hasPaper = computed(() => files.value.some((f) => f.type === 'pdf' && f.group === 'paper'))
+    const isText = computed(() => current.value && ['markdown', 'text', 'csv', 'json', 'code'].includes(current.value.type))
+    const rendered = computed(() => current.value?.type === 'markdown' ? renderMarkdown(content.value) : '')
+    const keyArtifacts = computed(() => priorityArtifacts(files.value, props.currentStep).slice(0, 6))
+
+    function iconFor(t) {
       return { image: 'image', pdf: 'file-text', csv: 'table', json: 'code', code: 'code', markdown: 'file-text', text: 'file-text' }[t] || 'file'
-    },
-    toggle(k) { this.expanded.has(k) ? this.expanded.delete(k) : this.expanded.add(k); this.expanded = new Set(this.expanded) },
-    reset() { this.files = []; this.current = null; this.content = ''; this.revoke() },
-    revoke() { if (this.blobUrl) { URL.revokeObjectURL(this.blobUrl); this.blobUrl = '' } },
-    async loadFiles() {
-      this.loading = true
-      try {
-        const d = await Projects.files(this.base)
-        this.files = d.files || []
-        // expand the first two non-empty groups by default
-        this.expanded = new Set(this.grouped.slice(0, 2).map((g) => g.key))
-        if (this.requested) this.handleRequest(this.requested)
-      } catch (e) {
-        this.toasts.error('加载产物列表失败')
-      } finally {
-        this.loading = false
+    }
+
+    function toggle(k) {
+      const next = new Set(expanded.value)
+      next.has(k) ? next.delete(k) : next.add(k)
+      expanded.value = next
+    }
+
+    function revoke() {
+      if (blobUrl.value) {
+        URL.revokeObjectURL(blobUrl.value)
+        blobUrl.value = ''
       }
-    },
-    handleRequest(req) {
-      if (req.__paper) { this.openPaper(); return }
+    }
+
+    function reset() {
+      files.value = []
+      current.value = null
+      content.value = ''
+      csv.value = { head: [], rows: [], truncated: false }
+      vError.value = ''
+      revoke()
+    }
+
+    async function loadFiles() {
+      loading.value = true
+      try {
+        const d = await Projects.files(props.base)
+        files.value = d.files || []
+        // expand the first two non-empty groups by default
+        expanded.value = new Set(grouped.value.slice(0, 2).map((g) => g.key))
+        if (props.requested) handleRequest(props.requested)
+      } catch (e) {
+        toasts.error('加载产物列表失败')
+      } finally {
+        loading.value = false
+      }
+    }
+
+    function handleRequest(req) {
+      if (req.__paper) { openPaper(); return }
       // ensure its group is expanded if known
-      const known = this.files.find((f) => f.path === req.path)
-      if (known) { this.expanded.add(known.group); this.expanded = new Set(this.expanded); this.openFile(known) }
-      else this.openFile(req)
-    },
-    async openFile(f) {
-      this.revoke()
-      this.current = f
-      this.vError = ''
-      this.content = ''
-      this.vLoading = true
+      const known = files.value.find((f) => f.path === req.path)
+      if (known) {
+        const next = new Set(expanded.value)
+        next.add(known.group)
+        expanded.value = next
+        openFile(known)
+      } else openFile(req)
+    }
+
+    async function openFile(f) {
+      revoke()
+      current.value = f
+      vError.value = ''
+      content.value = ''
+      vLoading.value = true
       try {
         if (f.type === 'image' || f.type === 'pdf') {
-          this.blobUrl = await fetchBlobUrl(Projects.rawUrl(this.base, f.path))
+          blobUrl.value = await fetchBlobUrl(Projects.rawUrl(props.base, f.path))
         } else {
-          const d = await Projects.file(this.base, f.path)
-          this.content = d.content || ''
-          if (f.type === 'csv') this.parseCsv(this.content)
-          if (f.type === 'json') this.content = this.prettyJson(this.content)
+          const d = await Projects.file(props.base, f.path)
+          content.value = d.content || ''
+          if (f.type === 'csv') parseCsv(content.value)
+          if (f.type === 'json') content.value = prettyJson(content.value)
         }
       } catch (e) {
-        this.vError = e.response?.data?.detail || '无法加载该文件'
+        vError.value = e.response?.data?.detail || '无法加载该文件'
       } finally {
-        this.vLoading = false
+        vLoading.value = false
       }
-    },
-    async openPaper() {
-      this.revoke()
-      this.current = { __paper: true, name: '论文 PDF', path: '', type: 'pdf' }
-      this.vError = ''
-      this.vLoading = true
+    }
+
+    async function openPaper() {
+      revoke()
+      current.value = { __paper: true, name: '论文 PDF', path: '', type: 'pdf' }
+      vError.value = ''
+      vLoading.value = true
       try {
-        this.blobUrl = await fetchBlobUrl(Projects.paperUrl(this.base))
+        blobUrl.value = await fetchBlobUrl(Projects.paperUrl(props.base))
       } catch (e) {
-        this.vError = '论文 PDF 暂不可用'
+        vError.value = '论文 PDF 暂不可用'
       } finally {
-        this.vLoading = false
+        vLoading.value = false
       }
-    },
-    parseCsv(text) {
+    }
+
+    function parseCsv(text) {
       const lines = text.split('\n').filter((l) => l.length)
-      const head = lines.length ? this.splitCsv(lines[0]) : []
+      const head = lines.length ? splitCsv(lines[0]) : []
       const max = 300
-      const rows = lines.slice(1, max + 1).map((l) => this.splitCsv(l))
-      this.csv = { head, rows, truncated: lines.length - 1 > max }
-    },
-    splitCsv(line) {
+      const rows = lines.slice(1, max + 1).map((l) => splitCsv(l))
+      csv.value = { head, rows, truncated: lines.length - 1 > max }
+    }
+
+    function splitCsv(line) {
       // naive split (sufficient for the simple numeric result CSVs)
       return line.split(',').map((s) => s.trim())
-    },
-    prettyJson(text) {
+    }
+
+    function prettyJson(text) {
       try { return JSON.stringify(JSON.parse(text), null, 2) } catch (e) { return text }
-    },
-    async copyContent() {
-      try { await navigator.clipboard.writeText(this.content); this.toasts.success('已复制') }
-      catch (e) { this.toasts.error('复制失败') }
-    },
-    async download() {
-      const f = this.current
+    }
+
+    async function copyContent() {
+      try { await navigator.clipboard.writeText(content.value); toasts.success('已复制') }
+      catch (e) { toasts.error('复制失败') }
+    }
+
+    async function download() {
+      const f = current.value
       if (!f) return
       try {
-        let url = this.blobUrl
+        let url = blobUrl.value
         let revokeAfter = false
-        if (!url) { url = URL.createObjectURL(new Blob([this.content], { type: 'text/plain' })); revokeAfter = true }
+        if (!url) { url = URL.createObjectURL(new Blob([content.value], { type: 'text/plain' })); revokeAfter = true }
         const a = document.createElement('a')
         a.href = url; a.download = f.name || 'file'; document.body.appendChild(a); a.click(); a.remove()
         if (revokeAfter) setTimeout(() => URL.revokeObjectURL(url), 1500)
-      } catch (e) { this.toasts.error('下载失败') }
-    },
+      } catch (e) { toasts.error('下载失败') }
+    }
+
+    watch(() => props.base, () => { reset(); loadFiles() })
+    watch(() => props.requested, (v) => { if (v) handleRequest(v) })
+    onMounted(loadFiles)
+    onBeforeUnmount(revoke)
+
+    return {
+      files,
+      loading,
+      current,
+      content,
+      csv,
+      blobUrl,
+      vLoading,
+      vError,
+      expanded,
+      grouped,
+      hasPaper,
+      isText,
+      rendered,
+      keyArtifacts,
+      fmtBytes: formatBytes,
+      iconFor,
+      toggle,
+      reset,
+      revoke,
+      loadFiles,
+      handleRequest,
+      openFile,
+      openPaper,
+      parseCsv,
+      splitCsv,
+      prettyJson,
+      copyContent,
+      download,
+    }
   },
 }
 </script>
@@ -254,6 +338,26 @@ export default {
 .paper-btn.active { background: var(--amber); color: var(--amber-ink); }
 
 .tree-empty { padding: 24px 12px; text-align: center; color: var(--ink-3); font-size: 12px; }
+
+.pinned {
+  margin: 0 0 10px;
+  padding: 7px;
+  border: 1px solid var(--amber-line);
+  border-radius: var(--r);
+  background: var(--amber-dim);
+}
+.pinned-h {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0 0 6px;
+  color: var(--amber);
+  font: 700 10.5px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.pinitem {
+  border-left-color: var(--amber-line);
+  background: color-mix(in srgb, var(--panel) 74%, transparent);
+}
 
 .grp { margin-bottom: 2px; }
 .grp-head { width: 100%; display: flex; align-items: center; gap: 7px; padding: 7px 8px; background: none; border: none; color: var(--ink-2); cursor: pointer; border-radius: var(--r-sm); font: 600 12px/1 var(--sans); }

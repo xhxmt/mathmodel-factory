@@ -19,6 +19,32 @@
     <div v-else-if="!req" class="cons-state">无法加载咨询请求</div>
 
     <div v-else class="cons-body">
+      <section class="workflow sec">
+        <div class="flow-head">
+          <span class="sec-h label amber">决策工作流</span>
+          <span class="flow-state mono" :class="{ ready: workflow.ready }">
+            {{ workflow.ready ? '可提交' : `缺 ${workflow.missing.length} 项` }}
+          </span>
+        </div>
+        <div class="flow-grid">
+          <div v-for="check in workflow.checks" :key="check.key" class="flow-check" :class="{ ok: check.ok }">
+            <Icon :name="check.ok ? 'check-circle' : 'alert-triangle'" :size="13" />
+            <span>{{ check.label }}</span>
+          </div>
+        </div>
+        <div v-if="workflow.evidence.length" class="evidence-strip">
+          <button
+            v-for="f in workflow.evidence"
+            :key="f.path"
+            class="evidence-chip"
+            @click="$emit('open-file', { path: f.path, name: f.name, type: guessType(f.path) })"
+          >
+            <Icon :name="guessIcon(f.path)" :size="12" />
+            <span class="mono">{{ f.name }}</span>
+          </button>
+        </div>
+      </section>
+
       <section v-if="req.background" class="sec">
         <div class="sec-h label">项目背景</div>
         <div class="md" v-html="md(req.background)"></div>
@@ -124,7 +150,7 @@
           </span>
           <div class="foot-btns">
             <button v-if="answer" class="btn btn-sm btn-ghost" @click="clearDraft">清空</button>
-            <button class="btn btn-amber" :disabled="!answer.trim() || submitting" @click="submit">
+            <button class="btn btn-amber" :disabled="!workflow.ready || submitting" @click="submit">
               <Icon name="check" :size="14" /> {{ submitting ? '提交中…' : '提交并恢复运行' }}
             </button>
           </div>
@@ -138,6 +164,7 @@
 import Icon from './Icon.vue'
 import { Projects } from '../lib/api.js'
 import { renderMarkdown } from '../lib/markdown.js'
+import { buildConsultationWorkflow } from '../lib/workspaceUi.js'
 import { useToasts } from '../composables/useToasts.js'
 
 export default {
@@ -161,6 +188,7 @@ export default {
   },
   computed: {
     draftKey() { return `pf_draft_${this.base}_${this.gate}` },
+    workflow() { return buildConsultationWorkflow(this.req || {}, this.answer) },
   },
   watch: {
     answer(v) {
@@ -202,7 +230,7 @@ export default {
       this.draftSaved = false
     },
     async submit() {
-      if (!this.answer.trim() || this.submitting) return
+      if (!this.workflow.ready || this.submitting) return
       this.submitting = true
       try {
         await Projects.answer(this.base, this.answer)
@@ -240,6 +268,16 @@ export default {
 .sec-h { display: block; margin-bottom: 9px; }
 .label.amber { color: var(--amber); }
 .sec.highlight { background: var(--amber-dim); border: 1px solid var(--amber-line); border-radius: var(--r); padding: 16px; }
+.workflow { padding: 14px; border: 1px solid var(--amber-line); border-radius: var(--r); background: var(--amber-dim); }
+.flow-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.flow-state { font-size: 11px; color: var(--amber); }
+.flow-state.ready { color: var(--ok); }
+.flow-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.flow-check { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); color: var(--ink-3); font-size: 12px; }
+.flow-check.ok { color: var(--ok); border-color: var(--ok-dim); background: var(--ok-dim); }
+.evidence-strip { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.evidence-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--ink-2); cursor: pointer; font-size: 12px; }
+.evidence-chip:hover { color: var(--live); border-color: var(--live); }
 
 .kf { display: flex; flex-direction: column; gap: 6px; }
 .kf-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 11px; background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--live); border-radius: var(--r-sm); color: var(--ink-2); cursor: pointer; font-size: 12px; text-align: left; transition: all 0.14s var(--ease); }

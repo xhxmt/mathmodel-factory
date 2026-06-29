@@ -12,6 +12,23 @@
           <input v-model="query" class="search-in mono" placeholder="过滤…" spellcheck="false" />
           <button v-if="query" class="clr" @click="query = ''"><Icon name="x" :size="11" /></button>
         </div>
+        <div class="level-tabs">
+          <button
+            v-for="item in LOG_LEVELS"
+            :key="item.key"
+            class="lvl-tab"
+            :class="{ on: logLevelFilter === item.key }"
+            @click="logLevelFilter = item.key"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+        <button class="btn btn-sm btn-ghost" :disabled="!firstErrorLine" @click="jumpError" title="跳到最近错误">
+          <Icon name="alert-triangle" :size="13" />
+        </button>
+        <button class="btn btn-sm btn-ghost" :disabled="!firstErrorLine" @click="copyErrorContext" title="复制错误上下文">
+          <Icon name="pin" :size="13" />
+        </button>
         <button class="btn btn-sm btn-ghost" :class="{ on: wrap }" @click="wrap = !wrap" title="自动换行">
           <Icon name="corner-down-left" :size="13" />
         </button>
@@ -29,12 +46,29 @@
 
     <div ref="body" class="logc-body mono" :class="{ wrap }" @scroll="onScroll">
       <div v-if="loading && lines.length === 0" class="logc-empty">加载日志…</div>
-      <div v-else-if="filtered.length === 0" class="logc-empty">
-        {{ query ? '无匹配行' : '暂无日志输出' }}
+      <div v-else-if="visibleLines.length === 0" class="logc-empty">
+        {{ query || logLevelFilter !== 'all' ? '无匹配行' : '暂无日志输出' }}
+      </div>
+      <!-- Virtualized path: fixed row height, only the viewport + buffer is rendered.
+           Wrap mode (variable row height) falls through to the flat v-for below. -->
+      <div
+        v-else-if="virtual"
+        class="logc-vlist"
+        :style="{ height: totalHeight + 'px', paddingTop: topPad + 'px' }"
+      >
+        <div
+          v-for="ln in renderSlice"
+          :key="ln.n"
+          class="ll"
+          :class="'lv-' + level(ln.text)"
+        >
+          <span class="ln-no">{{ ln.n }}</span>
+          <span class="ln-tx">{{ ln.text || ' ' }}</span>
+        </div>
       </div>
       <template v-else>
         <div
-          v-for="ln in filtered"
+          v-for="ln in visibleLines"
           :key="ln.n"
           class="ll"
           :class="'lv-' + level(ln.text)"
@@ -45,16 +79,18 @@
       </template>
     </div>
 
-    <button v-if="!atBottom && filtered.length" class="jump" @click="scrollBottom(true)">
+    <button v-if="!atBottom && visibleLines.length" class="jump" @click="scrollBottom(true)">
       <Icon name="chevron-down" :size="14" /> 跳到底部
     </button>
   </div>
 </template>
 
 <script>
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from './Icon.vue'
-import { Projects } from '../lib/api.js'
 import { useToasts } from '../composables/useToasts.js'
+import { useProjectLogs } from '../composables/useProjectLogs.js'
+import { LOG_LEVELS, buildLogErrorContext, filterLogLines, logLineLevel } from '../lib/workspaceUi.js'
 
 export default {
   name: 'LogConsole',
@@ -63,136 +99,176 @@ export default {
     base: { type: String, required: true },
     active: { type: Boolean, default: true },
   },
-  setup() { return { toasts: useToasts() } },
-  created() {
-    // Non-reactive instance caches (not rendered → kept out of data()).
-    this._seq = 0       // monotonic line number, per base session
-    this._lastSig = ''  // cheap change token: file|len|first|last
-    this._lastFile = ''
-    this._abort = null  // AbortController for in-flight fetch
-    this._visH = null   // visibilitychange handler
-  },
-  data() {
-    return { lines: [], file: '', loading: false, following: true, query: '', wrap: false, atBottom: true, timer: null }
-  },
-  computed: {
-    filtered() {
-      const q = this.query.trim().toLowerCase()
-      if (!q) return this.lines
-      return this.lines.filter((l) => l.text.toLowerCase().includes(q))
-    },
-  },
-  watch: {
-    active(v) { v ? this.start() : this.stop() },
-    base() { this.stop(); this.lines = []; this._seq = 0; this._lastSig = ''; this._lastFile = ''; this.fetchNow(); if (this.active) this.start() },
-  },
-  mounted() { if (this.active) this.start(); this.fetchNow() },
-  beforeUnmount() { this.stop() },
-  methods: {
-    start() {
-      this.stop()
-      this.timer = setInterval(() => {
-        if (this.following && !document.hidden) this.fetchNow(true)
-      }, 3000)
-      this._visH = () => {
-        if (document.hidden) {
-          if (this._abort) { try { this._abort.abort() } catch (e) { /* */ } }
-        } else if (this.active) {
-          this.fetchNow(true)
-        }
-      }
-      document.addEventListener('visibilitychange', this._visH)
-    },
-    stop() {
-      if (this.timer) { clearInterval(this.timer); this.timer = null }
-      if (this._abort) { try { this._abort.abort() } catch (e) { /* */ } }
-      if (this._visH) { document.removeEventListener('visibilitychange', this._visH); this._visH = null }
-    },
-    async fetchNow(silent = false) {
-      if (!silent) this.loading = true
-      // Abort any in-flight poll before starting a new one.
-      if (this._abort) { try { this._abort.abort() } catch (e) { /* */ } }
-      const ac = new AbortController()
-      this._abort = ac
-      try {
-        const d = await Projects.logs(this.base, 400, ac.signal)
-        this._abort = null
-        const raw = (d.logs || []).slice()
-        // drop trailing empty line(s) from tail()
-        while (raw.length && raw[raw.length - 1] === '') raw.pop()
-        const file = d.file || ''
-        // Cheap "nothing changed" short-circuit: same file + length + first/last line.
-        const sig = `${file}${raw.length}${raw[0] ?? ''}${raw[raw.length - 1] ?? ''}`
-        if (sig === this._lastSig && file === this._lastFile) return
-        this._lastSig = sig
-        this._lastFile = file
-        this.file = file
-        // Tail-overlap diff: tail -400 is a suffix of the full log; our buffer
-        // is also a suffix. Find the largest m where raw[0:m] matches the
-        // buffer's trailing m lines, then append only the genuinely new lines.
-        const bufTexts = this.lines.map((l) => l.text)
-        let m = 0
-        if (bufTexts.length) {
-          const maxM = Math.min(raw.length, bufTexts.length, 400)
-          for (let k = maxM; k > 0; k--) {
-            let ok = true
-            for (let i = 0; i < k; i++) {
-              if (raw[i] !== bufTexts[bufTexts.length - k + i]) { ok = false; break }
-            }
-            if (ok) { m = k; break }
-          }
-        }
-        if (m === 0) {
-          // No overlap (log rotation / first load) → reseed, keep _seq climbing.
-          this.lines = raw.map((t) => ({ n: ++this._seq, text: t }))
-        } else {
-          const fresh = raw.slice(m)
-          if (fresh.length) {
-            const cap = 1000
-            const next = this.lines.concat(fresh.map((t) => ({ n: ++this._seq, text: t })))
-            if (next.length > cap) next.splice(0, next.length - cap) // drop oldest; stable keys survive
-            this.lines = next
-          }
-        }
-        this.$nextTick(() => { if (this.following && this.atBottom) this.scrollBottom() })
-      } catch (e) {
-        if (e?.code === 'ERR_CANCELED') return // aborted by a newer poll / hide / unmount
-        // keep prior lines; surface only on explicit refresh
-      } finally {
-        if (!silent) this.loading = false
-      }
-    },
-    level(text) {
-      if (/\b(error|fail(ed)?|traceback|exception|fatal)\b|❌/i.test(text)) return 'err'
-      if (/\b(warn(ing)?)\b|⚠/i.test(text)) return 'warn'
-      if (/\b(ok|success|done|completed|pass(ed)?|converged)\b|✓|✅/i.test(text)) return 'ok'
-      if (/^\s*[>$#]/.test(text) || /\b(step|info)\b/i.test(text)) return 'info'
-      return ''
-    },
-    onScroll() {
-      const el = this.$refs.body
+  setup(props) {
+    const toasts = useToasts()
+    const body = ref(null)
+    const {
+      lines,
+      file,
+      loading,
+      following,
+      query,
+      wrap,
+      atBottom,
+      fetchNow: fetchProjectLogs,
+      resetLogs,
+      startPolling,
+      stopPolling,
+    } = useProjectLogs()
+    const logLevelFilter = ref('all')
+    const visibleLines = computed(() => filterLogLines(lines.value, {
+      query: query.value,
+      level: logLevelFilter.value,
+    }))
+    const firstErrorLine = computed(() => lines.value.find((line) => logLineLevel(line.text || '') === 'err') || null)
+
+    // ---- virtual scrolling (fixed row height; wrap mode opts out) ----
+    const ROW_H = 20      // 12.5px font * 1.6 line-height, .ll has no vertical padding
+    const BUFFER = 20     // rows rendered above/below the viewport
+    const scrollTop = ref(0)
+    const viewportH = ref(0)
+    const virtual = computed(() => !wrap.value && visibleLines.value.length > 0)
+    const totalHeight = computed(() => visibleLines.value.length * ROW_H)
+    const renderStart = computed(() => {
+      if (!virtual.value) return 0
+      const start = Math.floor(scrollTop.value / ROW_H) - BUFFER
+      return Math.max(0, Math.min(start, visibleLines.value.length))
+    })
+    const renderCount = computed(() => {
+      if (!virtual.value) return 0
+      const cnt = Math.ceil(viewportH.value / ROW_H) + BUFFER * 2
+      return Math.max(0, Math.min(cnt, visibleLines.value.length - renderStart.value))
+    })
+    const renderSlice = computed(() => visibleLines.value.slice(renderStart.value, renderStart.value + renderCount.value))
+    const topPad = computed(() => renderStart.value * ROW_H)
+
+    function fetchNow(silent = false) {
+      return fetchProjectLogs(props.base, silent === true).then(() => {
+        nextTick(() => {
+          if (following.value && atBottom.value) scrollBottom()
+        })
+      })
+    }
+
+    function start() {
+      startPolling(() => props.base)
+    }
+
+    function stop() {
+      stopPolling()
+    }
+
+    function onScroll() {
+      const el = body.value
       if (!el) return
-      this.atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-    },
-    scrollBottom(force = false) {
-      const el = this.$refs.body
+      scrollTop.value = el.scrollTop
+      viewportH.value = el.clientHeight
+      atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    }
+
+    function scrollBottom(force = false) {
+      const el = body.value
       if (!el) return
       el.scrollTop = el.scrollHeight
-      this.atBottom = true
-      if (force) this.following = true
-    },
-    toggleFollow() {
-      this.following = !this.following
-      if (this.following) { this.fetchNow(); this.$nextTick(() => this.scrollBottom()) }
-    },
-    async copyAll() {
-      try {
-        await navigator.clipboard.writeText(this.filtered.map((l) => l.text).join('\n'))
-        this.toasts.success('日志已复制到剪贴板')
-      } catch (e) {
-        this.toasts.error('复制失败')
+      atBottom.value = true
+      if (force) following.value = true
+    }
+
+    function toggleFollow() {
+      following.value = !following.value
+      if (following.value) {
+        fetchNow()
+        nextTick(() => scrollBottom())
       }
-    },
+    }
+
+    async function copyAll() {
+      try {
+        await navigator.clipboard.writeText(visibleLines.value.map((line) => line.text).join('\n'))
+        toasts.success('日志已复制到剪贴板')
+      } catch (error) {
+        toasts.error('复制失败')
+      }
+    }
+
+    async function copyErrorContext() {
+      const context = buildLogErrorContext(lines.value, 3)
+      if (!context.length) return
+      try {
+        await navigator.clipboard.writeText(context.map((line) => line.text).join('\n'))
+        toasts.success('错误上下文已复制')
+      } catch (error) {
+        toasts.error('复制失败')
+      }
+    }
+
+    function jumpError() {
+      if (!firstErrorLine.value) return
+      logLevelFilter.value = 'all'
+      query.value = ''
+      nextTick(() => {
+        // Recompute against the now-unfiltered list, then scroll the (possibly
+        // unmounted) error row into view via its index — virtualization means it
+        // may not be in the DOM until we move scrollTop there.
+        const idx = visibleLines.value.findIndex((line) => logLineLevel(line.text || '') === 'err')
+        if (idx === -1) return
+        const el = body.value
+        if (!el) return
+        el.scrollTop = Math.max(0, idx * ROW_H - el.clientHeight / 2)
+      })
+    }
+
+    watch(() => props.active, (active) => { active ? start() : stop() })
+    watch(() => props.base, () => {
+      stop()
+      resetLogs()
+      fetchNow()
+      if (props.active) start()
+    })
+
+    function measureViewport() {
+      const el = body.value
+      if (el) viewportH.value = el.clientHeight
+    }
+    function onResize() { measureViewport() }
+
+    onMounted(() => {
+      if (props.active) start()
+      fetchNow()
+      measureViewport()
+      window.addEventListener('resize', onResize)
+    })
+    onBeforeUnmount(() => {
+      stop()
+      window.removeEventListener('resize', onResize)
+    })
+
+    return {
+      body,
+      lines,
+      file,
+      loading,
+      following,
+      query,
+      wrap,
+      atBottom,
+      LOG_LEVELS,
+      logLevelFilter,
+      visibleLines,
+      firstErrorLine,
+      virtual,
+      totalHeight,
+      topPad,
+      renderSlice,
+      fetchNow,
+      level: logLineLevel,
+      onScroll,
+      scrollBottom,
+      toggleFollow,
+      copyAll,
+      copyErrorContext,
+      jumpError,
+    }
   },
 }
 </script>
@@ -213,6 +289,10 @@ export default {
 .search-in { background: none; border: none; outline: none; color: var(--ink); font-size: 12px; width: 110px; }
 .clr { background: none; border: none; color: var(--ink-3); cursor: pointer; display: flex; padding: 0; }
 .clr:hover { color: var(--ink); }
+.level-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); }
+.lvl-tab { border: none; background: transparent; color: var(--ink-3); border-radius: var(--r-xs); padding: 4px 7px; font: 600 11px/1 var(--sans); cursor: pointer; }
+.lvl-tab:hover { color: var(--ink); }
+.lvl-tab.on { background: var(--panel-3); color: var(--ink); }
 .btn.on { color: var(--amber); border-color: var(--amber-line); }
 .spin { animation: spin 0.7s linear infinite; }
 
@@ -231,6 +311,9 @@ export default {
   white-space: pre;
 }
 .ll:hover { background: var(--panel); }
+/* Virtualized rows have a fixed height (ROW_H = 20px); wrap-mode rows stay auto. */
+.logc-vlist .ll { height: 20px; }
+.logc-vlist { box-sizing: border-box; }
 .ln-no { color: var(--ink-3); opacity: 0.5; text-align: right; min-width: 34px; user-select: none; flex-shrink: 0; }
 .ln-tx { color: var(--ink-2); }
 
