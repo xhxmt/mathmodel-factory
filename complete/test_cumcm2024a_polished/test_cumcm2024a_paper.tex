@@ -1,0 +1,713 @@
+% 论文骨架: 本机未安装国赛官方模板 cumcmthesis / cumcm。
+%   现采用 ctexart + xeCJK, 并按 CUMCM 官方模板规定的章节顺序组织:
+%   摘要+关键词 / 问题重述 / 问题分析 /
+%   模型假设 / 符号说明 / 模型建立 / 模型求解 / 灵敏度分析 / 模型评价 / 结论 /
+%   参考文献 / 附录。
+% compile_paper.sh 检测到 ctex 文档类后自动选用 xelatex 引擎。
+% 注: 若最终提交环境可获取官方 cumcmthesis.cls, 应在 Step 15/16 切换文档类,
+%   并复核标题/摘要/关键词/参考文献的模板化格式。
+\documentclass[a4paper, 12pt]{ctexart}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{enumitem}
+\usepackage{listings}     % 附录代码
+\usepackage{xcolor}
+
+% 代码清单样式(附录)。extendedchars=true 以兼容代码中的中文注释。
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  extendedchars=true,
+  frame=single,
+  rulecolor=\color{gray!50},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue!60!black},
+  commentstyle=\color{green!45!black},
+  stringstyle=\color{red!55!black},
+  tabsize=4,
+  captionpos=b,
+}
+
+\title{板凳龙盘入、调头与限速的螺线运动学建模}
+\author{参赛队号（提交前由参赛者填写）}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+% =============== 摘要 ===============
+% Step 14 已将占位符替换为正式摘要 (CUMCM: 开头总述 + 逐问交付)。
+% 原占位符外层的 \catcode 临时组 (仅为保护字面下划线、防止替换前触发数学模式) 已随替换移除,
+% 以使摘要内 $v_0^\star$ / $R_1$ / $R_2$ 等下标正常渲染。起草记录见 abstract_draft.md。
+\begin{abstract}
+本文针对由 223 节板凳铰接而成的“板凳龙”盘入、碰撞、调头与限速问题，建立“参考路径运动学 + 刚性定弦长递推 + 连续时间实体碰撞检测 + 速度投影传递”的统一模型，五个子问题共用同一条链式刚体主线。
+
+针对问题 1，在螺距 $0.55\,\mathrm{m}$、龙头速度 $1\,\mathrm{m/s}$ 下，模型给出 $0$--$300\,\mathrm{s}$ 每秒全部把手位置与速度，并写入 \texttt{result1.xlsx}；全规模递推的最大杆长残差为 $3.33\times10^{-12}\,\mathrm{m}$，说明定弦长约束在数值上保持稳定。
+
+针对问题 2，模型先给出无碰撞盘入终止时刻 $t^\star=412.473838\,\mathrm{s}$，首碰为题目第 $1$、$9$ 节板凳；该结果由连续非负最近距离裕度 $g(t)$ 配合 Brent 法定位，并经独立 ODE 方法复核，吻合至小数点后四位，最终输出 \texttt{result2.xlsx}。
+
+针对问题 3，以螺距 $p$ 为决策变量，在龙头到达 $r=4.5\,\mathrm{m}$ 调头边界前要求整队无碰撞。经加密抽样验证后，推荐最小可行螺距取 $p^\star\approx0.450\,\mathrm{m}$；该值作为正文最终提交口径，粗网格结果仅用于灵敏度分析。
+
+针对问题 4，在盘入螺距 $1.7\,\mathrm{m}$ 下，构造与盘入、盘出螺线相切且前后弧半径比为 $2{:}1$ 的 S 形调头曲线，得到 $R_1=3.005\,\mathrm{m}$、$R_2=1.503\,\mathrm{m}$、总长 $13.621230\,\mathrm{m}$。对 $-100$--$100\,\mathrm{s}$ 逐秒全队 SAT 扫描均无碰撞，最小实体裕度 $0.290\,\mathrm{m}$，说明该方案物理可执行，并已将全队时序写入 \texttt{result4.xlsx}。
+
+针对问题 5，在问题 4 路径上扫描全部把手的速度放大倍率，时间步长加密到 $\Delta t=0.5\,\mathrm{s}$ 与 $0.25\,\mathrm{s}$ 后峰值稳定为 $A=1.588882$，出现在 $t=14.5\,\mathrm{s}$ 附近的第 $3$ 号把手处，反解得到龙头最大安全速度 $v_0^\star=1.258747\,\mathrm{m/s}$。
+\end{abstract}
+
+\noindent\textbf{关键词：} 板凳龙；阿基米德螺线运动学；链式刚体定弦长递推；SAT 实体碰撞检测；连续时间事件定位；调头曲线几何优化
+
+\newpage
+
+% =============== 问题重述 ===============
+\section{问题重述}
+
+\subsection{问题背景}
+
+“板凳龙”又称“盘龙”，是浙闽地区的传统民俗活动，浦江板凳龙已于 2006 年列入第一批国家级非物质文化遗产名录\cite{ihchina_pujiangloong}。表演时，人们将数十至上百条板凳首尾相连成一条长链，龙头在前领头，龙身与龙尾相随盘旋，整体呈圆盘状。在舞龙队能够自如盘入、盘出的前提下，盘龙所占面积越小、行进速度越快，观赏性越好。
+
+本题所研究的板凳龙由 223 节板凳组成：第 1 节为龙头，其后 221 节为龙身，最后 1 节为龙尾。龙头板长 $341\,\mathrm{cm}$，龙身与龙尾板长均为 $220\,\mathrm{cm}$，所有板凳板宽均为 $30\,\mathrm{cm}$。每节板凳设两个孔，孔径 $5.5\,\mathrm{cm}$，孔中心距最近板头 $27.5\,\mathrm{cm}$，相邻板凳通过把手（孔）连接。把这一民俗表演抽象为数学问题，核心是平面曲线运动学、刚体链递推、实体碰撞判定与约束优化。
+
+\subsection{问题提出}
+
+题目要求建立数学模型依次回答以下五个子问题：
+
+\noindent\textbf{问题 1（等距螺线盘入的全队运动轨迹）.} 舞龙队沿螺距 $0.55\,\mathrm{m}$ 的等距螺线顺时针盘入，各把手中心均在螺线上，龙头前把手速度恒为 $1\,\mathrm{m/s}$，初始时龙头位于第 16 圈的 $A$ 点。给出 $0$ 至 $300\,\mathrm{s}$ 每秒全部把手中心的位置与速度，写入 \texttt{result1.xlsx}，并在论文中报告 $0,60,120,180,240,300\,\mathrm{s}$ 时指定 7 个把手的结果。
+
+\noindent\textbf{问题 2（盘入终止时刻与碰撞边界）.} 沿问题 1 的螺线盘入，确定使板凳之间不发生碰撞的盘入终止时刻（即不能再继续无碰撞盘入的时刻），并给出此时全队的位置与速度，写入 \texttt{result2.xlsx}。
+
+\noindent\textbf{问题 3（进入调头空间所需最小螺距）.} 调头空间为以螺线中心为圆心、直径 $9\,\mathrm{m}$ 的圆形区域。确定最小螺距，使龙头前把手能够沿相应螺线盘入到调头空间边界，且整队盘入过程无碰撞。
+
+\noindent\textbf{问题 4（S 形调头路径设计与全队运动输出）.} 盘入螺距取 $1.7\,\mathrm{m}$，盘出螺线与盘入螺线关于中心对称；调头路径为两段相切圆弧构成的 S 形曲线，前段半径为后段的 2 倍，且与盘入、盘出螺线均相切。判断能否调整圆弧使调头曲线更短；以调头开始为零时刻，给出 $-100$ 至 $100\,\mathrm{s}$ 每秒全队位置与速度，写入 \texttt{result4.xlsx}。
+
+\noindent\textbf{问题 5（全队速度不超限时的龙头最大速度）.} 舞龙队沿问题 4 的路径行进，龙头速度保持常数。确定龙头的最大行进速度，使各把手速度均不超过 $2\,\mathrm{m/s}$。
+
+% =============== 问题分析 ===============
+\section{问题分析}
+
+五个子问题共享同一物理对象，因此采用单一运动学框架贯通求解。问题 1 提供链式刚体的位形与速度基础；问题 2 在该位形上叠加连续时间实体碰撞判定，输出首碰时刻；问题 3 将螺距作为决策变量，寻找可进入调头空间的最小可行值；问题 4 在给定螺距下构造 S 形调头曲线并核验整链可执行性；问题 5 复用问题 4 的速度场，反解全队不超速时的龙头上界。对应的几何、碰撞和限速公式见式~\eqref{eq:c1}--\eqref{eq:c5}。
+
+板凳龙系统的整体结构与坐标约定见图~\ref{fig:concept_overview}，五个子问题之间的建模依赖关系见图~\ref{fig:concept_dag}。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.72\textwidth]{concept_system_overview.pdf}
+  \caption{板凳龙系统结构总览。223 节板凳通过前后把手中心刚性连接成链，全部把手落在同一条顺时针等距螺线（螺距 $p$）上盘入；绿色虚线为直径 $9\,\mathrm{m}$（半径 $r=4.5\,\mathrm{m}$）的调头圆区域；左下放大窗展示龙头附近若干节板凳的刚性矩形实体（板宽 $W=0.30\,\mathrm{m}$）。坐标原点 $O$ 为螺线中心，龙头前把手 $A$ 位于 $+x$ 轴，顺时针盘入。}
+  \label{fig:concept_overview}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{concept_subproblem_dag.pdf}
+  \caption{五个子问题的建模依赖关系。问题 1 建立螺线运动学基础，向问题 2（无碰撞终止 $t^\star=412.473838\,\mathrm{s}$）与问题 4（S 形调头路径）传递；问题 2 $\to$ 问题 3（推荐保守螺距 $p^\star\approx0.450\,\mathrm{m}$）；问题 1、3 共同支撑问题 4（调头曲线长 $L=13.621230\,\mathrm{m}$，已经全队实体无碰撞核验）；问题 4 的速度场反解问题 5（推荐保守安全速度 $v_0^\star\approx1.258747\,\mathrm{m/s}$）。虚线弧表示问题 1 运动学被问题 4 直接复用。图中各子问题均取正文采用的最终保守口径。}
+  \label{fig:concept_dag}
+\end{figure}
+
+% =============== 模型假设 ===============
+\section{模型假设}
+
+为在题给信息下闭合模型，作如下假设，每条附一句理由：
+
+\begin{enumerate}[label=(\arabic*)]
+  \item \textbf{龙头前把手沿参考曲线严格匀速（目标速度 $1\,\mathrm{m/s}$），其余把手通过铰接被动随动}。理由：题目明确给定龙头牵引速度，把全队运动化为由龙头驱动的纯几何联动，无需引入弹簧迟滞等动力学。
+  \item \textbf{相邻板凳在把手孔处为无间隙刚性连接，孔中心重合且允许全角自由扭转}。理由：把手为销轴铰接，平面内可自由转动而连杆长度不变，是“定弦长”递推与速度投影传递的前提。
+  \item \textbf{每节板凳抽象为刚性有向矩形，碰撞以连续时间最近距离裕度 $g(t^\star)=0$ 定位}。理由：板凳是实体而非质点，且碰撞临界发生在连续时间，须避免整数秒采样漏检。
+  \item \textbf{除共享把手的相邻两节板凳天然接触豁免外，任意非相邻（$|i-j|\ge2$）板凳实体矩形重叠即判为碰撞}。理由：铰接处的合法接触不应被误判，非相邻板凳的实体交叠才是真实干涉。
+  \item \textbf{问题 4 主调头曲线取题给几何约束（与盘入、盘出螺线相切、前后弧半径 $2{:}1$、位于调头圆内）的\emph{非退化}分支，其物理可执行性由全队实体无碰撞核验（约束 C5）直接判定；外生转弯半径下界 $R\ge R_{\min}=2.0\,\mathrm{m}$ 仅用于辅助非线性规划对照，排除向中心塌缩的非物理解}。理由：题给“相切 $+$ 半径比 $2{:}1$”约束存在两个几何分支，主曲线取两弧角度均衡、相切点 $P_c$ 位于内部（$R_2\approx1.503\,\mathrm{m}$）的非退化分支，并经 §\ref{sec:model} 约束 C5 对全队逐秒实体核验确认无碰撞通过（最小裕度 $0.290\,\mathrm{m}$，见 §\ref{sec:sens}、§\ref{sec:eval}）。故 $R_{\min}$ 不再作为主曲线硬约束，仅作为辅助最短化模型的外生安全下界（见 §\ref{sec:aux_nlp}），主结论以全队实体无碰撞核验为准。
+  \item \textbf{初始时刻全队处于连续光滑、顺时针向原点演化的状态，龙头前把手起始极角精确为 $32\pi$ 且位于 $+x$ 正半轴}。理由：统一坐标口径可避免镜像导致的切向、极角符号相反，使输出与评卷参考系一一对应。
+\end{enumerate}
+
+% =============== 符号说明 ===============
+\section{符号说明}
+
+论文中所有符号汇总于表~\ref{tab:symbols}（分为基础运动学、调头几何与灵敏度两组），量纲与取值范围与模型公式一一对应。把手与板凳采用\textbf{同一零基编号基准}：把手（节点）集合 $\mathcal{P}=\{0,\dots,223\}$ 共 $224$ 个，板凳实体集合 $\mathcal{B}=\{0,\dots,222\}$ 共 $223$ 节，板凳 $i$ 的前把手即把手 $i$、后把手为把手 $i{+}1$，对应题目第 $i{+}1$ 节（板凳 $0$ 即龙头）。因此索引 $i$ 在全文仅表示“第 $i$ 个链节位置”这一单一含义，不承担两种语义。
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{主要符号说明}
+  \label{tab:symbols}
+  \begin{tabular}{llll}
+    \toprule
+    \textbf{符号} & \textbf{含义} & \textbf{量纲} & \textbf{取值 / 来源} \\
+    \midrule
+    \multicolumn{4}{l}{\textit{(a) 集合、索引与基础运动学符号}}\\
+    $\mathcal{P}$ & 把手（系统节点）集合，零基编号 & --- & $\{0,1,\dots,223\}$（共 224 个）\\
+    $\mathcal{B}$ & 板凳实体集合，零基；板凳 $i$ 对应题目第 $i{+}1$ 节 & --- & $\{0,1,\dots,222\}$（共 223 节）\\
+    $i,j$ & 链节位置编号索引（把手取 $\mathcal{P}$、板凳取 $\mathcal{B}$，同一基准） & --- & 整数 \\
+    $\mathcal{R}_i(t)$ & 板凳 $i$（$i\in\mathcal{B}$）的有向矩形实体 & --- & 矩形 \\
+    $t$ & 时间，$t=0$ 为进入螺线起始态 & $\mathrm{s}$ & $[0,\infty)$ \\
+    $p$ & 螺线螺距（轨间距） & $\mathrm{m}$ & $0.55$ (P1,2)，$1.7$ (P4,5)，决策量 (P3) \\
+    $b$ & 极径增长率，$b=p/(2\pi)$ & $\mathrm{m/rad}$ & 派生 \\
+    $L_0$ & 龙头两孔中心距 & $\mathrm{m}$ & $2.86=3.41-2\times0.275$ \\
+    $L_i$ & 龙身 / 龙尾两孔中心距 & $\mathrm{m}$ & $1.65=2.20-2\times0.275$ \\
+    $W$ & 板凳宽度 & $\mathrm{m}$ & $0.30$ \\
+    $d_{\text{ext}}$ & 孔中心到板端外延 & $\mathrm{m}$ & $0.275$ \\
+    $v_0$ & 龙头前把手行进速度 & $\mathrm{m/s}$ & $1.0$ 或决策量 (P5) \\
+    $\theta_{\text{start}}$ & 龙头初始极角 & $\mathrm{rad}$ & $32\pi$ \\
+    $\theta_i(t)$ & 把手 $i$ 在 $t$ 时刻的极角 & $\mathrm{rad}$ & $[0,32\pi]$ \\
+    $\boldsymbol{r}_i(t)$ & 把手 $i$ 的平面笛卡尔坐标 & $\mathrm{m}$ & $\mathbb{R}^2$ \\
+    $v_i(t)$ & 把手 $i$ 的速度大小 & $\mathrm{m/s}$ & $[0,\infty)$ \\
+    $s(\theta)$ & 原点到极角 $\theta$ 的螺线弧长 & $\mathrm{m}$ & 见式~\eqref{eq:arclen} \\
+    $\boldsymbol{t}_i(t)$ & 把手 $i$ 处轨迹单位切向量 & --- & $\mathrm{d}\boldsymbol{r}_i/\mathrm{d}s$ \\
+    $\boldsymbol{u}_i(t)$ & 把手 $i$ 与 $i{+}1$ 间连杆单位向量 & --- & 见式~\eqref{eq:c4} \\
+    $g(t)$ & 全局非相邻板凳最近距离（非负，重叠取 $0$） & $\mathrm{m}$ & $\min_{i,j\in\mathcal{B},\,|i-j|\ge2}\mathrm{dist}(\mathcal{R}_i,\mathcal{R}_j)$ \\
+    $t^\star$ & 无碰撞盘入终止时刻 & $\mathrm{s}$ & $g(t^\star)=0$ 的最早根 \\
+    \midrule
+    \multicolumn{4}{l}{\textit{(b) 调头几何（P4）与灵敏度符号}}\\
+    $R_{\min}$ & 调头曲线转弯半径外生下界（假设 A5） & $\mathrm{m}$ & $2.0$ \\
+    $R_1,R_2$ & S 形调头曲线前 / 后段圆弧半径，$R_1{:}R_2{=}2{:}1$ & $\mathrm{m}$ & $3.005,\ 1.503$ (P4) \\
+    $L_{\text{Uturn}}$ & 调头曲线（两段圆弧）总弧长 & $\mathrm{m}$ & $13.621$ (P4) \\
+    $P_{\text{in}},P_{\text{out}}$ & 盘入 / 盘出螺线与调头弧的相切点 & $\mathrm{m}$ & $\mathbb{R}^2$ \\
+    $P_c$ & 两段圆弧之间的相切点 & $\mathrm{m}$ & $\mathbb{R}^2$ \\
+    $A$ & 链式速度放大倍率，$A=\max_{i,t}v_i/v_0$ & --- & $\ge1$ (P5) \\
+    $\varepsilon$ & 碰撞判据松弛容差（灵敏度） & $\mathrm{m}$ & $10^{-8}$--$10^{-5}$ \\
+    $\Delta t$ & 速度倍率扫描时间步长（灵敏度） & $\mathrm{s}$ & $1.0,\ 0.5,\ 0.25$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent 缩写：AABB（Axis-Aligned Bounding Box，轴对齐包围盒）；SAT（Separating Axis Theorem，分离轴定理）；NLP（Nonlinear Programming，非线性规划）。
+
+% =============== 模型建立 ===============
+\section{模型建立}
+\label{sec:model}
+
+\subsection{模型定位与总体思路}
+
+本文对舞龙队作整体运动学建模。设盘入坐标系原点 $O$ 为螺线中心，龙头前把手起始位于 $+x$ 轴、顺时针盘入。问题 1 的基础是阿基米德螺线极坐标方程：由龙头“沿弧长匀速”反演极角，再以连杆刚性（定弦长）约束递推各把手的位置、极角与速度。
+
+问题 2 在同一位形递推上叠加实体碰撞约束：定义连续\textbf{非负}最近距离裕度 $g(t)$（重叠时取 $0$），用 SAT 计算任意非相邻板凳矩形间距离，并用 Brent 法定位 $g(t^\star)=0$ 的临界时刻。问题 3 将螺距作为变量，以二分 / 一维可行域搜索同时满足“龙头进入 $r=4.5\,\mathrm{m}$ 核心区”和“后随板凳无碰撞”。
+
+问题 4 以边界锚定的相切两弧几何构造 S 形调头曲线，并给出全队跨调头区的运动学时序。问题 5 利用同一路径上的切向--连杆夹角，扫描链式速度放大倍率，反解使全节点速度不超过 $2\,\mathrm{m/s}$ 的龙头速度上界。
+
+\subsection{集合、参数与决策变量}
+
+把手以 $i$ 索引，$i\in\mathcal{P}=\{0,1,\dots,223\}$，其中 $0$ 为龙头前把手；板凳实体另由 $\mathcal{B}$ 索引。参数取自题目：螺距 $p$、增长率 $b=p/(2\pi)$、龙头孔距 $L_0=2.86\,\mathrm{m}$、龙身孔距 $L_i=1.65\,\mathrm{m}$（$i\ge1$）、板宽 $W=0.30\,\mathrm{m}$、端部外延 $d_{\text{ext}}=0.275\,\mathrm{m}$、龙头速度 $v_0$、起始极角 $\theta_{\text{start}}=32\pi$。系统状态量为各把手极角 $\theta_i(t)$、坐标 $\boldsymbol{r}_i(t)$ 与速度 $v_i(t)$，通过代数 / 几何关系逐级反解。模型显式区分板长（$3.41$、$2.20\,\mathrm{m}$）与孔中心距（$2.86$、$1.65\,\mathrm{m}$），避免链长递推偏差\cite{jiang2018mathmodel}。
+
+\subsection{目标函数}
+
+问题 1、2、4 是以物理与几何相容为硬约束的正向连续推演，问题 3、5 蕴含最优化形式：
+\begin{equation}
+\text{问题 3：}\quad \min_{p}\ p \qquad\qquad \text{问题 5：}\quad \max_{v_0}\ v_0 ,
+\end{equation}
+分别在“整队无碰撞盘入到调头边界”与“任一时刻、任一把手速度不超 $2\,\mathrm{m/s}$”约束下取极值。
+
+\subsection{约束与控制方程}
+
+\paragraph{C1 螺线轨迹方程（等式）.} 各把手中心落在同一顺时针等距螺线 $r(\theta)=b\theta$ 上：
+\begin{equation}
+\boldsymbol{r}_i(t)=\begin{pmatrix} b\,\theta_i(t)\cos\theta_i(t) \\[2pt] -\,b\,\theta_i(t)\sin\theta_i(t) \end{pmatrix},\qquad \forall i,t.
+\label{eq:c1}
+\end{equation}
+$y$ 分量取负号实现顺时针盘入。以 $p=0.55\,\mathrm{m}$、$\theta_{\text{start}}=32\pi$ 计，龙头初始极径 $r=b\theta_{\text{start}}=\tfrac{0.55}{2\pi}\cdot32\pi=8.8\,\mathrm{m}$，与 $A$ 点在第 16 圈一致。
+
+\paragraph{C2 龙头弧长随动方程（等式）.} 等距螺线弧长无初等闭式，须解析积分\cite{docarmo1976differential}：
+\begin{equation}
+s(\theta)=\frac{b}{2}\Big[\theta\sqrt{\theta^2+1}+\ln\!\big(\theta+\sqrt{\theta^2+1}\big)\Big].
+\label{eq:arclen}
+\end{equation}
+龙头沿弧长匀速，故其极角 $\theta_0(t)$ 由弧长方程隐式确定：
+\begin{equation}
+s\big(\theta_0(t)\big)=s(\theta_{\text{start}})-v_0\,t .
+\label{eq:c2}
+\end{equation}
+
+\paragraph{C3 刚性连接（定弦长）约束（等式）.} 相邻把手在平面上的直线距离恒为孔中心距：
+\begin{equation}
+\big\|\boldsymbol{r}_i(t)-\boldsymbol{r}_{i-1}(t)\big\|_2=L_{i-1},\qquad \forall i\ge1.
+\label{eq:c3}
+\end{equation}
+给定 $\theta_{i-1}(t)$，沿螺线对 $\theta_i(t)$ 用 Brent 法求根即得下一把手极角\cite{brent1973algorithms}，从龙头逐节递推得整条链。
+
+\paragraph{C4 速度投影链式传递（等式）.} 连杆不可伸缩，故两端速度沿连杆轴线的投影相等，整理得\cite{spong2006robot}：
+\begin{equation}
+v_i(t)=v_{i-1}(t)\,\frac{\big|\boldsymbol{t}_{i-1}(t)\cdot\boldsymbol{u}_{i-1}(t)\big|}{\big|\boldsymbol{t}_i(t)\cdot\boldsymbol{u}_{i-1}(t)\big|},\qquad
+\boldsymbol{u}_i(t)=\frac{\boldsymbol{r}_{i+1}(t)-\boldsymbol{r}_i(t)}{\|\boldsymbol{r}_{i+1}(t)-\boldsymbol{r}_i(t)\|_2},
+\label{eq:c4}
+\end{equation}
+其中 $\boldsymbol{t}_k(t)=\mathrm{d}\boldsymbol{r}_k/\mathrm{d}s$ 为轨迹正向单位切向量。当分母 $|\boldsymbol{t}_i\cdot\boldsymbol{u}_{i-1}|\to0$ 时出现运动学奇异（速度放大发散），这正是问题 5 限速的核心约束边界。
+
+\paragraph{C5 实体无碰撞条件（不等式）.} 任意非相邻板凳（$i,j\in\mathcal{B}$，$|i-j|\ge2$，均为零基编号）的有向矩形不得交叠：
+\begin{equation}
+\mathcal{R}_i(t)\cap\mathcal{R}_j(t)=\varnothing,\quad \forall\,i,j\in\mathcal{B},\ |i-j|\ge2
+\;\Longleftrightarrow\;
+g(t)=\min_{\substack{i,j\in\mathcal{B}\\ |i-j|\ge2}}\mathrm{dist}\big(\mathcal{R}_i(t),\mathcal{R}_j(t)\big)>0.
+\label{eq:c5}
+\end{equation}
+其中 $\mathrm{dist}(\cdot,\cdot)$ 为两矩形间最近欧氏距离，是\textbf{非负}量（两矩形相交时取 $0$）；故 $g(t)$ 为非负最近距离裕度而非带符号穿透深度，首次碰撞由 $g(t)=0$ 与 SAT 重叠谓词共同判定，连续事件定位即对 $g(t)$ 求最早零点。每节板凳由把手中心连线两端各外延 $d_{\text{ext}}$、两侧各取 $W/2$ 构成有向矩形\cite{deberg2008compgeom}；相邻板凳（$|i-j|=1$）在共享把手处天然接触，按假设 A4 豁免。
+
+\subsection{辅助非线性规划模型：调头曲线的几何优化}
+\label{sec:aux_nlp}
+
+为回答问题 4 “能否更短”，本文另建非线性规划辅助模型。模型以两段圆弧半径 $R$（前段 $2R$、后段 $R$）、切点参数 $\theta_1,\theta_2$ 为决策变量，将“弧--弧相切、弧--螺线相切”写作等式约束，将“位于调头圆盘内、$R\ge R_{\min}$”写作不等式约束，最小化调头曲线总弧长\cite{nocedal2006numerical,boyd2004convex}。求解时先用差分进化生成全局初值，再用 SLSQP 局部精修，并以粒子群算法作全局对照\cite{kennedy1995particle,shi1998modified}。该模型仅用于判别放松相切约束后的数学下界，不作为最终调头路径。
+
+\subsection{求解策略}
+
+主算法以解析降维 + 一维数值求根推进：把时间换为极角，先定龙头极角再连锁反解各把手，避免 ODE 离散积分的累积误差。碰撞检测先用 AABB 宽相预筛（剔除超过 $95\%$ 的非干涉对），再对候选对做 SAT 窄相精算最短距离\cite{ericson2004realtime}。内圈小极角处可能出现“一弦跨两圈”的多根现象，求解时将角步长限定为 $0.01$；若局部根未定位，则继续缩小步长并重启该段递推，避免产生脱离螺线的异常节点。
+
+% =============== 模型求解 ===============
+\section{模型求解}
+
+全部子问题均按 §\ref{sec:model} 的运动学递推、实体碰撞判据和搜索策略求解。题目要求的附件中，问题 1、2、4 分别导出 \texttt{result1.xlsx}、\texttt{result2.xlsx} 与 \texttt{result4.xlsx}，数值逐项保留 6 位小数。
+
+\subsection{问题 1：等距螺线盘入的全队运动轨迹}
+
+取 $p=0.55\,\mathrm{m}$、$v_0=1\,\mathrm{m/s}$、$\theta_{\text{start}}=32\pi\approx100.530965\,\mathrm{rad}$，对 $0$--$300\,\mathrm{s}$ 逐秒、全 224 个把手求解。求解器达到最优收敛状态，全部约束满足，运行时间 $22.03\,\mathrm{s}$。定弦长约束 C3 在全规模下最大杆长误差仅 $3.330\times10^{-12}\,\mathrm{m}$，逼近浮点精度；$0$--$300\,\mathrm{s}$ 抽样窗口内非相邻板凳最近裕度恒正，最小 $0.120694\,\mathrm{m}$。盘入队形随时间向中心收拢见图~\ref{fig:p1_snapshots}，链上速度近乎无损传递见图~\ref{fig:p1_speed}。指定把手的位置与速度列于表~\ref{tab:p1_pos} 与表~\ref{tab:p1_spd}。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.62\textwidth]{solve_p1_inspiral_snapshots.pdf}
+  \caption{问题 1 全队 224 个把手在 $t=0,100,200,300\,\mathrm{s}$ 的盘入队形（螺距 $0.55\,\mathrm{m}$、龙头速度 $1\,\mathrm{m/s}$）。各色折线为对应时刻整条板凳龙的把手链，圆点标出龙头位置；随时间推移整队沿顺时针等距螺线向中心 $O$ 收拢、外圈逐步解开。浅灰曲线为底层螺线轨道。}
+  \label{fig:p1_snapshots}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{solve_p1_speed_profile.pdf}
+  \caption{问题 1 选定把手（龙头 0、第 $50/100/150/200$ 节、龙尾 $223$）速度随时间变化（$0$--$300\,\mathrm{s}$）。龙头恒为 $1.000\,\mathrm{m/s}$，其余把手速度沿链向后单调递减但始终在龙头速度的 $0.4\%$ 以内（$\ge0.9965\,\mathrm{m/s}$），表明盘入阶段链式速度传递近乎无损，与问题 5 调头段的显著速度放大形成对照。}
+  \label{fig:p1_speed}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{4.5pt}
+  \caption{问题 1 指定把手位置（单位：m），列为时刻 $0,60,120,180,240,300\,\mathrm{s}$}
+  \label{tab:p1_pos}
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    \textbf{把手坐标} & \textbf{$0\,$s} & \textbf{$60\,$s} & \textbf{$120\,$s} & \textbf{$180\,$s} & \textbf{$240\,$s} & \textbf{$300\,$s} \\
+    \midrule
+    龙头 $x$ & 8.800000 & 5.799209 & -4.084887 & -2.963609 & 2.594494 & 4.420274 \\
+    龙头 $y$ & 0.000000 & 5.771092 & 6.304479 & -6.094780 & 5.356743 & -2.320429 \\
+    第 1 节龙身 $x$ & 8.363824 & 7.456758 & -1.445473 & -5.237118 & 4.821221 & 2.459489 \\
+    第 1 节龙身 $y$ & -2.826544 & 3.440399 & 7.405883 & -4.359627 & 3.561949 & -4.402476 \\
+    第 51 节龙身 $x$ & -9.518732 & -8.686317 & -5.543150 & 2.890455 & 5.980011 & -6.301346 \\
+    第 51 节龙身 $y$ & -1.341137 & -2.540108 & -6.377946 & -7.249289 & 3.827758 & -0.465829 \\
+    第 101 节龙身 $x$ & 2.913983 & 5.687116 & 5.361939 & 1.898794 & -4.917371 & -6.237722 \\
+    第 101 节龙身 $y$ & 9.918311 & 8.001384 & 7.557638 & 8.471614 & 6.379874 & -3.936008 \\
+    第 151 节龙身 $x$ & 10.861726 & 6.682311 & 2.388757 & 1.005154 & 2.965378 & 7.040740 \\
+    第 151 节龙身 $y$ & -1.828753 & -8.134544 & -9.727411 & -9.424751 & -8.399721 & -4.393013 \\
+    第 201 节龙身 $x$ & 4.555102 & -6.619664 & -10.627211 & -9.287720 & -7.457151 & -7.458662 \\
+    第 201 节龙身 $y$ & -10.725118 & -9.025570 & -1.359847 & 4.246673 & 6.180726 & 5.263384 \\
+    龙尾(后) $x$ & -5.305444 & 7.364557 & 10.974348 & 7.383896 & 3.241051 & 1.785033 \\
+    龙尾(后) $y$ & 10.676584 & 8.797992 & -0.843473 & -7.492370 & -9.469336 & -9.301164 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \small
+  \setlength{\tabcolsep}{6pt}
+  \caption{问题 1 指定把手速度（单位：m/s）}
+  \label{tab:p1_spd}
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    \textbf{把手} & \textbf{$0\,$s} & \textbf{$60\,$s} & \textbf{$120\,$s} & \textbf{$180\,$s} & \textbf{$240\,$s} & \textbf{$300\,$s} \\
+    \midrule
+    龙头 & 1.000000 & 1.000000 & 1.000000 & 1.000000 & 1.000000 & 1.000000 \\
+    第 1 节龙身 & 0.999971 & 0.999961 & 0.999945 & 0.999917 & 0.999859 & 0.999709 \\
+    第 51 节龙身 & 0.999742 & 0.999662 & 0.999538 & 0.999331 & 0.998941 & 0.998065 \\
+    第 101 节龙身 & 0.999575 & 0.999453 & 0.999269 & 0.998971 & 0.998435 & 0.997302 \\
+    第 151 节龙身 & 0.999448 & 0.999299 & 0.999078 & 0.998727 & 0.998115 & 0.996861 \\
+    第 201 节龙身 & 0.999348 & 0.999180 & 0.998935 & 0.998551 & 0.997894 & 0.996574 \\
+    龙尾(后) & 0.999311 & 0.999136 & 0.998883 & 0.998489 & 0.997816 & 0.996478 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{问题 2：盘入终止时刻与碰撞边界}
+
+不以整数秒网格判碰撞，而以连续\textbf{非负}裕度 $g(t)$ 配 Brent 求根，得首碰时刻
+\begin{equation}
+t^\star = 412.473838\,\mathrm{s},\qquad g(t^\star)=0,
+\end{equation}
+求解器达到最优收敛状态，运行时间 $180.23\,\mathrm{s}$。首次发生实体碰撞的为板凳对 $(0,8)$（程序零基编号，对应题目第 $1$ 节龙头与第 $9$ 节板凳）。
+
+该结果经两条独立方法交叉验证：ODE（LSODA）数值积分与解析弧长法均给出 $t^\star=412.4738\,\mathrm{s}$（终止裕度 $-4.441\times10^{-16}\,\mathrm{m}$），吻合到小数点后四位。首碰时刻晚于问题 1 的 $300\,\mathrm{s}$ 展示窗，因此常规输出窗口内未见临界碰撞，仍需连续时间外推定位。
+
+终止时刻全队队形与两板凳相切见图~\ref{fig:p2_collision}，裕度衰减与事件定位见图~\ref{fig:p2_clearance}，指定把手结果见表~\ref{tab:p2}。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.62\textwidth]{solve_p2_terminal_collision.pdf}
+  \caption{问题 2 盘入终止时刻 $t^\star=412.47\,\mathrm{s}$ 的全队队形。蓝色为全部把手链，红色实体矩形为首次发生实体碰撞的两节板凳（程序零基编号板凳 $0$ 与板凳 $8$，即题目第 $1$ 节龙头与第 $9$ 节）；右上放大窗显示二者矩形恰好相切（最近距离裕度 $g(t^\star)=0$）。此刻之后继续盘入将导致非相邻板凳互相侵入。}
+  \label{fig:p2_collision}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{solve_p2_clearance_decay.pdf}
+  \caption{问题 2 全队非相邻板凳间最近距离裕度 $g(t)$ 随时间衰减。蓝点为离散抽样裕度（锯齿来自最近对随时间切换），整体单调下降；红色虚线标出由 Brent 连续求根精确定位的首碰时刻 $t^\star=412.47\,\mathrm{s}$（$g(t^\star)=0$），规避整数秒网格漏检先于网格点发生的碰撞。}
+  \label{fig:p2_clearance}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{问题 2 终止时刻 $t^\star=412.473838\,\mathrm{s}$ 指定把手的位置与速度}
+  \label{tab:p2}
+  \begin{tabular}{lrrr}
+    \toprule
+    \textbf{把手} & \textbf{$x$ (m)} & \textbf{$y$ (m)} & \textbf{速度 (m/s)} \\
+    \midrule
+    龙头 & 1.209931 & -1.942784 & 1.000000 \\
+    第 1 节龙身 & -1.643792 & -1.753399 & 0.991551 \\
+    第 51 节龙身 & 1.281201 & -4.326588 & 0.976858 \\
+    第 101 节龙身 & -0.536246 & 5.880138 & 0.974550 \\
+    第 151 节龙身 & 0.968840 & 6.957479 & 0.973608 \\
+    第 201 节龙身 & -7.893161 & 1.230764 & 0.973096 \\
+    龙尾(后) & 0.956217 & -8.322736 & 0.972938 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{问题 3：进入调头空间所需最小螺距}
+
+以螺距 $p$ 为决策变量做二分搜索，可行性判据同时要求“龙头前把手到达 $r=4.5\,\mathrm{m}$ 边界”与“盘入全程后随板凳无碰撞”。经加密抽样复核后，本文采用的最终口径为
+\begin{equation}
+\boxed{\,p^\star = 0.450\,\mathrm{m}\,}\qquad(\text{$61$ 点抽样下}\ g_{\min}=4.72\times10^{-4}\,\mathrm{m},\ \text{最紧对}\ (0,19),\ t^\star=220.56\,\mathrm{s}).
+\end{equation}
+因此，进入调头空间所需的推荐保守最小螺距为 $p^\star\approx0.450\,\mathrm{m}$。该值同时满足龙头到达半径 $4.5\,\mathrm{m}$ 边界和后随板凳实体无碰撞两个条件；其中最小裕度仍为正，说明限制来自后随板凳间距而非龙头是否能抵达边界。
+
+\paragraph{搜索过程与抽样加密验证.} 灵敏度分析（§\ref{sec:sens}）表明，最小可行螺距随抽样密度单调上升，故正文只保留 $p^\star\approx0.450\,\mathrm{m}$ 作为推荐提交值。粗网格下界和其对应的边界态、最紧对与裕度放在灵敏度章节中说明，用于解释为何需要加密抽样。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.62\textwidth]{solve_p3_pitch_geometry.pdf}
+  \caption{问题 3 最小螺距的最终可行口径示意。龙头抵达调头圆边界（$r=4.5\,\mathrm{m}$，绿色虚线）时，最紧约束来自后随板凳的实体间距而非龙头是否能到达边界。加密抽样后推荐的保守可行螺距为 $0.450\,\mathrm{m}$；粗网格对照仅在灵敏度章节中给出。}
+  \label{fig:p3_geometry}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{solve_p3_bisection.pdf}
+  \caption{问题 3 最小螺距的二分搜索收敛（$7$ 点稀疏抽样）。横轴为迭代次数，纵轴为试探螺距 $p$；蓝色圆点表示该 $p$ 在 $7$ 点抽样下无碰撞（可行）、红色叉号表示发生干涉（不可行），可行 / 不可行区间逐步收紧。右下放大窗展示第 $8$--$14$ 次迭代的收敛细节；加密到 $61$ 点抽样后保守可行螺距上调为 $0.450\,\mathrm{m}$。}
+  \label{fig:p3_bisection}
+\end{figure}
+
+\subsection{问题 4：S 形调头路径设计与全队运动输出}
+\label{subsec:p4}
+
+取盘入螺距 $p=1.7\,\mathrm{m}$，盘出螺线关于中心 $O$ 对称。首先以与盘入螺线、盘出螺线在切点 $P_{\text{in}},P_{\text{out}}$ 相切、两弧在 $P_c$ 相切、且前段半径为后段 $2$ 倍为几何约束构造 S 形调头曲线。
+
+在满足题给“相切 $+$ 半径比 $2{:}1$”约束的可执行分支下，得到
+\begin{equation}
+R_1 = 3.005418\,\mathrm{m},\quad R_2 = 1.502709\,\mathrm{m}\ (R_1{:}R_2=2{:}1),\quad L_{\text{Uturn}} = 13.621230\,\mathrm{m},
+\end{equation}
+相切点 $P_c$ 位于 $\|P_c\|=1.500\,\mathrm{m}$（曲线先内收至 $P_c$ 再外展），最大路径半径 $4.500000\,\mathrm{m}$ 恰好贴合调头圆边界，几何求解达到可行收敛状态并满足全部相切约束。把手沿调头路径按\textbf{欧氏定弦长}（即相邻把手直线距离恒等于孔距，而非沿曲线弧长等距）布点，全规模最大杆长残差仅 $1.55\times10^{-15}\,\mathrm{m}$，逼近浮点精度。全队 $-100$--$100\,\mathrm{s}$ 共 201 个整数秒时序均已导出。调头曲线几何见图~\ref{fig:p4_scurve}，全队过调头区三帧见图~\ref{fig:p4_snapshots}，指定时刻把手结果见表~\ref{tab:p4_pos}--\ref{tab:p4_spd}。
+
+\paragraph{关于“能否更短”的判定.} 在保持“与盘入、盘出螺线相切”和“前后弧半径比为 $2{:}1$”两个题给条件不变时，圆弧半径和切点位置由几何方程唯一确定，因而该调头曲线的总长不能继续通过调节圆弧缩短。故问题 4 的最终答案取上述几何构造给出的
+\[
+L_{\text{Uturn}}=13.621230\,\mathrm{m}.
+\]
+
+\paragraph{全队实体无碰撞核验（调头段）.} 仅证明龙头路径相切且位于圆内，尚不足以保证 $223$ 节刚性实体链可物理通过调头区，故对 $-100$--$100\,\mathrm{s}$ 逐秒全队队形复用 SAT 矩形碰撞判据做实体裕度扫描。结果表明全程\textbf{无碰撞}：$201$ 帧均未出现任意非相邻板凳矩形重叠（碰撞事件计数为 $0$），全程最小实体裕度
+\begin{equation}
+g^{\text{P4}}_{\min} = 0.289538\,\mathrm{m}\quad(\text{发生于}\ t=30\,\mathrm{s},\ \text{板凳对}\ (0,16)),
+\end{equation}
+为正且具可观裕量。盘入逼近段（$t\le0$）最近裕度约 $1.028\,\mathrm{m}$；链体陆续通过后段 $R_2=1.503\,\mathrm{m}$ 紧圆弧时裕度收窄至上述最小值后回升。因此在非退化 S 形调头曲线下，全链满足约束 C5 实体无碰撞条件，问题 4 输出（\texttt{result4.xlsx}）为物理可执行的整链调头时序。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.62\textwidth]{solve_p4_scurve_geometry.pdf}
+  \caption{问题 4 的 S 形调头曲线几何构造（盘入螺距 $1.7\,\mathrm{m}$）。蓝色为盘入 / 盘出螺线（关于中心 $O$ 对称），红色为两段相切圆弧组成的调头曲线，前段半径 $R_1=3.01\,\mathrm{m}$ 为后段 $R_2=1.50\,\mathrm{m}$ 的两倍（$2{:}1$），在 $P_{\text{in}}$、$P_{\text{out}}$ 与螺线相切、在内部相切点 $P_c$（$\|P_c\|=1.50\,\mathrm{m}$）两弧相切；曲线先内收至 $P_c$ 再外展，全程位于 $r=4.5\,\mathrm{m}$ 调头圆（绿色虚线）内，总长 $13.62\,\mathrm{m}$。此为约束系统的非退化分支，整链经全队实体无碰撞核验通过。}
+  \label{fig:p4_scurve}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{solve_p4_uturn_snapshots.pdf}
+  \caption{问题 4 全队通过调头区域的三帧队形（以调头开始为 $t=0$）。(a) $t=-50\,\mathrm{s}$ 整队沿盘入螺线逼近、(b) $t=0\,\mathrm{s}$ 龙头进入调头曲线、(c) $t=+50\,\mathrm{s}$ 龙头已转入盘出螺线；红点为龙头，绿色虚线为 $r=4.5\,\mathrm{m}$ 调头圆。三帧展示队伍由盘入向盘出的连续过渡。}
+  \label{fig:p4_snapshots}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{5.5pt}
+  \caption{问题 4 指定把手位置（单位：m），列为时刻 $-100,-50,0,50,100\,\mathrm{s}$}
+  \label{tab:p4_pos}
+  \begin{tabular}{lrrrrr}
+    \toprule
+    \textbf{把手坐标} & \textbf{$-100\,$s} & \textbf{$-50\,$s} & \textbf{$0\,$s} & \textbf{$50\,$s} & \textbf{$100\,$s} \\
+    \midrule
+    龙头 $x$ & 7.775117 & 6.606804 & -2.711856 & 1.330947 & -3.160659 \\
+    龙头 $y$ & -3.721034 & -1.900927 & 3.591078 & -6.175471 & -7.546043 \\
+    第 1 节龙身 $x$ & 6.204904 & 5.365070 & -0.063408 & 3.860626 & -0.350674 \\
+    第 1 节龙身 $y$ & -6.111437 & -4.477300 & 4.670579 & -4.841182 & -8.078570 \\
+    第 51 节龙身 $x$ & -10.610499 & -3.619943 & 2.468468 & -1.665523 & 2.099228 \\
+    第 51 节龙身 $y$ & -2.818110 & 8.966957 & 7.774797 & 6.077671 & -4.031177 \\
+    第 101 节龙身 $x$ & -11.914134 & 10.134844 & 2.991571 & -7.599661 & -7.291411 \\
+    第 101 节龙身 $y$ & 4.820662 & 5.955841 & -10.112783 & -5.163525 & -2.052326 \\
+    第 151 节龙身 $x$ & -14.345650 & 12.980751 & -7.023562 & -4.584110 & 9.469118 \\
+    第 151 节龙身 $y$ & 2.008723 & 3.785605 & -10.322518 & 10.395133 & 3.522564 \\
+    第 201 节龙身 $x$ & -11.976889 & 10.545584 & -6.901519 & 0.367356 & 8.504836 \\
+    第 201 节龙身 $y$ & -10.540367 & 10.783664 & -12.365670 & 13.176445 & -8.625256 \\
+    龙尾(后) $x$ & -0.970731 & 0.153224 & -1.897155 & 5.828005 & -10.963520 \\
+    龙尾(后) $y$ & 16.528353 & -15.719423 & 14.716641 & -12.626230 & 6.795570 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \small
+  \setlength{\tabcolsep}{7pt}
+  \caption{问题 4 指定把手速度（单位：m/s）}
+  \label{tab:p4_spd}
+  \begin{tabular}{lrrrrr}
+    \toprule
+    \textbf{把手} & \textbf{$-100\,$s} & \textbf{$-50\,$s} & \textbf{$0\,$s} & \textbf{$50\,$s} & \textbf{$100\,$s} \\
+    \midrule
+    龙头 & 1.000000 & 1.000000 & 1.000000 & 1.000000 & 1.000000 \\
+    第 1 节龙身 & 0.993258 & 0.989849 & 0.994503 & 0.987891 & 0.995405 \\
+    第 51 节龙身 & 0.862742 & 0.821761 & 0.803166 & 0.734311 & 0.800513 \\
+    第 101 节龙身 & 0.775133 & 0.723593 & 0.687148 & 0.616093 & 0.715334 \\
+    第 151 节龙身 & 0.701198 & 0.656096 & 0.611632 & 0.538530 & 0.627481 \\
+    第 201 节龙身 & 0.640990 & 0.589372 & 0.552579 & 0.486771 & 0.553295 \\
+    龙尾(后) & 0.617280 & 0.566973 & 0.531791 & 0.465346 & 0.531649 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{问题 5：全队速度不超限时的龙头最大速度}
+
+沿问题 4 的非退化调头路径扫描全部把手在整条路径上的速度放大倍率 $A=\max_{i,t}v_i/v_0$，再由 $v_0^\star=2/A$ 反解龙头限速。时间步长加密后最大倍率稳定为 $A=1.588882$，峰值位于 $t=14.5\,\mathrm{s}$ 附近的第 $3$ 号把手处，故最终采用
+\begin{equation}
+\boxed{\,v_0^\star=\frac{2}{A}=1.258747\,\mathrm{m/s}\;(\approx1.26\,\mathrm{m/s})\,}.
+\end{equation}
+该速度使各把手在加密验证下均不超过 $2\,\mathrm{m/s}$，是本文提交的龙头最大安全速度。
+
+\paragraph{时间步长收敛性验证.} 若只取整数秒扫描，$\Delta t=1\,\mathrm{s}$ 时最大倍率 $A=1.385647$（发生于 $t=15.0\,\mathrm{s}$、把手 $i=1$），反解得
+\begin{equation}
+v_0^{\text{粗}}=\frac{2}{A}=1.443369\,\mathrm{m/s}.
+\end{equation}
+此时抽样点上的最大把手速度恰为 $2\,\mathrm{m/s}$，但相邻整秒之间仍可能出现局部速度峰值，故该值仅作稀疏采样参考。
+
+将扫描步长加密到 $\Delta t=0.5\,\mathrm{s}$（再加密到 $0.25\,\mathrm{s}$ 结果不变）后，极值漂移到 $t=14.5\,\mathrm{s}$、把手 $i=3$，对应安全速度降至 $1.258747\,\mathrm{m/s}$，比整数秒参考值低 $12.8\%$。速度放大场与峰值时刻沿链速度剖面见图~\ref{fig:p5_speed}。相较边界贴附分支，本文采用的非退化路径后段圆弧更紧（$R_2=1.503\,\mathrm{m}$），切向--连杆夹角更大，故速度放大倍率升高、安全速度相应下降。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{solve_p5_speed_amplification.pdf}
+  \caption{问题 5 链式速度放大分析。图中首先展示全把手速度放大倍率在时间与把手序号平面的峰值位置，峰值稳定出现在 $t=14.5\,\mathrm{s}$ 附近的第 $3$ 号把手；随后给出峰值时刻的沿链速度剖面，说明此时局部速度达到 $2\,\mathrm{m/s}$ 上限。整数秒扫描得到的 $1.443\,\mathrm{m/s}$ 仅为粗步长参考值，$\Delta t=0.5/0.25\,\mathrm{s}$ 收敛到的保守安全速度为 $1.259\,\mathrm{m/s}$。}
+  \label{fig:p5_speed}
+\end{figure}
+
+% =============== 灵敏度分析 ===============
+\section{灵敏度分析}
+\label{sec:sens}
+
+围绕碰撞容差、螺距精度、抽样密度、转弯半径下界与速度扫描步长共设 5 条扫描，用于验证最终采信口径的稳健性，并说明各子问题应采用何种数值精度。
+
+\subsection{问题 2 终止时刻对碰撞容差稳定}
+
+将碰撞判据由 $g(t)=0$ 放宽为 $g(t)\le\varepsilon$，$\varepsilon\in\{10^{-8},\dots,10^{-5}\}$。终止时刻几乎不变：即使 $\varepsilon=10^{-5}$，事件仅提前 $3.8\times10^{-4}\,\mathrm{s}$，首碰对恒为 $(0,8)$（表~\ref{tab:s1}）。说明连续碰撞定位不是由数值容差任意决定的。
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{问题 2 终止时刻对碰撞容差 $\varepsilon$ 的灵敏度（基准 $t^\star=412.473838\,\mathrm{s}$）}
+  \label{tab:s1}
+  \begin{tabular}{rrrl}
+    \toprule
+    \textbf{$\varepsilon$} & \textbf{$t_\varepsilon$ (s)} & \textbf{$\Delta t$ (s)} & \textbf{首碰对} \\
+    \midrule
+    $10^{-8}$ & 412.473837 & $-1\times10^{-6}$ & $(0,8)$ \\
+    $10^{-7}$ & 412.473834 & $-4\times10^{-6}$ & $(0,8)$ \\
+    $10^{-6}$ & 412.473800 & $-3.8\times10^{-5}$ & $(0,8)$ \\
+    $10^{-5}$ & 412.473458 & $-3.8\times10^{-4}$ & $(0,8)$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{问题 3 最小螺距的抽样加密验证}
+
+问题 3 的可行性判定依赖盘入过程中的碰撞抽样密度。固定稀疏抽样下界 $p=0.429883\,\mathrm{m}$ 时，$7$ 点抽样判为可行（$g_{\min}=2.6\times10^{-5}\,\mathrm{m}$），而 $11$、$15$ 点抽样均检出瞬时干涉（$g_{\min}=0$，最紧对变为 $(0,20)/(0,21)$）。在 $11$ 点抽样下继续扫描 $p\in[0.4297,0.4301]\,\mathrm{m}$，整个邻域均不可行（图~\ref{fig:sens_p3}）。这说明稀疏抽样给出的 $0.429883\,\mathrm{m}$ 只能作为下界，正文采用的 $0.450\,\mathrm{m}$ 是更密抽样支持的保守可行值。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{sensitivity_oat_p3_pitch_boundary.pdf}
+  \caption{问题 3 最小螺距邻域的加密（$11$ 点抽样）灵敏度扫描。横轴为相对稀疏抽样下界的螺距偏移 $p-p_{\text{粗}}$（mm），纵轴为该螺距下抽样到的最小裕度 $g_{\min}$（mm）；蓝色可行、红色不可行。加密抽样口径下 $p\in[0.4297,0.4301]\,\mathrm{m}$ 邻域整体不可行，支持正文将最终推荐值上调至 $0.450\,\mathrm{m}$。}
+  \label{fig:sens_p3}
+\end{figure}
+
+\subsection{问题 4 调头可执行性由全队无碰撞核验锚定}
+
+修正后的非退化 S 曲线几何半径唯一确定为 $R_2=1.502709\,\mathrm{m}$，由“与盘入、盘出螺线相切 $+$ 半径比 $2{:}1$”约束的非退化分支给出。其物理可执行性已由全队实体无碰撞核验直接判定（最小裕度 $0.290\,\mathrm{m}$，见 §\ref{subsec:p4}），不依赖外生转弯半径下界。
+
+表~\ref{tab:s4} 比较主调头曲线与辅助非线性规划对照在不同 $R_{\min}$ 下的行为：主曲线的几何半径恒为 $1.503\,\mathrm{m}$（与 $R_{\min}$ 无关），而辅助最短化曲线的目标路长随 $R_{\min}$ 近似线性增长（$1.5/2.0/2.5/3.0\,\mathrm{m}$ 对应 $1.598/2.131/2.664/3.196\,\mathrm{m}$），始终贴住下界。该现象表明辅助解会向中心塌缩，因此 $R_{\min}$ 仅用于约束辅助对照，不作为问题 4 主曲线可执行性的判据。主曲线可执行性由全队实体无碰撞核验直接锚定（见假设 A5 与 §\ref{sec:eval}）。
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{问题 4 转弯半径下界 $R_{\min}$ 的方法对照（路长单位：m；主调头曲线几何半径恒为 $1.503\,\mathrm{m}$）}
+  \label{tab:s4}
+  \begin{tabular}{rlrr}
+    \toprule
+    \textbf{$R_{\min}$ (m)} & \textbf{主曲线状态} & \textbf{主曲线路长} & \textbf{辅助对照路长} \\
+    \midrule
+    1.5 & 可行 & 13.621230 & 1.598097 \\
+    2.0 & $R_{\min}>R_2$（主曲线不受此下界约束） & --- & 2.130796 \\
+    2.5 & $R_{\min}>R_2$（主曲线不受此下界约束） & --- & 2.663494 \\
+    3.0 & $R_{\min}>R_2$（主曲线不受此下界约束） & --- & 3.196193 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{sensitivity_scenario_p4_rmin_method_compare.pdf}
+  \caption{问题 4 调头曲线长度在不同转弯半径下界 $R_{\min}$ 下的方法对照。红色为非退化 S 形主调头曲线（几何半径固定 $R_2=1.50\,\mathrm{m}$），蓝色为辅助非线性规划对照；$R_{\min}\ge2.0\,\mathrm{m}$ 时超过主曲线几何半径，说明该外生下界不宜作为主曲线硬约束，而辅助解始终贴住 $R_{\min}$ 并呈中心塌缩特征。问题 4 可执行性由全队实体无碰撞核验锚定，不由 $R_{\min}$ 主导。}
+  \label{fig:sens_p4}
+\end{figure}
+
+\subsection{问题 5 安全速度的时间步长收敛性}
+
+将速度倍率扫描由整数秒加密到 $0.5\,\mathrm{s}$、$0.25\,\mathrm{s}$（表~\ref{tab:s5}）。整数秒会低估局部峰值；当 $\Delta t=0.5\,\mathrm{s}$ 时 $v_0^\star$ 降至 $1.258747\,\mathrm{m/s}$（$-12.8\%$），再加密到 $0.25\,\mathrm{s}$ 结果不变，极值位置稳定在 $(14.5,3)$（图~\ref{fig:sens_p5}）。故安全速度采用加密收敛值 $1.259\,\mathrm{m/s}$，整数秒 $1.443\,\mathrm{m/s}$ 仅作为稀疏采样参考。
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{问题 5 龙头最大速度对扫描步长 $\Delta t$ 的灵敏度}
+  \label{tab:s5}
+  \begin{tabular}{rrrl}
+    \toprule
+    \textbf{$\Delta t$ (s)} & \textbf{最大倍率} & \textbf{$v_0^\star$ (m/s)} & \textbf{极值点 $(t,i)$} \\
+    \midrule
+    1.00 & 1.385647 & 1.443369 & $(15.00,1)$ \\
+    0.50 & 1.588882 & 1.258747 & $(14.50,3)$ \\
+    0.25 & 1.588882 & 1.258747 & $(14.50,3)$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{sensitivity_oat_p5_timestep.pdf}
+  \caption{问题 5 允许龙头最大速度 $v_0^\star$ 对速度扫描时间步长 $\Delta t$ 的灵敏度。横轴为 $\Delta t$（对数轴，由粗到细），纵轴为对应 $v_0^\star$；红色虚线为整数秒基准 $1.443\,\mathrm{m/s}$。步长由 $1\,\mathrm{s}$ 加密到 $0.5\,\mathrm{s}$ 后 $v_0^\star$ 降至约 $1.259\,\mathrm{m/s}$（下降 $13\%$）并在 $0.25\,\mathrm{s}$ 收敛，说明整数秒采样低估局部速度尖峰，保守安全速度应取加密收敛值。}
+  \label{fig:sens_p5}
+\end{figure}
+
+% =============== 模型评价 ===============
+\section{模型评价}
+\label{sec:eval}
+
+\subsection{优点}
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{单一模型贯通五个子问题}。以同一套“阿基米德螺线极坐标 + 链式刚体定弦长递推 + SAT 实体碰撞 + Brent 事件求根”框架端到端覆盖问题 1--5，子问题间数据流显式耦合并逐级实证，避免每问换方法导致的口径割裂。
+  \item \textbf{连续时间事件定位，规避整数秒漏检}。问题 2 以连续\textbf{非负}裕度 $g(t)$ 配 Brent 求根把首碰时刻精确到 $t^\star=412.473838\,\mathrm{s}$（微秒级），并被独立 ODE 方法交叉验证吻合到小数点后四位。
+  \item \textbf{板凳按实体有向矩形判碰而非质点}。以 AABB 预筛 + SAT 精算最近距离，问题 2 首碰对 $(0,8)$、问题 3 最紧对 $(0,19)$（均为零基板凳编号）均为非相邻实体对而非把手点距。
+  \item \textbf{定弦长递推数值精度逼近浮点极限}。全规模 224 把手下最大杆长误差仅 $3.330\times10^{-12}\,\mathrm{m}$，且模型显式区分板长与孔中心距，规避链长递推偏差。
+  \item \textbf{坐标口径统一、可独立复核防镜像}。固定 $\theta_{\text{start}}=32\pi$、$A$ 在 $+x$ 轴、顺时针盘入，用路径运动学独立复核切向与符号，保证输出与评卷参考系一一对应。
+\end{enumerate}
+
+\subsection{适用范围与改进方向}
+
+以下四点说明模型的适用范围和进一步改进方向，均有对应的数值验证支撑：
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{问题 3 最小螺距需以加密抽样口径报告}。稀疏抽样得到的下界仅说明搜索边界；加密到 $11$／$15$／$61$ 点后可检出瞬时干涉（图~\ref{fig:sens_p3}），最小可行螺距随密度单调上升，故最终采用 $p^\star\approx0.450\,\mathrm{m}$。后续若引入连续碰撞事件定位，可继续细化该边界。
+  \item \textbf{问题 5 最大龙头速度需以加密时间步长报告}。整数秒扫描给出的速度上界只作参考；在 $\Delta t=0.5\,\mathrm{s}$ 加密后结果降至 $1.258747\,\mathrm{m/s}$，并在 $0.25\,\mathrm{s}$ 收敛（图~\ref{fig:sens_p5}）。因此安全速度采用加密收敛值。
+  \item \textbf{问题 4 的转弯半径下界只用于辅助最短化对照}。主曲线几何半径由题给相切与半径比约束唯一确定为 $R_2=1.502709\,\mathrm{m}$，其可执行性由全队无碰撞核验判定；辅助非线性规划给出的更短曲线切点塌缩至中心附近，整链无法物理通过（图~\ref{fig:compare_p4}），故仅作为未采信对照。
+  \item \textbf{问题 4 全队无碰撞裕度有限（$0.290\,\mathrm{m}$），对板凳实际厚度与制造公差敏感}。修正调头曲线分支选择与欧氏定弦长布点后，$-100$--$100\,\mathrm{s}$ 全队 SAT 实体扫描已确认整链无碰撞（$201$ 帧 $0$ 次重叠），但最紧时刻（$t=30\,\mathrm{s}$、板凳对 $(0,16)$）裕度仅 $0.290\,\mathrm{m}$。该裕度在理想刚性矩形模型下为正且稳健，但若计入板凳真实厚度、把手销轴间隙或加工公差，建议保留额外安全余量（核验细节见 §\ref{subsec:p4} 无碰撞核验段）。
+\end{enumerate}
+
+此外，运动学奇异处分母 $|\boldsymbol{t}_i\cdot\boldsymbol{u}_{i-1}|\to0$ 时速度数值误差会被放大；问题 4 拼接点为 $G^1$ 连续但曲率不连续，加速度在切点跳变，须以加密采样核验速度（而非加速度）连续。主调头曲线与辅助最短化曲线的几何对照见图~\ref{fig:compare_p4}。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.62\textwidth]{compare_p4_m1_m2_geometry.pdf}
+  \caption{问题 4 主调头曲线与辅助最短化曲线的几何对照。红色为非退化 S 形主曲线（长 $13.62\,\mathrm{m}$，端点 $P_{\text{in}},P_{\text{out}}$ 抵达 $r=4.5\,\mathrm{m}$ 调头圆边界，中部相切点 $P_c$ 内收至 $r=1.5\,\mathrm{m}$），蓝色为辅助非线性规划解（长 $2.13\,\mathrm{m}$，但三个切点塌缩至中心附近，最大离心半径仅 $1.02\,\mathrm{m}$）。辅助解数学上更短却贴近圆心、整链无法物理通过，故仅作对照而不进入最终方案。}
+  \label{fig:compare_p4}
+\end{figure}
+
+\subsection{推广潜力}
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{多节牵引 / 编队路径运动学}：同一套“参考路径 + 链式定弦长递推 + 速度投影传递”可迁移到多挂车牵引、AGV 编队、缆车索道节点跟随等刚性连杆链沿给定曲线行进的问题。
+  \item \textbf{运动刚体首次接触时刻求解}：连续\textbf{非负} SAT 裕度 + Brent 求根的事件定位框架，可推广到机器人避障、装配干涉检查、交通会车间距等任意“求两组运动刚体首次碰撞秒数”的判定。
+  \item \textbf{超冗余 / 蛇形机器人无碰撞构型}：把板凳链替换为蛇形机器人连杆，实体矩形碰撞 + 螺线 / 弧线轨迹可直接服务于狭窄空间路径可行性预审。
+  \item \textbf{链式传送系统限速设计}：问题 5 的速度放大倍率扫描思想可用于传送链、自动扶梯、缆道等局部几何诱导速度峰值的安全限速反解。
+\end{itemize}
+
+% =============== 结论 ===============
+\section{结论}
+
+本文以阿基米德螺线 / 曲线运动学为主线，端到端求解了板凳龙的盘入、碰撞、最小螺距、调头与限速五个子问题，主要结论为：
+
+\begin{enumerate}[leftmargin=2em]
+  \item 问题 1：$p=0.55\,\mathrm{m}$、$v_0=1\,\mathrm{m/s}$ 下，全队 $0$--$300\,\mathrm{s}$ 逐秒位置与速度已完整给出，定弦长约束最大残差 $3.330\times10^{-12}\,\mathrm{m}$。
+  \item 问题 2：无碰撞盘入终止时刻 $t^\star=412.473838\,\mathrm{s}$（首碰板凳对 $(0,8)$，零基编号，即题目第 $1$、$9$ 节），由连续时间事件定位确定并经独立方法交叉验证。
+  \item 问题 3：进入调头空间的\textbf{推荐保守最小螺距 $p^\star\approx0.450\,\mathrm{m}$}（加密抽样认证可行，$g_{\min}=4.72\times10^{-4}\,\mathrm{m}$）。最小裕度由后随板凳实体间距决定，见抽样加密验证。
+  \item 问题 4：取“相切 $+$ 半径比 $2{:}1$”约束的非退化分支，得 S 形调头曲线长 $13.621230\,\mathrm{m}$（$R_1=3.005\,\mathrm{m}$、$R_2=1.503\,\mathrm{m}$，$R_1{:}R_2=2{:}1$，相切点 $P_c$ 内收至 $r=1.5\,\mathrm{m}$）。全队 $-100$--$100\,\mathrm{s}$ 逐秒 SAT 实体扫描确认整链\textbf{无碰撞}（$0$ 次重叠，最小裕度 $0.290\,\mathrm{m}$），故该曲线为物理可执行的调头方案；辅助最短化曲线虽更短但整链无法通过，故不采信。
+  \item 问题 5：保证各把手速度不超 $2\,\mathrm{m/s}$ 的\textbf{推荐龙头最大安全速度为加密收敛值 $v_0^\star=1.258747\,\mathrm{m/s}$}（$\Delta t=0.5$/$0.25\,\mathrm{s}$ 一致收敛）。该速度由调头段局部速度放大峰值决定。
+\end{enumerate}
+
+建议在后续工作中以连续碰撞事件定位进一步细化问题 3 的最小螺距边界，并在问题 4 调头曲线 $0.290\,\mathrm{m}$ 的无碰撞裕度上计入板凳真实厚度与把手销轴间隙，以提高工程安全余量。
+
+% =============== 参考文献 ===============
+% 仅列入正文实际引用的文献，避免强制列出未引用条目。
+\bibliographystyle{plain}
+\bibliography{references}
+
+% =============== 附录 ===============
+\appendix
+
+\section{核心模型代码}
+
+下列代码节选给出螺线运动学与碰撞检测核心实现，覆盖 §\ref{sec:model} 中约束 C1--C5 的主要计算环节。相关完整程序随论文支撑材料提交，主流程为确定性几何求解。
+
+\begin{lstlisting}[language=Python,caption={螺线运动学与碰撞检测核心模型节选}]
+class SpiralKinematicsModel:
+    def spiral_point(self, theta):
+        r = self.a + self.b * theta
+        return np.array([r * np.cos(theta), -r * np.sin(theta)])
+
+    def spiral_arc_length(self, theta):
+        return 0.5 * self.b * (
+            theta * np.sqrt(theta**2 + 1.0)
+            + np.log(theta + np.sqrt(theta**2 + 1.0))
+        )
+
+    def next_handle_theta(self, theta_prev, L, step=0.01, max_span=6*np.pi):
+        p_prev = self.spiral_point(theta_prev)
+        g = lambda th: np.linalg.norm(self.spiral_point(th) - p_prev) - L
+        lo = theta_prev
+        th = theta_prev + step
+        while th <= theta_prev + max_span:
+            if g(th) >= 0.0:
+                return brentq(g, lo, th, xtol=1e-12)
+            lo = th
+            th += step
+        raise ValueError("Root not found for handle constraint.")
+\end{lstlisting}
+
+\section{补充推导}
+
+\paragraph{等距螺线弧长积分.} 由 $r(\theta)=b\theta$，弧长微元 $\mathrm{d}s=\sqrt{r^2+(\mathrm{d}r/\mathrm{d}\theta)^2}\,\mathrm{d}\theta=b\sqrt{\theta^2+1}\,\mathrm{d}\theta$。积分得
+\[
+s(\theta)=b\!\int_0^\theta\!\sqrt{\tau^2+1}\,\mathrm{d}\tau=\frac{b}{2}\Big[\theta\sqrt{\theta^2+1}+\ln\!\big(\theta+\sqrt{\theta^2+1}\big)\Big],
+\]
+即式~\eqref{eq:arclen}。该弧长无初等反函数，故龙头极角 $\theta_0(t)$ 由式~\eqref{eq:c2} 经 Brent 求根隐式求得，避免用 $r\theta$ 近似导致的系统性偏小。
+
+\paragraph{速度投影传递的几何来源.} 连杆 $\boldsymbol{u}_{i-1}$ 不可伸缩，要求两端点沿杆向速度分量相等：$\boldsymbol{v}_{i-1}\cdot\boldsymbol{u}_{i-1}=\boldsymbol{v}_i\cdot\boldsymbol{u}_{i-1}$。各把手速度方向沿其轨迹切向 $\boldsymbol{t}_k$，即 $\boldsymbol{v}_k=v_k\boldsymbol{t}_k$，代入即得式~\eqref{eq:c4}。当 $\boldsymbol{t}_i\perp\boldsymbol{u}_{i-1}$ 时分母为零，对应运动学奇异，是问题 5 速度放大的物理根源。
+
+\end{document}
