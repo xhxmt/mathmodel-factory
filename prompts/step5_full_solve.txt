@@ -59,7 +59,7 @@ __PROJECT_PATH__/results/
   "auxiliary_method": "m{M}" | null,
   "decision": { ... },              // 决策变量的最优值（key 用 symbol_table 里的符号）
   "objective": <float>,             // 目标函数值（若为多目标，列出每个分量）
-  "status": "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT" | "UNBOUNDED",
+  "status": "CONVERGED" | "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT" | "UNBOUNDED",
   "solver": "<scipy.milp / gurobi / cvxpy / ...>",
   "solver_version": "<version string>",
   "runtime_sec": <float>,
@@ -79,6 +79,8 @@ __PROJECT_PATH__/results/
   "completed_at": "<ISO8601>"
 }
 ```
+
+禁止把 `status` 留成 `RUNNING` / `PARTIAL` / `PENDING` / `INCOMPLETE` 后继续后续步骤；这类状态表示本子问题还不是 canonical result。若多个 solver 共同产生最终答案，额外生成 `results/canonical_results.json` 汇总每个子问题的最终采用值、来源文件、solver 状态和表格/Excel 派生字段。后续论文表格、摘要关键数字和 `result*.xlsx` 必须从 `values.json` 或 `canonical_results.json` 派生，不允许手工维护另一套数字。
 
 `plots.pdf` 至少包含：决策变量的可视化（条形 / 热力图 / 网络图，取决于变量类型）、目标函数的关键分量（如果可分解）、求解过程指标（收敛曲线 / MIP gap 演化 / SPRT 似然比轨迹 ...，按方法族而定）。**注意**：这是 quick-look 图，**不是论文最终图**。配色 / 字体可以暂时不严格遵守 `modeling_guide.md` §Figure Style，但必须每张子图有标题 + 轴标签。
 

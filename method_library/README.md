@@ -65,6 +65,16 @@ method_library/
 7. **在建模比赛中的典型应用**：CUMCM 历年题目里以这个方法作为主/辅工具的例子
 8. **参考文献**：教材、综述、官方文档链接
 
+## 可审计模板要求（给 Step 4/5 agent）
+
+每个方法文档里的代码模板不只是演示算法，还必须能接入 Modeling Factory 的质量门禁。新建或更新方法时，模板至少说明并尽量示范以下输出：
+
+- `results/pN/values.json` 或 `results/canonical_results.json`：包含 `status`、主目标值/关键结果、核心决策变量、随机种子、求解器状态和运行时间。禁止只把最终数值写进论文或临时日志。
+- `results/pN/solver.log` 或 `logs/<method>.log`：保留求解器原始状态、gap/收敛信息、警告和异常。
+- `assumption_ledger.md` 需要登记的核心假设、适用边界和违反后果。
+- 至少一个 sanity check 或小规模反例：说明该方法在什么输入下应通过、什么输入下应拒绝或降级。
+- 若方法生成 `result*.xlsx` 或论文表格，必须从同一 canonical 结果源派生，不能手工重填另一套数字。
+
 ## 使用规则（给 agent 看）
 
 - step0 的 `candidate_methods.md` 必须用本目录的相对路径引用方法（如 `method_library/optimization/milp.md`），不能凭空写未登记的方法名。

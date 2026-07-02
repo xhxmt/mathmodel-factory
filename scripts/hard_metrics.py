@@ -112,12 +112,19 @@ def _pdf_pages(pdf_path):
 
 def collect_artifact_metrics(project_dir, base_name):
     """检查编译产物 PDF 与提交包 zip 是否存在/有效；附 PDF 页数（仅 reference）。"""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     pdf_candidates = [
         os.path.join(project_dir, f"{base_name}_paper.pdf"),
         os.path.join(project_dir, "papers", f"{base_name}_paper.pdf"),
+        os.path.join(repo_root, "papers", f"{base_name}_paper.pdf"),
     ]
     pdf_path = next((p for p in pdf_candidates if os.path.exists(p) and os.path.getsize(p) > 0), None)
-    zip_path = os.path.join(project_dir, f"{base_name}_submission.zip")
+    zip_candidates = [
+        os.path.join(project_dir, f"{base_name}_submission.zip"),
+        os.path.join(project_dir, "papers", f"{base_name}_submission.zip"),
+        os.path.join(repo_root, "papers", f"{base_name}_submission.zip"),
+    ]
+    zip_path = next((p for p in zip_candidates if os.path.exists(p)), zip_candidates[0])
     zip_ok = False
     if os.path.exists(zip_path):
         try:

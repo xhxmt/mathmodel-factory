@@ -88,6 +88,60 @@ _is_newer_by() {
     (( newer_ts > 0 && older_ts > 0 && newer_ts - older_ts >= min_delta ))
 }
 
+gate2_verdict_for_path() {
+    local proj_dir="$1"
+    awk -F': *' '/^VERDICT:/{print $2; exit}' "$proj_dir/judge_evaluation.md" 2>/dev/null \
+        | tr -d '\r'
+}
+
+gate2_passed_for_path() {
+    [[ "$(gate2_verdict_for_path "$1")" == "PASS" ]]
+}
+
+step8_5_verdict_for_path() {
+    local proj_dir="$1"
+    if [[ -f "$FACTORY/scripts/step8_5_gate.py" ]]; then
+        python3 "$FACTORY/scripts/step8_5_gate.py" "$proj_dir" --verdict 2>/dev/null || true
+    else
+        awk -F': *' '/^VERDICT:/{print $2; exit}' "$proj_dir/entry_gate.md" 2>/dev/null \
+            | tr -d '\r'
+    fi
+}
+
+step8_5_passed_for_path() {
+    [[ "$(step8_5_verdict_for_path "$1")" == "PASS" ]]
+}
+
+delivery_quality_gate() {
+    local proj_dir="$1"
+    [[ -x "$FACTORY/scripts/evaluate_modeling_project.py" ]] || return 1
+    "$FACTORY/scripts/evaluate_modeling_project.py" "$proj_dir" --json
+}
+
+number_gate_passed() {
+    local proj_dir="$1" base_name="$2"
+    [[ -f "$proj_dir/numbers_manifest.json" ]] || return 1
+    python3 "$FACTORY/scripts/verify_numbers.py" --verify "$proj_dir" "$base_name" \
+        > "$proj_dir/number_verification.latest.stdout" \
+        2> "$proj_dir/number_verification.latest.stderr"
+}
+
+symbol_gate_passed() {
+    local proj_dir="$1" base_name="$2"
+    local out="$proj_dir/symbol_verification.latest.txt"
+    if python3 "$FACTORY/scripts/verify_symbols.py" "$proj_dir" "$base_name" > "$out" 2>&1; then
+        return 0
+    fi
+
+    local used undefined coverage
+    used=$(awk -F= '/SYMBOLS_USED/{gsub(/[^0-9]/, "", $2); print $2; exit}' "$out" 2>/dev/null || true)
+    undefined=$(awk -F= '/UNDEFINED_SYMBOLS/{gsub(/[^0-9]/, "", $2); print $2; exit}' "$out" 2>/dev/null || true)
+    [[ -n "$used" && -n "$undefined" && "$used" -gt 0 ]] || return 1
+    coverage=$(awk -v used="$used" -v undefined="$undefined" 'BEGIN { printf "%.3f", 1 - undefined / used }')
+    awk -v c="$coverage" 'BEGIN { exit !(c >= 0.5) }' || return 1
+    grep -qiE '未登记符号|undefined_symbols|UNDEFINED_SYMBOLS|白名单|补登记|symbol' "$proj_dir/code_review.md" 2>/dev/null
+}
+
 _kill_process_tree() {
     local root="${1:-}" sig="${2:-TERM}" kid
     [[ -n "$root" ]] || return 0
@@ -407,6 +461,7 @@ _infer_step_modeling() {
             && grep -q '\\begin{document}' "$paper" 2>/dev/null \
             && grep -q '\\end{document}' "$paper" 2>/dev/null \
             && grep -q 'ABSTRACT_PLACEHOLDER' "$paper" 2>/dev/null \
+            && step8_5_passed_for_path "$P" \
             && _review_step_is_fresh 9 "$paper"; then
             echo 9
             return
@@ -453,15 +508,17 @@ _infer_step_modeling() {
             return
         fi
 
-        # 4: model.md + symbol_table.md + assumption_ledger.md (Step 4
+        # 4: model.md + symbol_table.md + assumption_ledger.md +
+        # modeling_scope_gate.md (Step 4
         # contract).  Checked before step 3 because chosen_method.md /
         # method_decision.md remain on disk past step 4 — descending by
         # step number ensures the latest completed step is reported.
         if [[ -f "$P/model.md" && -f "$P/symbol_table.md" && \
-              -f "$P/assumption_ledger.md" ]] \
+              -f "$P/assumption_ledger.md" && -f "$P/modeling_scope_gate.md" ]] \
             && (( $(_lines "$P/model.md") >= 100 )) \
             && (( $(_lines "$P/symbol_table.md") >= 10 )) \
-            && (( $(_lines "$P/assumption_ledger.md") >= 10 )); then
+            && (( $(_lines "$P/assumption_ledger.md") >= 10 )) \
+            && grep -q '^VERDICT: PASS' "$P/modeling_scope_gate.md" 2>/dev/null; then
             echo 4
             return
         fi
@@ -523,8 +580,14 @@ infer_step() {
     # Killed projects stop before Step 1 completes.
     [[ -f "$P/$KILL_MARKER" ]] && echo 0 && return
 
-    # 16: final PDF and submission bundle delivered to papers/
-    [[ -f "$FACTORY/papers/${base}_paper.pdf" && -f "$FACTORY/papers/${base}_submission.zip" ]] && echo 16 && return
+    # 16: final PDF and submission bundle delivered to papers/, with the final
+    # quality gates still passing. A stale PDF/zip pair is not enough.
+    if [[ -f "$FACTORY/papers/${base}_paper.pdf" && -f "$FACTORY/papers/${base}_submission.zip" ]] \
+        && gate2_passed_for_path "$P" \
+        && step8_5_passed_for_path "$P"; then
+        echo 16
+        return
+    fi
 
     # Modeling-mode step inference — short-circuits when the project has a
     # problem/ directory (set by Step 0 problem parsing).  Modeling artifacts
@@ -1007,10 +1070,12 @@ verify_step_output() {
             grep -q "m[0-9]" "$P/chosen_method.md" || return 1
             ;;
         4)
-            # Step 4: model.md, symbol_table.md, assumption_ledger.md
+            # Step 4: model.md, symbol_table.md, assumption_ledger.md, modeling_scope_gate.md
             [[ -f "$P/model.md" ]] || return 1
             [[ -f "$P/symbol_table.md" ]] || return 1
             [[ -f "$P/assumption_ledger.md" ]] || return 1
+            [[ -f "$P/modeling_scope_gate.md" ]] || return 1
+            grep -q '^VERDICT: PASS' "$P/modeling_scope_gate.md" || return 1
             # Symbol table should have at least some entries
             (( $(_lines "$P/symbol_table.md") >= 10 )) || return 1
             ;;
@@ -1028,9 +1093,10 @@ verify_step_output() {
             ;;
         10)
             # Step 10: Gate 1 numerical check
-            [[ -f "$P/gate1_numerical_check.md" ]] || return 1
-            # Should have some verification results
-            (( $(_lines "$P/gate1_numerical_check.md") >= 20 )) || return 1
+            [[ -f "$P/code_review.md" ]] || return 1
+            (( $(_lines "$P/code_review.md") >= 20 )) || return 1
+            number_gate_passed "$P" "$BASE" || return 1
+            symbol_gate_passed "$P" "$BASE" || return 1
             ;;
         13)
             # Step 13: Gate 2 judge evaluation must have VERDICT
@@ -1053,6 +1119,9 @@ verify_step_output() {
             local pdf_size
             pdf_size=$(stat -c %s "$P/${BASE}_paper.pdf" 2>/dev/null || echo 0)
             (( pdf_size > 51200 )) || return 1
+            gate2_passed_for_path "$P" || return 1
+            step8_5_passed_for_path "$P" || return 1
+            delivery_quality_gate "$P" > "$P/delivery_quality_gate.json" 2> "$P/delivery_quality_gate.stderr.log" || return 1
             ;;
         *)
             # For other steps, rely on file-state inference
@@ -1190,6 +1259,19 @@ gate2_requests_reopen() {
     local verdict
     verdict=$(gate2_verdict)
     [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]
+}
+
+block_gate2_after_reopen() {
+    local verdict="$1"
+    log "   Step 13 verdict $verdict after prior reopen — blocking delivery"
+    echo "BLOCKED_STEP13:$verdict $(date +%s)" > "$PROJECT/.heartbeat"
+    touch "$PROJECT/.gate2_blocked"
+    diag_event "$PROJECT" 13 gate_blocked GATE2_REOPEN_UNRESOLVED \
+        "Gate 2 still requests reopen after the allowed revision cycle" "judge_evaluation.md"
+    diag_status "$PROJECT" blocked 13 gate2_unresolved GATE2_REOPEN_UNRESOLVED \
+        "Gate 2 未通过，项目不能进入摘要和交付" \
+        "open_judge_evaluation,open_revision_summary,refresh_status" \
+        "file:judge_evaluation.md,file:revision_summary.md"
 }
 
 # ── Determine starting point ─────────────────────────────────────────
@@ -3221,6 +3303,13 @@ run_step_16() {
     else
         log "   WARNING: cleanup_project_artifacts.py not found or not executable"
     fi
+    log "   Running final delivery quality gate"
+    if delivery_quality_gate "$PROJECT" > "$PROJECT/delivery_quality_gate.json" 2> "$PROJECT/delivery_quality_gate.stderr.log"; then
+        log "   Final delivery quality gate PASS"
+    else
+        log "   Final delivery quality gate FAIL — project remains incomplete"
+        return 1
+    fi
     # Update checkpoint
     _set_checkpoint_step 16
 }
@@ -3344,7 +3433,8 @@ while (( STEP < 16 )); do
                     rm -f "$(gate2_reopen_marker)"
                     log "   Gate 2 reopen cycle completed"
                     if [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]; then
-                        log "   Step 13 verdict $verdict after prior reopen — proceeding to Step 14 per policy"
+                        block_gate2_after_reopen "$verdict"
+                        exit 1
                     fi
                 elif [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]; then
                     if [[ ! -f "$(gate2_reopened_once_file)" ]]; then
@@ -3356,12 +3446,17 @@ while (( STEP < 16 )); do
                         _set_checkpoint_step "$STEP"
                         break
                     else
-                        log "   Step 13 verdict $verdict after prior reopen — proceeding to Step 14 per policy"
+                        block_gate2_after_reopen "$verdict"
+                        exit 1
                     fi
                 elif [[ -z "$verdict" ]]; then
-                    log "   Step 13 judge_evaluation.md has no VERDICT line — treating as pass"
+                    log "   Step 13 judge_evaluation.md has no VERDICT line — blocking delivery"
+                    echo "BLOCKED_STEP13:MISSING_VERDICT $(date +%s)" > "$PROJECT/.heartbeat"
+                    exit 1
                 elif [[ "$verdict" != "PASS" ]]; then
-                    log "   Step 13 VERDICT '$verdict' not recognized — treating as pass"
+                    log "   Step 13 VERDICT '$verdict' not recognized — blocking delivery"
+                    echo "BLOCKED_STEP13:UNKNOWN_VERDICT $(date +%s)" > "$PROJECT/.heartbeat"
+                    exit 1
                 fi
             fi
 

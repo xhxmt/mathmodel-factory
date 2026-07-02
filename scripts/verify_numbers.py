@@ -192,40 +192,62 @@ def scan_results_directory(project_dir: Path) -> Dict[str, Any]:
     manifest = {}
     results_dir = project_dir / "results"
 
-    if not results_dir.exists():
-        return manifest
+    def add_numeric(source: str, key: str, value: int | float) -> None:
+        if isinstance(value, bool):
+            return
+        manifest.setdefault(source, {})[key] = {
+            "value": value,
+            "checksum": compute_checksum(value),
+            "type": "float" if isinstance(value, float) else "int",
+        }
 
-    for subdir in results_dir.iterdir():
-        if not subdir.is_dir():
-            continue
+    def walk_json(value: Any, source: str, prefix: str = "") -> None:
+        if isinstance(value, bool):
+            return
+        if isinstance(value, (int, float)):
+            if prefix:
+                add_numeric(source, prefix, value)
+            return
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                child = f"{prefix}.{child_key}" if prefix else str(child_key)
+                walk_json(child_value, source, child)
+        elif isinstance(value, list):
+            for idx, child_value in enumerate(value):
+                child = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+                walk_json(child_value, source, child)
 
-        # Look for values.json
-        values_file = subdir / "values.json"
-        if values_file.exists():
+    if results_dir.exists():
+        for json_file in sorted(results_dir.rglob("*.json")):
             try:
-                with open(values_file) as f:
+                with open(json_file, encoding="utf-8") as f:
                     data = json.load(f)
-
-                relative_path = str(values_file.relative_to(project_dir))
-                manifest[relative_path] = {}
-
-                # Extract all numeric values
-                for key, value in data.items():
-                    if isinstance(value, (int, float)):
-                        manifest[relative_path][key] = {
-                            "value": value,
-                            "checksum": compute_checksum(value),
-                            "type": "float" if isinstance(value, float) else "int"
-                        }
-                    elif isinstance(value, list) and all(isinstance(x, (int, float)) for x in value):
-                        # Handle lists of numbers
-                        manifest[relative_path][key] = {
-                            "value": value,
-                            "checksum": compute_checksum(tuple(value)),
-                            "type": "array"
-                        }
+                relative_path = str(json_file.relative_to(project_dir))
+                walk_json(data, relative_path)
             except Exception as e:
-                print(f"Warning: Failed to parse {values_file}: {e}", file=sys.stderr)
+                print(f"Warning: Failed to parse {json_file}: {e}", file=sys.stderr)
+
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        load_workbook = None
+
+    if load_workbook is not None:
+        for xlsx_file in sorted(project_dir.glob("result*.xlsx")):
+            try:
+                wb = load_workbook(xlsx_file, data_only=True, read_only=True)
+                relative_path = str(xlsx_file.relative_to(project_dir))
+                for ws in wb.worksheets:
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            value = cell.value
+                            if isinstance(value, bool):
+                                continue
+                            if isinstance(value, (int, float)):
+                                add_numeric(relative_path, f"{ws.title}!{cell.coordinate}", value)
+                wb.close()
+            except Exception as e:
+                print(f"Warning: Failed to parse {xlsx_file}: {e}", file=sys.stderr)
 
     return manifest
 

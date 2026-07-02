@@ -21,6 +21,7 @@ from typing import Any
 
 METHOD_PATH_RE = re.compile(r"method_library/[A-Za-z0-9_./-]+\.md")
 VERDICT_RE = re.compile(r"^VERDICT:\s*(\S+)", re.M)
+INCOMPLETE_RESULT_STATUSES = {"RUNNING", "PARTIAL", "PENDING", "INCOMPLETE", "FAILED", "ERROR"}
 
 
 @dataclass
@@ -78,6 +79,46 @@ def infer_step(root: Path, project: Path) -> tuple[int | None, str]:
     return None, text or f"runner exited {proc.returncode}"
 
 
+def run_python_check(root: Path, args: list[str], timeout: int = 60) -> tuple[bool, str]:
+    try:
+        proc = subprocess.run(
+            [sys.executable, *args],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception as exc:  # pragma: no cover - defensive for local ops
+        return False, str(exc)
+    detail = "\n".join(part.strip() for part in (proc.stdout, proc.stderr) if part.strip())
+    return proc.returncode == 0, detail[:1000] if detail else f"exit {proc.returncode}"
+
+
+def symbol_check_ok(root: Path, project: Path, base: str) -> tuple[bool, str]:
+    ok, detail = run_python_check(root, ["scripts/verify_symbols.py", str(project), base])
+    if ok:
+        return True, "verify_symbols PASS"
+
+    used_match = re.search(r"SYMBOLS_USED\s*=\s*(\d+)", detail)
+    undefined_match = re.search(r"UNDEFINED_SYMBOLS\s*=\s*(\d+)", detail)
+    if not used_match or not undefined_match:
+        return False, detail or "verify_symbols failed"
+    used = int(used_match.group(1))
+    undefined = int(undefined_match.group(1))
+    coverage = 1 - undefined / used if used else 0
+    code_review = project / "code_review.md"
+    documented = code_review.is_file() and re.search(
+        r"未登记符号|undefined_symbols|UNDEFINED_SYMBOLS|白名单|补登记|symbol",
+        read_text(code_review),
+        re.I,
+    )
+    if coverage >= 0.5 and documented:
+        return True, f"verify_symbols WARNING documented; coverage={coverage:.3f}, undefined={undefined}"
+    return False, f"verify_symbols FAIL; coverage={coverage:.3f}, undefined={undefined}"
+
+
 def line_count(path: Path) -> int:
     if not path.is_file():
         return 0
@@ -130,6 +171,74 @@ def zip_ok(path: Path) -> tuple[bool, str]:
     if bad:
         return False, f"corrupt member: {bad}"
     return True, f"{len(names)} members"
+
+
+def read_json(path: Path) -> Any:
+    with path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def numeric_leaf_paths(data: Any, prefix: str = "") -> list[str]:
+    paths: list[str] = []
+    if isinstance(data, bool):
+        return paths
+    if isinstance(data, (int, float)):
+        if prefix and prefix.rsplit(".", 1)[-1] != "problem":
+            paths.append(prefix)
+        return paths
+    if isinstance(data, dict):
+        for key, value in data.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            paths.extend(numeric_leaf_paths(value, child))
+    elif isinstance(data, list):
+        for idx, value in enumerate(data):
+            child = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+            paths.extend(numeric_leaf_paths(value, child))
+    return paths
+
+
+def canonical_results_state(project: Path) -> tuple[bool, str]:
+    canonical = project / "results" / "canonical_results.json"
+    if canonical.is_file():
+        try:
+            data = read_json(canonical)
+        except Exception as exc:
+            return False, f"canonical_results.json parse error: {exc}"
+        numeric_paths = numeric_leaf_paths(data)
+        if not numeric_paths:
+            return False, "canonical_results.json has no numeric result values"
+        text = json.dumps(data, ensure_ascii=False).upper()
+        for status in INCOMPLETE_RESULT_STATUSES:
+            if f'"{status}"' in text:
+                return False, f"canonical_results.json contains incomplete status {status}"
+        return True, f"canonical_results.json with {len(numeric_paths)} numeric leaves"
+
+    result_root = project / "results"
+    values_files = sorted(result_root.glob("p*/values.json")) if result_root.is_dir() else []
+    if not values_files:
+        return False, "missing results/canonical_results.json and results/p*/values.json"
+
+    incomplete: list[str] = []
+    complete_count = 0
+    for path in values_files:
+        rel = path.relative_to(project)
+        try:
+            data = read_json(path)
+        except Exception as exc:
+            incomplete.append(f"{rel}: parse error {exc}")
+            continue
+        status = str(data.get("status", "")).upper() if isinstance(data, dict) else ""
+        numeric_paths = numeric_leaf_paths(data)
+        if status in INCOMPLETE_RESULT_STATUSES:
+            incomplete.append(f"{rel}: status={status}")
+        elif not numeric_paths:
+            incomplete.append(f"{rel}: no key numeric results")
+        else:
+            complete_count += 1
+
+    if incomplete:
+        return False, "; ".join(incomplete[:5])
+    return True, f"{complete_count} per-problem values.json files complete"
 
 
 def evaluate(project: Path, root: Path) -> Evaluation:
@@ -185,6 +294,15 @@ def evaluate(project: Path, root: Path) -> Evaluation:
         bool(gate1_text.strip()) and not re.search(r"\b(BLOCKING|UNRESOLVED)\b", gate1_text, re.I),
         "code_review exists and has no obvious unresolved marker" if gate1_text.strip() else "code_review missing/empty",
     )
+    manifest = project / "numbers_manifest.json"
+    if manifest.is_file():
+        numbers_ok, numbers_detail = run_python_check(root, ["scripts/verify_numbers.py", "--verify", str(project), base])
+        ev.add("gate1_manifest_verify", numbers_ok, "verify_numbers --verify PASS" if numbers_ok else numbers_detail)
+    else:
+        ev.add("gate1_manifest_verify", False, "numbers_manifest.json missing")
+
+    symbols_ok, symbols_detail = symbol_check_ok(root, project, base)
+    ev.add("gate1_symbol_audit", symbols_ok, symbols_detail)
 
     entry_gate = project / "entry_gate.md"
     gate_text = read_text(entry_gate) if entry_gate.is_file() else ""
@@ -209,6 +327,8 @@ def evaluate(project: Path, root: Path) -> Evaluation:
     log_files = nonempty_files(project / "logs", ("*.log", "*.json", "*.txt"))
     ev.add("results_present", bool(result_files), f"{len(result_files)} nonempty result files")
     ev.add("logs_present", bool(log_files), f"{len(log_files)} nonempty log files")
+    canonical_ok, canonical_detail = canonical_results_state(project)
+    ev.add("canonical_results", canonical_ok, canonical_detail)
 
     paper_tex = project / f"{base}_paper.tex"
     paper_pdf = project / f"{base}_paper.pdf"
