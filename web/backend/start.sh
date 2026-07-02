@@ -7,7 +7,10 @@ export PYTHONPATH="$SCRIPT_DIR/../..:${PYTHONPATH:-}"
 
 # 🔒 Load secrets from GCP Secret Manager
 if [[ -f "$SCRIPT_DIR/../../scripts/load_secrets.sh" ]]; then
-    source "$SCRIPT_DIR/../../scripts/load_secrets.sh" 2>/dev/null || echo "Warning: Failed to load secrets from Secret Manager" >&2
+    source "$SCRIPT_DIR/../../scripts/load_secrets.sh"
+else
+    echo "ERROR: missing $SCRIPT_DIR/../../scripts/load_secrets.sh" >&2
+    exit 1
 fi
 
 # Check if virtual environment exists

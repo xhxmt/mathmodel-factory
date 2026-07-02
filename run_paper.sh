@@ -29,17 +29,25 @@ REGISTRY="$FACTORY/run_state/process_registry"
 KILL_MARKER=".killed"
 REVIEW_STATE_FILE=".review_state.json"
 
-# Source $FACTORY/.env if present so subprocesses (the google-antigravity
-# SDK in scripts/agy_run.py, the MinerU client, etc.) see secrets like
-# GEMINI_API_KEY / MINERU_TOKEN.  The file is gitignored (see .gitignore
-# .env exclusion) so secrets never leak into the repo.  Format is plain
-# KEY=value lines — same shape as .env.example.
+# Source $FACTORY/.env if present for non-secret runtime settings such as
+# GCP_PROJECT_ID / GCP_REGION. Sensitive values are loaded from Secret Manager
+# by load_runtime_secrets below so stale local .env entries cannot win.
 if [[ -f "$FACTORY/.env" ]]; then
     set -a
     # shellcheck disable=SC1091
     . "$FACTORY/.env"
     set +a
 fi
+
+load_runtime_secrets() {
+    if [[ -f "$FACTORY/scripts/load_secrets.sh" ]]; then
+        # shellcheck disable=SC1091
+        source "$FACTORY/scripts/load_secrets.sh"
+    else
+        echo "ERROR: missing $FACTORY/scripts/load_secrets.sh" >&2
+        return 1
+    fi
+}
 
 export PATH="$HOME/local/node/bin:$PATH"
 
@@ -696,6 +704,8 @@ if [[ "${1:-}" == "--status" ]]; then
 fi
 
 # ── Main entry ────────────────────────────────────────────────────────
+
+load_runtime_secrets
 
 PROJECT="${1:?Usage: run_paper.sh <project_dir>}"
 if [[ ! -d "$PROJECT" ]]; then
