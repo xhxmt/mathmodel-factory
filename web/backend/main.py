@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -10,6 +11,7 @@ from .auth import WsTicketStore, create_access_token, get_current_user
 from .auth_store import AuthStore, InvalidUsername, UserExists, UserNotFound
 from .cloud_api import create_cloud_router
 from .config import load_settings, validate_settings
+from .ops_status import build_secret_ops_status
 from .project_api import (
     _valid_model_step_key,
     _resolve_project,
@@ -21,8 +23,10 @@ from .project_api import (
     load_model_registry,
 )
 from .schemas import (
+    AuditLogResponse,
     LoginRequest,
     LoginResponse,
+    OpsSecretsStatus,
     ProjectAction,
     ProjectRequestCreate,
     ProjectRequestDecision,
@@ -87,6 +91,25 @@ def _user_response(user) -> UserResponse:
         rejected_at=user.rejected_at,
         rejected_by=user.rejected_by,
         rejection_reason=user.rejection_reason,
+    )
+
+
+def _audit_response(record) -> AuditLogResponse:
+    metadata = {}
+    if record.metadata_json:
+        try:
+            parsed = json.loads(record.metadata_json)
+            metadata = parsed if isinstance(parsed, dict) else {"value": parsed}
+        except json.JSONDecodeError:
+            metadata = {"raw": record.metadata_json}
+    return AuditLogResponse(
+        id=record.id,
+        actor=record.actor,
+        action=record.action,
+        target_type=record.target_type,
+        target_id=record.target_id,
+        created_at=record.created_at,
+        metadata=metadata,
     )
 
 
@@ -227,6 +250,19 @@ async def delete_user(
             detail="ADMIN_USER_CANNOT_BE_DELETED",
         ) from exc
     return {"status": "ok", "username": username}
+
+
+@app.get("/api/admin/ops/secrets", response_model=OpsSecretsStatus)
+async def get_admin_secret_ops(current_user: UserInfo = Depends(get_current_user(settings))):
+    _require_admin(current_user)
+    return build_secret_ops_status(settings)
+
+
+@app.get("/api/admin/audit-log", response_model=list[AuditLogResponse])
+async def list_admin_audit_log(current_user: UserInfo = Depends(get_current_user(settings))):
+    _require_admin(current_user)
+    records = list(reversed(auth_store.list_audit_log()))[:200]
+    return [_audit_response(record) for record in records]
 
 
 project_router = create_project_router(settings, ticket_store, manager)

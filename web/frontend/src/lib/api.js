@@ -85,6 +85,11 @@ export const ProjectRequests = {
   reject: (id, note = '') => api.post(`/api/admin/project-requests/${id}/reject`, { note }).then((r) => normalizeProjectRequest(r.data)),
 }
 
+export const AdminOps = {
+  secrets: () => api.get('/api/admin/ops/secrets').then((r) => r.data),
+  auditLog: () => api.get('/api/admin/audit-log').then((r) => (Array.isArray(r.data) ? r.data : [])),
+}
+
 // ---- projects ----
 export const Projects = {
   list: () => api.get('/api/projects').then((r) => (Array.isArray(r.data) ? r.data.map(normalizeProjectStatus) : [])),

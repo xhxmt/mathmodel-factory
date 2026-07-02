@@ -1,0 +1,25 @@
+[Unit]
+Description=Paper Factory Web Dashboard API
+After=network.target
+
+[Service]
+Type=simple
+User=tfisher
+Group=tfisher
+WorkingDirectory=/home/tfisher/paper_factory/web/backend
+Environment="PATH=/home/tfisher/paper_factory/web/backend/venv/bin:/home/tfisher/google-cloud-sdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=/home/tfisher/paper_factory/web/.env
+ExecStart=/bin/bash -lc 'source /home/tfisher/paper_factory/scripts/load_secrets.sh; exec /home/tfisher/paper_factory/web/backend/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000'
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/tfisher/paper_factory/logs/api.log
+StandardError=append:/home/tfisher/paper_factory/logs/api.error.log
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/tfisher/paper_factory
+
+[Install]
+WantedBy=multi-user.target

@@ -215,6 +215,42 @@ assert.deepEqual(data, { status: 'ok', username: 'alice' })
     assert result.returncode == 0, result.stderr
 
 
+def test_admin_ops_helpers_use_admin_endpoints():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+globalThis.localStorage = { getItem() { return null } }
+const apiModule = await import('./web/frontend/src/lib/api.js')
+const api = apiModule.default
+const { AdminOps } = apiModule
+
+const seen = []
+api.defaults.adapter = async (config) => {
+  seen.push({ method: config.method, url: config.url })
+  if (config.url === '/api/admin/ops/secrets') {
+    return { data: { project_id: 'configured-project', secrets: [], local_config: [] }, status: 200, statusText: 'OK', headers: {}, config }
+  }
+  if (config.url === '/api/admin/audit-log') {
+    return { data: [{ id: 1, actor: 'admin', action: 'user.approve', target_type: 'user', target_id: 'alice', created_at: 1, metadata: {} }], status: 200, statusText: 'OK', headers: {}, config }
+  }
+  throw new Error(`unexpected url ${config.url}`)
+}
+
+const secrets = await AdminOps.secrets()
+const auditLog = await AdminOps.auditLog()
+
+assert.equal(secrets.project_id, 'configured-project')
+assert.equal(auditLog[0].action, 'user.approve')
+assert.deepEqual(seen, [
+  { method: 'get', url: '/api/admin/ops/secrets' },
+  { method: 'get', url: '/api/admin/audit-log' },
+])
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_use_auth_tracks_role_and_status_from_login_and_bootstrap():
     result = run_node(
         """

@@ -59,6 +59,40 @@ class UserDecisionRequest(BaseModel):
     reason: str = ""
 
 
+class SecretBindingStatus(BaseModel):
+    env: str
+    secret: str
+    loaded: bool = False
+    accessible: bool = False
+    error: str | None = None
+
+
+class LocalEnvFileStatus(BaseModel):
+    path: str
+    exists: bool = False
+    mode: str | None = None
+    secure_mode: bool = False
+    sensitive_keys: list[str] = []
+
+
+class OpsSecretsStatus(BaseModel):
+    project_id: str = ""
+    gcloud_path: str = ""
+    loader: str = ""
+    secrets: list[SecretBindingStatus] = []
+    local_config: list[LocalEnvFileStatus] = []
+
+
+class AuditLogResponse(BaseModel):
+    id: int
+    actor: str
+    action: str
+    target_type: str
+    target_id: str
+    created_at: int
+    metadata: dict = {}
+
+
 class ProjectAction(BaseModel):
     action: str
 
