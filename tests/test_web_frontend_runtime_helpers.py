@@ -151,6 +151,104 @@ assert.deepEqual(normalizeCloudConfig({ enabled: 1, solver_types: 'python,julia'
     assert result.returncode == 0, result.stderr
 
 
+def test_frontend_auth_and_project_request_contracts():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+import {
+  normalizeAuthUser,
+  normalizeProjectRequest,
+} from './web/frontend/src/lib/contracts.js'
+
+assert.deepEqual(normalizeAuthUser({ username: 'alice', role: 'user', status: 'active', display_name: 'Alice' }), {
+  username: 'alice',
+  role: 'user',
+  status: 'active',
+  display_name: 'Alice',
+})
+assert.equal(normalizeAuthUser({ username: 'admin' }).role, 'user')
+assert.deepEqual(normalizeProjectRequest({ id: '7', requester: 'alice', base_name: 'demo', consult: 1 }), {
+  id: 7,
+  requester: 'alice',
+  base_name: 'demo',
+  problem_path: '',
+  no_start: false,
+  consult: true,
+  status: 'pending',
+  created_at: 0,
+  decided_at: null,
+  decided_by: null,
+  decision_note: null,
+  launched_at: null,
+  launched_base_name: null,
+  launch_output: null,
+  failure_reason: null,
+})
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_admin_users_delete_helper_uses_delete_endpoint():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+globalThis.localStorage = { getItem() { return null } }
+const apiModule = await import('./web/frontend/src/lib/api.js')
+const api = apiModule.default
+const { AdminUsers } = apiModule
+
+let seen = null
+api.defaults.adapter = async (config) => {
+  seen = { method: config.method, url: config.url }
+  return { data: { status: 'ok', username: 'alice' }, status: 200, statusText: 'OK', headers: {}, config }
+}
+
+const data = await AdminUsers.delete('alice')
+
+assert.deepEqual(seen, { method: 'delete', url: '/api/admin/users/alice' })
+assert.deepEqual(data, { status: 'ok', username: 'alice' })
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_use_auth_tracks_role_and_status_from_login_and_bootstrap():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+globalThis.localStorage = {
+  data: new Map(),
+  getItem(key) { return this.data.get(key) || null },
+  setItem(key, value) { this.data.set(key, String(value)) },
+  removeItem(key) { this.data.delete(key) },
+}
+const api = await import('./web/frontend/src/lib/api.js')
+api.__setAuthMeForTest(async () => ({ username: 'alice', role: 'user', status: 'active' }))
+const { useAuth } = await import('./web/frontend/src/composables/useAuth.js')
+
+const auth = useAuth()
+auth.login({ username: 'alice', role: 'user', status: 'active' })
+assert.equal(auth.username.value, 'alice')
+assert.equal(auth.role.value, 'user')
+assert.equal(auth.status.value, 'active')
+
+localStorage.setItem('access_token', 'token')
+localStorage.setItem('username', 'alice')
+const ok = await auth.bootstrap()
+assert.equal(ok, true)
+assert.equal(auth.role.value, 'user')
+auth.logout()
+assert.equal(auth.isAuthenticated.value, false)
+assert.equal(auth.role.value, '')
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_project_store_can_be_created_independently():
     result = run_node(
         """

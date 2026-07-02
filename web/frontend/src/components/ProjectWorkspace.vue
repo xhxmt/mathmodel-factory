@@ -36,7 +36,7 @@
         <button class="btn btn-sm btn-ghost" @click="refresh" title="刷新">
           <Icon name="refresh" :size="14" :class="{ spin: loading }" />
         </button>
-        <button class="btn btn-sm btn-ghost" @click="showModels = true" title="模型管理">
+        <button v-if="isAdmin" class="btn btn-sm btn-ghost" @click="showModels = true" title="模型管理">
           <Icon name="cpu" :size="14" /> <span class="hide-xs">模型</span>
         </button>
         <button v-if="project.is_running" class="btn btn-sm btn-ghost" @click="act('pause')">
@@ -103,6 +103,13 @@
           @open-file="requestFile"
           @answered="onAnswered"
         />
+        <ModelingDirectionPanel
+          v-if="project.current_step <= 1"
+          class="rise"
+          :base="project.base_name"
+          :current-step="project.current_step"
+          @changed="onModelingDirectionChanged"
+        />
       </div>
 
       <PipelineTimeline
@@ -116,7 +123,7 @@
         @open-file="requestFile"
         @open-paper="requestPaper"
         @assign="onAssign"
-        @manage-models="showModels = true"
+        @manage-models="isAdmin ? (showModels = true) : null"
       />
 
       <LogConsole
@@ -170,7 +177,7 @@
       </div>
     </div>
 
-    <ModelManager v-if="showModels" @close="showModels = false" />
+    <ModelManager v-if="showModels && isAdmin" @close="showModels = false" />
     <CloudAcceleratorDialog
       v-if="showCloudDialog"
       :base="project.base_name"
@@ -187,6 +194,7 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from './Icon.vue'
+import ModelingDirectionPanel from './ModelingDirectionPanel.vue'
 import { relativeTime } from '../lib/api.js'
 import { stepByIndex, stepConfigKey } from '../lib/steps.js'
 import { workspaceTabs } from '../lib/workspaceUi.js'
@@ -214,8 +222,11 @@ const CloudTaskPanel = defineAsyncComponent({ loader: () => import('./CloudTaskP
 
 export default {
   name: 'ProjectWorkspace',
-  components: { Icon, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel },
-  props: { project: { type: Object, required: true } },
+  components: { Icon, ModelingDirectionPanel, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel },
+  props: {
+    project: { type: Object, required: true },
+    isAdmin: { type: Boolean, default: false },
+  },
   emits: ['close', 'action', 'refresh'],
   setup(props, { emit }) {
     const route = useRoute()
@@ -309,6 +320,12 @@ export default {
     }
 
     function onAnswered() {
+      emit('refresh')
+      fetchSteps()
+      fetchDiagnostics()
+    }
+
+    function onModelingDirectionChanged() {
       emit('refresh')
       fetchSteps()
       fetchDiagnostics()
@@ -505,6 +522,7 @@ export default {
       requestFile,
       requestPaper,
       onAnswered,
+      onModelingDirectionChanged,
       onDiagnosticsAction,
       onAssign,
       checkCloudAccelerator,

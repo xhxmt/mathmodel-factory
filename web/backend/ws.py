@@ -5,31 +5,43 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
 
+from .access_control import filter_visible_projects
 from .config import Settings
 from .project_api import list_all_projects
+from .schemas import UserInfo
 
 
 class ConnectionManager:
     def __init__(self) -> None:
-        self.active_connections: list[WebSocket] = []
+        self.active_connections: dict[WebSocket, dict] = {}
 
-    async def connect(self, websocket: WebSocket) -> None:
+    async def connect(self, websocket: WebSocket, payload: dict | None = None) -> None:
         await websocket.accept()
-        self.active_connections.append(websocket)
+        self.active_connections[websocket] = payload or {}
 
     def disconnect(self, websocket: WebSocket) -> None:
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+        self.active_connections.pop(websocket, None)
 
     async def broadcast(self, message: dict) -> None:
         stale: list[WebSocket] = []
-        for connection in self.active_connections:
+        for connection in list(self.active_connections):
             try:
                 await connection.send_json(message)
             except Exception:
                 stale.append(connection)
         for connection in stale:
             self.disconnect(connection)
+
+    def connections(self) -> list[tuple[WebSocket, dict]]:
+        return list(self.active_connections.items())
+
+
+def _payload_user(payload: dict) -> UserInfo:
+    return UserInfo(
+        username=payload.get("sub", ""),
+        role=payload.get("role", "user"),
+        status=payload.get("status", "active"),
+    )
 
 
 def create_monitor_task(
@@ -42,14 +54,21 @@ def create_monitor_task(
             try:
                 projects = list_all_projects(settings)
                 current_state = {project.base_name: project.dict() for project in projects}
-                for base_name, state in current_state.items():
-                    if last_state.get(base_name) != state:
-                        await manager.broadcast(
-                            {"type": "project_updated", "project": base_name, "status": state}
+                for websocket, payload in manager.connections():
+                    user = _payload_user(payload)
+                    visible = filter_visible_projects(settings, user, projects)
+                    visible_names = {project.base_name for project in visible}
+                    try:
+                        await websocket.send_json(
+                            {"type": "status_update", "projects": [project.dict() for project in visible]}
                         )
-                await manager.broadcast(
-                    {"type": "status_update", "projects": [project.dict() for project in projects]}
-                )
+                        for base_name, state in current_state.items():
+                            if base_name in visible_names and last_state.get(base_name) != state:
+                                await websocket.send_json(
+                                    {"type": "project_updated", "project": base_name, "status": state}
+                                )
+                    except Exception:
+                        manager.disconnect(websocket)
                 last_state = current_state
                 await asyncio.sleep(3)
             except asyncio.CancelledError:
@@ -74,11 +93,12 @@ def create_ws_router(settings: Settings, ticket_store, manager: ConnectionManage
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-        await manager.connect(websocket)
+        await manager.connect(websocket, payload)
+        user = _payload_user(payload)
         try:
             while True:
                 await asyncio.sleep(2)
-                projects = list_all_projects(settings)
+                projects = filter_visible_projects(settings, user, list_all_projects(settings))
                 await websocket.send_json(
                     {"type": "status_update", "projects": [project.dict() for project in projects]}
                 )

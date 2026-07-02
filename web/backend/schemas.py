@@ -19,6 +19,8 @@ except ModuleNotFoundError:  # pragma: no cover - lightweight unit tests may run
 class UserInfo(BaseModel):
     username: str
     role: str
+    status: str = "active"
+    display_name: str = ""
 
 
 class LoginRequest(BaseModel):
@@ -30,6 +32,31 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     username: str
+    role: str
+    status: str
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+
+
+class UserResponse(BaseModel):
+    username: str
+    role: str
+    status: str
+    display_name: str = ""
+    created_at: int = 0
+    approved_at: int | None = None
+    approved_by: str | None = None
+    rejected_at: int | None = None
+    rejected_by: str | None = None
+    rejection_reason: str | None = None
+
+
+class UserDecisionRequest(BaseModel):
+    reason: str = ""
 
 
 class ProjectAction(BaseModel):
@@ -54,6 +81,44 @@ class NewProjectRequest(BaseModel):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
             raise ValueError("base_name 仅允许字母、数字、下划线、连字符")
         return value
+
+
+class ProjectRequestCreate(BaseModel):
+    base_name: str
+    problem_path: str
+    no_start: bool = False
+    consult: bool = False
+
+    @field_validator("base_name")
+    @classmethod
+    def _check_base_name(cls, value: str) -> str:
+        import re
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError("base_name 仅允许字母、数字、下划线、连字符")
+        return value
+
+
+class ProjectRequestDecision(BaseModel):
+    note: str = ""
+
+
+class ProjectRequestResponse(BaseModel):
+    id: int
+    requester: str
+    base_name: str
+    problem_path: str
+    no_start: bool = False
+    consult: bool = False
+    status: str
+    created_at: int
+    decided_at: int | None = None
+    decided_by: str | None = None
+    decision_note: str | None = None
+    launched_at: int | None = None
+    launched_base_name: str | None = None
+    launch_output: str | None = None
+    failure_reason: str | None = None
 
 
 class ProjectStatus(BaseModel):
@@ -92,6 +157,10 @@ class ConsultationRequest(BaseModel):
 
 class ConsultationAnswer(BaseModel):
     answer: str
+
+
+class ModelingDirectionSelection(BaseModel):
+    direction_id: str
 
 
 class ModelEntry(BaseModel):

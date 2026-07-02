@@ -117,3 +117,32 @@ export function normalizeCloudConfig(raw = {}) {
     service_name: String(raw.service_name || ''),
   }
 }
+
+export function normalizeAuthUser(raw = {}) {
+  return {
+    username: String(raw.username || ''),
+    role: String(raw.role || 'user'),
+    status: String(raw.status || ''),
+    display_name: String(raw.display_name || ''),
+  }
+}
+
+export function normalizeProjectRequest(raw = {}) {
+  return {
+    id: numberOr(raw.id, 0),
+    requester: String(raw.requester || ''),
+    base_name: String(raw.base_name || ''),
+    problem_path: String(raw.problem_path || ''),
+    no_start: Boolean(raw.no_start),
+    consult: Boolean(raw.consult),
+    status: String(raw.status || 'pending'),
+    created_at: numberOr(raw.created_at, 0),
+    decided_at: raw.decided_at === undefined || raw.decided_at === null || raw.decided_at === '' ? null : numberOr(raw.decided_at, null),
+    decided_by: stringOrNull(raw.decided_by),
+    decision_note: stringOrNull(raw.decision_note),
+    launched_at: raw.launched_at === undefined || raw.launched_at === null || raw.launched_at === '' ? null : numberOr(raw.launched_at, null),
+    launched_base_name: stringOrNull(raw.launched_base_name),
+    launch_output: stringOrNull(raw.launch_output),
+    failure_reason: stringOrNull(raw.failure_reason),
+  }
+}

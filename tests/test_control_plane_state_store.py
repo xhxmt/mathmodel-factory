@@ -124,6 +124,28 @@ def test_read_runtime_status_falls_back_to_legacy_consultation_markers(tmp_path)
     assert runtime["evidence"] == [{"kind": "file", "path": "consultation/step4_request.md"}]
 
 
+def test_read_runtime_status_ignores_ready_legacy_consultation_requests(tmp_path):
+    mod = load_state_store_module()
+    write_file(tmp_path / "checkpoint.md", "- **Last completed step**: 16\n")
+    write_file(tmp_path / "consultation" / "preflight_request.md", "# request\n")
+    write_file(tmp_path / "consultation" / "step4_request.md", "# request\n")
+    write_file(
+        tmp_path / "human_review.md",
+        "## CONSULT preflight (Step 0) — STATUS: READY\n\n结论。\n\n"
+        "## CONSULT step4 (Step 4) — STATUS: READY\n\n结论。\n",
+    )
+
+    runtime = mod.read_runtime_status(tmp_path, "demo")
+
+    assert runtime["status"] == "completed"
+    assert runtime["display_status"] == "已完成"
+    assert runtime["current_step"] == 16
+    assert runtime["consultation_pending"] is False
+    assert runtime["consultation_gate"] is None
+    assert runtime["reason_code"] == ""
+    assert runtime["evidence"] == []
+
+
 def test_read_runtime_status_falls_back_to_awaiting_consultation_marker(tmp_path):
     mod = load_state_store_module()
     write_file(tmp_path / "checkpoint.md", "- **Last completed step**: 8\n")

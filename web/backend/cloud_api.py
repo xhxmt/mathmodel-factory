@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from .access_control import require_admin, require_project_access
 from .auth import get_current_user
 from .config import Settings
 from .schemas import UserInfo
@@ -94,7 +95,7 @@ def create_cloud_router(settings: Settings) -> APIRouter:
 
     @router.get("/api/cloud/status")
     async def cloud_status(current_user: UserInfo = Depends(get_current_user(settings))):
-        del current_user
+        require_admin(current_user)
         try:
             gcloud_bin = _resolve_gcloud_binary()
             if not gcloud_bin:
@@ -160,7 +161,7 @@ def create_cloud_router(settings: Settings) -> APIRouter:
 
     @router.get("/api/cloud/config")
     async def cloud_config(current_user: UserInfo = Depends(get_current_user(settings))):
-        del current_user
+        require_admin(current_user)
         return {
             "use_cloud": os.getenv("USE_CLOUD_SOLVER", "false"),
             "threshold_time": int(os.getenv("CLOUD_THRESHOLD_TIME", "300")),
@@ -175,7 +176,7 @@ def create_cloud_router(settings: Settings) -> APIRouter:
         base_name: str,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         return project_cloud_config(settings, base_name)
 
     @router.post("/api/projects/{base_name}/cloud/enable")
@@ -183,7 +184,7 @@ def create_cloud_router(settings: Settings) -> APIRouter:
         base_name: str,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         config = set_project_cloud_enabled(settings, base_name, True)
         return {"status": "enabled", "base_name": base_name, "config": config}
 
@@ -192,7 +193,7 @@ def create_cloud_router(settings: Settings) -> APIRouter:
         base_name: str,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         config = set_project_cloud_enabled(settings, base_name, False)
         return {"status": "disabled", "base_name": base_name, "config": config}
 

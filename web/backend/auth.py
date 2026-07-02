@@ -7,6 +7,7 @@ from typing import Any
 import bcrypt
 import jwt
 
+from .auth_store import AuthStore
 from .config import Settings
 from .schemas import UserInfo
 
@@ -55,16 +56,17 @@ def user_db(settings: Settings) -> dict[str, dict[str, Any]]:
     }
 
 
-def verify_password(password: str, password_hash: bytes) -> bool:
+def verify_password(password: str, password_hash: str | bytes) -> bool:
+    encoded_hash = password_hash.encode("utf-8") if isinstance(password_hash, str) else password_hash
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), password_hash)
+        return bcrypt.checkpw(password.encode("utf-8"), encoded_hash)
     except (TypeError, ValueError):
         return False
 
 
-def create_access_token(settings: Settings, username: str, role: str) -> str:
+def create_access_token(settings: Settings, username: str, role: str, user_status: str = "active") -> str:
     expiration = datetime.now(timezone.utc) + timedelta(hours=settings.jwt_hours)
-    payload = {"sub": username, "role": role, "exp": expiration}
+    payload = {"sub": username, "role": role, "status": user_status, "exp": expiration}
     return jwt.encode(payload, settings.jwt_secret, algorithm=JWT_ALGORITHM)
 
 
@@ -95,8 +97,29 @@ def require_token(settings: Settings) -> Callable[[HTTPAuthorizationCredentials]
 def get_current_user(settings: Settings) -> Callable[[dict[str, Any]], UserInfo]:
     verify = require_token(settings)
 
-    def _get_current_user(payload: dict[str, Any] = Depends(verify)) -> UserInfo:
-        return UserInfo(username=payload["sub"], role=payload["role"])
+    def _get_current_user(
+        payload: dict[str, Any] | None = Depends(verify),
+    ) -> UserInfo:
+        if payload is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token",
+            )
+
+        store = AuthStore(settings.resolved_auth_db_file)
+        store.initialize()
+        user = store.get_user(payload["sub"])
+        if user is None or user.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="USER_NOT_ACTIVE",
+            )
+        return UserInfo(
+            username=user.username,
+            role=user.role,
+            status=user.status,
+            display_name=user.display_name or "",
+        )
 
     return _get_current_user
 

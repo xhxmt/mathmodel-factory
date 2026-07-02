@@ -5,11 +5,22 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 from project_diagnostics import write_status
 
 
-def load_main_module():
-    sys.modules.pop("web.backend.main", None)
+def load_main_module(factory_root=None, auth_db_file=None):
+    for module_name in [
+        "web.backend.main",
+        "web.backend.project_api",
+        "web.backend.cloud_api",
+        "web.backend.ws",
+        "web.backend.auth",
+        "web.backend.access_control",
+        "web.backend.schemas",
+    ]:
+        sys.modules.pop(module_name, None)
     sys.modules.pop("fastapi", None)
     sys.modules.pop("fastapi.middleware.cors", None)
     sys.modules.pop("fastapi.responses", None)
@@ -19,6 +30,13 @@ def load_main_module():
 
     os.environ["JWT_SECRET"] = "0123456789abcdef0123456789abcdef"
     os.environ["ADMIN_PASSWORD"] = "strong-password"
+    if factory_root is None:
+        os.environ.pop("FACTORY_ROOT", None)
+    else:
+        os.environ["FACTORY_ROOT"] = str(factory_root)
+    auth_db = Path(auth_db_file) if auth_db_file else Path("/tmp") / f"paper_factory_web_control_plane_auth_{os.getpid()}.db"
+    auth_db.unlink(missing_ok=True)
+    os.environ["AUTH_DB_FILE"] = str(auth_db)
 
     fastapi = types.ModuleType("fastapi")
 
@@ -28,27 +46,44 @@ def load_main_module():
             self.status_code = status_code
             self.detail = detail
 
+    class DummyRoute:
+        def __init__(self, path, endpoint, methods=None):
+            self.path = path
+            self.endpoint = endpoint
+            self.methods = set(methods or [])
+
     class DummyFastAPI:
         def __init__(self, *args, **kwargs):
-            pass
+            self.routes = []
 
         def add_middleware(self, *args, **kwargs):
             return None
 
-        def include_router(self, *args, **kwargs):
+        def include_router(self, router, *args, **kwargs):
+            self.routes.extend(getattr(router, "routes", []))
             return None
 
-        def get(self, *args, **kwargs):
-            return lambda fn: fn
+        def _route(self, path, methods, *args, **kwargs):
+            def decorator(fn):
+                self.routes.append(DummyRoute(path, fn, methods))
+                return fn
 
-        def post(self, *args, **kwargs):
-            return lambda fn: fn
+            return decorator
 
-        def put(self, *args, **kwargs):
-            return lambda fn: fn
+        def get(self, path, *args, **kwargs):
+            return self._route(path, {"GET"}, *args, **kwargs)
 
-        def websocket(self, *args, **kwargs):
-            return lambda fn: fn
+        def post(self, path, *args, **kwargs):
+            return self._route(path, {"POST"}, *args, **kwargs)
+
+        def put(self, path, *args, **kwargs):
+            return self._route(path, {"PUT"}, *args, **kwargs)
+
+        def delete(self, path, *args, **kwargs):
+            return self._route(path, {"DELETE"}, *args, **kwargs)
+
+        def websocket(self, path, *args, **kwargs):
+            return self._route(path, set(), *args, **kwargs)
 
     fastapi.FastAPI = DummyFastAPI
     fastapi.APIRouter = DummyFastAPI
@@ -59,9 +94,12 @@ def load_main_module():
     fastapi.UploadFile = type("UploadFile", (), {})
     fastapi.File = lambda *a, **k: None
     fastapi.status = types.SimpleNamespace(
+        HTTP_400_BAD_REQUEST=400,
         HTTP_401_UNAUTHORIZED=401,
+        HTTP_403_FORBIDDEN=403,
         HTTP_404_NOT_FOUND=404,
         HTTP_409_CONFLICT=409,
+        HTTP_500_INTERNAL_SERVER_ERROR=500,
     )
     sys.modules["fastapi"] = fastapi
 
@@ -128,6 +166,7 @@ def test_main_module_exposes_runtime_api_surface():
         "get_me",
         "logout",
         "issue_ws_ticket",
+        "delete_user",
         "upload_problem_file",
         "create_new_project",
         "get_projects",
@@ -141,6 +180,8 @@ def test_main_module_exposes_runtime_api_surface():
         "get_paper",
         "get_consultation",
         "submit_consultation_answer",
+        "get_modeling_directions",
+        "select_modeling_direction",
         "get_models",
         "put_model_registry",
         "put_model_config",
@@ -158,7 +199,7 @@ def test_main_module_exposes_runtime_api_surface():
 
 def test_issue_ws_ticket_is_single_use():
     mod = load_main_module()
-    user = mod.UserInfo(username="admin", role="admin")
+    user = mod.UserInfo(username="admin", role="admin", status="active")
 
     response = asyncio.run(mod.issue_ws_ticket(current_user=user))
     ticket = response.ticket if hasattr(response, "ticket") else response["ticket"]
@@ -166,7 +207,7 @@ def test_issue_ws_ticket_is_single_use():
     first = mod.ticket_store.consume(ticket)
     second = mod.ticket_store.consume(ticket)
 
-    assert first == {"sub": "admin", "role": "admin"}
+    assert first == {"sub": "admin", "role": "admin", "status": "active"}
     assert second is None
 
 
@@ -263,3 +304,345 @@ def test_project_cloud_config_rejects_unknown_project(tmp_path):
         raise AssertionError("expected HTTPException")
 
     assert not (settings.ongoing_dir / "missing").exists()
+
+
+def _make_project(root, name):
+    project = root / "ongoing" / name
+    project.mkdir(parents=True)
+    (project / "checkpoint.md").write_text("- **Last completed step**: 1\n", encoding="utf-8")
+    write_status(
+        project,
+        state="running",
+        current_step=2,
+        current_action="agent_run",
+        display_status="Running",
+        updated_at=1700000000,
+    )
+    return project
+
+
+def _install_auth_store(mod):
+    settings = mod.settings
+    mod.auth_store = mod.AuthStore(settings.resolved_auth_db_file)
+    mod.auth_store.initialize()
+    mod.auth_store.bootstrap_admin(settings.admin_password)
+    mod.auth_store.register_user("alice", "alice password", "")
+    mod.auth_store.approve_user("alice", actor="admin")
+    mod.auth_store.register_user("bob", "bob password", "")
+    mod.auth_store.approve_user("bob", actor="admin")
+    return settings
+
+
+def test_user_project_list_is_filtered_by_acl(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    _make_project(tmp_path, "owned")
+    _make_project(tmp_path, "other")
+    mod.auth_store.grant_project_owner("owned", "alice", actor="admin")
+
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+    projects = asyncio.run(mod.get_projects(current_user=alice))
+
+    assert [project.base_name for project in projects] == ["owned"]
+
+
+def test_non_owner_project_file_returns_404(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    _make_project(tmp_path, "owned")
+    _make_project(tmp_path, "other")
+    mod.auth_store.grant_project_owner("owned", "alice", actor="admin")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+
+    with pytest.raises(mod.HTTPException) as excinfo:
+        asyncio.run(mod.get_checkpoint("other", current_user=alice))
+
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail == "PROJECT_NOT_FOUND"
+
+
+def test_admin_can_see_all_projects(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    _make_project(tmp_path, "owned")
+    _make_project(tmp_path, "other")
+    admin = mod.UserInfo(username="admin", role="admin", status="active")
+
+    projects = asyncio.run(mod.get_projects(current_user=admin))
+
+    assert sorted(project.base_name for project in projects) == ["other", "owned"]
+
+
+def test_model_registry_is_admin_only_but_owner_can_save_project_config(tmp_path):
+    from web.backend.schemas import ModelConfigPayload, ModelRegistryPayload, StepAssignment
+
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    _make_project(tmp_path, "owned")
+    mod.auth_store.grant_project_owner("owned", "alice", actor="admin")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+
+    with pytest.raises(mod.HTTPException) as registry_error:
+        asyncio.run(mod.put_model_registry(ModelRegistryPayload(models=[]), current_user=alice))
+    assert registry_error.value.status_code == 403
+
+    payload = ModelConfigPayload(scope="owned", steps={"step_7": StepAssignment(primary="claude")})
+    saved = asyncio.run(mod.put_model_config(payload, current_user=alice))
+    assert saved["status"] == "ok"
+
+    default_payload = ModelConfigPayload(scope="_default", steps={"step_7": StepAssignment(primary="claude")})
+    with pytest.raises(mod.HTTPException) as default_error:
+        asyncio.run(mod.put_model_config(default_payload, current_user=alice))
+    assert default_error.value.status_code == 403
+
+
+def test_user_new_project_requires_project_request(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    problem = tmp_path / "problem.pdf"
+    problem.write_text("problem", encoding="utf-8")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+
+    with pytest.raises(mod.HTTPException) as excinfo:
+        asyncio.run(
+            mod.create_new_project(
+                mod.NewProjectRequest(base_name="alice_project", problem_path=str(problem)),
+                current_user=alice,
+            )
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail == "PROJECT_APPROVAL_REQUIRED"
+
+
+def test_user_can_submit_and_list_own_project_request(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    problem = tmp_path / "problem.pdf"
+    problem.write_text("problem", encoding="utf-8")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+
+    created = asyncio.run(
+        mod.create_project_request(
+            mod.ProjectRequestCreate(
+                base_name="alice_project",
+                problem_path=str(problem),
+                no_start=False,
+                consult=True,
+            ),
+            current_user=alice,
+        )
+    )
+    listed = asyncio.run(mod.list_project_requests(current_user=alice))
+
+    assert created.status == "pending"
+    assert created.requester == "alice"
+    assert [item.id for item in listed] == [created.id]
+
+
+def test_admin_approves_project_request_launches_and_grants_acl(tmp_path, monkeypatch):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    problem = tmp_path / "problem.pdf"
+    problem.write_text("problem", encoding="utf-8")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+    admin = mod.UserInfo(username="admin", role="admin", status="active")
+    created = asyncio.run(
+        mod.create_project_request(
+            mod.ProjectRequestCreate(
+                base_name="alice_project",
+                problem_path=str(problem),
+                no_start=False,
+                consult=False,
+            ),
+            current_user=alice,
+        )
+    )
+
+    class DummyResult:
+        returncode = 0
+        stdout = "created alice_project"
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(
+        mod.project_api,
+        "run_project_launcher",
+        lambda settings, request: calls.append(request.base_name) or DummyResult(),
+    )
+    approved = asyncio.run(
+        mod.approve_project_request(
+            created.id,
+            mod.ProjectRequestDecision(note="ok"),
+            current_user=admin,
+        )
+    )
+
+    assert approved.status == "approved"
+    assert calls == ["alice_project"]
+    assert mod.auth_store.user_can_access_project("alice", "alice_project") is True
+
+
+def test_admin_cannot_approve_project_request_after_it_is_processed(tmp_path, monkeypatch):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    problem = tmp_path / "problem.pdf"
+    problem.write_text("problem", encoding="utf-8")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+    admin = mod.UserInfo(username="admin", role="admin", status="active")
+    created = asyncio.run(
+        mod.create_project_request(
+            mod.ProjectRequestCreate(
+                base_name="alice_project",
+                problem_path=str(problem),
+                no_start=False,
+                consult=False,
+            ),
+            current_user=alice,
+        )
+    )
+
+    class DummyResult:
+        returncode = 0
+        stdout = "created alice_project"
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(
+        mod.project_api,
+        "run_project_launcher",
+        lambda settings, request: calls.append(request.base_name) or DummyResult(),
+    )
+
+    asyncio.run(
+        mod.approve_project_request(
+            created.id,
+            mod.ProjectRequestDecision(note="ok"),
+            current_user=admin,
+        )
+    )
+
+    with pytest.raises(mod.HTTPException) as excinfo:
+        asyncio.run(
+            mod.approve_project_request(
+                created.id,
+                mod.ProjectRequestDecision(note="again"),
+                current_user=admin,
+            )
+        )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail == "PROJECT_REQUEST_NOT_PENDING"
+    assert calls == ["alice_project"]
+
+    with pytest.raises(mod.HTTPException) as reject_error:
+        asyncio.run(
+            mod.reject_project_request(
+                created.id,
+                mod.ProjectRequestDecision(note="reject after approve"),
+                current_user=admin,
+            )
+        )
+    assert reject_error.value.status_code == 409
+    assert reject_error.value.detail == "PROJECT_REQUEST_NOT_PENDING"
+
+
+def test_failed_project_request_launch_marks_failed(tmp_path, monkeypatch):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    problem = tmp_path / "problem.pdf"
+    problem.write_text("problem", encoding="utf-8")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+    admin = mod.UserInfo(username="admin", role="admin", status="active")
+    created = asyncio.run(
+        mod.create_project_request(
+            mod.ProjectRequestCreate(
+                base_name="bad_project",
+                problem_path=str(problem),
+                no_start=False,
+                consult=False,
+            ),
+            current_user=alice,
+        )
+    )
+
+    class DummyResult:
+        returncode = 2
+        stdout = ""
+        stderr = "launcher failed"
+
+    monkeypatch.setattr(mod.project_api, "run_project_launcher", lambda settings, request: DummyResult())
+
+    with pytest.raises(mod.HTTPException) as excinfo:
+        asyncio.run(
+            mod.approve_project_request(
+                created.id,
+                mod.ProjectRequestDecision(note="ok"),
+                current_user=admin,
+            )
+        )
+
+    assert excinfo.value.status_code == 500
+    failed = mod.auth_store.require_project_request(created.id)
+    assert failed.status == "failed"
+    assert "launcher failed" in failed.failure_reason
+
+
+def test_cloud_global_config_is_admin_only_and_project_config_requires_owner(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    _make_project(tmp_path, "owned")
+    mod.auth_store.grant_project_owner("owned", "alice", actor="admin")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+    bob = mod.UserInfo(username="bob", role="user", status="active")
+
+    with pytest.raises(mod.HTTPException) as global_error:
+        asyncio.run(mod.cloud_config(current_user=alice))
+    assert global_error.value.status_code == 403
+
+    owned = asyncio.run(mod.project_cloud_config("owned", current_user=alice))
+    assert owned["enabled"] is False
+
+    with pytest.raises(mod.HTTPException) as owner_error:
+        asyncio.run(mod.project_cloud_config("owned", current_user=bob))
+    assert owner_error.value.status_code == 404
+
+
+class RecordingWebSocket:
+    def __init__(self, ticket):
+        self.query_params = {"ticket": ticket}
+        self.accepted = False
+        self.closed = None
+        self.sent = []
+        self._sends_before_stop = 1
+
+    async def accept(self):
+        self.accepted = True
+
+    async def close(self, code=None):
+        self.closed = code
+
+    async def send_json(self, payload):
+        self.sent.append(payload)
+        self._sends_before_stop -= 1
+        if self._sends_before_stop <= 0:
+            raise RuntimeError("stop websocket test")
+
+
+def test_websocket_filters_status_update_projects_by_ticket_user(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    _make_project(tmp_path, "owned")
+    _make_project(tmp_path, "other")
+    mod.auth_store.grant_project_owner("owned", "alice", actor="admin")
+
+    ticket = mod.ticket_store.issue({"sub": "alice", "role": "user", "status": "active"})
+    websocket = RecordingWebSocket(ticket)
+
+    with pytest.raises(RuntimeError, match="stop websocket test"):
+        asyncio.run(mod.websocket_endpoint(websocket))
+
+    assert websocket.accepted is True
+    status_messages = [msg for msg in websocket.sent if msg.get("type") == "status_update"]
+    assert status_messages
+    assert [item["base_name"] for item in status_messages[0]["projects"]] == ["owned"]

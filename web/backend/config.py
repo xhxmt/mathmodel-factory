@@ -27,6 +27,7 @@ class Settings:
     admin_password: str
     factory_root: Path = Path(__file__).resolve().parents[2]
     jwt_hours: int = 24
+    auth_db_file: Path | None = None
     cors_origins: tuple[str, ...] = (
         "http://localhost:5173",
         "http://localhost:3000",
@@ -69,6 +70,10 @@ class Settings:
     def model_config_file(self) -> Path:
         return self.factory_root / "web" / "model_config.json"
 
+    @property
+    def resolved_auth_db_file(self) -> Path:
+        return self.auth_db_file or self.factory_root / "web" / "auth.db"
+
 
 def load_settings() -> Settings:
     cors_origins = tuple(
@@ -77,11 +82,14 @@ def load_settings() -> Settings:
         if part.strip()
     ) or Settings.cors_origins
 
+    auth_db_env = (os.getenv("AUTH_DB_FILE") or "").strip()
+
     return Settings(
         jwt_secret=(os.getenv("JWT_SECRET") or os.getenv("JWT_SECRET_KEY") or "").strip(),
         admin_password=(os.getenv("ADMIN_PASSWORD") or "").strip(),
         factory_root=Path(os.getenv("FACTORY_ROOT") or Path(__file__).resolve().parents[2]),
         jwt_hours=int(os.getenv("JWT_EXPIRATION_HOURS") or 24),
+        auth_db_file=Path(auth_db_env) if auth_db_env else None,
         cors_origins=cors_origins,
         max_upload_size=int(os.getenv("MAX_UPLOAD_SIZE") or 100 * 1024 * 1024),
         gcp_project_id=(os.getenv("GCP_PROJECT_ID") or "").strip(),

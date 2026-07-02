@@ -11,6 +11,8 @@
 /web/notes.json
 /web/model_registry.json
 /web/model_config.json
+/web/auth.db
+/web/auth.db-*
 
 # External evaluation per-run outputs (regenerable; baseline_scores.md is kept)
 /evaluation/results/

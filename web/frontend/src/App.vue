@@ -25,12 +25,14 @@
         </div>
 
         <div class="rr">
-          <button class="btn btn-amber" @click="openNew"><Icon name="plus" :size="15" /> <span class="hide-sm">新建</span></button>
+          <button class="btn btn-amber" @click="openNew"><Icon :name="isAdmin ? 'plus' : 'send'" :size="15" /> <span class="hide-sm">{{ isAdmin ? '新建' : '申请' }}</span></button>
           <div class="hb mono" :class="{ off: !wsConnected }" :title="wsConnected ? '实时连接正常' : '正在重连'">
             <span class="dot" :class="wsConnected ? 'live' : 'bad'"></span>{{ wsConnected ? 'LIVE' : 'RECONN' }}
           </div>
           <button class="btn btn-icon btn-ghost" @click="showPalette = true" title="命令面板 (⌘K)"><Icon name="command" :size="15" /></button>
-          <button class="btn btn-icon btn-ghost" @click="showModels = true" title="模型管理"><Icon name="cpu" :size="15" /></button>
+          <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showAdmin = true" title="管理员"><Icon name="shield" :size="15" /></button>
+          <button class="btn btn-icon btn-ghost" @click="showRequests = true" title="项目申请"><Icon name="inbox" :size="15" /></button>
+          <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showModels = true" title="模型管理"><Icon name="cpu" :size="15" /></button>
           <button class="btn btn-icon btn-ghost" @click="toggleTheme" title="切换主题"><Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="15" /></button>
           <div class="user">
             <Icon name="user" :size="14" />
@@ -78,16 +80,18 @@
           <div v-else class="empty panel">
             <Icon name="inbox" :size="34" />
             <p>{{ query || statusFilter !== 'all' ? '无匹配项目' : '暂无项目' }}</p>
-            <span class="hint mono">点击「新建」或 ./launch_agents.sh new 创建</span>
+            <span class="hint mono">点击「{{ isAdmin ? '新建' : '申请' }}」{{ isAdmin ? '创建项目' : '提交项目申请' }}</span>
           </div>
         </section>
       </main>
     </div>
 
-    <ProjectWorkspace v-if="selectedProject" :project="selectedProject" @close="closeWorkspace" @action="onAction" @refresh="fetchProjects" />
-    <NewProjectModal v-if="showNew" @close="showNew = false" @project-created="onCreated" />
+    <ProjectWorkspace v-if="selectedProject" :project="selectedProject" :is-admin="isAdmin" @close="closeWorkspace" @action="onAction" @refresh="fetchProjects" />
+    <NewProjectModal v-if="showNew" :is-admin="isAdmin" @close="showNew = false" @project-created="onCreated" @project-requested="onRequested" />
+    <AdminPanel v-if="showAdmin" @close="showAdmin = false" @changed="onAdminChanged" />
+    <ProjectRequestsPanel v-if="showRequests" :admin="isAdmin" @close="showRequests = false" @changed="onAdminChanged" />
     <CommandPalette :visible="showPalette" :projects="projects" @close="showPalette = false" @open-project="openByBase" @new-project="openNew" @toggle-theme="toggleTheme" />
-    <ModelManager v-if="showModels" @close="showModels = false" @saved="() => {}" />
+    <ModelManager v-if="showModels && isAdmin" @close="showModels = false" @saved="() => {}" />
   </template>
 </template>
 
@@ -125,17 +129,19 @@ const AsyncOverlayFallback = {
 const AsyncNewProjectModal = defineAsyncComponent({ loader: () => import('./components/NewProjectModal.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
 const AsyncCommandPalette = defineAsyncComponent({ loader: () => import('./components/CommandPalette.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
 const AsyncModelManager = defineAsyncComponent({ loader: () => import('./components/ModelManager.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
+const AsyncAdminPanel = defineAsyncComponent({ loader: () => import('./components/AdminPanel.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
+const AsyncProjectRequestsPanel = defineAsyncComponent({ loader: () => import('./components/ProjectRequestsPanel.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
 
 export default {
   name: 'App',
-  components: { Icon, Toasts, LoginForm, ProjectCard, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager },
+  components: { Icon, Toasts, LoginForm, ProjectCard, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager, AdminPanel: AsyncAdminPanel, ProjectRequestsPanel: AsyncProjectRequestsPanel },
   setup() {
     const { theme, toggle: toggleTheme } = useTheme()
     const route = useRoute()
     const router = useRouter()
     const toasts = useToasts()
     const { invalidate: invalidateModels, load: loadModels } = useModels()
-    const { isAuthenticated, username, bootstrap, login, logout: clearAuth } = useAuth()
+    const { isAuthenticated, username, role, status, isAdmin, bootstrap, login, logout: clearAuth } = useAuth()
     const {
       projects,
       loading,
@@ -161,6 +167,8 @@ export default {
     const showNew = ref(false)
     const showPalette = ref(false)
     const showModels = ref(false)
+    const showAdmin = ref(false)
+    const showRequests = ref(false)
 
     function notifyAwaiting(baseName) {
       toasts.warn(`项目 ${baseName} 需要你的决策`, '人工咨询')
@@ -189,6 +197,9 @@ export default {
               invalidateModels()
               break
             case 'project_created':
+            case 'project_request_created':
+            case 'project_request_failed':
+            case 'project_request_rejected':
             case 'project_action':
             case 'consultation_answered':
               refreshProjects()
@@ -264,6 +275,12 @@ export default {
       toasts.success(`项目 ${result.base_name} 已创建`)
       refreshProjects()
     }
+    function onRequested(result) {
+      toasts.success(`项目 ${result.base_name} 已提交审批`)
+    }
+    async function onAdminChanged() {
+      await refreshProjects()
+    }
 
     // ---- navigation / deep-link ----
     function openProjectFromCard(project) { openProject(project) }
@@ -307,10 +324,10 @@ export default {
 
     return {
       theme, toggleTheme,
-      isAuthenticated, username, projects, loading, wsConnected,
-      selectedBase, selectedProject, showNew, showPalette, showModels, query, statusFilter, filterChips,
+      isAuthenticated, username, role, status, isAdmin, projects, loading, wsConnected,
+      selectedBase, selectedProject, showNew, showPalette, showModels, showAdmin, showRequests, query, statusFilter, filterChips,
       needsYou, others, filteredOthers, counts,
-      onLogin, logout, onAction, onCreated,
+      onLogin, logout, onAction, onCreated, onRequested, onAdminChanged,
       openProject: openProjectFromCard,
       openByBase: openByBaseFromPalette,
       closeWorkspace: closeSelectedWorkspace,

@@ -18,6 +18,16 @@
 
 不要重新读 `problem/source.md` 全文——Step 0 已经把要点压到 problem_brief.md 里了，回头读原文等于浪费 token。
 
+[人工建模方向选择 — 前端手动选择入口]
+
+读完 `human_review.md`（如存在）后，先检查是否包含以 `## Step 1 modeling directions:` 开头的 H2 段落。
+
+- 若存在且段内有 `STATUS: READY` 与 `Selected direction id:`：这是用户在前端界面选择的早期建模方向。你必须优先承接该方向。
+- `viable_streams.md` 必须包含至少一条以该方向为主方法或核心方法族的候选流，并把它排在较高优先级（通常写成 `m1`）。除非它被数据、时间、算力或题目硬约束明确否决。
+- 若该方向不可行，不要静默忽略。必须在 `research_brief.md` 的方法对比表后写明不可行原因，并在 `viability_gate.md` 对应流标为不可推进；同时保留至少一条不同方法族的可行备选流。
+- 即使用户选择了一个方向，仍需生成 2–5 条候选流。至少 1 条备选流应来自不同方法族，避免同题多次运行全部坍缩成同一论文结构。
+- 在 `viable_streams.md` 对应流的 `核心建模思想` 或 `风险` 后加一句：`人工方向承接：来自 human_review.md §Step 1 modeling directions`，方便 Step 2/3 追踪。
+
 若 `problem/method_retrieval.md` 不存在，可用 Step 0 的结构化摘要补跑一次检索：
 
 ```bash

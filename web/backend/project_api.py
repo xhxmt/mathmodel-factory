@@ -12,18 +12,28 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
+from .access_control import filter_visible_projects, require_admin, require_project_access
 from .auth import get_current_user
+from .auth_store import AuthStore, ProjectNameConflict
 from .config import Settings
 from .consultation_service import write_consultation_answer
 from .diagnostics_service import build_project_diagnostics, summarize_project_diagnostics
+from .modeling_direction_service import (
+    build_modeling_directions,
+    write_modeling_direction_selection,
+)
 from .project_actions import run_action
 from .schemas import (
     ConsultationAnswer,
     ConsultationRequest,
+    ModelingDirectionSelection,
     ModelConfigPayload,
     ModelRegistryPayload,
     NewProjectRequest,
     ProjectAction,
+    ProjectRequestCreate,
+    ProjectRequestDecision,
+    ProjectRequestResponse,
     ProjectStatus,
     UserInfo,
 )
@@ -516,8 +526,57 @@ def get_consultation_request(project_path: Path) -> ConsultationRequest | None:
     )
 
 
+def _project_request_response(record) -> ProjectRequestResponse:
+    return ProjectRequestResponse(
+        id=record.id,
+        requester=record.requester,
+        base_name=record.base_name,
+        problem_path=record.problem_path,
+        no_start=record.no_start,
+        consult=record.consult,
+        status=record.status,
+        created_at=record.created_at,
+        decided_at=record.decided_at,
+        decided_by=record.decided_by,
+        decision_note=record.decision_note,
+        launched_at=record.launched_at,
+        launched_base_name=record.launched_base_name,
+        launch_output=record.launch_output,
+        failure_reason=record.failure_reason,
+    )
+
+
+def existing_project_names(settings: Settings) -> set[str]:
+    names: set[str] = set()
+    for root in (settings.ongoing_dir, settings.complete_dir):
+        if root.is_dir():
+            names.update(path.name for path in root.iterdir() if path.is_dir())
+    return names
+
+
+def run_project_launcher(settings: Settings, request: ProjectRequestCreate | NewProjectRequest):
+    problem_path = Path(request.problem_path)
+    cmd = ["/usr/bin/bash", str(settings.launch_script), "new"]
+    if request.no_start:
+        cmd.append("--no-start")
+    if request.consult:
+        cmd.append("--consult")
+    cmd.extend([request.base_name, str(problem_path.resolve())])
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=settings.factory_root,
+        env={**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+        check=False,
+    )
+
+
 def create_project_router(settings: Settings, ticket_store, manager) -> APIRouter:
     router = APIRouter()
+    store = AuthStore(settings.resolved_auth_db_file)
+    store.initialize()
 
     @router.post("/api/upload/problem")
     async def upload_problem_file(
@@ -593,27 +652,13 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         request: NewProjectRequest,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        if current_user.role != "admin":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PROJECT_APPROVAL_REQUIRED")
         problem_path = Path(request.problem_path)
         if not problem_path.exists():
             raise HTTPException(status_code=400, detail=f"Problem file not found: {request.problem_path}")
 
-        cmd = ["/usr/bin/bash", str(settings.launch_script), "new"]
-        if request.no_start:
-            cmd.append("--no-start")
-        if request.consult:
-            cmd.append("--consult")
-        cmd.extend([request.base_name, str(problem_path.resolve())])
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=settings.factory_root,
-            env={**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-            check=False,
-        )
+        result = run_project_launcher(settings, request)
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=f"Failed to create project: {result.stderr}")
 
@@ -625,17 +670,110 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
             "output": result.stdout,
         }
 
+    @router.get("/api/project-requests", response_model=list[ProjectRequestResponse])
+    async def list_project_requests(current_user: UserInfo = Depends(get_current_user(settings))):
+        if current_user.role == "admin":
+            records = store.list_project_requests()
+        else:
+            records = store.list_project_requests(current_user.username)
+        return [_project_request_response(record) for record in records]
+
+    @router.post("/api/project-requests", response_model=ProjectRequestResponse)
+    async def create_project_request(
+        request: ProjectRequestCreate,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        if current_user.role == "admin":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ADMIN_USE_DIRECT_CREATE")
+        problem_path = Path(request.problem_path)
+        if not problem_path.exists():
+            raise HTTPException(status_code=400, detail=f"Problem file not found: {request.problem_path}")
+        try:
+            record = store.create_project_request(
+                requester=current_user.username,
+                base_name=request.base_name,
+                problem_path=str(problem_path),
+                no_start=request.no_start,
+                consult=request.consult,
+                existing_project_names=existing_project_names(settings),
+            )
+        except ProjectNameConflict as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PROJECT_NAME_EXISTS") from exc
+        await manager.broadcast(
+            {
+                "type": "project_request_created",
+                "request_id": record.id,
+                "requester": current_user.username,
+            }
+        )
+        return _project_request_response(record)
+
+    @router.post("/api/admin/project-requests/{request_id}/approve", response_model=ProjectRequestResponse)
+    async def approve_project_request(
+        request_id: int,
+        decision: ProjectRequestDecision,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        del decision
+        require_admin(current_user)
+        record = store.require_project_request(request_id)
+        if record.status != "pending":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PROJECT_REQUEST_NOT_PENDING")
+        launcher_payload = ProjectRequestCreate(
+            base_name=record.base_name,
+            problem_path=record.problem_path,
+            no_start=record.no_start,
+            consult=record.consult,
+        )
+        result = run_project_launcher(settings, launcher_payload)
+        if result.returncode != 0:
+            failed = store.mark_project_request_failed(
+                request_id,
+                actor=current_user.username,
+                failure_reason=result.stderr or result.stdout or "project launch failed",
+            )
+            await manager.broadcast({"type": "project_request_failed", "request_id": request_id})
+            raise HTTPException(status_code=500, detail=failed.failure_reason)
+        approved = store.approve_project_request(
+            request_id,
+            actor=current_user.username,
+            launched_base_name=record.base_name,
+            launch_output=result.stdout,
+        )
+        store.grant_project_owner(record.base_name, record.requester, actor=current_user.username)
+        await manager.broadcast(
+            {
+                "type": "project_created",
+                "project": record.base_name,
+                "user": record.requester,
+            }
+        )
+        return _project_request_response(approved)
+
+    @router.post("/api/admin/project-requests/{request_id}/reject", response_model=ProjectRequestResponse)
+    async def reject_project_request(
+        request_id: int,
+        decision: ProjectRequestDecision,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        require_admin(current_user)
+        record = store.require_project_request(request_id)
+        if record.status != "pending":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PROJECT_REQUEST_NOT_PENDING")
+        rejected = store.reject_project_request(request_id, actor=current_user.username, reason=decision.note)
+        await manager.broadcast({"type": "project_request_rejected", "request_id": request_id})
+        return _project_request_response(rejected)
+
     @router.get("/api/projects", response_model=list[ProjectStatus])
     async def get_projects(current_user: UserInfo = Depends(get_current_user(settings))):
-        del current_user
-        return list_all_projects(settings)
+        return filter_visible_projects(settings, current_user, list_all_projects(settings))
 
     @router.get("/api/projects/{base_name}/status", response_model=ProjectStatus)
     async def get_single_project_status(
         base_name: str,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         return _runtime_to_project_status(read_runtime_status(_resolve_project(settings, base_name), base_name))
 
     @router.get("/api/projects/{base_name}/diagnostics")
@@ -643,7 +781,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         base_name: str,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
         status_payload = read_runtime_status(project, base_name)
         return build_project_diagnostics(
@@ -656,7 +794,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
 
     @router.get("/api/projects/{base_name}/checkpoint")
     async def get_checkpoint(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         checkpoint_file = _resolve_project(settings, base_name) / "checkpoint.md"
         if not checkpoint_file.is_file():
             raise HTTPException(status_code=404, detail="Checkpoint file not found")
@@ -668,7 +806,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         lines: int = 100,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
         logs_dir = project / "logs"
         if not logs_dir.is_dir():
@@ -698,13 +836,13 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
 
     @router.get("/api/projects/{base_name}/steps")
     async def get_project_steps(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
         return get_steps(settings, project, base_name)
 
     @router.get("/api/projects/{base_name}/files")
     async def get_files(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         return {"files": list_artifacts(_resolve_project(settings, base_name))}
 
     @router.get("/api/projects/{base_name}/file")
@@ -713,7 +851,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         path: str,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
         target = _safe_path(project, path)
         if target.suffix.lower() not in TEXT_EXTS:
@@ -724,7 +862,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
 
     @router.get("/api/projects/{base_name}/raw")
     async def get_raw_file(base_name: str, path: str, current_user: UserInfo = Depends(get_current_user(settings))):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
         target = _safe_path(project, path)
         if target.suffix.lower() not in (IMAGE_EXTS | PDF_EXTS | TEXT_EXTS):
@@ -737,7 +875,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         download: bool = False,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
         paper = _find_paper(settings, project, base_name)
         if not paper:
@@ -746,7 +884,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
 
     @router.get("/api/projects/{base_name}/consultation")
     async def get_consultation(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         request = get_consultation_request(_resolve_project(settings, base_name))
         if not request:
             raise HTTPException(status_code=404, detail="No pending consultation request")
@@ -758,7 +896,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         answer: ConsultationAnswer,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
         request = get_consultation_request(project)
         if not request:
@@ -775,13 +913,44 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         await manager.broadcast({"type": "consultation_answered", "project": base_name, "gate": request.gate})
         return {"status": "ok", "message": "Consultation answer submitted"}
 
+    @router.get("/api/projects/{base_name}/modeling-directions")
+    async def get_modeling_directions(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        return build_modeling_directions(project, settings.factory_root)
+
+    @router.post("/api/projects/{base_name}/modeling-directions/selection")
+    async def select_modeling_direction(
+        base_name: str,
+        selection: ModelingDirectionSelection,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        payload = build_modeling_directions(project, settings.factory_root)
+        if not payload.get("available"):
+            raise HTTPException(status_code=409, detail=payload.get("message") or "Modeling directions are not available")
+
+        direction_id = selection.direction_id.strip()
+        direction = next((item for item in payload.get("directions", []) if item.get("id") == direction_id), None)
+        if not direction:
+            raise HTTPException(status_code=400, detail=f"Unknown modeling direction: {selection.direction_id}")
+
+        write_modeling_direction_selection(
+            project,
+            direction,
+            timestamp=datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        await manager.broadcast({"type": "project_action", "project": base_name, "action": "select_modeling_direction"})
+        return {"status": "ok", "message": "Modeling direction selected", "direction": direction}
+
     @router.post("/api/projects/{base_name}/action")
     async def project_action(
         base_name: str,
         action: ProjectAction,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_project_access(settings, current_user, base_name)
         result = run_action(settings.factory_root, action.action, base_name)
         if not result.ok:
             raise HTTPException(
@@ -806,7 +975,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         payload: ModelRegistryPayload,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
+        require_admin(current_user)
         seen = set()
         for model in payload.models:
             model_id = model.id.strip()
@@ -828,10 +997,13 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         payload: ModelConfigPayload,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
-        del current_user
         scope = payload.scope.strip()
         if not scope:
             raise HTTPException(status_code=400, detail="scope 不能为空")
+        if current_user.role != "admin":
+            if scope == "_default":
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="ADMIN_REQUIRED")
+            require_project_access(settings, current_user, scope)
 
         config = load_model_config(settings)
         known_ids = {model["id"] for model in load_model_registry(settings)}

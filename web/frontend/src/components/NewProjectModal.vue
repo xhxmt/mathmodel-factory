@@ -8,7 +8,7 @@
 
     <div class="modal panel rise">
       <div class="m-head">
-        <div class="mh-l"><Icon name="plus" :size="16" /><span>新建建模项目</span></div>
+        <div class="mh-l"><Icon :name="isAdmin ? 'plus' : 'send'" :size="16" /><span>{{ isAdmin ? '新建建模项目' : '申请建模项目' }}</span></div>
         <button class="btn btn-icon btn-ghost btn-sm" @click="$emit('close')"><Icon name="x" :size="15" /></button>
       </div>
 
@@ -54,7 +54,7 @@
           <button type="button" class="btn btn-ghost" @click="$emit('close')" :disabled="loading">取消</button>
           <button type="submit" class="btn btn-amber" :disabled="loading">
             <span v-if="loading" class="spinner sm"></span>
-            <template v-else><Icon name="plus" :size="14" /> 创建项目</template>
+            <template v-else><Icon :name="isAdmin ? 'plus' : 'send'" :size="14" /> {{ isAdmin ? '创建项目' : '提交申请' }}</template>
           </button>
         </div>
       </form>
@@ -64,12 +64,15 @@
 
 <script>
 import Icon from './Icon.vue'
-import api, { Projects, formatBytes } from '../lib/api.js'
+import api, { Projects, ProjectRequests, formatBytes } from '../lib/api.js'
 
 export default {
   name: 'NewProjectModal',
   components: { Icon },
-  emits: ['close', 'project-created'],
+  props: {
+    isAdmin: { type: Boolean, default: false },
+  },
+  emits: ['close', 'project-created', 'project-requested'],
   data() {
     return {
       form: { base_name: '', problem_path: '', no_start: false, consult: false },
@@ -107,11 +110,11 @@ export default {
         } else if (!this.form.problem_path) {
           this.error = '请输入文件路径'; this.loading = false; return
         }
-        const result = await Projects.create(this.form)
-        this.$emit('project-created', result)
+        const result = this.isAdmin ? await Projects.create(this.form) : await ProjectRequests.create(this.form)
+        this.$emit(this.isAdmin ? 'project-created' : 'project-requested', result)
         this.$emit('close')
       } catch (err) {
-        this.error = err.response?.data?.detail || err.message || '创建项目失败'
+        this.error = err.response?.data?.detail || err.message || (this.isAdmin ? '创建项目失败' : '提交申请失败')
       } finally {
         this.loading = false
       }

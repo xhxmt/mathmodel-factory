@@ -2,7 +2,9 @@
 import axios from 'axios'
 import {
   normalizeArtifact,
+  normalizeAuthUser,
   normalizeCloudConfig,
+  normalizeProjectRequest,
   normalizeProjectStatus,
   normalizeStepsPayload,
 } from './contracts.js'
@@ -47,17 +49,40 @@ api.interceptors.response.use(
 export default api
 
 // ---- auth ----
+let authMeOverride = null
+export function __setAuthMeForTest(fn) { authMeOverride = fn }
+
 export async function authLogin(username, password) {
   const { data } = await api.post('/api/auth/login', { username, password })
-  return data
+  return Object.assign({}, data, normalizeAuthUser(data))
+}
+export async function authRegister(payload) {
+  const { data } = await api.post('/api/auth/register', payload)
+  return normalizeAuthUser(data)
 }
 export async function authMe() {
+  if (authMeOverride) return normalizeAuthUser(await authMeOverride())
   const { data } = await api.get('/api/auth/me')
-  return data
+  return normalizeAuthUser(data)
 }
 export async function authWsTicket() {
   const { data } = await api.post('/api/auth/ws-ticket')
   return data
+}
+
+export const AdminUsers = {
+  list: () => api.get('/api/admin/users').then((r) => (Array.isArray(r.data) ? r.data.map(normalizeAuthUser) : [])),
+  approve: (username, reason = '') => api.post(`/api/admin/users/${username}/approve`, { reason }).then((r) => normalizeAuthUser(r.data)),
+  reject: (username, reason = '') => api.post(`/api/admin/users/${username}/reject`, { reason }).then((r) => normalizeAuthUser(r.data)),
+  disable: (username, reason = '') => api.post(`/api/admin/users/${username}/disable`, { reason }).then((r) => normalizeAuthUser(r.data)),
+  delete: (username) => api.delete(`/api/admin/users/${username}`).then((r) => r.data),
+}
+
+export const ProjectRequests = {
+  list: () => api.get('/api/project-requests').then((r) => (Array.isArray(r.data) ? r.data.map(normalizeProjectRequest) : [])),
+  create: (payload) => api.post('/api/project-requests', payload).then((r) => normalizeProjectRequest(r.data)),
+  approve: (id, note = '') => api.post(`/api/admin/project-requests/${id}/approve`, { note }).then((r) => normalizeProjectRequest(r.data)),
+  reject: (id, note = '') => api.post(`/api/admin/project-requests/${id}/reject`, { note }).then((r) => normalizeProjectRequest(r.data)),
 }
 
 // ---- projects ----
@@ -75,6 +100,8 @@ export const Projects = {
   file: (b, path) => api.get(`/api/projects/${b}/file`, { params: { path } }).then((r) => r.data),
   consultation: (b) => api.get(`/api/projects/${b}/consultation`).then((r) => r.data),
   answer: (b, answer) => api.post(`/api/projects/${b}/consultation/answer`, { answer }).then((r) => r.data),
+  modelingDirections: (b) => api.get(`/api/projects/${b}/modeling-directions`).then((r) => r.data),
+  selectModelingDirection: (b, directionId) => api.post(`/api/projects/${b}/modeling-directions/selection`, { direction_id: directionId }).then((r) => r.data),
   action: (b, action) => api.post(`/api/projects/${b}/action`, { action }).then((r) => r.data),
   create: (payload) => api.post('/api/projects/new', payload).then((r) => r.data),
   rawUrl: (b, path) => `/api/projects/${b}/raw?path=${encodeURIComponent(path)}`,

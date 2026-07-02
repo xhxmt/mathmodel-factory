@@ -5,6 +5,8 @@ import os
 import re
 from pathlib import Path
 
+from .consultation_service import gate_ready
+
 TOTAL_STEPS = 16
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT_DIAGNOSTICS_PATH = ROOT / "scripts" / "project_diagnostics.py"
@@ -57,18 +59,24 @@ def _validate_pid(pid: int | None) -> int | None:
 
 
 def _read_consultation(project_path: Path) -> tuple[bool, str | None]:
+    human_review = project_path / "human_review.md"
     await_marker = project_path / ".awaiting_consultation"
     if await_marker.is_file():
         content = await_marker.read_text(encoding="utf-8", errors="replace")
         gate_match = re.search(r"GATE:([^\s]+)", content)
         gate = gate_match.group(1).strip() if gate_match else None
+        if gate and gate_ready(human_review, gate):
+            return False, None
         return True, gate
 
     consult_dir = project_path / "consultation"
     if not consult_dir.is_dir():
         return False, None
     for req_file in sorted(consult_dir.glob("*_request.md")):
-        return True, req_file.stem.replace("_request", "")
+        gate = req_file.stem.replace("_request", "")
+        if gate_ready(human_review, gate):
+            continue
+        return True, gate
     return False, None
 
 
