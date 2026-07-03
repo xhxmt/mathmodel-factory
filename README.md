@@ -24,6 +24,7 @@ cd web
 - **项目管理**：暂停/恢复/终止正在运行的项目
 - **日志查看**：实时查看最新的执行日志
 - **人工咨询**：当项目进入 `awaiting_consultation` 状态时，通过 Web 界面提交 GPT Pro / Gemini Deep Think 的分析结果
+- **上游方案选择**：交互式项目可启用 Step 3 方法主线选择门，在已验证候选流中选择 `PRIMARY/AUXILIARY`；无人值守项目默认不启用
 
 详细使用说明请参阅 [`web/README.md`](web/README.md)。
 
@@ -111,6 +112,15 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 ./launch_agents.sh run test_cumcm2024b
 ```
 
+若项目启用了 `selection/config.json`，Step 3 前会生成 `selection/step3_request.md` 并暂停。可在终端中查看候选后选择：
+
+```bash
+python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
+  --primary m2 --aux m1 --reason "Prefer heuristic contrast"
+```
+
+该命令会写入 `selection/step3_decision.json` 和 `human_review.md`，并默认恢复项目运行；调试时可加 `--no-resume`。
+
 检查状态：
 
 ```bash
@@ -148,7 +158,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 - 设置 / Step 0：将赛题解析至 `problem/` 目录。
 - Step 1：背景调研及方法预选。
 - Step 2：并行生成建模方案及示例求解。
-- Step 3：方法选择，支持 `human_review.md` 手工介入修改。
+- Step 3：方法选择，支持 `human_review.md` 手工介入修改；显式启用 `selection/config.json` 时会先暂停，让用户在 Step 2 验证过的候选流中选择 `PRIMARY/AUXILIARY`。
 - Step 4：构建完整模型。
 - Step 5：执行完整求解过程。
 - Step 6：敏感性与鲁棒性分析。

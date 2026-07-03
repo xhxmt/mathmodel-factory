@@ -46,6 +46,7 @@
 - 咨询请求展示：显示 gate、step、title、content
 - 回答提交：粘贴 GPT Pro / Gemini Deep Think 的分析
 - 自动写入 `human_review.md` 并恢复运行
+- 上游方案选择：启用 `selection/config.json` 后，Step 3 前可在已验证候选流中选择 `PRIMARY/AUXILIARY`
 
 ## 快速开始
 
@@ -114,6 +115,7 @@ cd web
 Dashboard 显示所有项目的实时状态：
 - **运行中**（蓝色）：正在执行，有活跃的 PID
 - **等待咨询**（黄色）：等待人工输入
+- **等待选方案**（黄色）：等待 Step 3 方法主线选择
 - **暂停**（灰色）：用户手动暂停
 - **已完成**（绿色）：所有 16 步完成
 - **已终止**（红色）：用户终止
@@ -130,6 +132,21 @@ Dashboard 显示所有项目的实时状态：
 6. 点击 **"提交并恢复运行"**
 
 系统会自动写入 `human_review.md` 并标记 `STATUS: READY`。
+
+### 上游方案选择
+
+启用 `selection/config.json` 的项目会在 Step 3 前暂停，展示已验证候选流的正确性、可行性、覆盖率和风险。用户可选择 `PRIMARY/AUXILIARY`；若 30 分钟未选择，系统自动采用排名第 1 的候选并恢复运行。
+
+Step 1 的“建模方向”用于早期方法偏好，Step 3 的“方法主线选择”用于在 Step 2 已验证候选流中确定主线。两者都会镜像到 `human_review.md`，但作用阶段不同。
+
+如果不使用网页，也可以在终端中完成选择：
+
+```bash
+python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
+  --primary m2 --aux m1 --reason "Prefer heuristic contrast"
+```
+
+该命令会写入 `selection/step3_decision.json` 和 `human_review.md`，并默认恢复项目运行；调试时可加 `--no-resume`。
 
 ### 控制项目
 
@@ -203,6 +220,8 @@ Authorization: Bearer <your_token>
 
 - `GET /api/projects/{base_name}/consultation` - 获取咨询请求
 - `POST /api/projects/{base_name}/consultation/answer` - 提交咨询回答
+- `GET /api/projects/{base_name}/selection` - 获取当前方案选择请求
+- `POST /api/projects/{base_name}/selection/decision` - 提交方案选择并恢复项目
 
 ### 模型管理（需要认证）
 
