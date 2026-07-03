@@ -2,7 +2,7 @@
 
 # Diagnostics protocol reason codes emitted by run_paper.sh and consumed by the
 # web diagnostics layer:
-# NO_LOG_PROGRESS AWAITING_STEP8_5 CONSULTATION_PENDING
+# NO_LOG_PROGRESS AWAITING_STEP8_5 CONSULTATION_PENDING OPTION_SELECTION_PENDING
 # VERIFY_OUTPUT_FAILED LOCK_STALE_RECLAIMED
 
 diag_python() {

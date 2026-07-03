@@ -1938,6 +1938,35 @@ maybe_consult() {
     exit 0
 }
 
+maybe_select_option() {
+    local gate="$1" step="$2" title="$3"
+    local script="$FACTORY/scripts/selection_gate.py"
+    [[ -x "$script" || -f "$script" ]] || return 0
+
+    set +e
+    python3 "$script" "prepare-${gate}" "$PROJECT" >> "$PROJECT/logs/runner.log" 2>&1
+    local ec=$?
+    set -e
+
+    if (( ec == 10 )); then
+        log "   SELECTION[$gate]: awaiting human choice - $title"
+        diag_event "$PROJECT" "$step" selection_requested OPTION_SELECTION_PENDING \
+            "Runner paused for option selection" "selection/${gate}_request.md"
+        diag_status "$PROJECT" awaiting_selection "$step" selection_wait OPTION_SELECTION_PENDING \
+            "等待人工选择${title}" \
+            "open_selection_request,open_selection_evidence,refresh_status" \
+            "file:selection/${gate}_request.md,file:selection/${gate}_options.json"
+        ( python3 "$script" "wait-default-${gate}" "$PROJECT" >> "$PROJECT/logs/selection_timeout_${gate}.log" 2>&1 & )
+        log "   Runner exiting cleanly for selection. Resume after choosing or timeout."
+        remove_registry_entry "$BASE"
+        exit 0
+    fi
+
+    (( ec == 0 )) && return 0
+    log "   SELECTION[$gate]: prepare failed (exit $ec)"
+    return "$ec"
+}
+
 # ── Execution primitives ────────────────────────────────────────────
 #
 # These replace the old "launch Claude as orchestrator-monitor" pattern.
@@ -3341,6 +3370,10 @@ while (( STEP < 16 )); do
     # model is constructed.  No-op unless opted in + the `step4` gate active.
     if (( NEXT == 4 )); then
         maybe_consult step4 4 "建模定型前：确认 model.md 的建模路线（贴前沿模型的建模方案）"
+    fi
+
+    if (( NEXT == 3 )); then
+        maybe_select_option step3 3 "方法主线选择"
     fi
 
     while (( RETRIES < STEP_MAX_RETRIES )); do

@@ -121,3 +121,11 @@ def test_verify_numbers_manifest_includes_nested_json_and_xlsx(tmp_path):
     assert "decision.theta_deg" in flat_keys
     assert "intervals[0][1]" in flat_keys
     assert manifest["result3.xlsx"]["Sheet!B1"]["value"] == 14.804
+
+
+def test_runner_invokes_step3_selection_before_step3_dispatch():
+    runner = Path(REPO_ROOT) / "run_paper.sh"
+    text = runner.read_text(encoding="utf-8")
+
+    assert "maybe_select_option step3 3" in text
+    assert text.index("maybe_select_option step3 3") < text.index("3)  run_step_3")
