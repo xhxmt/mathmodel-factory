@@ -167,6 +167,9 @@ class ProjectStatus(BaseModel):
     pid: int | None = None
     consultation_pending: bool = False
     consultation_gate: str | None = None
+    selection_pending: bool = False
+    selection_gate: str | None = None
+    selection_deadline: int | None = None
     reason_code: str = ""
     reason_summary: str = ""
     suggested_actions: list[str] = []
@@ -195,6 +198,13 @@ class ConsultationAnswer(BaseModel):
 
 class ModelingDirectionSelection(BaseModel):
     direction_id: str
+
+
+class SelectionDecisionRequest(BaseModel):
+    gate: str = "step3"
+    selected_option_id: str
+    selected_aux_id: str = ""
+    reason: str = ""
 
 
 class ModelEntry(BaseModel):

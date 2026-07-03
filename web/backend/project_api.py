@@ -23,6 +23,7 @@ from .modeling_direction_service import (
     write_modeling_direction_selection,
 )
 from .project_actions import run_action
+from .selection_service import SelectionError, read_selection_request, write_selection_decision
 from .schemas import (
     ConsultationAnswer,
     ConsultationRequest,
@@ -35,6 +36,7 @@ from .schemas import (
     ProjectRequestDecision,
     ProjectRequestResponse,
     ProjectStatus,
+    SelectionDecisionRequest,
     UserInfo,
 )
 from .state_store import read_runtime_status
@@ -240,6 +242,9 @@ def _runtime_to_project_status(runtime: dict[str, Any]) -> ProjectStatus:
         pid=runtime.get("pid"),
         consultation_pending=runtime.get("consultation_pending", False),
         consultation_gate=runtime.get("consultation_gate"),
+        selection_pending=runtime.get("selection_pending", False),
+        selection_gate=runtime.get("selection_gate"),
+        selection_deadline=runtime.get("selection_deadline"),
         reason_code=runtime.get("reason_code", ""),
         reason_summary=runtime.get("reason_summary", ""),
         suggested_actions=list(runtime.get("suggested_actions", [])),
@@ -943,6 +948,43 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         )
         await manager.broadcast({"type": "project_action", "project": base_name, "action": "select_modeling_direction"})
         return {"status": "ok", "message": "Modeling direction selected", "direction": direction}
+
+    @router.get("/api/projects/{base_name}/selection")
+    async def get_selection(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        payload = read_selection_request(project, "step3")
+        if not payload.get("gate") and not payload.get("options"):
+            raise HTTPException(status_code=404, detail="No selection request")
+        return payload
+
+    @router.post("/api/projects/{base_name}/selection/decision")
+    async def submit_selection_decision(
+        base_name: str,
+        decision: SelectionDecisionRequest,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        try:
+            saved = write_selection_decision(
+                project,
+                gate=decision.gate,
+                selected_option_id=decision.selected_option_id.strip(),
+                selected_aux_id=decision.selected_aux_id.strip(),
+                source="human",
+                reason=decision.reason.strip() or f"Selected by {current_user.username}",
+            )
+        except SelectionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await manager.broadcast({"type": "project_action", "project": base_name, "action": "select_option"})
+        result = run_action(settings.factory_root, "resume", base_name)
+        if not result.ok:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=result.stderr or result.stdout or "project resume failed",
+            )
+        return {"status": "ok", "decision": saved}
 
     @router.post("/api/projects/{base_name}/action")
     async def project_action(

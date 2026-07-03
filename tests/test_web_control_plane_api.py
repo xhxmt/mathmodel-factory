@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import json
 import os
 import sys
 import types
@@ -182,6 +183,8 @@ def test_main_module_exposes_runtime_api_surface():
         "submit_consultation_answer",
         "get_modeling_directions",
         "select_modeling_direction",
+        "get_selection",
+        "submit_selection_decision",
         "get_models",
         "put_model_registry",
         "put_model_config",
@@ -304,6 +307,77 @@ def test_project_cloud_config_rejects_unknown_project(tmp_path):
         raise AssertionError("expected HTTPException")
 
     assert not (settings.ongoing_dir / "missing").exists()
+
+
+def test_selection_endpoint_returns_pending_options(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    user = mod.UserInfo(username="admin", role="admin")
+    project = tmp_path / "ongoing" / "demo"
+    (project / "selection").mkdir(parents=True)
+    (project / "selection" / "step3_options.json").write_text(
+        json.dumps(
+            {
+                "gate": "step3",
+                "available": True,
+                "default_option_id": "m1",
+                "options": [{"id": "m1", "rank": 1, "recommended_aux": "NONE"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = asyncio.run(mod.get_selection("demo", current_user=user))
+
+    assert response["default_option_id"] == "m1"
+
+
+def test_selection_decision_writes_human_review(tmp_path, monkeypatch):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    user = mod.UserInfo(username="admin", role="admin")
+    project = tmp_path / "ongoing" / "demo"
+    (project / "selection").mkdir(parents=True)
+    (project / "selection" / "step3_options.json").write_text(
+        json.dumps(
+            {
+                "gate": "step3",
+                "available": True,
+                "default_option_id": "m1",
+                "options": [
+                    {
+                        "id": "m1",
+                        "rank": 1,
+                        "title": "m1 - MILP",
+                        "family": "MILP",
+                        "recommended_aux": "NONE",
+                        "scores": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class DummyResult:
+        ok = True
+        stdout = "resumed"
+        stderr = ""
+
+    monkeypatch.setattr(mod.project_api, "run_action", lambda *a, **k: DummyResult())
+    response = asyncio.run(
+        mod.submit_selection_decision(
+            "demo",
+            mod.SelectionDecisionRequest(
+                gate="step3",
+                selected_option_id="m1",
+                selected_aux_id="NONE",
+                reason="ok",
+            ),
+            current_user=user,
+        )
+    )
+
+    assert response["status"] == "ok"
+    assert "## Step 3 decision:" in (project / "human_review.md").read_text(encoding="utf-8")
 
 
 def _make_project(root, name):

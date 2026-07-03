@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 from pathlib import Path
@@ -80,6 +81,23 @@ def _read_consultation(project_path: Path) -> tuple[bool, str | None]:
     return False, None
 
 
+def _read_selection(project_path: Path) -> tuple[bool, str | None, int | None]:
+    selection_dir = project_path / "selection"
+    if not selection_dir.is_dir():
+        return False, None, None
+    for gate in ("step3", "step4"):
+        options = selection_dir / f"{gate}_options.json"
+        decision = selection_dir / f"{gate}_decision.json"
+        if options.is_file() and not decision.is_file():
+            try:
+                data = json.loads(options.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+            deadline = data.get("deadline_epoch") if isinstance(data, dict) else None
+            return True, gate, deadline
+    return False, None, None
+
+
 def _progress_percent(current_step: int) -> float:
     return round(min(100.0, max(0, current_step) / TOTAL_STEPS * 100), 1)
 
@@ -96,6 +114,8 @@ def _from_snapshot(project_path: Path, base_name: str, snapshot: dict) -> dict:
     current_step = max(0, int(snapshot.get("current_step", 0)))
     pid = _validate_pid(snapshot.get("pid"))
     consultation_gate = snapshot.get("consultation_gate")
+    selection_from_files, selection_gate, selection_deadline = _read_selection(project_path)
+    selection_pending = snapshot.get("state") == "awaiting_selection" or selection_from_files
     display_status = snapshot.get("display_status") or snapshot.get("state", "unknown")
     return {
         "base_name": base_name,
@@ -109,6 +129,9 @@ def _from_snapshot(project_path: Path, base_name: str, snapshot: dict) -> dict:
         "pid": pid,
         "consultation_pending": snapshot.get("state") == "awaiting_consultation",
         "consultation_gate": consultation_gate,
+        "selection_pending": selection_pending,
+        "selection_gate": selection_gate,
+        "selection_deadline": selection_deadline,
         "reason_code": snapshot.get("reason_code", ""),
         "reason_summary": snapshot.get("reason_summary", ""),
         "suggested_actions": list(snapshot.get("suggested_actions", [])),
@@ -119,7 +142,32 @@ def _from_snapshot(project_path: Path, base_name: str, snapshot: dict) -> dict:
 def _fallback_status(project_path: Path, base_name: str) -> dict:
     current_step = _read_checkpoint_step(project_path)
     pid = _read_pid(project_path)
+    selection_pending, selection_gate, selection_deadline = _read_selection(project_path)
     consultation_pending, consultation_gate = _read_consultation(project_path)
+
+    if selection_pending:
+        gate = selection_gate or "step3"
+        step = 3 if gate == "step3" else 4
+        return {
+            "base_name": base_name,
+            "status": "awaiting_selection",
+            "display_status": "等待选方案",
+            "current_step": max(current_step, step),
+            "total_steps": TOTAL_STEPS,
+            "progress_percent": _progress_percent(max(current_step, step)),
+            "last_updated": int(project_path.stat().st_mtime),
+            "is_running": False,
+            "pid": None,
+            "consultation_pending": False,
+            "consultation_gate": None,
+            "selection_pending": True,
+            "selection_gate": gate,
+            "selection_deadline": selection_deadline,
+            "reason_code": "OPTION_SELECTION_PENDING",
+            "reason_summary": "等待人工选择方案",
+            "suggested_actions": ["open_selection_request", "open_selection_evidence", "refresh_status"],
+            "evidence": [{"kind": "file", "path": f"selection/{gate}_request.md"}],
+        }
 
     if consultation_pending:
         return {
@@ -134,6 +182,9 @@ def _fallback_status(project_path: Path, base_name: str) -> dict:
             "pid": None,
             "consultation_pending": True,
             "consultation_gate": consultation_gate,
+            "selection_pending": False,
+            "selection_gate": None,
+            "selection_deadline": None,
             "reason_code": "CONSULTATION_PENDING",
             "reason_summary": "等待人工咨询回填",
             "suggested_actions": ["open_consultation_request", "open_human_review", "refresh_status"],
@@ -153,6 +204,9 @@ def _fallback_status(project_path: Path, base_name: str) -> dict:
         "pid": pid,
         "consultation_pending": False,
         "consultation_gate": None,
+        "selection_pending": False,
+        "selection_gate": None,
+        "selection_deadline": None,
         "reason_code": "",
         "reason_summary": "",
         "suggested_actions": ["refresh_status"],
