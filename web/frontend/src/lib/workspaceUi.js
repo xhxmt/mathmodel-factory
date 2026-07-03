@@ -31,9 +31,9 @@ export function buildLogErrorContext(lines, radius = 2) {
   return safe.slice(Math.max(0, idx - radius), Math.min(safe.length, idx + radius + 1))
 }
 
-export function workspaceTabs({ consultationPending = false, diagnostics = null, cloudEnabled = false } = {}) {
+export function workspaceTabs({ consultationPending = false, selectionPending = false, diagnostics = null, cloudEnabled = false } = {}) {
   const hasDiagnostics = Boolean(diagnostics?.status?.reason_code)
-  return [
+  const tabs = [
     { key: 'overview', label: '概览', icon: 'activity' },
     { key: 'pipeline', label: '流水线', icon: 'layers' },
     { key: 'logs', label: '日志', icon: 'terminal' },
@@ -42,6 +42,10 @@ export function workspaceTabs({ consultationPending = false, diagnostics = null,
     { key: 'consultation', label: '咨询', icon: 'message-square', attention: consultationPending },
     { key: 'cloud', label: '云端', icon: 'zap', attention: cloudEnabled },
   ]
+  if (selectionPending) {
+    tabs.splice(5, 0, { key: 'selection', label: '选方案', icon: 'git-branch', attention: true })
+  }
+  return tabs
 }
 
 const PRIORITY_PATTERNS = [

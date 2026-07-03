@@ -8,6 +8,9 @@
  * @property {number|null} pid
  * @property {boolean} consultation_pending
  * @property {string|null} consultation_gate
+ * @property {boolean} selection_pending
+ * @property {string|null} selection_gate
+ * @property {number|null} selection_deadline
  * @property {string|null} last_updated
  */
 
@@ -65,6 +68,9 @@ export function normalizeProjectStatus(raw = {}) {
     pid: raw.pid === undefined || raw.pid === null || raw.pid === '' ? null : numberOr(raw.pid, null),
     consultation_pending: Boolean(raw.consultation_pending),
     consultation_gate: stringOrNull(raw.consultation_gate),
+    selection_pending: Boolean(raw.selection_pending),
+    selection_gate: stringOrNull(raw.selection_gate),
+    selection_deadline: raw.selection_deadline === undefined || raw.selection_deadline === null || raw.selection_deadline === '' ? null : numberOr(raw.selection_deadline, null),
     last_updated: stringOrNull(raw.last_updated),
   }
 }

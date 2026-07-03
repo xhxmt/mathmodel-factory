@@ -1,5 +1,5 @@
 <template>
-  <article class="card panel" :class="['ac-' + project.status, { pending: project.consultation_pending }]" @click="$emit('open', project)" tabindex="0" @keydown.enter="$emit('open', project)">
+  <article class="card panel" :class="['ac-' + project.status, { pending: project.consultation_pending || project.selection_pending }]" @click="$emit('open', project)" tabindex="0" @keydown.enter="$emit('open', project)">
     <div class="c-top">
       <span class="dot" :class="dotClass"></span>
       <span class="c-name mono">{{ project.base_name }}</span>
@@ -12,9 +12,13 @@
       <Icon name="alert-triangle" :size="13" />
       <span>等待你处理 · {{ project.consultation_gate || 'gate' }}</span>
     </div>
+    <div v-if="project.selection_pending" class="c-consult">
+      <Icon name="git-branch" :size="13" />
+      <span>等待选方案 · {{ project.selection_gate || 'step3' }}</span>
+    </div>
 
     <div class="c-rail">
-      <StepRail :current-step="project.current_step" :awaiting="project.consultation_pending" compact />
+      <StepRail :current-step="project.current_step" :awaiting="project.consultation_pending || project.selection_pending" compact />
       <div class="c-railmeta mono">
         <span class="c-step">{{ stepText }}</span>
         <span class="c-pct" :class="{ done: project.progress_percent >= 100 }">{{ Math.round(project.progress_percent) }}%</span>
@@ -52,9 +56,9 @@ export default {
     statusLabel() { return mapStatusLabel(this.project.status) },
     diagnosticBadge() { return badgeText(this.project) },
     dotClass() {
-      return { running: 'live', awaiting_consultation: 'amber', completed: 'ok', paused: 'paused', failed: 'bad', killed: 'bad' }[this.project.status] || ''
+      return { running: 'live', awaiting_consultation: 'amber', awaiting_selection: 'amber', completed: 'ok', paused: 'paused', failed: 'bad', killed: 'bad' }[this.project.status] || ''
     },
-    canResume() { return ['paused', 'ready', 'awaiting_consultation'].includes(this.project.status) },
+    canResume() { return ['paused', 'ready', 'awaiting_consultation', 'awaiting_selection'].includes(this.project.status) },
     stepText() {
       const c = this.project.current_step
       if (c >= 16) return '16 · 已完成'
@@ -108,6 +112,7 @@ export default {
 .tag { font: 600 10px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 8px; border-radius: var(--r-xs); border: 1px solid var(--line); background: var(--panel-2); color: var(--ink-2); white-space: nowrap; }
 .st-running { color: var(--live); border-color: var(--live-dim); background: var(--live-dim); }
 .st-awaiting_consultation { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
+.st-awaiting_selection { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
 .st-completed { color: var(--ok); border-color: var(--ok-dim); background: var(--ok-dim); }
 .st-paused { color: var(--paused); }
 .st-failed, .st-killed { color: var(--bad); border-color: var(--bad-dim); background: var(--bad-dim); }

@@ -107,6 +107,8 @@ export const Projects = {
   answer: (b, answer) => api.post(`/api/projects/${b}/consultation/answer`, { answer }).then((r) => r.data),
   modelingDirections: (b) => api.get(`/api/projects/${b}/modeling-directions`).then((r) => r.data),
   selectModelingDirection: (b, directionId) => api.post(`/api/projects/${b}/modeling-directions/selection`, { direction_id: directionId }).then((r) => r.data),
+  selection: (b) => api.get(`/api/projects/${b}/selection`).then((r) => r.data),
+  selectOption: (b, payload) => api.post(`/api/projects/${b}/selection/decision`, payload).then((r) => r.data),
   action: (b, action) => api.post(`/api/projects/${b}/action`, { action }).then((r) => r.data),
   create: (payload) => api.post('/api/projects/new', payload).then((r) => r.data),
   rawUrl: (b, path) => `/api/projects/${b}/raw?path=${encodeURIComponent(path)}`,

@@ -76,9 +76,9 @@
             <span class="ov-l label">当前阶段</span>
             <span class="ov-v mono">{{ stepLabel }}</span>
           </button>
-          <button class="ov-card panel" @click="activeTab = project.consultation_pending ? 'consultation' : 'diagnostics'">
+          <button class="ov-card panel" @click="activeTab = project.selection_pending ? 'selection' : project.consultation_pending ? 'consultation' : 'diagnostics'">
             <span class="ov-l label">人工/诊断</span>
-            <span class="ov-v mono">{{ project.consultation_pending ? '等待你处理' : diagnostics?.status?.reason_code || '无阻塞' }}</span>
+            <span class="ov-v mono">{{ project.selection_pending ? '等待选方案' : project.consultation_pending ? '等待你处理' : diagnostics?.status?.reason_code || '无阻塞' }}</span>
           </button>
           <button class="ov-card panel" @click="activeTab = 'logs'">
             <span class="ov-l label">日志</span>
@@ -103,6 +103,12 @@
           @open-file="requestFile"
           @answered="onAnswered"
         />
+        <SelectionPanel
+          v-if="project.selection_pending"
+          class="rise"
+          :base="project.base_name"
+          @changed="onSelectionChanged"
+        />
         <ModelingDirectionPanel
           v-if="project.current_step <= 1"
           class="rise"
@@ -117,7 +123,7 @@
         class="rise"
         :current-step="project.current_step"
         :steps-data="stepsData"
-        :awaiting="project.consultation_pending"
+        :awaiting="project.consultation_pending || project.selection_pending"
         :registry="modelRegistry"
         :assignments="projectAssignments"
         @open-file="requestFile"
@@ -163,6 +169,13 @@
         @answered="onAnswered"
       />
 
+      <SelectionPanel
+        v-else-if="activeTab === 'selection'"
+        class="rise"
+        :base="project.base_name"
+        @changed="onSelectionChanged"
+      />
+
       <CloudTaskPanel
         v-else-if="activeTab === 'cloud'"
         class="rise"
@@ -195,6 +208,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch 
 import { useRoute, useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import ModelingDirectionPanel from './ModelingDirectionPanel.vue'
+import SelectionPanel from './SelectionPanel.vue'
 import { relativeTime } from '../lib/api.js'
 import { stepByIndex, stepConfigKey } from '../lib/steps.js'
 import { workspaceTabs } from '../lib/workspaceUi.js'
@@ -222,7 +236,7 @@ const CloudTaskPanel = defineAsyncComponent({ loader: () => import('./CloudTaskP
 
 export default {
   name: 'ProjectWorkspace',
-  components: { Icon, ModelingDirectionPanel, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel },
+  components: { Icon, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel },
   props: {
     project: { type: Object, required: true },
     isAdmin: { type: Boolean, default: false },
@@ -263,14 +277,16 @@ export default {
     const dotClass = computed(() => ({
       running: 'live',
       awaiting_consultation: 'amber',
+      awaiting_selection: 'amber',
       completed: 'ok',
       paused: 'paused',
       failed: 'bad',
       killed: 'bad',
     }[props.project.status] || ''))
-    const canResume = computed(() => ['paused', 'ready', 'awaiting_consultation'].includes(props.project.status))
+    const canResume = computed(() => ['paused', 'ready', 'awaiting_consultation', 'awaiting_selection'].includes(props.project.status))
     const tabs = computed(() => workspaceTabs({
       consultationPending: props.project.consultation_pending,
+      selectionPending: props.project.selection_pending,
       diagnostics: diagnostics.value,
       cloudEnabled: cloudEnabled.value,
     }))
@@ -331,6 +347,13 @@ export default {
       fetchDiagnostics()
     }
 
+    function onSelectionChanged() {
+      emit('refresh')
+      fetchSteps()
+      fetchDiagnostics()
+      activeTab.value = 'overview'
+    }
+
     function onEsc(event) {
       if (event.key === 'Escape' && !killArm.value) emit('close')
     }
@@ -367,6 +390,8 @@ export default {
         open_reviewer_entry_artifacts: { path: 'reviewer_entry_map.md', type: 'markdown', name: 'reviewer_entry_map.md' },
         open_consultation_request: { path: `consultation/${props.project.consultation_gate || 'dynamic'}_request.md`, type: 'markdown', name: 'consultation request' },
         open_human_review: { path: 'human_review.md', type: 'markdown', name: 'human_review.md' },
+        open_selection_request: { path: `selection/${props.project.selection_gate || 'step3'}_request.md`, type: 'markdown', name: 'selection request' },
+        open_selection_evidence: { path: `selection/${props.project.selection_gate || 'step3'}_options.json`, type: 'json', name: 'selection options' },
         open_failed_artifact: { path: 'logs/runner.log', type: 'text', name: 'runner.log' },
       }
       const request = evidenceMap[actionId]
@@ -435,9 +460,13 @@ export default {
       if (pending) activeTab.value = 'consultation'
       else if (activeTab.value === 'consultation') activeTab.value = 'overview'
     }, { immediate: true })
+    watch(() => props.project.selection_pending, (pending) => {
+      if (pending) activeTab.value = 'selection'
+      else if (activeTab.value === 'selection') activeTab.value = 'overview'
+    }, { immediate: true })
 
     // ---- tab deep-linking: keep activeTab and route.query.tab in sync ----
-    const VALID_TABS = new Set(['overview', 'pipeline', 'logs', 'artifacts', 'diagnostics', 'consultation', 'cloud'])
+    const VALID_TABS = new Set(['overview', 'pipeline', 'logs', 'artifacts', 'diagnostics', 'consultation', 'selection', 'cloud'])
     let syncingTab = false
     // URL -> tab. Only act when the URL explicitly carries a valid tab, so an
     // absent ?tab leaves the consultation auto-jump / default 'overview' intact.
@@ -523,6 +552,7 @@ export default {
       requestPaper,
       onAnswered,
       onModelingDirectionChanged,
+      onSelectionChanged,
       onDiagnosticsAction,
       onAssign,
       checkCloudAccelerator,
@@ -664,6 +694,7 @@ export default {
 .tag { display: inline-flex; align-items: center; gap: 6px; font: 600 11px/1 var(--mono); letter-spacing: 0.05em; text-transform: uppercase; padding: 5px 9px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel-2); color: var(--ink-2); }
 .st-running { color: var(--live); border-color: var(--live-dim); background: var(--live-dim); }
 .st-awaiting_consultation { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
+.st-awaiting_selection { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
 .st-completed { color: var(--ok); border-color: var(--ok-dim); background: var(--ok-dim); }
 .st-paused { color: var(--paused); }
 .st-failed, .st-killed { color: var(--bad); border-color: var(--bad-dim); background: var(--bad-dim); }

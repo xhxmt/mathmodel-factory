@@ -131,6 +131,9 @@ assert.deepEqual(normalizeProjectStatus({ base_name: 'demo', is_running: 1 }), {
   pid: null,
   consultation_pending: false,
   consultation_gate: null,
+  selection_pending: false,
+  selection_gate: null,
+  selection_deadline: null,
   last_updated: null,
 })
 
@@ -445,6 +448,7 @@ const tabs = workspaceTabs({
 })
 assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'logs', 'artifacts', 'diagnostics', 'consultation', 'cloud'])
 assert.equal(tabs.find((t) => t.key === 'diagnostics').attention, true)
+assert.equal(workspaceTabs({ selectionPending: true }).find((t) => t.key === 'selection').attention, true)
 
 const artifacts = priorityArtifacts([
   { path: 'logs/runner.log', name: 'runner.log', type: 'text', group: 'diagnostics' },
@@ -470,3 +474,28 @@ assert.deepEqual(buildCloudTaskPanel(
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_frontend_contracts_include_selection_fields():
+    text = Path("web/frontend/src/lib/contracts.js").read_text(encoding="utf-8")
+
+    assert "selection_pending" in text
+    assert "selection_gate" in text
+    assert "selection_deadline" in text
+
+
+def test_frontend_api_exposes_selection_helpers():
+    text = Path("web/frontend/src/lib/api.js").read_text(encoding="utf-8")
+
+    assert "selection:" in text
+    assert "selectOption:" in text
+    assert "/selection/decision" in text
+
+
+def test_workspace_has_selection_tab_and_panel():
+    workspace = Path("web/frontend/src/components/ProjectWorkspace.vue").read_text(encoding="utf-8")
+    tabs = Path("web/frontend/src/lib/workspaceUi.js").read_text(encoding="utf-8")
+
+    assert "SelectionPanel" in workspace
+    assert "selection_pending" in workspace
+    assert "key: 'selection'" in tabs
