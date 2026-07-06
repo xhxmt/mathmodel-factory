@@ -49,6 +49,15 @@ def test_infer_step_does_not_report_16_when_gate2_is_not_pass(tmp_path):
     assert out.stdout.strip() != "16"
 
 
+def test_step16_writes_delivery_manifest_after_quality_gate():
+    runner = Path(REPO_ROOT) / "run_paper.sh"
+    text = runner.read_text(encoding="utf-8")
+
+    assert "scripts/delivery_contract.py" in text
+    assert "delivery_manifest.json" in text
+    assert text.index("Final delivery quality gate PASS") < text.index("delivery_manifest.json")
+
+
 def test_verify_step_output_rejects_step9_without_step8_5_pass(tmp_path):
     project = tmp_path / "ongoing" / "demo_step9"
     write_file(project / "problem" / "problem_brief.md", "# brief\n")

@@ -21,6 +21,7 @@
 |---|---|
 | `run_evaluation.sh` | 主入口：预检门 → 编译 → 数值核查 → 评委 ×K → 聚合 |
 | `../scripts/llm_judge_call.py` | 共享 LLM 调用器：按 model 名分派 DeepSeek / Gemini / Claude 三后端（run_evaluation.sh 与 perturbation_harness.py 共用） |
+| `../scripts/enrich_evaluation_result.py` | 将聚合结果拆成 `structural` 硬证据和 `llm_score` 软评分 |
 | `llm_judge_prompt.txt` | 外部 LLM 评委 prompt（复用 Step 13 rubric + 输出格式） |
 | `human_rubric.md` | 给真人评委的纸面打分表（同一把尺子） |
 | `baseline_scores.md` | 提交进 git 的校准基线（已完成项目的外部 vs in-loop 读数） |
@@ -45,7 +46,11 @@
 
 输出（写到 `evaluation/results/`）：
 - `<base>_eval_run1.md … run<K>.md` —— 每次评委的完整评分卡。
-- `<base>_eval.json` —— 聚合：median / min / max 总分、各次 VERDICT、verify_numbers 的 unmatched 计数、预检结果。
+- `<base>_precheck.json` —— `scripts/evaluate_modeling_project.py --json` 的结构门禁证据。
+- `<base>_eval.json` —— 聚合结果，包含：
+  - `structural`：`precheck_passed`、`inferred_step`、`unmatched_numbers`、`blocking_evidence`
+  - `llm_score`：`median_recomputed`、`min/max/spread_recomputed`、`median_total`、`verdict_distribution`
+  - `comparison_ready`：结构门禁通过且至少一个 LLM 样本可解析时为 `true`
 - 一行汇总打到 stdout，例如：
   `test_cumcm2024b: external=85.x/100 (spread 84.x-87.x), in-loop=86.4, unmatched=N, precheck=PASS`
 

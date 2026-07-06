@@ -90,26 +90,20 @@ _is_newer_by() {
 
 gate2_verdict_for_path() {
     local proj_dir="$1"
-    awk -F': *' '/^VERDICT:/{print $2; exit}' "$proj_dir/judge_evaluation.md" 2>/dev/null \
-        | tr -d '\r'
+    python3 "$FACTORY/scripts/workflow_state.py" gate2-verdict "$proj_dir" 2>/dev/null || true
 }
 
 gate2_passed_for_path() {
-    [[ "$(gate2_verdict_for_path "$1")" == "PASS" ]]
+    python3 "$FACTORY/scripts/workflow_state.py" gate2-passed "$1" 2>/dev/null
 }
 
 step8_5_verdict_for_path() {
     local proj_dir="$1"
-    if [[ -f "$FACTORY/scripts/step8_5_gate.py" ]]; then
-        python3 "$FACTORY/scripts/step8_5_gate.py" "$proj_dir" --verdict 2>/dev/null || true
-    else
-        awk -F': *' '/^VERDICT:/{print $2; exit}' "$proj_dir/entry_gate.md" 2>/dev/null \
-            | tr -d '\r'
-    fi
+    python3 "$FACTORY/scripts/workflow_state.py" step8_5-verdict "$proj_dir" 2>/dev/null || true
 }
 
 step8_5_passed_for_path() {
-    [[ "$(step8_5_verdict_for_path "$1")" == "PASS" ]]
+    python3 "$FACTORY/scripts/workflow_state.py" step8_5-passed "$1" 2>/dev/null
 }
 
 delivery_quality_gate() {
@@ -2567,31 +2561,7 @@ MODEL_CONFIG_FILE="$FACTORY/web/model_config.json"
 get_step_model_ids() {
     local step="$1"
     [[ -f "$MODEL_CONFIG_FILE" ]] || return 0
-    python3 - "$MODEL_CONFIG_FILE" "$BASE" "$step" <<'PY' 2>/dev/null || true
-import json, sys
-cfg_file, base, step = sys.argv[1], sys.argv[2], sys.argv[3]
-key = "step_%s" % step
-try:
-    with open(cfg_file) as f:
-        cfg = json.load(f)
-except Exception:
-    sys.exit(0)
-def get(scope):
-    e = (cfg.get(scope) or {}).get(key)
-    if isinstance(e, dict):
-        return e
-    if isinstance(e, str) and e:
-        return {"primary": e}
-    return None
-entry = get(base) or get("_default")
-if not entry:
-    sys.exit(0)
-prim = (entry.get("primary") or "").strip()
-fb = (entry.get("fallback") or "").strip()
-if not prim:
-    sys.exit(0)
-print("%s|%s" % (prim, fb))
-PY
+    python3 "$FACTORY/scripts/model_dispatch_config.py" step-ids "$MODEL_CONFIG_FILE" "$BASE" "$step" 2>/dev/null || true
 }
 
 # Echo "backend<US>model<US>effort<US>base_url<US>key_env" (US = \x1f) for a
@@ -2600,26 +2570,7 @@ PY
 get_model_entry() {
     local id="$1"
     [[ -n "$id" && -f "$MODEL_REGISTRY_FILE" ]] || return 1
-    python3 - "$MODEL_REGISTRY_FILE" "$id" <<'PY' 2>/dev/null || return 1
-import json, sys
-reg_file, mid = sys.argv[1], sys.argv[2]
-try:
-    with open(reg_file) as f:
-        reg = json.load(f)
-except Exception:
-    sys.exit(1)
-models = reg.get("models", []) if isinstance(reg, dict) else reg
-for m in models:
-    if m.get("id") == mid:
-        if m.get("enabled") is False:
-            sys.exit(1)
-        print("\x1f".join([
-            m.get("backend", ""), m.get("model", ""), m.get("effort", ""),
-            m.get("base_url", ""), m.get("key_env", ""),
-        ]))
-        sys.exit(0)
-sys.exit(1)
-PY
+    python3 "$FACTORY/scripts/model_dispatch_config.py" entry "$MODEL_REGISTRY_FILE" "$id" 2>/dev/null || return 1
 }
 
 # Step -> the single markdown artifact a non-agentic API backend should write.
@@ -3337,6 +3288,17 @@ run_step_16() {
         log "   Final delivery quality gate PASS"
     else
         log "   Final delivery quality gate FAIL — project remains incomplete"
+        return 1
+    fi
+    log "   Writing delivery manifest"
+    if python3 "$FACTORY/scripts/delivery_contract.py" "$PROJECT" \
+        --root "$FACTORY" \
+        --output "$PROJECT/delivery_manifest.json" \
+        > "$PROJECT/delivery_manifest.stdout.json" \
+        2> "$PROJECT/delivery_manifest.stderr.log"; then
+        log "   delivery_manifest.json OK"
+    else
+        log "   delivery_manifest.json failed"
         return 1
     fi
     # Update checkpoint

@@ -3,13 +3,6 @@ set -euo pipefail
 
 FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 🔒 Load secrets from GCP Secret Manager
-if [[ -f "$FACTORY/scripts/load_secrets.sh" ]]; then
-    source "$FACTORY/scripts/load_secrets.sh"
-else
-    echo "ERROR: missing $FACTORY/scripts/load_secrets.sh" >&2
-    exit 1
-fi
 PAPER_STY="$FACTORY/resources/style/paper.sty"
 BIB_BST="$FACTORY/resources/bib/bibliography.bst"
 STYLE_JSON="$FACTORY/resources/style/model_papers_style.json"

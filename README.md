@@ -181,7 +181,8 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 - 文件状态具有最高权威。`run_paper.sh --infer-step <project_dir>` 会检查实际产出的文件，并且修复并对齐检查点文本。
 - 当 `modeling_guide.md` 和遗留的 `analysis_guide.md` 同时存在时，以 `modeling_guide.md` 为准。
 - 已完成的项目将从 `ongoing/` 移至 `complete/`。
-- Step 16 会将最终版本的 PDF 复制到 `papers/` 并生成 `papers/<base>_submission.zip` 文件。
+- Step 16 会将最终版本的 PDF 复制到 `papers/`，生成 `papers/<base>_submission.zip` 文件，并写入项目内 `delivery_manifest.json`。
+- `complete/` 是历史交付目录，不等价于“符合当前最新契约”。使用 `python3 scripts/audit_complete_projects.py --write-manifests` 生成 `complete/_validation_index.json`，将项目分为 `CURRENT_PASS`、`LEGACY_DELIVERED` 和 `INVALID_OR_INCOMPLETE`。
 
 ## 评测与消融实验
 
@@ -195,6 +196,7 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 - 在 6 个维度上评分：模型合理性、求解正确性、创新性、写作清晰度、结果说服力、灵敏度分析
 - 支持重复采样（K=3）和方差分析，确保评估稳定性
 - 与流水线内部 Step 13 评委解耦，消除自我偏好（self-preference bias）
+- 输出 JSON 同时包含 `structural` 硬门禁证据与 `llm_score` 软评分，横向比较时不要只看单个总分。
 
 ```bash
 # 评估已完成的项目

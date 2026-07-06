@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
+import importlib
 import json
 import os
 import re
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -19,19 +20,12 @@ REGISTRY_FILE = "run_state/process_registry"
 TOTAL_STEPS = 16
 ROOT = Path(__file__).resolve().parents[1]
 RUN_PAPER = ROOT / "run_paper.sh"
-STATE_STORE_PATH = ROOT / "web" / "backend" / "state_store.py"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def _load_state_store():
-    spec = importlib.util.spec_from_file_location(
-        "_state_store_for_project_ctl",
-        STATE_STORE_PATH,
-    )
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Unable to load state store from {STATE_STORE_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module("web.backend.state_store")
 
 
 def _registry_path(factory_root: Path) -> Path:
