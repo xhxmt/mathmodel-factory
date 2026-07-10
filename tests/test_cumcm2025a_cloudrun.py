@@ -120,8 +120,8 @@ def main():
     out_dir.mkdir(exist_ok=True)
 
     tests = [
-        {"problem": 1, "expected_objective": 1.4, "tolerance": 0.01, "particles": 80, "iterations": 150},
-        {"problem": 2, "expected_objective": 4.7, "tolerance": 0.5, "particles": 40, "iterations": 80},
+        {"problem": 1, "expected_objective": 1.391643, "tolerance": 0.002, "particles": 80, "iterations": 150},
+        {"problem": 2, "expected_objective": 4.45, "tolerance": 0.35, "particles": 40, "iterations": 80},
     ]
 
     passed = 0
