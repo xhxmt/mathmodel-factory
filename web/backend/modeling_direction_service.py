@@ -98,17 +98,27 @@ def _data_fit(required_data: list[Any], data_text: str) -> float:
     return hits / len(requirements)
 
 
-def _score_direction(entry: dict[str, Any], retrieval: dict[str, Any], data_text: str) -> tuple[int, int, int]:
-    retrieval_score = float(retrieval.get("retrieval_score") or 0.0)
-    applicable = len(entry.get("applicable_problem_types", []) or [])
-    solver_count = len(entry.get("solver_stack", []) or [])
-    failure_count = len(entry.get("failure_modes", []) or [])
-    data_score = _data_fit(entry.get("required_data", []) or [], data_text)
+EVIDENCE_RANK = {"none": 0, "weak": 1, "moderate": 2, "strong": 3}
 
-    correctness = round(min(100, 55 + min(30, retrieval_score * 5) + min(8, applicable * 2)))
-    feasibility = round(max(35, min(100, 58 + data_score * 32 + min(6, solver_count * 3) - min(10, failure_count * 3))))
-    combined = round(correctness * 0.55 + feasibility * 0.45)
-    return correctness, feasibility, combined
+
+def _direction_evidence(
+    entry: dict[str, Any], retrieval: dict[str, Any], data_text: str
+) -> tuple[str, float, int]:
+    retrieval_score = float(retrieval.get("retrieval_score") or 0.0)
+    data_score = _data_fit(entry.get("required_data", []) or [], data_text)
+    historical_samples = max(0, int(entry.get("historical_samples") or 0))
+    has_problem_types = bool(entry.get("applicable_problem_types"))
+    has_solver = bool(entry.get("solver_stack"))
+
+    if historical_samples >= 3 and retrieval_score >= 6 and data_score >= 0.75:
+        level = "strong"
+    elif retrieval_score >= 4 and data_score >= 0.5 and has_problem_types and has_solver:
+        level = "moderate"
+    elif retrieval_score > 0 or data_score > 0:
+        level = "weak"
+    else:
+        level = "none"
+    return level, round(data_score, 3), historical_samples
 
 
 def _selected_direction_id(project_path: Path) -> str:
@@ -156,7 +166,9 @@ def build_modeling_directions(project_path: Path, factory_root: Path, limit: int
         if direction_id in seen_ids:
             continue
         seen_ids.add(direction_id)
-        correctness, feasibility, combined = _score_direction(entry, retrieval, data_text)
+        evidence_level, data_coverage, historical_samples = _direction_evidence(
+            entry, retrieval, data_text
+        )
         risks = [str(item) for item in (entry.get("failure_modes", []) or [])[:2]]
         required = [str(item) for item in (entry.get("required_data", []) or [])[:4]]
         solver_stack = [str(item) for item in (entry.get("solver_stack", []) or [])[:3]]
@@ -170,23 +182,31 @@ def build_modeling_directions(project_path: Path, factory_root: Path, limit: int
                 "domain": str(entry.get("domain") or ""),
                 "subdomain": str(entry.get("subdomain") or ""),
                 "method_path": str(entry.get("path") or retrieval.get("path") or ""),
-                "correctness_score": correctness,
-                "feasibility_score": feasibility,
-                "combined_score": combined,
+                "evidence_level": evidence_level,
+                "data_coverage": data_coverage,
+                "historical_samples": historical_samples,
                 "retrieval_score": retrieval.get("retrieval_score", 0),
                 "matched_terms": retrieval.get("matched_terms", []),
                 "required_data": required,
                 "solver_stack": solver_stack,
                 "risks": risks,
-                "rationale": _direction_rationale(title, method, correctness, feasibility, required, solver_stack),
+                "rationale": _direction_rationale(
+                    title,
+                    method,
+                    evidence_level,
+                    data_coverage,
+                    historical_samples,
+                    required,
+                    solver_stack,
+                ),
             }
         )
 
     candidates.sort(
         key=lambda item: (
-            -int(item["combined_score"]),
-            -int(item["correctness_score"]),
-            -int(item["feasibility_score"]),
+            -EVIDENCE_RANK[str(item["evidence_level"])],
+            -float(item["retrieval_score"]),
+            -float(item["data_coverage"]),
             str(item["id"]),
         )
     )
@@ -205,17 +225,18 @@ def build_modeling_directions(project_path: Path, factory_root: Path, limit: int
 def _direction_rationale(
     title: str,
     method: str,
-    correctness: int,
-    feasibility: int,
+    evidence_level: str,
+    data_coverage: float,
+    historical_samples: int,
     required_data: list[str],
     solver_stack: list[str],
 ) -> str:
-    data_note = "、".join(required_data[:2]) if required_data else "题目结构化数据"
+    data_note = "、".join(required_data[:2]) if required_data else "未声明专用数据要求"
     solver_note = " / ".join(solver_stack[:2]) if solver_stack else "常规数值工具"
     return (
-        f"{title}（{method}）在方法匹配和数据可得性上综合得分较高；"
-        f"当前正确性潜力 {correctness}，可行性 {feasibility}。"
-        f"主要依赖 {data_note}，可用 {solver_note} 落地。"
+        f"{title}（{method}）的检索证据等级为 {evidence_level}，"
+        f"所需数据覆盖率为 {data_coverage:.0%}，可校准历史样本 {historical_samples} 个。"
+        f"主要依赖 {data_note}，候选工具为 {solver_note}；这些信息不代表方法正确率。"
     )
 
 
@@ -254,8 +275,9 @@ def _render_selection_section(direction: dict[str, Any], timestamp: str) -> str:
         f"Selected direction id: {direction.get('id', '')}\n"
         f"Primary direction: {direction.get('title', '')} ({direction.get('method', '')})\n"
         f"Method path: {direction.get('method_path', '')}\n"
-        f"Correctness score: {direction.get('correctness_score', '')}\n"
-        f"Feasibility score: {direction.get('feasibility_score', '')}\n"
+        f"Evidence level: {direction.get('evidence_level', 'none')}\n"
+        f"Historical samples: {direction.get('historical_samples', 0)}\n"
+        f"Required-data coverage: {float(direction.get('data_coverage', 0.0)):.0%}\n"
         f"Rationale: {direction.get('rationale', '')}\n"
         f"Known risks: {risks_text}\n\n"
         "请 Step 1 将该方向作为高优先级候选流写入 viable_streams.md；"

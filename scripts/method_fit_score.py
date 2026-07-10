@@ -181,54 +181,55 @@ def find_method_path(family_desc):
 
 
 def extract_quality_score(project_dir, base_name):
-    """提取项目质量得分（优先judge，否则用硬指标）。"""
-    judge_path = os.path.join(project_dir, 'judge_evaluation.md')
-    judge_text = _read_file(judge_path)
-
-    # 尝试提取judge分数
-    score_match = re.search(r'总分.*?[:：]\s*(\d+)', judge_text)
-    if score_match:
-        return {
-            'score': int(score_match.group(1)),
-            'source': 'judge',
-        }
-
-    # 降级到硬指标
+    """Load an explicit human/award label; never learn from self-judging proxies."""
+    label_path = os.path.join(project_dir, 'quality_label.json')
     try:
-        # 导入hard_metrics（假设在同目录）
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-        from hard_metrics import collect_all
-
-        metrics = collect_all(project_dir, base_name)
-
-        # 硬指标综合得分（越低越好的指标取负）
-        score = 100
-        score -= metrics.get('dangling_cites', 0) * 10
-        score -= metrics.get('symbols_undefined', 0) * 2
-        score -= metrics.get('numbers_unmatched', 0) * 5
-        score -= metrics.get('non_converged', 0) * 15
-        score -= metrics.get('chain_breaks', 0) * 8
-        score = max(0, min(100, score))
-
-        return {
-            'score': score,
-            'source': 'hard_metrics',
-        }
+        label = json.loads(_read_file(label_path))
     except Exception:
-        return {
-            'score': None,
-            'source': 'unavailable',
-        }
+        label = None
+    if isinstance(label, dict):
+        score = label.get('score')
+        source = str(label.get('source') or '')
+        if isinstance(score, (int, float)) and source in {'human', 'award'}:
+            return {'score': float(score), 'source': source}
+    return {'score': None, 'source': 'unavailable'}
+
+
+def _is_current_pass(project_dir):
+    try:
+        manifest = json.loads(_read_file(os.path.join(project_dir, 'delivery_manifest.json')))
+    except Exception:
+        return False
+    return (
+        manifest.get('status') == 'CURRENT_PASS'
+        and (manifest.get('evaluation') or {}).get('passed') is True
+    )
+
+
+def _registered_paths(complete_dir):
+    index_path = os.path.join(os.path.dirname(os.path.abspath(complete_dir)), 'method_library', 'index.json')
+    try:
+        entries = json.loads(_read_file(index_path))
+    except Exception:
+        return set()
+    return {
+        str(entry.get('path'))
+        for entry in entries
+        if isinstance(entry, dict) and entry.get('path')
+    }
 
 
 def learn_from_history(complete_dir):
     """从complete/目录学习历史模式。"""
     projects = []
+    registered_paths = _registered_paths(complete_dir)
 
     for project_name in os.listdir(complete_dir):
         project_dir = os.path.join(complete_dir, project_name)
         if not os.path.isdir(project_dir):
+            continue
+
+        if not _is_current_pass(project_dir):
             continue
 
         # 需要有chosen_method.md
@@ -241,6 +242,10 @@ def learn_from_history(complete_dir):
             quality = extract_quality_score(project_dir, project_name)
 
             if quality['score'] is None:
+                continue
+            if methods.get('primary_path') not in registered_paths:
+                continue
+            if features['constraint_count'] == 0 and features['variable_count'] == 0:
                 continue
 
             projects.append({

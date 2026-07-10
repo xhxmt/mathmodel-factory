@@ -86,8 +86,15 @@ def test_build_modeling_directions_returns_ranked_two_to_three_options(tmp_path)
     assert [item["rank"] for item in payload["directions"]] == [1, 2, 3]
     assert 2 <= len(payload["directions"]) <= 3
     assert payload["directions"][0]["id"] == "milp"
-    assert payload["directions"][0]["correctness_score"] >= payload["directions"][1]["correctness_score"]
-    assert payload["directions"][0]["feasibility_score"] >= payload["directions"][1]["feasibility_score"]
+    assert "correctness_score" not in payload["directions"][0]
+    assert "feasibility_score" not in payload["directions"][0]
+    assert payload["directions"][0]["evidence_level"] in {
+        "none",
+        "weak",
+        "moderate",
+        "strong",
+    }
+    assert payload["directions"][0]["data_coverage"] >= payload["directions"][1]["data_coverage"]
 
 
 def test_write_modeling_direction_selection_records_step1_guidance(tmp_path):
@@ -97,9 +104,10 @@ def test_write_modeling_direction_selection_records_step1_guidance(tmp_path):
         "title": "混合整数线性规划",
         "method": "MILP",
         "method_path": "method_library/optimization/milp.md",
-        "correctness_score": 92,
-        "feasibility_score": 88,
-        "rationale": "适合离散决策和多阶段约束。",
+        "evidence_level": "moderate",
+        "historical_samples": 0,
+        "data_coverage": 0.75,
+        "rationale": "检索匹配较强，所需数据覆盖率为 75%。",
         "risks": ["大 M 过松"],
     }
 
@@ -114,4 +122,7 @@ def test_write_modeling_direction_selection_records_step1_guidance(tmp_path):
     assert "STATUS: READY" in text
     assert "Selected direction id: milp" in text
     assert "method_library/optimization/milp.md" in text
+    assert "Evidence level: moderate" in text
+    assert "Historical samples: 0" in text
+    assert "Correctness score" not in text
     assert "请 Step 1 将该方向作为高优先级候选流" in text

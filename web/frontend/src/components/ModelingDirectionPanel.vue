@@ -33,17 +33,10 @@
         </div>
         <h3>{{ direction.title }}</h3>
         <div class="method mono">{{ direction.method_path }}</div>
-        <div class="scores">
-          <div class="score-row">
-            <span>正确性</span>
-            <meter min="0" max="100" :value="direction.correctness_score"></meter>
-            <b class="mono">{{ direction.correctness_score }}</b>
-          </div>
-          <div class="score-row">
-            <span>可行性</span>
-            <meter min="0" max="100" :value="direction.feasibility_score"></meter>
-            <b class="mono">{{ direction.feasibility_score }}</b>
-          </div>
+        <div class="evidence">
+          <span class="evidence-level mono">证据 {{ evidenceLabel(direction.evidence_level) }}</span>
+          <span class="mono">数据 {{ percent(direction.data_coverage) }}</span>
+          <span class="mono">样本 {{ direction.historical_samples || 0 }}</span>
         </div>
         <p class="rationale">{{ direction.rationale }}</p>
         <div class="risk mono">{{ riskText(direction) }}</div>
@@ -127,6 +120,15 @@ export default {
       return risks.length ? `风险: ${risks.join(' / ')}` : '风险: 无硬阻塞'
     }
 
+    function evidenceLabel(level) {
+      return ({ strong: '强', moderate: '中', weak: '弱', none: '无' })[level] || '无'
+    }
+
+    function percent(value) {
+      const numeric = Number(value)
+      return Number.isFinite(numeric) ? `${Math.round(numeric * 100)}%` : '0%'
+    }
+
     watch(() => props.base, load)
     watch(() => props.currentStep, (step) => {
       visible.value = step <= 1 || Boolean(selectedId.value)
@@ -145,6 +147,8 @@ export default {
       load,
       select,
       riskText,
+      evidenceLabel,
+      percent,
     }
   },
 }
@@ -169,12 +173,9 @@ export default {
 .domain { color: var(--ink-3); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 h3 { margin: 0; font-size: 14px; line-height: 1.28; letter-spacing: 0; }
 .method { min-height: 28px; color: var(--ink-3); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
-.scores { display: flex; flex-direction: column; gap: 6px; }
-.score-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 28px; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-2); }
-meter { width: 100%; height: 7px; }
-meter::-webkit-meter-bar { background: var(--bg-2); border: 0; border-radius: 999px; }
-meter::-webkit-meter-optimum-value { background: var(--amber); border-radius: 999px; }
-.score-row b { color: var(--ink); font-size: 11px; text-align: right; }
+.evidence { display: flex; flex-wrap: wrap; gap: 6px; color: var(--ink-2); font-size: 10.5px; }
+.evidence span { padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-3); }
+.evidence-level { color: var(--amber); }
 .rationale { flex: 1; margin: 0; color: var(--ink-2); font-size: 11.5px; line-height: 1.45; }
 .risk { min-height: 28px; color: var(--ink-3); font-size: 10.5px; line-height: 1.35; overflow-wrap: anywhere; }
 .spinner.sm { width: 13px; height: 13px; border-top-color: currentColor; }
