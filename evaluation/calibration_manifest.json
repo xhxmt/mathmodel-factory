@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "path_root": "..",
+  "policy": {
+    "mode": "offline_only",
+    "score_use": "pairwise_ordering_primary_absolute_score_secondary",
+    "runtime_answer_keys": "forbidden"
+  },
+  "papers": [
+    {
+      "id": "national1_2024b",
+      "problem_id": "CUMCM-2024-B",
+      "category": "real_awarded",
+      "award_tier": "national_first",
+      "paper_path": "reference_papers/national_1_B/national1_24B_production.pdf",
+      "result_path": "evaluation/results/national_1_B_eval.json"
+    },
+    {
+      "id": "provincial1_2024b",
+      "problem_id": "CUMCM-2024-B",
+      "category": "real_awarded",
+      "award_tier": "provincial_first",
+      "paper_path": "reference_papers/provincial_1/henryers_24B_provincial1.pdf",
+      "result_path": "evaluation/results/ext_sheng1_2024b_eval.json"
+    },
+    {
+      "id": "provincial3_2024b",
+      "problem_id": "CUMCM-2024-B",
+      "category": "real_awarded",
+      "award_tier": "provincial_third",
+      "paper_path": "reference_papers/provincial_3/cherzing_24B_provincial3.pdf",
+      "result_path": "evaluation/results/provincial_3_2024b_eval.json"
+    },
+    {
+      "id": "generated_2024b",
+      "problem_id": "CUMCM-2024-B",
+      "category": "generated_baseline",
+      "award_tier": null,
+      "paper_path": "complete/test_cumcm2024b/test_cumcm2024b_paper.pdf",
+      "result_path": "evaluation/results/test_cumcm2024b_eval.json",
+      "expected_fatal_flaw": false
+    },
+    {
+      "id": "generated_2024a_known_fatal",
+      "problem_id": "CUMCM-2024-A",
+      "category": "generated_baseline",
+      "award_tier": null,
+      "paper_path": "complete/test_cumcm2024a_polished/test_cumcm2024a_paper.pdf",
+      "result_path": "evaluation/results/test_cumcm2024a_eval.json",
+      "expected_fatal_flaw": true
+    }
+  ],
+  "pairs": [
+    {
+      "higher": "national1_2024b",
+      "lower": "provincial1_2024b",
+      "basis": "same_problem_award_order"
+    },
+    {
+      "higher": "provincial1_2024b",
+      "lower": "provincial3_2024b",
+      "basis": "same_problem_award_order"
+    }
+  ]
+}

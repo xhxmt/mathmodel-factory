@@ -1,0 +1,111 @@
+{
+  "papers": [
+    {
+      "id": "national1_2024b",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": "national_first",
+      "category": "real_awarded",
+      "paper_path": "reference_papers/national_1_B/national1_24B_production.pdf",
+      "result_path": "evaluation/results/national_1_B_eval.json",
+      "status": "MISSING",
+      "score": null,
+      "fatal_flaw_detected": false
+    },
+    {
+      "id": "provincial1_2024b",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": "provincial_first",
+      "category": "real_awarded",
+      "paper_path": "reference_papers/provincial_1/henryers_24B_provincial1.pdf",
+      "result_path": "evaluation/results/ext_sheng1_2024b_eval.json",
+      "status": "AVAILABLE",
+      "score": 76.4,
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "provincial3_2024b",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": "provincial_third",
+      "category": "real_awarded",
+      "paper_path": "reference_papers/provincial_3/cherzing_24B_provincial3.pdf",
+      "result_path": "evaluation/results/provincial_3_2024b_eval.json",
+      "status": "MISSING",
+      "score": null,
+      "fatal_flaw_detected": false
+    },
+    {
+      "id": "generated_2024b",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": "generated_baseline",
+      "paper_path": "complete/test_cumcm2024b/test_cumcm2024b_paper.pdf",
+      "result_path": "evaluation/results/test_cumcm2024b_eval.json",
+      "status": "AVAILABLE",
+      "score": 91.6,
+      "fatal_flaw_detected": false
+    },
+    {
+      "id": "generated_2024a_known_fatal",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": "generated_baseline",
+      "paper_path": "complete/test_cumcm2024a_polished/test_cumcm2024a_paper.pdf",
+      "result_path": "evaluation/results/test_cumcm2024a_eval.json",
+      "status": "AVAILABLE",
+      "score": 66.3,
+      "fatal_flaw_detected": true
+    }
+  ],
+  "missing_results": [
+    "national1_2024b",
+    "provincial3_2024b"
+  ],
+  "pairs": [
+    {
+      "higher": "national1_2024b",
+      "lower": "provincial1_2024b",
+      "status": "MISSING",
+      "credit": null
+    },
+    {
+      "higher": "provincial1_2024b",
+      "lower": "provincial3_2024b",
+      "status": "MISSING",
+      "credit": null
+    }
+  ],
+  "pairwise": {
+    "evaluated": 0,
+    "total": 2,
+    "correct_points": 0.0,
+    "accuracy": null
+  },
+  "ordering": {
+    "concordant": 0,
+    "discordant": 0,
+    "ties": 0,
+    "kendall_style_tau": null
+  },
+  "malformed_outputs": {
+    "malformed": 0,
+    "total_runs": 9,
+    "rate": 0.0
+  },
+  "fatal_flaw_detection": {
+    "detected": 1,
+    "expected": 1,
+    "rate": 1.0
+  },
+  "coverage_by_problem": {
+    "CUMCM-2024-A": {
+      "available": 1,
+      "total": 1,
+      "coverage": 1.0
+    },
+    "CUMCM-2024-B": {
+      "available": 2,
+      "total": 4,
+      "coverage": 0.5
+    }
+  }
+}

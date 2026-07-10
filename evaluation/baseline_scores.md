@@ -1,5 +1,10 @@
 # 外部评估校准基线 — Baseline Scores
 
+> **状态更新（2026-07-10）**：下列分数来自旧的合并上下文评委，现仅作历史记录。
+> 当前评测已改为数学、执行、论文三类隔离调用并采用正确性否决；新的活跃校准入口是
+> `evaluation/calibration_manifest.json` 与 `scripts/evaluate_calibration.py`。在真实论文缺失的新结果补齐前，
+> 不得把下列绝对分数宣称为当前评委精度。
+
 > 由 `evaluation/run_evaluation.sh` 在两道已完成真题上跑出的客观外部读数，
 > 提交进 git 作为后续 prompt 迭代（5.3）/ 消融实验（5.4）的对照基线。
 > 这不是流水线自评（in-loop Step 13），而是**独立外部评委**给出的分数。
@@ -109,4 +114,3 @@ haiku 时代的已知问题：单次方差 13–16 分；偶发首行非 `VERDIC
 当时的"模型决策"是：`opus[1m]` 在 `anyrouter.top` 路由上对重型评委请求卡死
 （300s 0 字节），`sonnet[1m]` 连 PONG 都超时，`haiku[1m]` 是唯一能完成的 Claude 模型
 （~40–150s）。这一路由限制依旧成立，故现选 DeepSeek 而非 Claude 大模型。
-

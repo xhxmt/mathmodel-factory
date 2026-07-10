@@ -5,8 +5,8 @@
 
 ## 为什么存在
 
-流水线内部的 **Step 13 评委模拟**（`prompts/step13_gate2_judge.txt`）由"写论文的同一上下文"
-打分，用于驱动 reopen——但做横向比较 / 消融实验时，这种自评有 self-preference 偏置，**不可信**。
+流水线内部的 **Step 13** 与外部评测现在都使用三个隔离评审包：数学审计、执行审计和论文评阅。
+数学或执行失败是不可平均的硬否决；论文分数只在正确性通过后用于质量排序。
 
 `evaluation/` 提供同一套 6 维度 rubric、**不同的评判主体**：
 
@@ -19,7 +19,9 @@
 
 | 文件 | 作用 |
 |---|---|
-| `run_evaluation.sh` | 主入口：预检门 → 编译 → 数值核查 → 评委 ×K → 聚合 |
+| `run_evaluation.sh` | 主入口：预检门 → 编译 → 隔离评审包 → 三角色 ×K → 否决聚合 |
+| `calibration_manifest.json` | 真实获奖论文与生成基线的离线标签、同题奖项顺序和结果路径 |
+| `../scripts/evaluate_calibration.py` | 计算奖项顺序准确率、Kendall-style 次序、缺失覆盖、格式失败和致命缺陷检出率 |
 | `../scripts/llm_judge_call.py` | 共享 LLM 调用器：按 model 名分派 DeepSeek / Gemini / Claude 三后端（run_evaluation.sh 与 perturbation_harness.py 共用） |
 | `../scripts/enrich_evaluation_result.py` | 将聚合结果拆成 `structural` 硬证据和 `llm_score` 软评分 |
 | `llm_judge_prompt.txt` | 外部 LLM 评委 prompt（复用 Step 13 rubric + 输出格式） |
@@ -66,12 +68,14 @@
 
 ## 校准
 
-`baseline_scores.md` 记录已完成项目的外部分数与 in-loop ground truth 的偏差。
-健全性约束：外部分数应保持 **2024b > 2024a** 的序（in-loop: 86.4 > 80.2）。
-若翻转 → 评委 prompt 失准，需回炉。
+校准优先看同题真实论文的奖项顺序，不把绝对分数当 ground truth：
 
-## 不在本阶段范围
+```bash
+python3 scripts/evaluate_calibration.py evaluation/calibration_manifest.json --existing-results
+```
 
-- 对照获奖论文打分（`benchmark/` 里没有，且版权不可 commit）→ 留作扩展。
-- prompt 迭代记录（5.3 `prompts/CHANGELOG.md`）、消融脚本（5.4 `experiments/`）、研究论文素材（5.5）。
-  但本目录的 `<base>_eval.json` 是 5.4 消融统计的共用前置。
+报告会明确列出 `MISSING`，不会把缺失论文从分母静默删除。答案材料不得进入 runtime agent 的评审包。
+
+## 历史结果说明
+
+`results/` 中 2026-07-10 之前的评分卡来自旧的合并上下文评委，只能作为历史样本。新的校准报告会保留这些结果的可用性标记，但新的基线必须由隔离三角色评审重新生成。
