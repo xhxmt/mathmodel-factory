@@ -8,7 +8,10 @@ the fixed Problem 1 reference calculation used by offline regression tests.
 
 from __future__ import annotations
 
+import argparse
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -152,3 +155,54 @@ def solve_problem1_reference(
         sample_count=len(targets),
         endpoint_tol=endpoint_tol,
     )
+
+
+def verify_project_result(project: Path, tolerance: float = 1e-5) -> dict[str, object]:
+    project = Path(project).resolve()
+    values_path = project / "results" / "problem1" / "values.json"
+    values = json.loads(values_path.read_text(encoding="utf-8"))
+    intervals = (values.get("decision") or {}).get("intervals") or []
+    if len(intervals) != 1 or len(intervals[0]) != 2:
+        return {
+            "passed": False,
+            "reason": "project result must contain exactly one Problem 1 interval",
+            "values_path": str(values_path),
+        }
+    reference = solve_problem1_reference(endpoint_tol=min(1e-7, tolerance / 10.0))
+    objective = float(values["objective"])
+    start, end = (float(value) for value in intervals[0])
+    duration_error = abs(objective - reference.duration)
+    start_error = abs(start - reference.start)
+    end_error = abs(end - reference.end)
+    return {
+        "passed": max(duration_error, start_error, end_error) <= tolerance,
+        "values_path": str(values_path),
+        "tolerance": tolerance,
+        "project": {"start": start, "end": end, "duration": objective},
+        "reference": {
+            "start": reference.start,
+            "end": reference.end,
+            "duration": reference.duration,
+        },
+        "duration_error": duration_error,
+        "start_error": start_error,
+        "end_error": end_error,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--verify-project", type=Path)
+    parser.add_argument("--tolerance", type=float, default=1e-5)
+    args = parser.parse_args()
+    if args.verify_project:
+        result = verify_project_result(args.verify_project, args.tolerance)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["passed"] else 1
+    result = solve_problem1_reference()
+    print(json.dumps(result.__dict__, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -820,14 +820,14 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         all_logs = []
         for pattern in ("step_*.log", "step_*_claude_*.log", "step_*_codex_*.log", "step_*_agy_*.log"):
             all_logs.extend(logs_dir.glob(pattern))
+        runner_log = logs_dir / "runner.log"
+        if runner_log.is_file():
+            all_logs.append(runner_log)
         all_logs = sorted(all_logs, key=lambda path: path.stat().st_mtime, reverse=True)
         all_logs = [path for path in all_logs if path.stat().st_size > 0] or all_logs
 
         if not all_logs:
-            runner_log = logs_dir / "runner.log"
-            if not runner_log.is_file():
-                return {"logs": []}
-            all_logs = [runner_log]
+            return {"logs": []}
 
         recent_log = all_logs[0]
         result = subprocess.run(

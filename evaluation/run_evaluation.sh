@@ -2,8 +2,8 @@
 # evaluation/run_evaluation.sh — external, reproducible, cross-comparable quality
 # evaluation of a finished Modeling Factory project. See evaluation/README.md.
 #
-# Pipeline:  precheck gate -> compile -> numeric-traceability signal ->
-#            assemble judge input -> claude -p judge x K -> aggregate (median+spread)
+# Pipeline: precheck -> compile -> build isolated packets -> run three independent
+#           judge calls per sample -> correctness-veto aggregation -> median/spread
 #
 # NOTE: intentionally NOT `set -e`. scripts/verify_numbers.py exits 1 whenever
 # any paper number is unmatched (verify_numbers.py:217) — that is a signal we
@@ -13,16 +13,13 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS="$REPO_ROOT/scripts"
 RESULTS_DIR="$REPO_ROOT/evaluation/results"
-PROMPT_FILE="$REPO_ROOT/evaluation/llm_judge_prompt.txt"
+JUDGE_PROMPTS="$REPO_ROOT/prompts/judges"
 
 # API keys (DEEPSEEK_API_KEY / GEMINI_API_KEY) live in .env; source it so the
 # shared caller scripts/llm_judge_call.py can see them. Existing env wins.
 if [ -f "$REPO_ROOT/.env" ]; then
   set -a; . "$REPO_ROOT/.env"; set +a
 fi
-
-# Evidence files fed to the judge alongside the paper .tex (each guarded by -f).
-EVIDENCE_FILES=(model.md solve_log.md sensitivity_report.md evaluation.md symbol_table.md assumption_ledger.md)
 
 usage() {
   cat >&2 <<EOF
@@ -119,24 +116,31 @@ UNMATCHED="$(printf '%s\n' "$VN_OUT" | sed -n 's/^UNMATCHED (no source found):[[
 [ -n "$UNMATCHED" ] || UNMATCHED="NA"
 echo "    UNMATCHED numbers: $UNMATCHED"
 
-# ---- 4. assemble judge input (prompt header + paper + evidence, inline) ----
-echo ">>> [4/5] assembling judge input"
-INPUT_FILE="$(mktemp)"
-trap 'rm -f "$INPUT_FILE"' EXIT
-{
-  sed "s/__BASE_NAME__/${BASE}/g" "$PROMPT_FILE"
-  printf '\n═══════════════════════════════════════════════\n=== 输入材料开始 ===\n'
-  printf 'UNMATCHED_NUMBERS = %s\n\n' "$UNMATCHED"
-  printf -- '----- 论文 LaTeX 源 (%s_paper.tex) -----\n' "$BASE"
-  cat "$PROJECT/${BASE}_paper.tex" 2>/dev/null || echo "(缺失)"
-  for f in "${EVIDENCE_FILES[@]}"; do
-    if [ -f "$PROJECT/$f" ]; then
-      printf -- '\n----- 证据: %s -----\n' "$f"
-      cat "$PROJECT/$f"
-    fi
-  done
-  printf '\n=== 输入材料结束 — 现在直接输出评分卡 ===\n'
-} > "$INPUT_FILE"
+# ---- 4. build isolated, hash-addressed judge packets ----
+echo ">>> [4/5] building isolated judge packets"
+python3 "$SCRIPTS/judge_packet.py" "$PROJECT" --base "$BASE" >/dev/null || {
+  echo "ERROR: failed to build judge packets" >&2
+  exit 4
+}
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+assemble_role_input() {
+  role="$1"
+  prompt="$JUDGE_PROMPTS/${role}_auditor.txt"
+  [ "$role" = paper ] && prompt="$JUDGE_PROMPTS/paper_reviewer.txt"
+  {
+    sed -e "s|__PROJECT_PATH__|ISOLATED_PACKET|g" -e "s|__BASE_NAME__|$BASE|g" "$prompt"
+    printf '\n=== ISOLATED PACKET START ===\n'
+    cat "$PROJECT/judge_packets/$role/context.txt"
+    printf '\n=== ISOLATED PACKET END ===\n'
+    printf 'Return only the requested role output. Do not add an outer code fence.\n'
+  } > "$TMP_DIR/${role}.prompt.txt"
+}
+
+for role in math execution paper; do
+  assemble_role_input "$role"
+done
 
 # ---- 5. run judge K times (stdin = full prompt; avoids ARG_MAX limits) ----
 echo ">>> [5/5] judging x$SAMPLES"
@@ -147,29 +151,36 @@ judge_call() {  # prompt on stdin -> scorecard on stdout
   # like grok-search) and passes CLAUDE_EFFORT through. (NOTE: --disallowedTools
   # was tried to force no-tools but HANGS claude -p, so it is intentionally unused
   # — see evaluation/README.) Model defaults to deepseek-chat (see note above).
-  python3 "$SCRIPTS/llm_judge_call.py" --model "$CLAUDE_MODEL" \
-    --timeout "${JUDGE_TIMEOUT:-360}"
+  (cd "$TMP_DIR" && python3 "$SCRIPTS/llm_judge_call.py" --model "$CLAUDE_MODEL" \
+    --timeout "${JUDGE_TIMEOUT:-360}")
 }
 RUN_FILES=()
 for k in $(seq 1 "$SAMPLES"); do
-  OUT="$RESULTS_DIR/${BASE}_eval_run${k}.md"
-  ERRLOG="$RESULTS_DIR/${BASE}_eval_run${k}.stderr.log"
-  judge_call < "$INPUT_FILE" > "$OUT" 2>"$ERRLOG"
-  rc=$?
-  if [ "$rc" -eq 0 ] && [ -s "$OUT" ]; then
-    if head -1 "$OUT" | grep -q '^VERDICT:'; then
-      echo "    run $k -> $(head -1 "$OUT")"
+  ROLE_DIR="$TMP_DIR/run${k}"
+  mkdir -p "$ROLE_DIR"
+  for role in math execution paper; do
+    ROLE_OUT="$ROLE_DIR/${role}.md"
+    ERRLOG="$RESULTS_DIR/${BASE}_eval_run${k}_${role}.stderr.log"
+    judge_call < "$TMP_DIR/${role}.prompt.txt" > "$ROLE_OUT" 2>"$ERRLOG"
+    rc=$?
+    if [ "$rc" -eq 0 ] && [ -s "$ROLE_OUT" ]; then
+      echo "    run $k $role -> $(head -1 "$ROLE_OUT")"
     else
-      echo "    run $k -> WARN: first line is not VERDICT: (malformed output)"
+      rm -f "$ROLE_OUT"
+      echo "    run $k $role -> ERROR rc=$rc (recorded as INDETERMINATE)"
     fi
-    RUN_FILES+=("$OUT")
-  else
-    body="$( [ -s "$OUT" ] && echo nonempty || echo empty )"
-    echo "    run $k -> ERROR: judge failed (rc=$rc, stdout=$body). stderr tail:"
-    tail -n 8 "$ERRLOG" 2>/dev/null | sed 's/^/        /' || true
-  fi
+  done
+  OUT="$RESULTS_DIR/${BASE}_eval_run${k}.md"
+  python3 "$SCRIPTS/aggregate_judges.py" \
+    --math "$ROLE_DIR/math.md" \
+    --execution "$ROLE_DIR/execution.md" \
+    --paper "$ROLE_DIR/paper.md" \
+    --output "$OUT" \
+    --json "$RESULTS_DIR/${BASE}_eval_run${k}_roles.json" \
+    --base "$BASE" >/dev/null
+  echo "    run $k aggregate -> $(head -1 "$OUT")"
+  RUN_FILES+=("$OUT")
 done
-[ "${#RUN_FILES[@]}" -gt 0 ] || { echo "ERROR: all $SAMPLES judge runs failed" >&2; exit 4; }
 
 # ---- aggregate median + spread, enrich JSON, print one-line summary ----
 AGG_JSON="$RESULTS_DIR/${BASE}_eval.json"

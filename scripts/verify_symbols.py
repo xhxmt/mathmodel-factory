@@ -37,7 +37,8 @@ _LATEX_NOISE = {
     'left', 'right', 'big', 'Big', 'bigg', 'Bigg', 'quad', 'qquad',
     'cdot', 'cdots', 'ldots', 'dots', 'vdots', 'ddots', 'times', 'div',
     'leq', 'geq', 'neq', 'approx', 'equiv', 'sim', 'simeq', 'cong', 'propto',
-    'in', 'notin', 'subset', 'supset', 'subseteq', 'cup', 'cap', 'emptyset',
+    'in', 'notin', 'subset', 'supset', 'subseteq', 'cup', 'cap', 'bigcup',
+    'bigcap', 'emptyset',
     'forall', 'exists', 'nabla', 'partial', 'infty', 'rightarrow', 'leftarrow',
     'Rightarrow', 'Leftarrow', 'mapsto', 'to', 'gets', 'iff',
     'text', 'mathrm', 'mathbf', 'mathcal', 'mathbb', 'boldsymbol', 'bm',
@@ -71,6 +72,7 @@ _LATEX_NOISE = {
     'colon', 'ldotp', 'cdotp', 'rule', 'multicolumn', 'multirow', 'arraystretch',
     'mathstrut', 'phantom', 'hphantom', 'vphantom', 'qedhere', 'square',
     'color', 'textcolor', 'rowcolor', 'cellcolor', 'arraybackslash',
+    'lVert', 'rVert', 'Vert', 'vert',
 }
 
 # Greek command names are *symbols* when used as variables; keep a separate set
@@ -238,7 +240,11 @@ def extract_used_symbols(paper_path: str):
     ]
     for pat in math_patterns:
         for m in re.finditer(pat, text, flags=re.DOTALL):
-            expr = m.group(1)
+            expr = re.sub(
+                r'\\(?:label|ref|eqref|tag)\{[^{}]*\}',
+                ' ',
+                m.group(1),
+            )
             ln = line_of(m.start())
             for tok in _split_math_tokens(expr):
                 base = normalize_symbol(tok)

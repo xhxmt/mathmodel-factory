@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 
 def write_file(path: Path, text: str) -> None:
@@ -42,3 +43,27 @@ def test_pass_gate_is_ready(tmp_path):
     assert state["verdict"] == "PASS"
     assert state["ready"] is True
     assert state["artifacts_complete"] is True
+
+
+def test_pass_gate_is_stale_when_canonical_results_are_newer(tmp_path):
+    from step8_5_gate import collect_step8_5_state
+
+    write_file(tmp_path / "reviewer_entry_map.md", "# map\n")
+    write_file(tmp_path / "anchor_figure_plan.md", "# anchors\n")
+    write_file(tmp_path / "entry_gate.md", "# Step 8.5 Entry Gate\n\nVERDICT: PASS\n")
+    write_file(tmp_path / "results" / "canonical_results.json", "{}\n")
+
+    gate_time = 1_700_000_000
+    for name in ("reviewer_entry_map.md", "anchor_figure_plan.md", "entry_gate.md"):
+        os.utime(tmp_path / name, (gate_time, gate_time))
+    os.utime(
+        tmp_path / "results" / "canonical_results.json",
+        (gate_time + 10, gate_time + 10),
+    )
+
+    state = collect_step8_5_state(tmp_path)
+    assert state["status"] == "stale"
+    assert state["verdict"] == "PASS"
+    assert state["effective_verdict"] == "STALE"
+    assert state["ready"] is False
+    assert state["fresh"] is False

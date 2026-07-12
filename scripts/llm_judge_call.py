@@ -86,22 +86,49 @@ def _gemini_call(prompt: str, model: str, timeout: int, max_tokens: int) -> str:
     if not key:
         raise RuntimeError("GEMINI_API_KEY not set")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": max(max_tokens, 8192),
-                             "temperature": 0.0},
-    }).encode()
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Content-Type": "application/json", "x-goog-api-key": key},
+    initial_budget = max(max_tokens, 8192)
+    budgets = [initial_budget]
+    retry_budget = min(65536, max(initial_budget * 4, 32768))
+    if retry_budget > initial_budget:
+        budgets.append(retry_budget)
+
+    last_reason = "MISSING"
+    last_block_reason = "NONE"
+    last_usage: dict = {}
+    for attempt, budget in enumerate(budgets):
+        body = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": budget, "temperature": 0.0},
+        }).encode()
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json", "x-goog-api-key": key},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read())
+
+        candidates = data.get("candidates") or []
+        candidate = candidates[0] if candidates else {}
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
+        text = "".join(part.get("text", "") for part in parts if isinstance(part, dict))
+        last_reason = candidate.get("finishReason") or "MISSING"
+        prompt_feedback = data.get("promptFeedback") or {}
+        last_block_reason = prompt_feedback.get("blockReason") or "NONE"
+        last_usage = data.get("usageMetadata") or {}
+
+        if text and last_reason != "MAX_TOKENS":
+            return text
+        if last_reason == "MAX_TOKENS" and attempt + 1 < len(budgets):
+            continue
+        if text:
+            return text
+        break
+
+    raise RuntimeError(
+        "gemini returned no text parts "
+        f"(finishReason={last_reason}, blockReason={last_block_reason}, usage={last_usage})"
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        data = json.loads(r.read())
-    parts = data["candidates"][0]["content"]["parts"]
-    text = "".join(p.get("text", "") for p in parts)
-    if not text:
-        raise RuntimeError("gemini returned no text parts")
-    return text
 
 
 def _claude_call(prompt: str, model: str, timeout: int, max_tokens: int) -> str:

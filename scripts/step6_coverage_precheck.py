@@ -14,6 +14,7 @@ Step 6 敏感性分析覆盖度预检查工具
 import sys
 import json
 import argparse
+import re
 from pathlib import Path
 from typing import List, Tuple
 
@@ -39,7 +40,11 @@ def check_results_baseline(project_path: Path) -> Tuple[bool, str]:
     if not results_dir.exists():
         return False, "results/ 目录不存在"
 
-    subproblem_dirs = [d for d in results_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+    subproblem_dirs = [
+        d
+        for d in results_dir.iterdir()
+        if d.is_dir() and re.fullmatch(r"(?:p|problem)\d+", d.name)
+    ]
     if not subproblem_dirs:
         return False, "results/ 目录下无子问题目录"
 
@@ -73,8 +78,9 @@ def check_assumption_ledger(project_path: Path) -> Tuple[bool, str, dict]:
 
     for line in lines:
         if '|' in line and not line.strip().startswith('#'):
-            parts = [p.strip() for p in line.split('|')]
-            if len(parts) >= 6:  # id | statement | source | impact | status | tags
+            parts = [p.strip() for p in line.strip().strip('|').split('|')]
+            if len(parts) >= 6 and parts[0].lower() != 'id' and not set(parts[0]) <= {'-'}:
+                # id | statement | source | impact | status | tags
                 status = parts[4].strip().upper()
                 for key in status_counts:
                     if key in status:

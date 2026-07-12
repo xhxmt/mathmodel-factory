@@ -70,6 +70,8 @@ ABLATE_NO_METHOD_LIB="${ABLATE_NO_METHOD_LIB:-0}"
 ABLATE_NO_JUDGE="${ABLATE_NO_JUDGE:-0}"
 ABLATE_NO_INNOVATION_PROTECT="${ABLATE_NO_INNOVATION_PROTECT:-0}"
 
+codex_only_enabled() { case "${CODEX_ONLY:-0}" in 1|true|yes|on) return 0;; *) return 1;; esac; }
+
 
 # ── File-state step inference ────────────────────────────────────────
 #
@@ -97,6 +99,16 @@ gate2_passed_for_path() {
     python3 "$FACTORY/scripts/workflow_state.py" gate2-passed "$1" 2>/dev/null
 }
 
+gate2_delivery_allowed_for_path() {
+    python3 "$FACTORY/scripts/workflow_state.py" gate2-delivery-allowed "$1" 2>/dev/null
+}
+
+gate2_delivery_override_active() {
+    [[ -f "$PROJECT/gate2_delivery_override.json" ]] \
+        && gate2_delivery_allowed_for_path "$PROJECT" \
+        && ! gate2_passed_for_path "$PROJECT"
+}
+
 step8_5_verdict_for_path() {
     local proj_dir="$1"
     python3 "$FACTORY/scripts/workflow_state.py" step8_5-verdict "$proj_dir" 2>/dev/null || true
@@ -118,6 +130,123 @@ number_gate_passed() {
     python3 "$FACTORY/scripts/verify_numbers.py" --verify "$proj_dir" "$base_name" \
         > "$proj_dir/number_verification.latest.stdout" \
         2> "$proj_dir/number_verification.latest.stderr"
+}
+
+# Deliverables gate (Layer-0): required attachments + strategy tables +
+# xlsx↔canonical consistency.  Exits 0 (SKIP) when the project has no
+# problem/deliverables.json, so legacy projects are unaffected.
+deliverables_gate_passed() {
+    local proj_dir="$1" base_name="$2"
+    python3 "$FACTORY/scripts/verify_deliverables.py" "$proj_dir" "$base_name" \
+        > "$proj_dir/deliverables_verification.latest.txt" 2>&1
+}
+
+# Invariants gate (correctness, not just provenance): recompute declared
+# aggregation identities / monotonicity from results/invariants.json.
+# Exits 0 (SKIP) when the spec file is absent.
+invariants_gate_passed() {
+    local proj_dir="$1"
+    python3 "$FACTORY/scripts/verify_invariants.py" "$proj_dir" \
+        > "$proj_dir/invariants_verification.latest.txt" 2>&1
+}
+
+# Spec-implementation reconciliation gate (A3, blind 2025A): model.md §8.1
+# promises (budget ladder / seeds / Δt cap / relaxation gap) must match what
+# the solve actually ran.  Third recurrence of the promise-implementation gap
+# (rerun_0706 N=150 vs N=51; blind 40x80..120x240 vs particles=6, 1 seed,
+# dt=0.08).  Exits 0 (SKIP) on legacy projects without a §8.1 section.
+spec_impl_gate_passed() {
+    local proj_dir="$1"
+    python3 "$FACTORY/scripts/verify_spec_impl.py" "$proj_dir" \
+        > "$proj_dir/spec_impl_verification.latest.txt" 2>&1
+}
+
+# Project-specific mathematical quality contract.  Unlike generic anomaly
+# heuristics, hard claims only veto delivery when the project declares the
+# problem-derived justification and executable independent evidence.
+quality_contract_gate_passed() {
+    local proj_dir="$1"
+    python3 "$FACTORY/scripts/verify_quality_contract.py" "$proj_dir" \
+        --factory-root "$FACTORY" \
+        --json-out "$proj_dir/quality_contract_verification.latest.json" \
+        --text-out "$proj_dir/quality_contract_verification.latest.txt" \
+        >/dev/null 2>&1
+    local ec=$?
+    (( ec == 0 || ec == 2 ))
+}
+
+# Provenance / reality gate (B1/B2/B3): every results/p*/values.json must
+# declare a reconcilable provenance block, global-search solvers must meet a
+# budget floor, and no models/*.stub may remain.  Exits 0 (SKIP) only when
+# there is no results tree yet (INDETERMINATE), so legacy projects that never
+# had a results/ dir are unaffected; a results tree WITHOUT provenance is a
+# signal (fail), not a skip.  Writes the report for auditing.
+provenance_gate_passed() {
+    local proj_dir="$1"
+    python3 "$FACTORY/scripts/verify_provenance.py" "$proj_dir" \
+        > "$proj_dir/provenance_verification.latest.txt" 2>&1
+    local ec=$?
+    # ec: 0=PASS, 1=BLOCKING/repair/budget, 2=INDETERMINATE(no results tree)
+    (( ec == 0 )) && return 0
+    (( ec == 2 )) && return 0   # nothing to check yet — do not block infer
+    return 1
+}
+
+# C4: a verification output is only trustworthy if it was produced AFTER the
+# results it checks.  rerun_0706 shipped invariants_verification.latest.txt
+# stamped 07:52 while results/ was rewritten at 10:18 — a stale PASS.  Returns
+# 0 when <verify_file> is newer than every file under results/, else 1.
+_verification_is_fresh() {
+    local proj_dir="$1" verify_file="$2"
+    [[ -f "$verify_file" ]] || return 1
+    local results="$proj_dir/results"
+    [[ -d "$results" ]] || return 0   # no results => nothing to be stale against
+    # Newest input under results/ that is strictly newer than the verify file.
+    local newer
+    newer=$(find "$results" -type f -newer "$verify_file" -print -quit 2>/dev/null)
+    [[ -z "$newer" ]]
+}
+
+# D3: Step 16 hard acceptance.  Delivery must not proceed while any of these
+# hold (each is a way rerun_0706 shipped a defective paper past soft gates):
+#   1. an audit_issue_ledger.md row is still BLOCKING and not RESOLVED
+#   2. a models/*.stub survives (a declared solver was never built)
+#   3. the provenance/budget gate does not pass (repair/padding results)
+# Returns 0 only when all clear.  Legacy projects without a ledger skip (1).
+step16_hard_acceptance() {
+    local P="$1"
+    # (2) stub residue
+    if find "$P/models" -name "*.stub" -print -quit 2>/dev/null | grep -q .; then
+        log "   Step 16 BLOCKED: models/*.stub residue (declared solver never built)"
+        return 1
+    fi
+    # (3) provenance / budget reality gate
+    if ! provenance_gate_passed "$P"; then
+        log "   Step 16 BLOCKED: provenance gate failed (see provenance_verification.latest.txt)"
+        return 1
+    fi
+    if ! quality_contract_gate_passed "$P"; then
+        log "   Step 16 BLOCKED: project quality contract failed (see quality_contract_verification.latest.txt)"
+        return 1
+    fi
+    # (1) unresolved BLOCKING issues.  A ledger row is a markdown table line;
+    # flag any row whose severity cell is BLOCKING and whose status cell is not
+    # RESOLVED (i.e. still OPEN/DEFERRED/blank).
+    local ledger="$P/audit_issue_ledger.md"
+    if [[ -f "$ledger" ]]; then
+        local open_blocking
+        open_blocking=$(awk -F'|' '
+            /\|/ {
+                sev=$3; st=$6
+                gsub(/[ \t*]/,"",sev); gsub(/`/,"",sev)
+                if (sev=="BLOCKING" && toupper(st) !~ /RESOLVED/) print
+            }' "$ledger" 2>/dev/null | grep -c . || echo 0)
+        if (( open_blocking > 0 )); then
+            log "   Step 16 BLOCKED: $open_blocking unresolved BLOCKING issue(s) in audit_issue_ledger.md"
+            return 1
+        fi
+    fi
+    return 0
 }
 
 symbol_gate_passed() {
@@ -508,7 +637,8 @@ _infer_step_modeling() {
         # method_decision.md remain on disk past step 4 — descending by
         # step number ensures the latest completed step is reported.
         if [[ -f "$P/model.md" && -f "$P/symbol_table.md" && \
-              -f "$P/assumption_ledger.md" && -f "$P/modeling_scope_gate.md" ]] \
+              -f "$P/assumption_ledger.md" && -f "$P/modeling_scope_gate.md" && \
+              -f "$P/quality_contract.json" ]] \
             && (( $(_lines "$P/model.md") >= 100 )) \
             && (( $(_lines "$P/symbol_table.md") >= 10 )) \
             && (( $(_lines "$P/assumption_ledger.md") >= 10 )) \
@@ -577,7 +707,7 @@ infer_step() {
     # 16: final PDF and submission bundle delivered to papers/, with the final
     # quality gates still passing. A stale PDF/zip pair is not enough.
     if [[ -f "$FACTORY/papers/${base}_paper.pdf" && -f "$FACTORY/papers/${base}_submission.zip" ]] \
-        && gate2_passed_for_path "$P" \
+        && gate2_delivery_allowed_for_path "$P" \
         && step8_5_passed_for_path "$P"; then
         echo 16
         return
@@ -1069,9 +1199,25 @@ verify_step_output() {
             [[ -f "$P/symbol_table.md" ]] || return 1
             [[ -f "$P/assumption_ledger.md" ]] || return 1
             [[ -f "$P/modeling_scope_gate.md" ]] || return 1
+            [[ -f "$P/quality_contract.json" ]] || return 1
             grep -q '^VERDICT: PASS' "$P/modeling_scope_gate.md" || return 1
             # Symbol table should have at least some entries
             (( $(_lines "$P/symbol_table.md") >= 10 )) || return 1
+            ;;
+        5)
+            # Step 5: full solve.  Beyond "solve_log.md exists" (infer_step's
+            # bar), enforce that the results are REAL solves, not repair-script
+            # padding (rerun_0706): canonical tree present, no stub residue,
+            # provenance/budget reconcilable (B1/B2/B3).
+            [[ -f "$P/solve_log.md" ]] || return 1
+            (( $(_lines "$P/solve_log.md") >= 20 )) || return 1
+            [[ -f "$P/results/canonical_results.json" ]] || return 1
+            # B3: any surviving .stub means a declared solver was never built.
+            if find "$P/models" -name "*.stub" -print -quit 2>/dev/null | grep -q .; then
+                return 1
+            fi
+            # B1/B2: provenance + budget floor (SKIP only when no results tree).
+            provenance_gate_passed "$P" || return 1
             ;;
         9)
             # Step 9: paper.tex must have ABSTRACT_PLACEHOLDER properly escaped
@@ -1091,6 +1237,19 @@ verify_step_output() {
             (( $(_lines "$P/code_review.md") >= 20 )) || return 1
             number_gate_passed "$P" "$BASE" || return 1
             symbol_gate_passed "$P" "$BASE" || return 1
+            deliverables_gate_passed "$P" "$BASE" || return 1
+            invariants_gate_passed "$P" || return 1
+            spec_impl_gate_passed "$P" || return 1
+            quality_contract_gate_passed "$P" || return 1
+            # C4: the invariants/number reports must be newer than results/**;
+            # a stale PASS (verify ran before the last solve) is not a PASS.
+            # invariants_gate_passed just (re)ran, so its output is fresh unless
+            # results/ changed under it — re-check freshness explicitly.
+            _verification_is_fresh "$P" "$P/invariants_verification.latest.txt" || return 1
+            _verification_is_fresh "$P" "$P/spec_impl_verification.latest.txt" || return 1
+            if [[ -f "$P/quality_contract.json" ]]; then
+                _verification_is_fresh "$P" "$P/quality_contract_verification.latest.txt" || return 1
+            fi
             ;;
         13)
             # Step 13: Gate 2 judge evaluation must have VERDICT
@@ -1113,9 +1272,13 @@ verify_step_output() {
             local pdf_size
             pdf_size=$(stat -c %s "$P/${BASE}_paper.pdf" 2>/dev/null || echo 0)
             (( pdf_size > 51200 )) || return 1
-            gate2_passed_for_path "$P" || return 1
+            gate2_delivery_allowed_for_path "$P" || return 1
             step8_5_passed_for_path "$P" || return 1
             delivery_quality_gate "$P" > "$P/delivery_quality_gate.json" 2> "$P/delivery_quality_gate.stderr.log" || return 1
+            # D3: hard acceptance — a delivered paper must not rest on unresolved
+            # BLOCKING issues, .stub solvers, or unreconcilable provenance
+            # (rerun_0706 shipped with a stub MILP + repair-fabricated P3/P5).
+            step16_hard_acceptance "$P" || return 1
             ;;
         *)
             # For other steps, rely on file-state inference
@@ -1268,6 +1431,55 @@ block_gate2_after_reopen() {
         "file:judge_evaluation.md,file:revision_summary.md"
 }
 
+# Backend health helpers must be defined before bootstrap invokes them. Bash
+# executes this script top-to-bottom; definitions located with the later model
+# dispatch functions are not visible during the bootstrap preflight.
+_BACKEND_HEALTH_FILE="$PROJECT/run_state/backend_health.json"
+_backend_health_note() {
+    local backend="$1" state="$2"
+    mkdir -p "$PROJECT/run_state" 2>/dev/null || true
+    python3 - "$_BACKEND_HEALTH_FILE" "$backend" "$state" <<'PY' 2>/dev/null || true
+import json, sys, os
+path, backend, state = sys.argv[1], sys.argv[2], sys.argv[3]
+d = {}
+if os.path.exists(path):
+    try:
+        d = json.load(open(path))
+    except Exception:
+        d = {}
+d[backend] = state
+json.dump(d, open(path, "w"), indent=2)
+PY
+}
+
+backend_canary() {
+    local backend="$1" model="${2:-}"
+    local tmp; tmp=$(mktemp 2>/dev/null) || return 0
+    local rc=0
+    case "$backend" in
+        claude)
+            local mf=(); [[ -n "$model" ]] && mf=(--model "$model")
+            timeout 60 claude -p "Reply with exactly one word: PONG" \
+                --dangerously-skip-permissions "${mf[@]}" >"$tmp" 2>&1 || rc=$?
+            ;;
+        codex)
+            local mf=(); [[ -n "$model" ]] && mf=(--model "$model")
+            timeout 60 codex exec "${mf[@]}" --skip-git-repo-check \
+                "Reply with exactly one word: PONG" >"$tmp" 2>&1 || rc=$?
+            if grep -qiE "requires a newer version of Codex" "$tmp" 2>/dev/null; then
+                _backend_health_note "codex" "VERSION_DRIFT"; rm -f "$tmp"; return 1
+            fi
+            ;;
+        *)  rm -f "$tmp"; return 0 ;;
+    esac
+    if (( rc != 0 )) || ! grep -qi "PONG" "$tmp" 2>/dev/null; then
+        _backend_health_note "$backend" "CANARY_FAILED"
+        rm -f "$tmp"; return 1
+    fi
+    _backend_health_note "$backend" "OK"
+    rm -f "$tmp"; return 0
+}
+
 # ── Determine starting point ─────────────────────────────────────────
 
 INFERRED=$(infer_step "$PROJECT" "$BASE")
@@ -1295,6 +1507,29 @@ if [[ -z "$QUESTION" ]]; then
     exit 1
 fi
 log "  question: ${QUESTION:0:120}..."
+
+# A2: backend canary preflight.  Probe the CLIs the runner will actually use
+# so a mis-routed proxy or a version-drifted codex is caught before it burns a
+# real step.  Opt-out with BACKEND_CANARY=0 (unattended/offline benchmark runs
+# where the probe cost isn't wanted).  Best-effort: a failed canary only logs +
+# records to backend_health.json; it never blocks the run (built-in defaults
+# still apply), matching the "file-state authoritative" philosophy.
+if [[ "${BACKEND_CANARY:-1}" == "1" ]]; then
+    if codex_only_enabled; then
+        log "  CODEX_ONLY=1: skipping claude canary"
+    elif command -v claude >/dev/null 2>&1; then
+        if backend_canary claude ""; then
+            log "  canary: claude OK"
+        else
+            log "  canary: claude UNHEALTHY — see run_state/backend_health.json (proceeding; INVALID_SESSION guard active)"
+        fi
+    fi
+    if command -v codex >/dev/null 2>&1; then
+        backend_canary codex "" \
+            && log "  canary: codex OK" \
+            || log "  canary: codex UNHEALTHY (version drift or no PONG) — fallback chain will route around it"
+    fi
+fi
 
 # File-state is authoritative; correct checkpoint drift in either direction.
 if (( INFERRED != FROM_CP )); then
@@ -1356,10 +1591,14 @@ Do not inspect, reference, reuse, or mention completed projects unless the human
     fi
 
     set +e
+    CODEX_SETUP_MODEL_ARGS=()
+    if [[ -n "${CODEX_SETUP_MODEL:-}" ]]; then
+        CODEX_SETUP_MODEL_ARGS=(--model "$CODEX_SETUP_MODEL")
+    fi
     (
         cd "$PROJECT" && timeout --kill-after=120 3600 \
             codex exec \
-              --model gpt-5.5 \
+              "${CODEX_SETUP_MODEL_ARGS[@]}" \
               -c 'model_reasoning_effort="xhigh"' \
               --dangerously-bypass-approvals-and-sandbox \
               -C "$PROJECT" \
@@ -1554,6 +1793,8 @@ Before doing any substantive work, read the project style guide in the current p
 If \`human_review.md\` exists in the current project directory, read it before doing substantive work. Treat it as the newest human reviewer guidance for the current review cycle. If it conflicts with older review materials, prefer \`human_review.md\`. Older downstream artifacts may still be on disk for context after a rewind or revision request; do not treat them as authoritative unless you deliberately reuse or regenerate them in the current step.
 
 Do not inspect, read, cite, summarize, reuse, or mention completed projects unless the human researcher explicitly instructs you to do so for this project. Work from the current project directory, the source data, the active prompts, and shared infrastructure only.
+
+ANSWER-KEY ISOLATION: never read, search, cite, or calibrate targets against files under \`evaluation/\`, \`external/\`, \`benchmark/\`, \`reference_papers/\`, or any \`*answer_key*\` / \`*excellent*\` / this problem's past-solution material. Those contain graded answers or this problem's reference-paper values; using them to set your objective is open-book cheating that corrupts the benchmark. Derive every target, bound, and sanity range from the problem statement's own structure. Transferable methodology guides (e.g. \`docs/guides/MODELING_CHECKLIST.md\`) are fine; problem-specific answer numbers are not.
 
 EOF
     # Only when this project opted into the consultation window AND the dynamic
@@ -2001,6 +2242,22 @@ find_codex_trace() {
     echo "$latest"
 }
 
+find_claude_trace_mtime() {
+    local project_path="$1"
+    local project_name proj_encoded newest=0 mt
+    project_name=$(basename "$project_path")
+    proj_encoded="${project_name//_/-}"
+    for tdir in "$CLAUDE_PROJECTS"/*"$proj_encoded"*; do
+        [ -d "$tdir" ] || continue
+        for tf in "$tdir"/*.jsonl "$tdir"/subagents/*.jsonl; do
+            [ -f "$tf" ] || continue
+            mt=$(stat -c %Y "$tf" 2>/dev/null || echo 0)
+            (( mt > newest )) && newest=$mt
+        done
+    done
+    echo "$newest"
+}
+
 # Run a single Codex agent with shell-level hang detection.
 # Shared hang check for run_codex / run_agy (this block was byte-identical in
 # both functions). Returns 1 when the process is NOT (yet) considered hung —
@@ -2035,9 +2292,10 @@ _maybe_kill_hung() {
 # Returns: 0=success, 1=timeout/error, 2=hung(killed)
 run_codex() {
     local prompt_file="$1" timeout="$2" hang_timeout="${3:-3600}"
-    # Optional model override (model registry / per-step dispatch).  Defaults
-    # preserve the historical hardcoded behavior for every existing caller.
-    local cx_model="${4:-gpt-5.5}" cx_effort="${5:-xhigh}"
+    # Optional model override (model registry / per-step dispatch).  If no
+    # model is specified, let the installed Codex CLI choose its configured
+    # default; hardcoding newer model ids breaks older CLI installations.
+    local cx_model="${4:-${CODEX_MODEL:-}}" cx_effort="${5:-xhigh}"
     local rendered
     rendered=$(render_prompt "$prompt_file")
     local note
@@ -2051,11 +2309,13 @@ NOTE FROM THE RESEARCHER: $note"
     local before_ts
     before_ts=$(date +%s)
 
-    log "   Codex: $prompt_file (model=$cx_model effort=$cx_effort, timeout ${timeout}s)"
+    log "   Codex: $prompt_file (model=${cx_model:-default} effort=$cx_effort, timeout ${timeout}s)"
 
+    local -a model_args=()
+    [[ -n "$cx_model" ]] && model_args=(--model "$cx_model")
     ( cd "$PROJECT" && timeout --kill-after=120 "$timeout" \
         codex exec \
-          --model "$cx_model" \
+          "${model_args[@]}" \
           -c "model_reasoning_effort=\"$cx_effort\"" \
           --dangerously-bypass-approvals-and-sandbox \
           -C "$PROJECT" \
@@ -2098,6 +2358,14 @@ NOTE FROM THE RESEARCHER: $note"
 
     wait "$codex_pid"
     local ec=$?
+    # A2: detect the "requires a newer version of Codex" version-drift failure
+    # that burned 5 reconnect attempts in rerun_0706.  Surface it distinctly so
+    # dispatch escalates to fallback immediately and the health file records it.
+    if grep -qiE "requires a newer version of Codex|model requires a newer" "$codex_log" 2>/dev/null; then
+        log "   Codex $prompt_file VERSION_DRIFT — configured model unavailable on installed CLI"
+        _backend_health_note "codex" "VERSION_DRIFT"
+        return 1
+    fi
     case "$ec" in
         0)   log "   Codex $prompt_file exited OK" ;;
         124) log "   Codex $prompt_file TIMEOUT" ; return 1 ;;
@@ -2241,12 +2509,62 @@ run_agy_then_claude() {
         log "   Agy exited nonzero but step $NEXT artifacts verify — skipping Claude fallback"
         return 0
     fi
+    if codex_only_enabled; then
+        log "   CODEX_ONLY=1: Claude fallback disabled"
+        return 1
+    fi
     run_claude_fallback "$NEXT"
 }
-# Usage: run_claude_worker <prompt_file_or_literal> <timeout_secs> [is_literal]
+# ---------------------------------------------------------------------------
+# A1: Worker output validity check (fake-session / dead-channel detection).
+#
+# Motivation (rerun_0706 post-mortem): a mis-routed proxy returned a 59-byte
+# "Hi! I'm Kiro, your AI assistant" greeting in 7s to a 4-hour Step 5 solve
+# prompt.  The CLI exited 0, so the runner treated it as a real session and
+# only noticed the missing artifacts much later.  This helper flags such
+# sessions so the caller can retry immediately instead of trusting exit 0.
+#
+# A session is INVALID when the transcript is tiny AND the wall-clock was
+# short AND no project artifact was produced/touched during the run.  All
+# three must hold, so a legitimately fast-but-productive step (writes a file)
+# or a slow-but-quiet step (long think, big output) is never mislabeled.
+#
+# Args: <log_path> <elapsed_secs> <project_dir> <run_start_epoch>
+# Returns 0 when the output looks valid, 1 when it looks like a fake session.
+_WORKER_MIN_BYTES="${WORKER_MIN_BYTES:-2048}"
+_WORKER_MIN_SECS="${WORKER_MIN_SECS:-120}"
+_worker_output_valid() {
+    local log_path="$1" elapsed="$2" proj="${3:-$PROJECT}" run_start="${4:-0}"
+    local sz
+    sz=$(stat -c %s "$log_path" 2>/dev/null || echo 0)
+
+    # Large transcript or long run => trust it (cheap accept).
+    (( sz >= _WORKER_MIN_BYTES )) && return 0
+    (( elapsed >= _WORKER_MIN_SECS )) && return 0
+
+    # Tiny + fast: only accept if the agent actually touched a project file
+    # during the run (real work leaves artifacts), else declare it fake.
+    if (( run_start > 0 )); then
+        local touched
+        touched=$(find "$proj" -maxdepth 3 -type f \
+            ! -name ".heartbeat" \
+            ! -path "$proj/logs/*" \
+            ! -path "$proj/.runner.lock/*" \
+            ! -path "$proj/diagnostics/*" \
+            -newermt "@$run_start" -print -quit 2>/dev/null)
+        [[ -n "$touched" ]] && return 0
+    fi
+    return 1
+}
+
+# Usage: run_claude_worker <prompt_file_or_literal> <timeout_secs> [is_literal] [model] [hang_timeout_secs]
 # When is_literal is "literal", first arg is treated as the prompt text directly.
 run_claude_worker() {
-    local prompt_src="$1" timeout="$2" is_literal="${3:-}" cl_model="${4:-}"
+    local prompt_src="$1" timeout="$2" is_literal="${3:-}" cl_model="${4:-}" hang_timeout="${5:-3600}"
+    if codex_only_enabled; then
+        log "   Claude backend blocked because CODEX_ONLY=1"
+        return 1
+    fi
     local prompt
     if [[ "$is_literal" == "literal" ]]; then
         prompt="$(common_prompt_preamble)
@@ -2271,12 +2589,92 @@ NOTE FROM THE RESEARCHER: $note"
     local cl_model_flag=()
     [[ -n "$cl_model" ]] && cl_model_flag=(--model "$cl_model")
 
+    # A1: track a per-attempt fake-session counter so a mis-routed proxy that
+    # keeps returning greetings is escalated (return 3) instead of looping.
+    local _cw_attempts=0
+    local _cw_run_start _cw_elapsed
+
+    while : ; do
+    _cw_run_start=$(date +%s)
     set +e
     ( cd "$PROJECT" && stdbuf -oL -eL timeout --kill-after=120 "$timeout" \
         claude -p "$prompt" --dangerously-skip-permissions --effort max "${cl_model_flag[@]}" \
-    ) > "$claude_log" 2>&1
+    ) > "$claude_log" 2>&1 &
+    local claude_pid=$!
+    local last_size=0 last_trace_mtime=0 stale_since
+    stale_since=$(date +%s)
+
+    while kill -0 "$claude_pid" 2>/dev/null; do
+        sleep "$MONITOR_SLEEP"
+        echo "ACTIVE:$NEXT $(date +%s)" > "$PROJECT/.heartbeat"
+
+        local alive=false
+        local cur_size
+        cur_size=$(stat -c %s "$claude_log" 2>/dev/null || echo 0)
+        if (( cur_size > last_size )); then
+            alive=true
+            last_size=$cur_size
+        fi
+
+        if ! $alive; then
+            local trace_mtime
+            trace_mtime=$(find_claude_trace_mtime "$PROJECT")
+            if (( trace_mtime > last_trace_mtime )); then
+                alive=true
+                last_trace_mtime=$trace_mtime
+            fi
+        fi
+
+        if ! $alive; then
+            local newest_project_file
+            newest_project_file=$(find "$PROJECT" -maxdepth 3 -type f \
+                ! -name ".heartbeat" \
+                ! -path "$PROJECT/diagnostics/*" \
+                ! -path "$PROJECT/.runner.lock/*" \
+                ! -path "$PROJECT/logs/runner.log" \
+                ! -path "$claude_log" \
+                -newermt "@$stale_since" -print -quit 2>/dev/null)
+            [[ -n "$newest_project_file" ]] && alive=true
+        fi
+
+        if $alive; then
+            stale_since=$(date +%s)
+            continue
+        fi
+
+        local now
+        now=$(date +%s)
+        if (( now - stale_since > hang_timeout )); then
+            log "   Claude worker stale for ${hang_timeout}s — killing process tree"
+            _kill_process_tree "$claude_pid" TERM
+            sleep 5
+            kill -0 "$claude_pid" 2>/dev/null && _kill_process_tree "$claude_pid" KILL
+            wait "$claude_pid" 2>/dev/null
+            set -e
+            return 2
+        fi
+    done
+
+    wait "$claude_pid"
     local ec=$?
     set -e
+    _cw_elapsed=$(( $(date +%s) - _cw_run_start ))
+
+    # A1: exit 0 is not enough — a mis-routed proxy can return a greeting and
+    # exit clean.  If the transcript is tiny+fast and nothing was produced,
+    # treat it as an INVALID_SESSION and retry once in-place (does not consume
+    # the caller's attempt budget).  A second invalid session escalates to the
+    # fallback chain via return 3.
+    if (( ec == 0 )) && ! _worker_output_valid "$claude_log" "$_cw_elapsed" "$PROJECT" "$_cw_run_start"; then
+        _cw_attempts=$(( _cw_attempts + 1 ))
+        log "   Claude INVALID_SESSION (${_cw_elapsed}s, $(stat -c %s "$claude_log" 2>/dev/null || echo 0)B, no artifacts) — attempt ${_cw_attempts}/2"
+        if (( _cw_attempts < 2 )); then
+            sleep 5
+            continue
+        fi
+        log "   Claude INVALID_SESSION twice — escalating to fallback"
+        return 3
+    fi
 
     case "$ec" in
         0)   log "   Claude exited OK" ;;
@@ -2284,12 +2682,17 @@ NOTE FROM THE RESEARCHER: $note"
         *)   log "   Claude exit code $ec" ;;
     esac
     return $ec
+    done
 }
 
 # Fallback: Codex failed, retry the step with Claude.
 # Claude reads STEPS.md and does the work itself (no Codex launch).
 run_claude_fallback() {
     local step="$1"
+    if codex_only_enabled; then
+        log "   CODEX_ONLY=1: Claude fallback disabled"
+        return 1
+    fi
     log "   FALLBACK: retrying step $step with Claude (Codex failed)"
     local prompt=""
 
@@ -2359,6 +2762,11 @@ run_codex_backup() {
 
 run_claude_then_codex() {
     local prompt_file="$1" timeout="$2" hang_timeout="${3:-3600}"
+    if codex_only_enabled; then
+        log "   CODEX_ONLY=1: using Codex instead of Claude primary"
+        run_codex "$prompt_file" "$timeout" "$hang_timeout"
+        return $?
+    fi
     if run_claude_worker "$prompt_file" "$timeout"; then
         return 0
     fi
@@ -2377,6 +2785,10 @@ run_codex_then_claude() {
     if verify_step "$NEXT"; then
         log "   Codex exited nonzero but step $NEXT artifacts verify — skipping Claude fallback"
         return 0
+    fi
+    if codex_only_enabled; then
+        log "   CODEX_ONLY=1: Claude fallback disabled"
+        return 1
     fi
     run_claude_fallback "$NEXT"
 }
@@ -2406,9 +2818,11 @@ NOTE FROM THE RESEARCHER: $note"
         local codex_log="$PROJECT/logs/step_${NEXT}_codex_${pf%.txt}_$(date +%Y%m%d_%H%M%S).log"
         log "   Launching Codex: $pf"
 
+        local -a codex_model_args=()
+        [[ -n "${CODEX_MODEL:-}" ]] && codex_model_args=(--model "$CODEX_MODEL")
         ( cd "$PROJECT" && timeout --kill-after=120 "$timeout" \
             codex exec \
-              --model gpt-5.5 \
+              "${codex_model_args[@]}" \
               -c 'model_reasoning_effort="xhigh"' \
               --dangerously-bypass-approvals-and-sandbox \
               -C "$PROJECT" \
@@ -2580,7 +2994,7 @@ api_step_output_file() {
     case "$1" in
         7)  echo "evaluation.md" ;;
         11) echo "review_comments.md" ;;
-        13) echo "judge_evaluation.md" ;;
+        13) echo "${JUDGE_ROLE_OUTPUT:-judge_evaluation.md}" ;;
         *)  echo "" ;;
     esac
 }
@@ -2589,11 +3003,15 @@ api_step_output_file() {
 # (it cannot open files itself).  Missing files are skipped by api_agent_run.py.
 api_step_context_files() {
     local step="$1"
+    if [[ "$step" == 13 && -n "${JUDGE_PACKET_CONTEXT:-}" ]]; then
+        echo "$JUDGE_PACKET_CONTEXT"
+        return 0
+    fi
     local common="problem/problem_brief.md model.md symbol_table.md assumption_ledger.md"
     case "$step" in
         7)  echo "$common solve_log.md sensitivity_report.md" ;;
         11) echo "$common solve_log.md sensitivity_report.md evaluation.md ${BASE}_paper.tex paper/paper.tex" ;;
-        13) echo "$common solve_log.md sensitivity_report.md evaluation.md review_comments.md revision_summary.md ${BASE}_paper.tex paper/paper.tex" ;;
+        13) echo "$common solve_log.md sensitivity_report.md evaluation.md review_comments.md revision_summary.md ${BASE}_paper.tex paper/paper.tex ../../docs/guides/NATIONAL1_CALIBRATION_ANCHOR.md ../../docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md" ;;
         *)  echo "$common" ;;
     esac
 }
@@ -2661,11 +3079,21 @@ run_backend() {
         return 1
     fi
     IFS=$'\x1f' read -r backend model effort base_url key_env <<<"$entry"
+    if codex_only_enabled; then
+        if [[ "$backend" == "claude" ]]; then
+            log "   Claude backend blocked because CODEX_ONLY=1"
+            return 1
+        fi
+        if [[ "$backend" != "codex" ]]; then
+            log "   backend '$backend' blocked because CODEX_ONLY=1"
+            return 1
+        fi
+    fi
     case "$backend" in
         claude)
-            run_claude_worker "$prompt_file" "$timeout" "" "$model" ;;
+            run_claude_worker "$prompt_file" "$timeout" "" "$model" "$hang" ;;
         codex)
-            run_codex "$prompt_file" "$timeout" "$hang" "${model:-gpt-5.5}" "${effort:-xhigh}" ;;
+            run_codex "$prompt_file" "$timeout" "$hang" "$model" "${effort:-xhigh}" ;;
         agy)
             run_agy "$prompt_file" "$timeout" "$hang" "$model" ;;
         openai|deepseek|gemini)
@@ -2684,8 +3112,18 @@ dispatch_step() {
     local prompt_file="$1" timeout="$2" hang="$3" default_fn="$4"
     local step_key="${5:-$NEXT}"
     local ids primary fallback
+    if codex_only_enabled; then
+        log "   CODEX_ONLY=1: using Codex instead of configured/default model dispatch"
+        run_codex "$prompt_file" "$timeout" "$hang"
+        return $?
+    fi
     ids="$(get_step_model_ids "$step_key")"
     if [[ -z "$ids" ]]; then
+        if codex_only_enabled; then
+            log "   CODEX_ONLY=1: using Codex instead of built-in default"
+            run_codex "$prompt_file" "$timeout" "$hang"
+            return $?
+        fi
         "$default_fn" "$prompt_file" "$timeout" "$hang"
         return $?
     fi
@@ -2694,19 +3132,39 @@ dispatch_step() {
     [[ "$fallback" == "$ids" ]] && fallback=""
     log "   Step $NEXT: model override — primary='$primary' fallback='${fallback:-<none>}'"
 
+    # A3: critical code/solve/writing steps must not be single-point.  When no
+    # explicit fallback is configured the built-in default_fn is still the
+    # implicit safety net, but warn so the config gets fixed — and note that
+    # A1's fast INVALID_SESSION escalation (return 3) is what makes reaching
+    # that net cheap instead of an 8-hour timeout (rerun_0706 Step 5).
+    case "$NEXT" in
+        4|5|9|12)
+            [[ -z "$fallback" ]] && log "   Step $NEXT: WARNING single-point primary (no configured fallback) — relying on built-in default"
+            ;;
+    esac
+
     if run_backend "$primary" "$prompt_file" "$timeout" "$hang"; then
-        return 0
-    fi
-    if verify_step "$NEXT"; then
+        if verify_step "$NEXT" && verify_step_output "$NEXT"; then
+            return 0
+        fi
+        log "   Step $NEXT: primary exited OK but artifacts do not verify — trying fallback/default"
+    elif verify_step "$NEXT" && verify_step_output "$NEXT"; then
         log "   Step $NEXT: primary exited nonzero but artifacts verify — done"
         return 0
     fi
     if [[ -n "$fallback" && "$fallback" != "$primary" ]]; then
         log "   Step $NEXT: primary failed — trying configured fallback '$fallback'"
         if run_backend "$fallback" "$prompt_file" "$timeout" "$hang"; then
-            return 0
+            if verify_step "$NEXT" && verify_step_output "$NEXT"; then
+                return 0
+            fi
+            log "   Step $NEXT: fallback exited OK but artifacts do not verify — using built-in default"
         fi
-        if verify_step "$NEXT"; then return 0; fi
+        if verify_step "$NEXT" && verify_step_output "$NEXT"; then return 0; fi
+    fi
+    if codex_only_enabled; then
+        log "   CODEX_ONLY=1: configured model(s) failed; not invoking built-in default"
+        return 1
     fi
     log "   Step $NEXT: configured model(s) failed — falling back to built-in default"
     "$default_fn" "$prompt_file" "$timeout" "$hang"
@@ -2714,7 +3172,7 @@ dispatch_step() {
 
 # Wrapper so single-Claude-worker steps (1, 3) can be a dispatch default_fn:
 # run_claude_worker's 3rd arg is is_literal, NOT hang, so it must be elided.
-_default_claude_worker() { run_claude_worker "$1" "$2"; }
+_default_claude_worker() { run_claude_worker "$1" "$2" "" "" "$3"; }
 
 run_step_1() {
     # Modeling-mode Step 1: research_brief + viable_streams + viability_gate
@@ -2825,17 +3283,40 @@ run_step_2() {
 
     log "   Step 2: active streams = ${active_ids[*]} (N=${#active_ids[@]})"
 
-    # Model assignment: last stream goes to Claude for diversification,
-    # rest go to Codex. Critic is always Codex (stable structured judge).
+    # Model assignment: if the project explicitly configures step_2 with an
+    # agentic backend, honor it for all streams.  Otherwise keep the historical
+    # diversification policy: last stream goes to Claude, the rest to Codex.
     local -A stream_models
+    local step2_ids step2_primary step2_entry step2_backend
+    local forced_step2_backend=""
+    step2_ids="$(get_step_model_ids "2")"
+    if [[ -n "$step2_ids" ]]; then
+        step2_primary="${step2_ids%%|*}"
+        if step2_entry="$(get_model_entry "$step2_primary")"; then
+            IFS=$'\x1f' read -r step2_backend _ _ _ _ <<<"$step2_entry"
+            if [[ "$step2_backend" == "claude" || "$step2_backend" == "codex" ]]; then
+                forced_step2_backend="$step2_backend"
+                log "   Step 2: model override — all streams use $forced_step2_backend (primary='$step2_primary')"
+            else
+                log "   Step 2: model override primary='$step2_primary' backend '$step2_backend' is not agentic — using built-in stream assignment"
+            fi
+        fi
+    fi
+    if codex_only_enabled; then
+        forced_step2_backend="codex"
+        log "   CODEX_ONLY=1: Step 2 proposal and critic streams forced to Codex"
+    fi
     local last_idx="${active_ids[${#active_ids[@]}-1]}"
     for idx in "${active_ids[@]}"; do
-        if [[ "$idx" == "$last_idx" ]]; then
+        if [[ -n "$forced_step2_backend" ]]; then
+            stream_models[$idx]="$forced_step2_backend"
+        elif [[ "$idx" == "$last_idx" ]]; then
             stream_models[$idx]="claude"
         else
             stream_models[$idx]="codex"
         fi
     done
+    local critic_model="${forced_step2_backend:-codex}"
 
     local -A stream_phases stream_pids stream_rounds stream_critic_attempts
 
@@ -2864,10 +3345,12 @@ NOTE FROM THE RESEARCHER: $note"
         log "   Step 2: launching proposal stream $stream_idx ($model, round ${stream_rounds[$stream_idx]})"
 
         if [[ "$model" == "codex" ]]; then
+            local -a codex_model_args=()
+            [[ -n "${CODEX_MODEL:-}" ]] && codex_model_args=(--model "$CODEX_MODEL")
             (
                 cd "$PROJECT" && timeout --kill-after=120 "$proposal_timeout" \
                     codex exec \
-                      --model gpt-5.5 \
+                      "${codex_model_args[@]}" \
                       -c 'model_reasoning_effort="xhigh"' \
                       --dangerously-bypass-approvals-and-sandbox \
                       -C "$PROJECT" \
@@ -2899,18 +3382,27 @@ NOTE FROM THE RESEARCHER: $note"
         prompt=$(prepend_agent_key "step2_modeling_critic_${stream_idx}" "$prompt")
 
         log_path="$PROJECT/logs/step_${NEXT}_${prefix}_critic_a${stream_critic_attempts[$stream_idx]}_$(date +%Y%m%d_%H%M%S).log"
-        log "   Step 2: launching critic for stream $stream_idx"
+        log "   Step 2: launching critic for stream $stream_idx ($critic_model)"
 
-        (
-            cd "$PROJECT" && timeout --kill-after=120 "$critic_timeout" \
-                codex exec \
-                  --model gpt-5.5 \
-                  -c 'model_reasoning_effort="xhigh"' \
-                  --dangerously-bypass-approvals-and-sandbox \
-                  -C "$PROJECT" \
-                  --skip-git-repo-check \
-                  "$prompt"
-        ) > "$log_path" 2>&1 &
+        if [[ "$critic_model" == "claude" ]]; then
+            (
+                cd "$PROJECT" && stdbuf -oL -eL timeout --kill-after=120 "$critic_timeout" \
+                    claude -p "$prompt" --dangerously-skip-permissions --effort max
+            ) > "$log_path" 2>&1 &
+        else
+            local -a critic_codex_model_args=()
+            [[ -n "${CODEX_MODEL:-}" ]] && critic_codex_model_args=(--model "$CODEX_MODEL")
+            (
+                cd "$PROJECT" && timeout --kill-after=120 "$critic_timeout" \
+                    codex exec \
+                      "${critic_codex_model_args[@]}" \
+                      -c 'model_reasoning_effort="xhigh"' \
+                      --dangerously-bypass-approvals-and-sandbox \
+                      -C "$PROJECT" \
+                      --skip-git-repo-check \
+                      "$prompt"
+            ) > "$log_path" 2>&1 &
+        fi
 
         stream_pids[$stream_idx]=$!
         stream_phases[$stream_idx]="critic"
@@ -3199,6 +3691,54 @@ run_step_10() { dispatch_step step10_gate1_numerical.txt 10800 3600 run_codex_th
 run_step_11() { dispatch_step step11_constructive_review.txt 7200 1800 run_codex_then_claude; }
 
 run_step_12() { dispatch_step step12_revision.txt 14400 3600 run_claude_then_codex; }
+
+run_independent_judge_role() {
+    local role="$1" prompt_file="$2"
+    local output_rel="judge_outputs/${role}.md"
+    local context_rel="judge_packets/${role}/context.txt"
+    local ids primary fallback
+    ids="$(get_step_model_ids 13)"
+    if [[ -z "$ids" ]]; then
+        primary="deepseek-chat"
+        fallback=""
+    else
+        primary="${ids%%|*}"
+        fallback="${ids#*|}"
+        [[ "$fallback" == "$ids" ]] && fallback=""
+    fi
+
+    mkdir -p "$PROJECT/judge_outputs"
+    rm -f "$PROJECT/$output_rel"
+    JUDGE_ROLE_OUTPUT="$output_rel"
+    JUDGE_PACKET_CONTEXT="$context_rel"
+
+    local model_id
+    for model_id in "$primary" "$fallback"; do
+        [[ -n "$model_id" ]] || continue
+        local entry backend
+        entry="$(get_model_entry "$model_id" 2>/dev/null || true)"
+        IFS=$'\x1f' read -r backend _ <<<"$entry"
+        case "$backend" in
+            openai|deepseek|gemini) ;;
+            *)
+                log "   Step 13 ${role}: skipping non-isolated backend ${model_id} (${backend:-unknown})"
+                continue
+                ;;
+        esac
+        log "   Step 13 ${role}: isolated judge via ${model_id}"
+        run_backend "$model_id" "$prompt_file" 3600 1800 || true
+        if [[ -s "$PROJECT/$output_rel" ]] \
+            && head -1 "$PROJECT/$output_rel" | grep -q '^VERDICT:'; then
+            unset JUDGE_ROLE_OUTPUT JUDGE_PACKET_CONTEXT
+            return 0
+        fi
+        log "   Step 13 ${role}: unusable output from ${model_id}"
+        rm -f "$PROJECT/$output_rel"
+    done
+    unset JUDGE_ROLE_OUTPUT JUDGE_PACKET_CONTEXT
+    return 1
+}
+
 run_step_13() {
     if _ablate_on "$ABLATE_NO_JUDGE"; then
         log "   ABLATION: skipping Gate-2 judge (ABLATE_NO_JUDGE); writing PASS stub"
@@ -3206,46 +3746,27 @@ run_step_13() {
         return 0
     fi
 
-    # Step 13 缓存检查: 如果论文内容未变,直接复用缓存的评分结果
-    log "   Checking Step 13 judge evaluation cache"
-    if [[ -x "$FACTORY/scripts/step13_judge_cache.py" ]]; then
-        if "$FACTORY/scripts/step13_judge_cache.py" "$PROJECT" --check >> "$PROJECT/logs/runner.log" 2>&1; then
-            log "   Step 13 cache HIT — reusing cached evaluation"
-            # 缓存命中(exit 0),judge_evaluation.md 应该已存在,直接验证即可
-            if [[ -f "$PROJECT/judge_evaluation.md" ]]; then
-                return 0
-            else
-                log "   WARNING: cache hit but judge_evaluation.md missing, re-evaluating"
-            fi
-        else
-            local cache_exit=$?
-            if (( cache_exit == 1 )); then
-                log "   Step 13 cache PARTIAL HIT — evaluating changed sections"
-            else
-                log "   Step 13 cache MISS — full evaluation needed"
-            fi
-        fi
-    fi
+    # The legacy cache hashes the paper but not the independent math/execution
+    # packets. Reusing it could preserve a PASS after code or machine evidence
+    # changed, so isolated judging deliberately bypasses that cache.
+    log "   Step 13 isolated judging: bypassing legacy paper-only cache"
 
-    dispatch_step step13_gate2_judge.txt 10800 3600 run_codex_then_claude
+    log "   Building isolated Step 13 judge packets"
+    python3 "$FACTORY/scripts/judge_packet.py" "$PROJECT" --base "$BASE" \
+        >> "$PROJECT/logs/runner.log" 2>&1 || return 1
 
-    # 评分完成后保存到缓存
-    if [[ -f "$PROJECT/judge_evaluation.md" ]] && [[ -x "$FACTORY/scripts/step13_judge_cache.py" ]]; then
-        local verdict=""
-        local score=0
-        verdict=$(awk -F': *' '/^VERDICT:/{print $2; exit}' "$PROJECT/judge_evaluation.md" 2>/dev/null | tr -d ' ')
-        score=$(grep -oP '整体得分[：:]\s*\K[\d.]+' "$PROJECT/judge_evaluation.md" 2>/dev/null | head -1 || echo "0")
+    run_independent_judge_role math judges/math_auditor.txt || true
+    run_independent_judge_role execution judges/execution_auditor.txt || true
+    run_independent_judge_role paper judges/paper_reviewer.txt || true
 
-        if [[ -n "$verdict" ]] && [[ -n "$score" ]]; then
-            local reopen_cycle=1
-            [[ -f "$(gate2_reopened_once_file)" ]] && reopen_cycle=2
+    python3 "$FACTORY/scripts/aggregate_judges.py" \
+        --math "$PROJECT/judge_outputs/math.md" \
+        --execution "$PROJECT/judge_outputs/execution.md" \
+        --paper "$PROJECT/judge_outputs/paper.md" \
+        --output "$PROJECT/judge_evaluation.md" \
+        --json "$PROJECT/judge_outputs/aggregate.json" \
+        --base "$BASE" >> "$PROJECT/logs/runner.log" 2>&1 || return 1
 
-            "$FACTORY/scripts/step13_judge_cache.py" "$PROJECT" --save \
-                --verdict "$verdict" --score "$score" --reopen-cycle "$reopen_cycle" \
-                >> "$PROJECT/logs/runner.log" 2>&1 || true
-            log "   Step 13 evaluation cached (verdict=$verdict, score=$score)"
-        fi
-    fi
 }
 
 run_step_14() { dispatch_step step14_abstract.txt 7200 1800 run_claude_then_codex; }
@@ -3322,7 +3843,7 @@ while (( STEP < 16 )); do
     TIMEOUT=$(step_timeout "$NEXT")
 
     # 步骤特定的重试限制
-    local STEP_MAX_RETRIES=$MAX_RETRIES
+    STEP_MAX_RETRIES=$MAX_RETRIES
     case "$NEXT" in
         6)  STEP_MAX_RETRIES=$MAX_RETRIES_STEP6 ;;
         13) STEP_MAX_RETRIES=$MAX_RETRIES_STEP13 ;;
@@ -3424,7 +3945,13 @@ while (( STEP < 16 )); do
                 verdict=""
                 verdict=$(gate2_verdict)
 
-                if [[ -f "$(gate2_reopen_marker)" ]]; then
+                if gate2_delivery_override_active; then
+                    rm -f "$(gate2_reopen_marker)" "$(gate2_reopened_once_file)" "$PROJECT/.gate2_blocked"
+                    log "   Gate 2 verdict ${verdict:-MISSING} recorded; user delivery override active — continuing to Step 14"
+                    diag_event "$PROJECT" 13 gate_override GATE2_DELIVERY_OVERRIDE \
+                        "Gate 2 result retained; user requested completion through Step 16 without reopen" \
+                        "gate2_delivery_override.json,judge_evaluation.md"
+                elif [[ -f "$(gate2_reopen_marker)" ]]; then
                     rm -f "$(gate2_reopen_marker)"
                     log "   Gate 2 reopen cycle completed"
                     if [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]; then
@@ -3470,7 +3997,7 @@ while (( STEP < 16 )); do
             RETRIES=$((RETRIES + 1))
 
             # Classify error for intelligent retry
-            local err_class
+            err_class=""
             err_class=$(classify_step_error "$STEP_LOG")
 
             log "   Step $NEXT NOT VERIFIED (expected output files missing or invalid)"
@@ -3501,9 +4028,9 @@ while (( STEP < 16 )); do
 
             if (( RETRIES < STEP_MAX_RETRIES )); then
                 # Exponential backoff: 30s, 60s, 120s, 300s, 600s
-                local delays=(30 60 120 300 600)
-                local delay_idx=$((RETRIES - 1))
-                local delay=${delays[$delay_idx]:-600}
+                delays=(30 60 120 300 600)
+                delay_idx=$((RETRIES - 1))
+                delay=${delays[$delay_idx]:-600}
 
                 log "   Retrying in ${delay}s (attempt $((RETRIES + 1))/$STEP_MAX_RETRIES)..."
                 sleep "$delay"

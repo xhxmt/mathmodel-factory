@@ -15,10 +15,10 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts import evaluate_modeling_project
+from scripts import evaluate_modeling_project, workflow_state
 
 
-CURRENT_CONTRACT_VERSION = "2026-07-02.step8_5_gate2_zip"
+CURRENT_CONTRACT_VERSION = "2026-07-10.quality_contract_v1"
 
 
 def utc_now() -> str:
@@ -56,9 +56,12 @@ def check_map(ev: evaluate_modeling_project.Evaluation) -> dict[str, evaluate_mo
     return {check.name: check for check in ev.checks}
 
 
-def classify_evaluation(ev: evaluate_modeling_project.Evaluation) -> str:
+def classify_evaluation(ev: evaluate_modeling_project.Evaluation, project: Path | None = None) -> str:
     checks = check_map(ev)
     if ev.passed and ev.inferred_step == 16:
+        if project is not None and workflow_state.gate2_delivery_override(project) \
+                and not workflow_state.gate2_passed(project):
+            return "GATE2_OVERRIDE_DELIVERED"
         return "CURRENT_PASS"
 
     delivered_checks = ("papers_pdf", "submission_zip")
@@ -92,7 +95,7 @@ def build_delivery_manifest(
     return {
         "contract_version": CURRENT_CONTRACT_VERSION,
         "generated_at": generated_at or utc_now(),
-        "status": classify_evaluation(ev),
+        "status": classify_evaluation(ev, project),
         "runner_commit": git_commit(root),
         "project": {
             "base": base,
@@ -101,6 +104,9 @@ def build_delivery_manifest(
         "evaluation": {
             "inferred_step": ev.inferred_step,
             "passed": ev.passed,
+            "gate2_verdict": workflow_state.gate2_verdict(project),
+            "gate2_passed": workflow_state.gate2_passed(project),
+            "gate2_delivery_override": workflow_state.gate2_delivery_override(project),
             "failed_checks": failed_checks,
         },
         "artifacts": {
@@ -134,7 +140,7 @@ def main() -> int:
 
     manifest = write_delivery_manifest(project, root, Path(args.output).resolve() if args.output else None)
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
-    return 0 if manifest["status"] == "CURRENT_PASS" else 1
+    return 0 if manifest["status"] in {"CURRENT_PASS", "GATE2_OVERRIDE_DELIVERED"} else 1
 
 
 if __name__ == "__main__":

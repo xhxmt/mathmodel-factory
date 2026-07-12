@@ -167,6 +167,26 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
    - 把验证报告 `number_verification.md` 的内容拷贝到 code_review.md §1 数字审计 段
    - **重要**：如果 Step 6 重新运行（灵敏度分析更新），必须先 `--update` 更新 manifest，否则会出现 checksum 不匹配
 
+2.3. **交付物硬门禁**（runner 会独立复跑，FAIL = Step 10 不通过）：
+   ```bash
+   python3 __FACTORY__/scripts/verify_deliverables.py __PROJECT_PATH__ __BASE_NAME__
+   ```
+   检查题目要求的附件 (`result*.xlsx`) 是否存在、策略明细表是否进了论文、
+   xlsx 数值是否可追溯到 canonical 结果（防"论文一套数、Excel 另一套数"）。
+   把输出整合到 code_review.md §1.3：
+   - `ATTACHMENTS_MISSING > 0` / `TABLES_MISSING > 0` → 列 BLOCKING issue；附件缺失回 Step 5 生成，策略表缺失直接在本步骤补表（表格数值从 canonical 取，属于"改数字"授权范围）。
+   - `XLSX_UNMATCHED ratio > 0.15` 或 `HEADLINE_MISSING > 0` → xlsx 与结果真相源分叉，回 Step 5 用导出脚本重新生成 xlsx，**不允许**手改论文数字去迁就 xlsx。
+
+2.4. **数值不变量审计**（runner 会独立复跑，FAIL = Step 10 不通过）：
+   ```bash
+   python3 __FACTORY__/scripts/verify_invariants.py __PROJECT_PATH__
+   ```
+   独立重算 `results/invariants.json` 声明的聚合恒等式 / 支配关系 / 取值范围。
+   这是**正确性**检查——一个数字"可追溯"但内部自相矛盾（总量≠分项之和、
+   多弹<单弹）依然是死刑。把输出整合到 code_review.md §1.4：
+   - 任何 `[FAIL]` → BLOCKING issue。诊断根因：是求解真错了（回 Step 5 重跑）还是不变量声明写错（改声明必须给出数学理由，记录在 code_review.md）。
+   - `INVARIANTS_SPEC=MISSING` → 在 code_review.md 标注并要求补写（Step 5 的契约产物）。
+
 2.5. **数字传递链审计**（新增 — 硬信号检查项）：
    ```bash
    python3 __FACTORY__/scripts/verify_number_chain.py __PROJECT_PATH__ __BASE_NAME__
@@ -181,12 +201,15 @@ Gate 1 vs Gate 2: Step 10 (Gate 1) 只查**算术 / 复现 / 数字一致性**, 
    `CHAIN_BREAKS > 0` 记 **WARNING**（不直接 FAIL）：关键结果未在结论复述可能是合理的结构选择，但必须在 §1.5 给出理由或补写，不能无视。
 
 3. 对每个数字, 用 python 读 results/<sub>/values.json 或 results/sensitivity/*.json, 核对（如果 verify_numbers.py 未覆盖的特殊情况）。
+3.1. 对多弹同平台策略执行共享决策审计：按 `uav_id` 分组，检查题面声明为“一经确定不再调整”的航向、速度等平台级变量是否逐行唯一；再对官方 xlsx 做相同分组检查。任何组出现多组航向或速度，记为 BLOCKING 并回 Step 5 联合重求，禁止仅修改表格显示值。
 4. 把核对结果填进 code_review.md §1 表格。
 5. 对每个 discrepancy: 写到 §2 详细诊断, 直接修 paper.tex, 在 §5 修订摘要记一笔。
 6. 修完后跑 `compile_paper.sh` 确认 PDF 还能编译; 如果挂, 修。
 7. 写 §6 Gate 1 verdict — 必须满足：
    - 符号覆盖率 ≥ 0.7（或 ≥ 0.5 但所有泄漏符号已在 code_review.md 中列出补登记方案）
    - 数字通过率 100%（任何凭空数字 / 未修 discrepancy = FAIL）
+   - 交付物门禁：`verify_deliverables.py` VERDICT: PASS（附件齐 + 策略表在论文里 + xlsx 与结果同源）
+   - 不变量门禁：`verify_invariants.py` VERDICT: PASS（聚合恒等式 / 支配关系全部重算通过）
    - 数字传递链：CHAIN_BREAKS=0，或 §1.5 已对每个断链给出理由 / 补写结论（WARNING 可放行，但不能无视）
    - 编译成功
 

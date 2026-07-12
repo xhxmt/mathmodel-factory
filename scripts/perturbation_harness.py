@@ -23,11 +23,11 @@ JUDGE_PROMPT = ROOT / "evaluation/external_paper_judge_prompt.txt"
 
 PAPERS = {
     "national_1_A": {
-        "label": "国一 A题（蚁群+遗传+蒙特卡洛，生产决策）",
+        "label": "国一 A题（板凳龙动态搜索）",
         "md": ROOT / "reference_papers/national_1_A/ocr/full.md",
     },
     "national_1_B": {
-        "label": "国一 B题（板凳龙动态搜索）",
+        "label": "国一 B题（蚁群+遗传+蒙特卡洛，生产决策）",
         "md": ROOT / "reference_papers/national_1_B/ocr/full.md",
     },
     "provincial_1": {

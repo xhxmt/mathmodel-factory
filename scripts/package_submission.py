@@ -76,6 +76,8 @@ INCLUDE_DIRS = {
 
 
 def should_skip(path: Path, rel: Path) -> bool:
+    if rel.parts[:2] == ("paper", "archive"):
+        return True
     if any(part in SKIP_DIR_NAMES for part in rel.parts):
         return True
     if path.name.startswith(".runner") or path.name in {".heartbeat", ".killed", ".review_state.json"}:

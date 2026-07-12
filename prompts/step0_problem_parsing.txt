@@ -28,7 +28,7 @@ C. 直接的题目纯文本（不以 `/` 开头的 inline 文本）
 4. `__PROJECT_PATH__/problem/source.md` — 题目原文（你刚生成或拷贝的）
 5. `__PROJECT_PATH__/human_review.md` — 如存在，作为最新人工指引覆盖默认决策
 
-[输出契约 — 产生 5 个文件，缺一不可]
+[输出契约 — 产生 6 个文件，缺一不可]
 
 ═══════════════════════════════════════════════════════════════
 ### 1. `__PROJECT_PATH__/problem/problem_brief.md`
@@ -137,6 +137,38 @@ python3 __FACTORY__/scripts/method_retrieve.py \
 - 若 method_library 不够用，在`未登记但题目暗示需要的方法`小节列出，等用户决定是否补登记，**不要伪造路径**。
 
 ═══════════════════════════════════════════════════════════════
+### 6. `__PROJECT_PATH__/problem/deliverables.json`
+
+**机器可读的交付物契约** —— Gate 1 和 Step 16 会用
+`scripts/verify_deliverables.py` 按这份契约做硬检查（附件缺失 / 策略表缺失 /
+Excel 与结果不一致 = 直接 FAIL）。逐字扫描题目原文，抽出**题目明文要求提交的
+所有东西**：
+
+```json
+{
+  "schema_version": 1,
+  "attachments": [
+    {"file": "result1.xlsx", "problem": "问题3", "description": "单机三弹投放策略明细"}
+  ],
+  "strategy_tables": [
+    {"problem": "问题2", "description": "投放策略明细表",
+     "fields": ["航向角", "速度", "投放时刻", "起爆时刻", "有效遮蔽时长"]}
+  ]
+}
+```
+
+填写规则：
+- `attachments`：题目原文点名的每个提交文件（`result1.xlsx`、`result2.xlsx`…），
+  一个都不能漏。文件名照抄原文。题目没要求附件时写 `[]`。
+- `strategy_tables`：题目用"给出…策略 / 方案 / 结果"措辞要求的每个子问题，
+  论文正文必须有一张明细表。`fields` 列出这张表**至少**要包含的列名——从题目
+  要求的决策变量推（如投放问题 = 航向角/速度/投放点/起爆点；调度问题 =
+  时段/机器/任务分配）。列名不带单位括号。
+- 宁多勿漏：评委按题目要求逐项对照，缺一项就是硬扣分（历史案例：策略表缺失
+  被三位评委一致扣 3-5 分）。
+- 抽不出任何要求时两个数组都写 `[]`，但必须先逐字读完题目再下这个结论。
+
+═══════════════════════════════════════════════════════════════
 
 [执行流程]
 1. 读 `__FACTORY__/modeling_guide.md`（前 60 行即可，主要看项目结构）
@@ -144,10 +176,11 @@ python3 __FACTORY__/scripts/method_retrieve.py \
 3. 根据 `__RESEARCH_QUESTION__` 解读输入类型 → 生成 `problem/source.md`（必要时调 mineru_parse.py）
 4. 读 `problem/source.md` 全文
 5. 运行 `python3 __FACTORY__/scripts/method_retrieve.py --query-file __PROJECT_PATH__/problem/source.md --top-k 8 > __PROJECT_PATH__/problem/method_retrieval.md`
-6. 顺序生成 5 个产物文件
+6. 顺序生成 6 个产物文件
 7. 自检：
-   - `ls __PROJECT_PATH__/problem/` 应至少看到：`source.md`, `method_retrieval.md`, `problem_brief.md`, `terminology_table.md`, `data_inventory.md`, `feasibility_constraints.md`, `candidate_methods.md`（7 项）
-   - 5 个核心交付物（`problem_brief.md`, `terminology_table.md`, `data_inventory.md`, `feasibility_constraints.md`, `candidate_methods.md`）各 ≥ 20 行；`method_retrieval.md` 是短名单，只需包含 `Method Retrieval Results` 表
+   - `ls __PROJECT_PATH__/problem/` 应至少看到：`source.md`, `method_retrieval.md`, `problem_brief.md`, `terminology_table.md`, `data_inventory.md`, `feasibility_constraints.md`, `candidate_methods.md`, `deliverables.json`（8 项）
+   - 5 个核心 markdown 交付物（`problem_brief.md`, `terminology_table.md`, `data_inventory.md`, `feasibility_constraints.md`, `candidate_methods.md`）各 ≥ 20 行；`method_retrieval.md` 是短名单，只需包含 `Method Retrieval Results` 表
+   - `deliverables.json` 用 `python3 -c "import json; json.load(open('problem/deliverables.json'))"` 验证可解析
    - candidate_methods.md 中引用的方法路径用 `test -f` 逐一验证存在
 
 不要写 `checkpoint.md`——runner 用磁盘文件推断步骤进度并自行重写 checkpoint，agent 写入会产生格式冲突的重复行。

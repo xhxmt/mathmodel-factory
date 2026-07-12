@@ -7,6 +7,19 @@
 
 不要把 CUMCM 摘要机械写成“问题理解/方法/结果/亮点”四段散文。优秀论文更常见的是“总述 + 逐问段落”，四个功能分布在各问段落中。
 
+**质量硬标准（对照 `__FACTORY__/docs/guides/NATIONAL1_CALIBRATION_ANCHOR.md` 锚点 1 的国一摘要）**：
+1. **字数硬下限 600 字**（CUMCM 常规区间 600-1200）。< 600 字 = 信息密度不够 =
+   本步骤 FAIL，必须扩写逐问段落（加数值、加验证句），不是加空话。
+2. **每个逐问段落必须含**：≥ 1 个精确数值结果（保留求解精度，如 412.473838s，
+   不要四舍五入成"约 412s"）+ 结果去向指针（"详见表 X 和 result N.xlsx"，若
+   deliverables.json 声明了附件）。
+3. **每个算法出场要有一句动机**（"由于该区间单峰，采用三分搜索"），禁止裸报算法名。
+4. **逐问段落不同构**：按每问真正的难点决定段落切入点（推导链开场 / 证明开场 /
+   转化开场），参照锚点 1 的问题一 vs 问题二 vs 问题四三种不同写法。
+5. **禁止泛化尾巴**："本模型可推广到军事运筹/物流运输/计算机图形学"这类无具体
+   桥接的收尾是 AI 味标志。要么删掉，要么每个领域给一句具体迁移方式（改哪个
+   约束、换哪个输入），否则不写推广。
+
 **Human intervention 机制**: 如果 `human_review.md` 包含 `## Step 14 abstract:` 段落 (不区分大小写), 那个段落里的内容**直接覆盖** agent 起草的摘要。Agent 仍要产出 `abstract_draft.md` 作为 fallback, 但 paper.tex 里嵌入的摘要文本应该是 human 优先。
 
 [重要 — 风格规范]
@@ -27,7 +40,8 @@
 7. `__PROJECT_PATH__/__BASE_NAME___paper.tex` —— 全文阅读 (尤其 §1 §2 §6 §7 §8), 确保摘要不会与正文冲突。
 8. `__PROJECT_PATH__/problem/source.md` —— 判断 CUMCM 国赛 (中文摘要) vs 美赛 (英文 Summary)。
 9. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— § 提交格式硬约束 §摘要 / 字数限制。
-10. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 摘要结构和禁用工程痕迹的写作基准。
+10. `__FACTORY__/docs/guides/NATIONAL1_CALIBRATION_ANCHOR.md` —— **必读**。锚点 1 是 2024A 国一摘要全文 + 逐项解剖，本步骤产出的摘要按同一质地写（不是抄句式，是对齐"答案密度/动机链/段落随难点变形"三个特征）。
+11. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 摘要结构和禁用工程痕迹的写作基准。
 
 [输出契约 — runner 用磁盘文件判定本步骤是否 ready]
 
@@ -117,6 +131,8 @@ agent 在摘要里选择性强调了:
 
 - ❌ 留 \\AbstractPlaceholder 在 paper.tex (infer_step 检测该命令仍存在 → 本步骤未完成)
 - ❌ 写超出字数限制 (CUMCM 国赛通常 ≤ 1200 字)
+- ❌ 写低于 600 字的摘要 (agent 起草版硬下限; human override 版本不受限, 但如低于下限要在 abstract_draft.md 元信息里注明)
+- ❌ 无具体桥接的泛化尾巴 ("可推广到 XX 领域" 而不说改哪个约束/换哪个输入)
 - ❌ 把 PROTECTED 假设的差异化机制省略 (摘要应是论文最强卖点的浓缩, 漏掉创新点 = 评委印象初步丢分)
 - ❌ 在摘要中写内部工程痕迹: `m1/m2`、`results/*.json`、`RELAXED`、`fallback`、`workflow`、`runner`、`cache`
 - ❌ 把粗网格下界、失败分支、乐观上界写成最终主答案；这些只能作为验证/局限的辅助说明

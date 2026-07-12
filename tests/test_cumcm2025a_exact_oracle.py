@@ -4,6 +4,7 @@ import pytest
 from scripts.domain_oracles.cumcm2025a_occlusion import (
     segment_intersects_sphere,
     solve_problem1_reference,
+    verify_project_result,
 )
 
 
@@ -38,3 +39,21 @@ def test_problem1_reference_uses_refined_interval_boundaries():
     assert result.start < result.end
     assert result.sample_count >= 600
     assert result.endpoint_tol == pytest.approx(1e-7)
+
+
+def test_oracle_verifies_matching_project_result(tmp_path):
+    result = solve_problem1_reference(endpoint_tol=1e-7)
+    values = tmp_path / "results" / "problem1" / "values.json"
+    values.parent.mkdir(parents=True)
+    values.write_text(
+        "{"
+        f'"objective": {result.duration}, '
+        f'"decision": {{"intervals": [[{result.start}, {result.end}]]}}'
+        "}",
+        encoding="utf-8",
+    )
+
+    verification = verify_project_result(tmp_path, tolerance=1e-5)
+
+    assert verification["passed"] is True
+    assert verification["duration_error"] <= 1e-5

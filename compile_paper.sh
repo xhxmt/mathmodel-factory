@@ -4,6 +4,11 @@ set -euo pipefail
 PROJECT="${1:?Usage: $0 <project_dir> <base_name>}"
 BASE="${2:?Usage: $0 <project_dir> <base_name>}"
 
+# Make factory-vendored classes/styles (cumcmthesis.cls, abstract_placeholder.sty)
+# resolvable from any project directory. Trailing colon keeps default paths.
+FACTORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export TEXINPUTS="${FACTORY_DIR}/latex_templates:${TEXINPUTS:-}"
+
 cd "$PROJECT"
 
 # 创建编译日志目录

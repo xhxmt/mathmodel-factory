@@ -59,6 +59,11 @@ __PROJECT_PATH__/results/
   "auxiliary_method": "m{M}" | null,
   "decision": { ... },              // 决策变量的最优值（key 用 symbol_table 里的符号）
   "objective": <float>,             // 目标函数值（若为多目标，列出每个分量）
+                                    // ⚠ 时间区间类目标必须是端点二分精化后的值（见下方"精度口径"），
+                                    // 粗网格计数值只能放 diagnostics
+  "per_smoke": [                    // 多资源子问题建议记录：每枚资源单独评估的边际贡献
+    { "id": "<资源标识>", "contribution": <float> }   // = 只保留该资源时的目标值；
+  ] | null,                         // 0 贡献默认是异常信号；只有题面可推出必须非零时才是硬失败
   "status": "CONVERGED" | "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "TIMEOUT" | "UNBOUNDED",
   "solver": "<scipy.milp / gurobi / cvxpy / ...>",
   "solver_version": "<version string>",
@@ -66,6 +71,17 @@ __PROJECT_PATH__/results/
   "mip_gap": <float> | null,        // MILP 才有；其他求解器留 null
   "n_vars": <int>,
   "n_constraints": <int>,
+  "provenance": {                   // 必填（B1/B2 真实性门禁 verify_provenance.py 会对账）
+    "solver": "<与上面 solver 一致的求解器/算法名>",
+    "job_id": "<solver_submit.sh 返回的 jobid；必须能在 run_state/solver_jobs/<jobid>.meta 找到>",
+    "budget": { "maxiter": <int>, "de_maxiter": <int>, "pso_iters": <int>, "n_eval": <int> },
+                                    // 全局搜索必须记录迭代数和 n_eval，供预算阶梯、跨算法差异和 gap 联合判断；
+                                    // 固定评估次数本身不能证明搜索充分
+    "repair": false                 // 仅当本结果来自兜底/修复脚本而非承诺求解器时置 true；
+                                    // 置 true 或 provenance 缺失 = REPAIR_FALLBACK（BLOCKING，须 Step 16 前清零）
+  },
+  "upper_bound": <float> | null,    // C3：可计算的宽松上界（去耦合独立最优和/资源寿命上界等）
+  "gap_pct": <float> | null,        // C3：(upper_bound - objective)/upper_bound × 100；>40% 须在 Step 7 解释
   "auxiliary_validation": {         // 若 AUXILIARY ≠ NONE 且本子问题做了辅流程对照
     "auxiliary_decision": { ... },
     "auxiliary_objective": <float>,
@@ -81,6 +97,72 @@ __PROJECT_PATH__/results/
 ```
 
 禁止把 `status` 留成 `RUNNING` / `PARTIAL` / `PENDING` / `INCOMPLETE` 后继续后续步骤；这类状态表示本子问题还不是 canonical result。若多个 solver 共同产生最终答案，额外生成 `results/canonical_results.json` 汇总每个子问题的最终采用值、来源文件、solver 状态和表格/Excel 派生字段。后续论文表格、摘要关键数字和 `result*.xlsx` 必须从 `values.json` 或 `canonical_results.json` 派生，不允许手工维护另一套数字。
+
+**真求解硬约束（B1/B2/B3 门禁，Step 5 完成前会跑 `verify_provenance.py`）**：
+- **每个 `values.json` 必须带可对账的 `provenance`**：`job_id` 要能在
+  `run_state/solver_jobs/<jobid>.meta` 找到（即结果确实由 `solver_submit.sh` 跑出，
+  不是脚本里现算的临时数）。provenance 缺失 = REPAIR_FALLBACK。
+- **全局搜索求解器必须记录预算与停止证据**：不能只报一次运行。预算充分性由项目的
+  `quality_contract.json`、预算阶梯边际收益、跨算法差异和上/下界 gap 联合判断；
+  通用经验阈值只能产生 WARN，不能单独证明或否定最优性。
+- **不得用 `.stub` 交付**：`model.md` 声明的每个 stream（尤其 AUXILIARY MILP）必须真正
+  实例化——`models/**/*.stub` 只要还在就是"承诺的求解器从未实现"，Step 5 直接 FAIL。
+  若某方法确实放弃，改 `model.md`/`assumption_ledger.md` 记录决策并删 stub，不要留着。
+- **兜底脚本不得冒充求解器**：若正规求解通道失败、你不得不写修复/兜底脚本产出结果，
+  必须把该结果 `provenance.repair` 置 `true` 并在 `solve_log.md §修订决策` 说明，
+  它会作为 BLOCKING 进 `audit_issue_ledger.md`，必须在 Step 12 前用真求解替换。
+  **不要**为了让门禁变绿而拼装数字——门禁的目的是拦住这种拼装。
+- **同一平台的共享决策必须在最终记录中逐行一致**：若题面规定无人机航向和速度一经
+  确定不再调整，则同一 `uav_id` 的所有烟幕记录必须共享唯一航向和唯一速度。单槽候选
+  可以为构造代理收益而各自搜索，但不得直接拼接成 canonical 策略；必须增加自动化测试，
+  同时核对 `values.json` 与官方 xlsx。违反该约束属于物理不可行，直接阻断 Step 6。
+
+**精度口径（时间/区间类目标的 canonical 必须精化）**：
+粗时间网格（Δt≈0.05 s 级）只准用于**搜索定位**；canonical 采信值必须对每个
+遮蔽/服务/覆盖区间做**端点二分精化**（到 1e-3 级）后按精化区间并集统计。
+粗网格计数值只能写进 `diagnostics` 字段，**不得**作为 `objective`。红旗自检：
+若 objective 恰为 Δt 的整数倍，先标记为量化异常并检查端点精化证据；真实精确值也可能
+偶然落在网格点上，因此 `quantized_off` 默认只告警。只有本题质量契约给出充分理由时才硬失败。
+
+**逐资源贡献落盘 + 冗余资源诊断（多资源子问题建议做）**：
+每个 ≥2 枚资源的子问题，求解定稿后对**每枚**资源做一次"只保留它"的单独评估，
+把结果填进 `per_smoke[].contribution`。零贡献可能意味着搜索失败，也可能意味着冗余资源、
+备用资源或非加性协同；先诊断原因。只有题面或已证明命题要求每个资源必须产生正边际收益时，
+才在 `quality_contract.json` 将 `nonzero_each` 升级为硬主张。
+
+**结构 baseline 对照（高维子问题优先）**：`model.md §8.1` 承诺的几何引导
+搜索（seed/降维/分层）与**无先验**的裸 DE/PSO 在同预算下各跑一次，两者目标值
+都写进 `convergence.json`。差异阈值必须由本题 contract 解释；平台期只证明当前算法
+停止改进，不自动证明全局收敛。
+
+**C2 预算阶梯 + 边际收益停机（高维/多资源子问题）**：不要只跑一次就定稿。跑一个
+**预算递增序列**（如
+DE maxiter × {1,3,9} 或 多起点 × {1,3,9}），把每一级的 `(budget, objective)`
+落盘到 `results/p<N>/convergence.json`：
+
+```json
+{"ladder": [{"budget": 50, "objective": 5.21}, {"budget": 150, "objective": 5.60},
+            {"budget": 450, "objective": 5.61}], "stop_reason": "marginal_gain<1%"}
+```
+
+停止阈值由 `quality_contract.json` 给出并说明依据。`FEASIBLE` 只表示已有可行解；
+只有求解器证书或可验证的 gap 才能写 `OPTIMAL`。预算阶梯平台化是证据之一，不是充分条件。
+
+**C3 松弛上界自报 gap（每个优化子问题必做）**：给一个**可计算的宽松上界**
+（去掉耦合约束后各资源独立最优之和、资源寿命上界、LP 松弛值等），填进 `values.json`
+的 `upper_bound` 与 `gap_pct`。gap 是你对自己解质量的诚实标尺——评估时无需任何外部
+答案就能看出余量（例：P5 objective=15.7 / upper_bound=17.1 → gap≈8%）。gap>40%
+必须在 `solve_log.md` 解释为什么还这么松（是真难还是没搜够）。
+
+> 注意：以上 C2/C3 的"上界/预算"都从**题目结构本身**导出，**严禁**参考任何往年或本题
+> 范文的具体答案数值来标定目标；那属于信息污染（见 preamble 的禁读清单）。
+
+**`result*.xlsx` 必须用脚本生成，不允许手填**：若 `problem/deliverables.json`
+声明了附件，写一个生成脚本（如 `models/<id>/09_export_xlsx.py`）从
+`canonical_results.json` / `values.json` 读数生成全部 `result*.xlsx`，脚本入库。
+生成后跑 `python3 __FACTORY__/scripts/verify_deliverables.py __PROJECT_PATH__ __BASE_NAME__`
+自检——xlsx 数值不可追溯比例 > 15% 或 headline 数字缺失 = Gate 1 直接 FAIL
+（历史案例：Excel 总时长 6.358s vs 论文 4.90s 双源分叉被三位评委一致扣分）。
 
 `plots.pdf` 至少包含：决策变量的可视化（条形 / 热力图 / 网络图，取决于变量类型）、目标函数的关键分量（如果可分解）、求解过程指标（收敛曲线 / MIP gap 演化 / SPRT 似然比轨迹 ...，按方法族而定）。**注意**：这是 quick-look 图，**不是论文最终图**。配色 / 字体可以暂时不严格遵守 `modeling_guide.md` §Figure Style，但必须每张子图有标题 + 轴标签。
 
@@ -167,6 +249,38 @@ __PROJECT_PATH__/results/
 ### 3. `__PROJECT_PATH__/assumption_ledger.md` —— 状态原地更新
 
 **不要**重写整个文件。只**修改表格里第 5 列（状态）+ 必要时加备注**，按上述 §假设触发记录 同步。`PROTECTED` / `CRITICAL` 标签**永远不动**。
+
+═══════════════════════════════════════════════════════════════
+### 4. `__PROJECT_PATH__/results/invariants.json` —— 数值不变量与异常检查声明
+
+Gate 1 会用 `python3 __FACTORY__/scripts/verify_invariants.py __PROJECT_PATH__`
+独立重算这些条目。只有**模型数学结构必然蕴含的关系**才是硬不变量；反直觉现象写入
+`quality_contract.json.anomaly_checks`，默认作为 WARN：
+
+```json
+{
+  "invariants": [
+    {"name": "问题3总时长=各弹之和", "type": "sum",
+     "total": "canonical:p3.total_time",
+     "parts": ["canonical:p3.bombs[0].duration", "canonical:p3.bombs[1].duration"],
+     "tol": 0.01},
+    {"name": "多资源目标不劣于可嵌入的少资源基线", "type": "ge",
+     "left": "canonical:p3.objective", "right": "canonical:p2.objective", "tol": 1e-8},
+    {"name": "占比之和=100", "type": "sum", "total": 100.0,
+     "parts": ["canonical:p5.share[0]", "canonical:p5.share[1]"], "tol": 0.5}
+  ]
+}
+```
+
+- 引用语法：`canonical:` → `results/canonical_results.json`；`p<N>:` →
+  `results/p<N>/values.json`；类型有 `sum` / `eq` / `ge` / `le` / `gt_strict` /
+  `nonzero` / `nonzero_each` / `quantized_off` / `monotone` / `range`。
+- 必须包含：(a) 聚合恒等式；(b) 题面可证明的弱/严格支配关系；(c) 概率、占比、
+  守恒量和物理范围。严格增益、逐资源非零、非网格量化等只有在题目级推导成立时才放这里；
+  否则放 `quality_contract.json.anomaly_checks`。
+- **硬不变量 FAIL 不是"改声明让它过"**；异常检查 FAIL 则要求诊断、复算并记录结论，
+  不能直接等同于数学错误。
+- 写完立刻本地跑一次 `verify_invariants.py` 确认 PASS。
 
 ═══════════════════════════════════════════════════════════════
 

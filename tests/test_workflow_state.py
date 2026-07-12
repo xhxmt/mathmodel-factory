@@ -49,3 +49,30 @@ def test_delivery_artifacts_and_step16_ready(tmp_path):
 
     assert delivery_artifacts_ready(root, "demo") is True
     assert step16_ready(project, root, "demo") is True
+
+
+def test_gate2_delivery_override_allows_step16_without_faking_pass(tmp_path):
+    root = tmp_path
+    project = root / "ongoing" / "demo"
+    write_file(project / "reviewer_entry_map.md", "# map\n")
+    write_file(project / "anchor_figure_plan.md", "# anchors\n")
+    write_file(project / "entry_gate.md", "VERDICT: PASS\n")
+    write_file(project / "judge_evaluation.md", "VERDICT: REOPEN_REVISION_MODEL\n")
+    write_file(
+        project / "gate2_delivery_override.json",
+        '{"enabled": true, "scope": "continue_to_step16", "reason": "user_requested"}\n',
+    )
+    write_file(root / "papers" / "demo_paper.pdf", "pdf\n")
+    write_zip(root / "papers" / "demo_submission.zip")
+
+    from scripts.workflow_state import (
+        gate2_delivery_allowed,
+        gate2_delivery_override,
+        gate2_passed,
+        step16_ready,
+    )
+
+    assert gate2_passed(project) is False
+    assert gate2_delivery_override(project) is True
+    assert gate2_delivery_allowed(project) is True
+    assert step16_ready(project, root, "demo") is True

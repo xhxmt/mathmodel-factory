@@ -16,12 +16,17 @@ if __package__ in (None, ""):
 from scripts import delivery_contract, evaluate_modeling_project
 
 
-STATUSES = ("CURRENT_PASS", "LEGACY_DELIVERED", "INVALID_OR_INCOMPLETE")
+STATUSES = (
+    "CURRENT_PASS",
+    "GATE2_OVERRIDE_DELIVERED",
+    "LEGACY_DELIVERED",
+    "INVALID_OR_INCOMPLETE",
+)
 
 
 def project_entry(project: Path, root: Path, *, write_manifest: bool = False) -> dict[str, Any]:
     ev = evaluate_modeling_project.evaluate(project, root)
-    status = delivery_contract.classify_evaluation(ev)
+    status = delivery_contract.classify_evaluation(ev, project)
     failed = [check.__dict__ for check in ev.checks if not check.ok and check.severity != "warning"]
     manifest = project / "delivery_manifest.json"
     if write_manifest:

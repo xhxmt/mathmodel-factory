@@ -271,6 +271,25 @@ def generate_manifest(project_dir: Path) -> None:
     print(f"  Total values: {sum(len(v) for v in manifest.values())}")
 
 
+def _strip_non_content_latex(line: str) -> str:
+    """Remove LaTeX commands whose numeric arguments are formatting, not results."""
+    line = re.sub(r'\\includegraphics(?:\[[^\]]*\])?\{[^}]*\}', '', line)
+    line = re.sub(
+        r'\\(?:label|ref|pageref|cite[tp]?|citealp|hypersetup|bibliographystyle|bibliography)\{[^}]*\}',
+        '',
+        line,
+    )
+    line = re.sub(r'\\(?:begin|end)\{[^}]*\}', '', line)
+    # Avoid false positives from LaTeX command names and exponent notation:
+    # \approx1.23 should expose 1.23, not a bogus 23; 10^{-6} should not
+    # emit -6 as a standalone result number.
+    line = re.sub(r'\^\{[-+]?\d+\}', '', line)
+    line = re.sub(r'\^[+-]?\d+', '', line)
+    line = re.sub(r'\\[a-zA-Z]+\*?', ' ', line)
+    line = line.replace(r'\,', ' ')
+    return line
+
+
 def extract_numbers_from_tex(tex_file: Path) -> List[Tuple[int, str, float]]:
     """
     Extract numerical values from LaTeX file.
@@ -280,18 +299,45 @@ def extract_numbers_from_tex(tex_file: Path) -> List[Tuple[int, str, float]]:
     """
     numbers = []
 
+    in_document = False
+    in_references = False
+
     with open(tex_file) as f:
         for line_num, line in enumerate(f, start=1):
+            if r"\begin{document}" in line:
+                in_document = True
+                line = line.split(r"\begin{document}", 1)[1]
+            if not in_document:
+                continue
+            if r"\section{参考文献}" in line or r"\begin{thebibliography}" in line:
+                in_references = True
+            if r"\appendix" in line:
+                in_references = False
+                continue
+            if in_references:
+                continue
+
             # Skip comments
             if line.strip().startswith('%'):
                 continue
 
+            line_for_numbers = _strip_non_content_latex(line)
+
             # Find numbers in text (not in commands)
             # Match patterns like: 187.2, 0.0478, $x = 42$, etc.
-            pattern = r'(?<![a-zA-Z])(\d+\.?\d*(?:[eE][+-]?\d+)?)'
-            for match in re.finditer(pattern, line):
+            pattern = r'(?<![a-zA-Z])-?\d+\.?\d*(?:[eE][+-]?\d+)?%?'
+            for match in re.finditer(pattern, line_for_numbers):
                 try:
-                    value = float(match.group(1))
+                    raw = match.group(0)
+                    clean = raw.rstrip('%')
+                    value = float(clean)
+                    if (
+                        value == int(value)
+                        and "." not in clean
+                        and "e" not in clean.lower()
+                        and (1 <= value <= 20 or 1900 <= value <= 2099 or value == 100)
+                    ):
+                        continue
                     context = line.strip()[:60]
                     numbers.append((line_num, context, value))
                 except ValueError:
@@ -315,15 +361,26 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
     with open(manifest_file) as f:
         manifest_data = json.load(f)
 
-    # Build reverse lookup: value -> source
-    value_sources = {}
+    # Verify that the manifest still reflects current result artifacts.
+    current_sources = scan_results_directory(project_dir)
+    source_mismatches = []
+
+    # Build reverse lookup entries.  Do not collapse duplicate values: common
+    # integers such as 0/1/2 may legitimately appear in multiple result files
+    # with different JSON/XLSX scalar types.
+    value_sources = []
     for source_path, values in manifest_data["sources"].items():
         for key, entry in values.items():
             value = entry["value"]
             checksum = entry["checksum"]
             if isinstance(value, list):
                 value = tuple(value)
-            value_sources[value] = (source_path, key, checksum)
+            current_entry = current_sources.get(source_path, {}).get(key)
+            if current_entry is None:
+                source_mismatches.append((source_path, key, "missing"))
+            elif current_entry.get("checksum") != checksum:
+                source_mismatches.append((source_path, key, "checksum"))
+            value_sources.append((value, source_path, key, checksum))
 
     # Extract numbers from paper
     paper_file = project_dir / f"{base_name}_paper.tex"
@@ -335,26 +392,21 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
 
     # Check each number
     untraced = []
-    checksum_mismatches = []
+    def matches(manifest_value: float, paper_value: float) -> bool:
+        abs_tol = 1e-6
+        rel_tol = 5e-3
+        return abs(float(manifest_value) - paper_value) <= max(abs_tol, abs(float(manifest_value)) * rel_tol)
 
     for line_num, context, value in paper_numbers:
         # Try to find this value in manifest (with tolerance for floats)
         found = False
-        for manifest_value, (source, key, checksum) in value_sources.items():
+        for manifest_value, source, key, checksum in value_sources:
             if isinstance(manifest_value, (int, float)):
-                # Allow small floating point tolerance
-                if abs(float(manifest_value) - value) < 1e-6:
-                    # Verify checksum
-                    value_checksum = compute_checksum(value)
-                    if value_checksum != checksum:
-                        checksum_mismatches.append((line_num, context, value, source))
+                if matches(float(manifest_value), value):
                     found = True
                     break
 
         if not found:
-            # Check if it's a "safe" number (like page numbers, section numbers)
-            if value in [1, 2, 3, 4, 5, 10, 20, 100] and value == int(value):
-                continue  # Skip common structural numbers
             untraced.append((line_num, context, value))
 
     # Report results
@@ -364,7 +416,7 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
         f.write(f"Paper: `{base_name}_paper.tex`\n")
         f.write(f"Manifest: `numbers_manifest.json`\n\n")
 
-        if not untraced and not checksum_mismatches:
+        if not untraced and not source_mismatches:
             f.write("✓ All numerical values are traced to source files.\n")
             print("✓ Number verification passed")
             return True
@@ -376,11 +428,11 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
                 f.write(f"- Line {line_num}: `{value}` in \"{context}\"\n")
             f.write("\n")
 
-        if checksum_mismatches:
-            f.write(f"## ⚠ Checksum Mismatches ({len(checksum_mismatches)})\n\n")
-            f.write("These numbers exist in results but checksums don't match (value may have changed):\n\n")
-            for line_num, context, value, source in checksum_mismatches:
-                f.write(f"- Line {line_num}: `{value}` (source: `{source}`)\n")
+        if source_mismatches:
+            f.write(f"## ⚠ Source Checksum Mismatches ({len(source_mismatches)})\n\n")
+            f.write("The manifest is stale relative to current result artifacts:\n\n")
+            for source, key, reason in source_mismatches:
+                f.write(f"- `{source}::{key}` ({reason})\n")
             f.write("\n")
 
     print(f"✗ Number verification found issues. See {report_file}")

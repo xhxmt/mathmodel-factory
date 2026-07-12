@@ -309,6 +309,24 @@ def test_project_cloud_config_rejects_unknown_project(tmp_path):
     assert not (settings.ongoing_dir / "missing").exists()
 
 
+def test_recent_logs_prefers_newer_runner_log_over_stale_step_log(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    user = mod.UserInfo(username="admin", role="admin")
+    logs_dir = tmp_path / "ongoing" / "demo" / "logs"
+    logs_dir.mkdir(parents=True)
+    stale_step = logs_dir / "step_setup_20260706_132022.log"
+    runner_log = logs_dir / "runner.log"
+    stale_step.write_text("old setup failure\n", encoding="utf-8")
+    runner_log.write_text("current runner line\n", encoding="utf-8")
+    os.utime(stale_step, (1000, 1000))
+    os.utime(runner_log, (2000, 2000))
+
+    response = asyncio.run(mod.get_recent_logs("demo", lines=20, current_user=user))
+
+    assert response["file"] == "runner.log"
+    assert "current runner line" in response["logs"]
+
+
 def test_selection_endpoint_returns_pending_options(tmp_path):
     mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
     user = mod.UserInfo(username="admin", role="admin")

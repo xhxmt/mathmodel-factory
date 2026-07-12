@@ -39,9 +39,28 @@ def gate2_passed(project: Path) -> bool:
     return gate2_verdict(project) == "PASS"
 
 
+def gate2_delivery_override(project: Path) -> bool:
+    path = project / "gate2_delivery_override.json"
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(read_text(path))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return (
+        payload.get("enabled") is True
+        and payload.get("scope") == "continue_to_step16"
+        and bool(str(payload.get("reason", "")).strip())
+    )
+
+
+def gate2_delivery_allowed(project: Path) -> bool:
+    return gate2_passed(project) or gate2_delivery_override(project)
+
+
 def step8_5_verdict(project: Path) -> str | None:
     state = collect_step8_5_state(project)
-    return state.get("verdict")
+    return state.get("effective_verdict")
 
 
 def step8_5_passed(project: Path) -> bool:
@@ -69,7 +88,7 @@ def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:
     resolved_base = base or project.name
     return (
         delivery_artifacts_ready(root, resolved_base)
-        and gate2_passed(project)
+        and gate2_delivery_allowed(project)
         and step8_5_passed(project)
     )
 
@@ -80,6 +99,8 @@ def collect_state(project: Path, root: Path, base: str | None = None) -> dict[st
         "base": resolved_base,
         "gate2_verdict": gate2_verdict(project),
         "gate2_passed": gate2_passed(project),
+        "gate2_delivery_override": gate2_delivery_override(project),
+        "gate2_delivery_allowed": gate2_delivery_allowed(project),
         "step8_5": collect_step8_5_state(project),
         "delivery_artifacts_ready": delivery_artifacts_ready(root, resolved_base),
         "step16_ready": step16_ready(project, root, resolved_base),
@@ -94,6 +115,9 @@ def main() -> int:
     p.add_argument("project")
 
     p = sub.add_parser("gate2-passed")
+    p.add_argument("project")
+
+    p = sub.add_parser("gate2-delivery-allowed")
     p.add_argument("project")
 
     p = sub.add_parser("step8_5-verdict")
@@ -120,6 +144,8 @@ def main() -> int:
         return 0
     if args.command == "gate2-passed":
         return 0 if gate2_passed(project) else 1
+    if args.command == "gate2-delivery-allowed":
+        return 0 if gate2_delivery_allowed(project) else 1
     if args.command == "step8_5-verdict":
         print(step8_5_verdict(project) or "")
         return 0

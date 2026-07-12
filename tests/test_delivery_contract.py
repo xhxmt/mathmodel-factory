@@ -46,6 +46,35 @@ def test_delivery_manifest_records_contract_and_artifact_hashes(tmp_path, monkey
     assert manifest["artifacts"]["submission_zip"]["sha256"]
 
 
+def test_delivery_manifest_does_not_mark_gate2_override_as_current_pass(tmp_path, monkeypatch):
+    project = tmp_path / "complete" / "demo_override"
+    make_complete_project(project)
+    make_current_contract_project(project)
+    write_file(
+        project / "judge_evaluation.md",
+        "VERDICT: REOPEN_REVISION_MODEL\n" + "\n".join(["judge"] * 30) + "\n",
+    )
+    write_file(
+        project / "gate2_delivery_override.json",
+        '{"enabled": true, "scope": "continue_to_step16", "reason": "user_requested"}\n',
+    )
+
+    from scripts import delivery_contract
+    from scripts import evaluate_modeling_project as evaluator
+
+    monkeypatch.setattr(evaluator, "infer_step", lambda root, project: (16, "16"))
+    monkeypatch.setattr(evaluator, "run_python_check", lambda root, args, timeout=60: (True, "ok"))
+    monkeypatch.setattr(evaluator, "symbol_check_ok", lambda root, project, base: (True, "ok"))
+
+    ev = evaluator.evaluate(project, tmp_path)
+    manifest = delivery_contract.build_delivery_manifest(project, tmp_path, ev)
+
+    assert ev.passed is True
+    assert manifest["status"] == "GATE2_OVERRIDE_DELIVERED"
+    assert manifest["evaluation"]["gate2_verdict"] == "REOPEN_REVISION_MODEL"
+    assert manifest["evaluation"]["gate2_delivery_override"] is True
+
+
 def test_audit_complete_projects_classifies_current_legacy_and_invalid(tmp_path, monkeypatch):
     current = tmp_path / "complete" / "current"
     legacy = tmp_path / "complete" / "legacy"
@@ -78,6 +107,7 @@ def test_audit_complete_projects_classifies_current_legacy_and_invalid(tmp_path,
     assert (invalid / "delivery_manifest.json").is_file()
     assert result["summary"] == {
         "CURRENT_PASS": 1,
+        "GATE2_OVERRIDE_DELIVERED": 0,
         "LEGACY_DELIVERED": 1,
         "INVALID_OR_INCOMPLETE": 1,
     }

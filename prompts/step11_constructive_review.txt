@@ -9,9 +9,11 @@ Issue 严重度:
 
 [重要 — 风格规范]
 - 风格圣经：`__FACTORY__/modeling_guide.md §LaTeX Document Requirements`
+- 国一校准锚：`__FACTORY__/docs/guides/NATIONAL1_CALIBRATION_ANCHOR.md`
+  - §写作 评估的"锚点对照"和"同构检测"以它为标尺。
 - 优秀论文写作基准：`__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md`
   - CUMCM 分问题目摘要和正文主线应按“开头总述 + 逐问交付”组织。
-  - §问题分析每问应写“难点 -> 建模对象/变量 -> 方法 -> 输出”的阅卷索引。
+  - §问题分析每问应覆盖难点、建模对象/变量、方法、输出四要素，但组织方式随每问难点变化，不要各问同构。
   - §模型求解应先报最终采信口径，诊断和未采信分支后置。
   - 正文主线不得出现内部工程痕迹，如 `m1/m2`、`results/*.json`、`RELAXED`、`fallback`、`workflow`、`runner`、`cache`。
 - 优秀论文可视化基准：`__FACTORY__/docs/guides/EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md`
@@ -130,14 +132,25 @@ issue-level 审稿报告。结构:
 
 ## §写作 评估
 
+表面项（yes/no 快查）:
 - 是否避免 "我们认为" / "我们注意到" 等口语化表达: <yes/no>
 - 是否避免 markdown 残留语法 (如 `**bold**` 残留): <yes/no>
 - 是否中英混杂术语 (CUMCM 中文版应纯中文除引文 key): <yes/no>
-- 段落长度是否合理 (≤ 5 行): <yes/no>
 - CUMCM 摘要素材是否适合“开头总述 + 逐问交付”: <yes/no>
-- §问题分析是否逐问说明难点、建模对象/变量、方法和输出: <yes/no>
 - §模型求解是否先报最终采信口径, 把粗网格/退化/失败分支后置: <yes/no>
 - 正文主线是否清除了内部工程痕迹 (`m1/m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache`): <yes/no>
+
+**实质写作质量（对比式评估, 不是打勾）**——yes/no 全过的论文照样可能读起来
+机械。对以下三处做实测:
+1. **压缩测试**: 随机抽 3 个正文段落, 尝试改写成短 30% 的版本。如果改写后没有
+   丢失任何数字/结论/限定条件, 说明原段落信息密度不足 → 挂 MAJOR issue, 附上
+   你的改写版本作为修复建议。
+2. **同构检测**: 把每问在 §问题分析 和 §模型求解 的首段并排列出。如果各问段落
+   句式结构逐句同构（同一模板套 N 遍）→ 挂 MAJOR issue, 指明哪几问应换切入点
+   （按各自真正的难点, 参照 `NATIONAL1_CALIBRATION_ANCHOR.md` 锚点 1 的三种写法）。
+3. **锚点对照**: 抽被评论文最好的一问与 `NATIONAL1_CALIBRATION_ANCHOR.md`
+   锚点 1 对应段落并排对照, 写 2-3 句差距诊断（答案密度 / 动机链 / 交付指针）。
+   差距明显 → 具体化为 issue。
 - `reviewer_entry_map.md` 的每问交付是否真的被 Step 9 写进了正文首段: <yes/no>
 - `anchor_figure_plan.md` 的主锚点是否真的被放到评委优先看到的位置: <yes/no>
 

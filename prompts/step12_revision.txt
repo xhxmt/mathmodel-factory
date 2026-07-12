@@ -94,6 +94,13 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 
 ## 未处理 issue (deferred 到 Step 15 polish 或 future work)
 
+**只允许 defer MINOR 级 issue。** BLOCKING / MAJOR 级 issue —— 尤其是交付物类
+（策略表缺失、`result*.xlsx` 与论文数字不一致、文档类/格式不合规）—— 必须在
+本步骤修完，**不得 deferred**。历史教训：BLOCKING 问题被标 DEFERRED 后 Gate 2
+连续 reopen 5 次、白烧 7 小时，最后还是原样丢分。如果某个 BLOCKING 确实修不了
+（如需要重跑求解），不要标 DEFERRED —— 在 §给 Step 13 的提示 中明确写
+"需回 Step 5/6 重跑 + 原因"，让 Gate 2 出 `REOPEN_REVISION_MODEL` 走正确的返工路径。
+
 逐项列出:
 - m<id>: <issue 标题> — 理由: <为什么 defer (例如 "篇幅有限, Step 15 polish 阶段处理")>
 
@@ -133,7 +140,11 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 2. 读 review_comments.md, 把 issue 按建议执行顺序拍排列。
 3. 对每个 issue: (a) 定位 paper.tex 中具体位置; (b) 按建议修复方案修改; (c) 在 revision_summary.md 写一行修订记录。
 4. **每修 5 个 issue 跑一次 `compile_paper.sh` 检查未引入新编译错误**, 避免修到最后挂掉编译又难定位是哪条 issue 引入的。
-5. 处理完 BLOCKING + MAJOR 后, 跑 Step 10 的数字核对 (用 `code_review.md §1 表格` 重新核对几个数字; 不需要写新文档, 只是 sanity check)。
+5. 处理完 BLOCKING + MAJOR 后, 跑 Step 10 的数字核对 (用 `code_review.md §1 表格` 重新核对几个数字; 不需要写新文档, 只是 sanity check)。同时复跑两个机器门禁确认修订没有引入新问题:
+   ```bash
+   python3 __FACTORY__/scripts/verify_deliverables.py "$(pwd)" __BASE_NAME__
+   python3 __FACTORY__/scripts/verify_invariants.py "$(pwd)"
+   ```
 6. 完整跑一遍 `compile_paper.sh`, 必须 exit 0 + PDF 生成。
 7. 写 revision_summary.md 完整结构。
 8. 更新 audit_issue_ledger.md 中已修 issue 状态。

@@ -13,6 +13,14 @@ REQUIRED_FILES = (
     "anchor_figure_plan.md",
     "entry_gate.md",
 )
+FRESHNESS_INPUTS = (
+    "results/canonical_results.json",
+    "visualization_log.md",
+    "evaluation.md",
+    "solve_log.md",
+    "sensitivity_report.md",
+    "model.md",
+)
 
 
 def collect_step8_5_state(project_dir: str | Path) -> dict:
@@ -20,6 +28,17 @@ def collect_step8_5_state(project_dir: str | Path) -> dict:
     files = {name: project / name for name in REQUIRED_FILES}
     present = {name: path.is_file() and path.stat().st_size > 0 for name, path in files.items()}
     artifacts_complete = all(present.values())
+
+    existing_inputs = [project / name for name in FRESHNESS_INPUTS if (project / name).is_file()]
+    stale_inputs: list[str] = []
+    if artifacts_complete and existing_inputs:
+        oldest_output_mtime = min(path.stat().st_mtime_ns for path in files.values())
+        stale_inputs = [
+            str(path.relative_to(project))
+            for path in existing_inputs
+            if path.stat().st_mtime_ns > oldest_output_mtime
+        ]
+    fresh = artifacts_complete and not stale_inputs
 
     verdict = None
     if present["entry_gate.md"]:
@@ -29,18 +48,24 @@ def collect_step8_5_state(project_dir: str | Path) -> dict:
 
     if not artifacts_complete:
         status = "missing"
+    elif verdict == "PASS" and not fresh:
+        status = "stale"
     elif verdict == "PASS":
         status = "pass"
     elif verdict == "REVISE":
         status = "revise"
     else:
         status = "invalid"
+    effective_verdict = "STALE" if status == "stale" else verdict
 
     return {
         "status": status,
         "verdict": verdict,
-        "ready": verdict == "PASS" and artifacts_complete,
+        "effective_verdict": effective_verdict,
+        "ready": verdict == "PASS" and artifacts_complete and fresh,
         "artifacts_complete": artifacts_complete,
+        "fresh": fresh,
+        "stale_inputs": stale_inputs,
         "files": {name: str(path) for name, path in files.items()},
         "present": present,
     }
@@ -55,7 +80,7 @@ def main() -> int:
 
     state = collect_step8_5_state(args.project_dir)
     if args.verdict:
-        print(state["verdict"] or "")
+        print(state["effective_verdict"] or "")
     elif args.json:
         print(json.dumps(state, ensure_ascii=False))
     else:

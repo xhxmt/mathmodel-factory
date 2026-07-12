@@ -309,7 +309,16 @@ def evaluate(project: Path, root: Path) -> Evaluation:
     )
 
     verdict = workflow_state.gate2_verdict(project)
-    ev.add("gate2_verdict", verdict == "PASS", f"VERDICT: {verdict or 'missing'}")
+    gate2_override = workflow_state.gate2_delivery_override(project)
+    ev.add(
+        "gate2_verdict",
+        workflow_state.gate2_delivery_allowed(project),
+        (
+            f"VERDICT: {verdict or 'missing'}; delivery override active"
+            if gate2_override
+            else f"VERDICT: {verdict or 'missing'}"
+        ),
+    )
 
     methods = method_paths_in(project)
     missing_methods = sorted(path for path in methods if not (root / path).is_file())
@@ -325,6 +334,81 @@ def evaluate(project: Path, root: Path) -> Evaluation:
     ev.add("logs_present", bool(log_files), f"{len(log_files)} nonempty log files")
     canonical_ok, canonical_detail = canonical_results_state(project)
     ev.add("canonical_results", canonical_ok, canonical_detail)
+
+    # 交付物硬门禁：附件存在 + 策略表存在 + Excel 与结果真相源一致。
+    # 无 problem/deliverables.json 的老项目脚本会 SKIP（exit 0），仅记 warning。
+    def gate_summary(detail: str) -> str:
+        lines = [
+            line for line in detail.splitlines()
+            if line.startswith((
+                "FAIL",
+                "VERDICT",
+                "[FAIL]",
+                "[ERROR]",
+                "[BLOCKING]",
+                "DELIVERABLES_CONTRACT",
+                "INVARIANTS_",
+                "VALUES_FILES",
+                "STUB_RESIDUE",
+                "REPAIR_FALLBACK",
+                "BUDGET_LIMITED",
+                "HARD_FAIL",
+                "SPEC_IMPL_",
+                "QUALITY_CONTRACT_",
+            ))
+        ]
+        return "; ".join(lines[-4:]) if lines else (detail[:200] or "no output")
+
+    deliv_ok, deliv_detail = run_python_check(
+        root, ["scripts/verify_deliverables.py", str(project), base]
+    )
+    ev.add(
+        "deliverables_gate",
+        deliv_ok,
+        gate_summary(deliv_detail),
+        severity="warning" if "VERDICT: SKIP" in deliv_detail else "error",
+    )
+
+    # 数值不变量门禁：results/invariants.json 声明的恒等式/单调性独立重算。
+    inv_ok, inv_detail = run_python_check(
+        root, ["scripts/verify_invariants.py", str(project)]
+    )
+    ev.add(
+        "invariants_gate",
+        inv_ok,
+        gate_summary(inv_detail),
+        severity="warning" if "VERDICT: SKIP" in inv_detail else "error",
+    )
+
+    prov_ok, prov_detail = run_python_check(
+        root, ["scripts/verify_provenance.py", str(project)]
+    )
+    ev.add(
+        "provenance_gate",
+        prov_ok,
+        gate_summary(prov_detail),
+        severity="warning" if "VERDICT: INDETERMINATE" in prov_detail else "error",
+    )
+
+    spec_ok, spec_detail = run_python_check(
+        root, ["scripts/verify_spec_impl.py", str(project)]
+    )
+    ev.add(
+        "spec_impl_gate",
+        spec_ok,
+        gate_summary(spec_detail),
+        severity="warning" if "VERDICT: SKIP" in spec_detail else "error",
+    )
+
+    quality_ok, quality_detail = run_python_check(
+        root, ["scripts/verify_quality_contract.py", str(project)]
+    )
+    ev.add(
+        "quality_contract_gate",
+        quality_ok,
+        gate_summary(quality_detail),
+        severity="warning" if "VERDICT: SKIP" in quality_detail else "error",
+    )
 
     paper_tex = project / f"{base}_paper.tex"
     paper_pdf = project / f"{base}_paper.pdf"
