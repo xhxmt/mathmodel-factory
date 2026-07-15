@@ -4,6 +4,8 @@
 
 原始的社会科学资产保留以供参考和兼容，但标准建模流程遵循 `STEPS.md` 和 `modeling_guide.md`。
 
+完整文档导航请查看 [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md)。
+
 ## 交互式演示界面
 
 请查看位于 [**`xhxmt.github.io/`**](https://xhxmt.github.io/) 的交互式演示项目。它现已升级为一个动态的前端交互页面，采用现代化的 UI 设计风格构建。该演示站点不仅模拟了多智能体数学建模工作流的终端执行过程，还结合真实的数据产出，通过直观的交互式卡片展示了系统的工作流架构、质量检查门禁和评测指标。只需在浏览器中打开 [xhxmt.github.io](https://xhxmt.github.io/) 即可体验全貌。
