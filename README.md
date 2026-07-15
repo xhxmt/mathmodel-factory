@@ -6,10 +6,6 @@
 
 完整文档导航请查看 [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md)。
 
-## 交互式演示界面
-
-请查看位于 [**`xhxmt.github.io/`**](https://xhxmt.github.io/) 的交互式演示项目。它现已升级为一个动态的前端交互页面，采用现代化的 UI 设计风格构建。该演示站点不仅模拟了多智能体数学建模工作流的终端执行过程，还结合真实的数据产出，通过直观的交互式卡片展示了系统的工作流架构、质量检查门禁和评测指标。只需在浏览器中打开 [xhxmt.github.io](https://xhxmt.github.io/) 即可体验全貌。
-
 ## 本地 Web Dashboard（新增）
 
 本项目现已提供本地 Web Dashboard，用于实时监控项目进度并进行人工介入：
@@ -43,7 +39,6 @@ cd web
 - `scripts/`：辅助脚本，用于 Antigravity 路由、MinerU 解析、数字校验和清理工作。
 - `evaluation/`：评分解析器以及针对外部大语言模型（LLM）裁判的基准校准脚本。
 - `experiments/`：消融实验测试工具，用于测试不同流程机制对结果的影响。
-- `xhxmt.github.io/`：交互式的项目演示前端界面，用于展示多智能体工作流的运行过程与结果。
 - **`docs/guides/`**：优秀论文基准文档（可视化与写作规范）
 
 诸如 `analysis_guide.md`、`stata_submit.sh` 和 `stata_wrapper.sh` 等旧文件仅为保持跨模式兼容性而保留。新建模项目请遵循 `modeling_guide.md` 规范并使用 `solver_submit.sh`。
