@@ -1,0 +1,541 @@
+{
+  "models": [
+    "deepseek-chat"
+  ],
+  "papers": [
+    {
+      "id": "n1a_clean",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 70.0,
+      "correctness_score": 55.0,
+      "writing_dimensions": {
+        "answer_completeness": 70.0,
+        "argument_chain": 65.0,
+        "result_traceability": 70.0,
+        "section_organization": 80.0,
+        "figure_narrative": 70.0,
+        "language_maturity": 70.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1a_no_symbols",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 70.0,
+      "correctness_score": 55.0,
+      "writing_dimensions": {
+        "answer_completeness": 70.0,
+        "argument_chain": 65.0,
+        "result_traceability": 75.0,
+        "section_organization": 80.0,
+        "figure_narrative": 70.0,
+        "language_maturity": 65.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1a_numeric_contradiction",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 71.0,
+      "correctness_score": 60.0,
+      "writing_dimensions": {
+        "answer_completeness": 75.0,
+        "argument_chain": 67.5,
+        "result_traceability": 75.0,
+        "section_organization": 77.5,
+        "figure_narrative": 70.0,
+        "language_maturity": 67.5
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1a_unsupported_optimality",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 72.0,
+      "correctness_score": 65.0,
+      "writing_dimensions": {
+        "answer_completeness": 75.0,
+        "argument_chain": 75.0,
+        "result_traceability": 65.0,
+        "section_organization": 80.0,
+        "figure_narrative": 70.0,
+        "language_maturity": 75.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1a_robotic_repetition",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 70.0,
+      "correctness_score": 55.0,
+      "writing_dimensions": {
+        "answer_completeness": 75.0,
+        "argument_chain": 65.0,
+        "result_traceability": 70.0,
+        "section_organization": 80.0,
+        "figure_narrative": 60.0,
+        "language_maturity": 70.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1a_missing_answers",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 72.0,
+      "correctness_score": 65.0,
+      "writing_dimensions": {
+        "answer_completeness": 75.0,
+        "argument_chain": 70.0,
+        "result_traceability": 68.0,
+        "section_organization": 78.0,
+        "figure_narrative": 70.0,
+        "language_maturity": 72.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1b_clean",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 45.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 40.0,
+        "result_traceability": 30.0,
+        "section_organization": 60.0,
+        "figure_narrative": 50.0,
+        "language_maturity": 55.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1b_no_sensitivity",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 45.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 40.0,
+        "result_traceability": 20.0,
+        "section_organization": 60.0,
+        "figure_narrative": 50.0,
+        "language_maturity": 60.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1b_no_symbols",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 40.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 35.0,
+        "result_traceability": 20.0,
+        "section_organization": 50.0,
+        "figure_narrative": 45.0,
+        "language_maturity": 55.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1b_numeric_contradiction",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 55.0,
+      "correctness_score": 35.0,
+      "writing_dimensions": {
+        "answer_completeness": 50.0,
+        "argument_chain": 45.0,
+        "result_traceability": 40.0,
+        "section_organization": 60.0,
+        "figure_narrative": 50.0,
+        "language_maturity": 65.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1b_unsupported_optimality",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 55.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 45.0,
+        "argument_chain": 47.5,
+        "result_traceability": 30.0,
+        "section_organization": 70.0,
+        "figure_narrative": 55.0,
+        "language_maturity": 72.5
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1b_robotic_repetition",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 40.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 35.0,
+        "result_traceability": 20.0,
+        "section_organization": 50.0,
+        "figure_narrative": 40.0,
+        "language_maturity": 55.0
+      },
+      "fatal_flaw_detected": true
+    },
+    {
+      "id": "n1b_missing_answers",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 45.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 35.0,
+        "result_traceability": 30.0,
+        "section_organization": 55.0,
+        "figure_narrative": 40.0,
+        "language_maturity": 60.0
+      },
+      "fatal_flaw_detected": true
+    }
+  ],
+  "missing_results": [],
+  "pairs": [
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_no_symbols",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean"
+    },
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_numeric_contradiction",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean"
+    },
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_unsupported_optimality",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean"
+    },
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_robotic_repetition",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean"
+    },
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_missing_answers",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean"
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_no_sensitivity",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean"
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_no_symbols",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean"
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_numeric_contradiction",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean"
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_unsupported_optimality",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean"
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_robotic_repetition",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean"
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_missing_answers",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean"
+    }
+  ],
+  "pairwise": {
+    "evaluated": 11,
+    "total": 11,
+    "correct_points": 5.5,
+    "accuracy": 0.5,
+    "direct_evaluated": 11,
+    "direct_complete": 11,
+    "direct_coverage": 1.0,
+    "axis_accuracy": {
+      "overall": 0.0,
+      "correctness": 0.18181818181818182,
+      "writing": 0.36363636363636365
+    },
+    "axis_evaluated": {
+      "overall": 11,
+      "correctness": 11,
+      "writing": 11
+    }
+  },
+  "ordering": {
+    "concordant": 0,
+    "discordant": 0,
+    "ties": 11,
+    "kendall_style_tau": 0.0
+  },
+  "malformed_outputs": {
+    "malformed": 2,
+    "total_runs": 72,
+    "rate": 0.027777777777777776
+  },
+  "fatal_flaw_detection": {
+    "detected": 4,
+    "expected": 4,
+    "rate": 1.0
+  },
+  "coverage_by_problem": {
+    "CUMCM-2024-A": {
+      "available": 6,
+      "total": 6,
+      "coverage": 1.0
+    },
+    "CUMCM-2024-B": {
+      "available": 7,
+      "total": 7,
+      "coverage": 1.0
+    }
+  },
+  "split_axis_coverage": 1.0,
+  "score_reliability": {
+    "ready": false,
+    "checks": {
+      "all_papers_scored": true,
+      "split_axis_coverage": true,
+      "direct_pair_coverage": true,
+      "pairwise_accuracy": false,
+      "malformed_output_rate": true,
+      "fatal_flaw_detection": true,
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "policy": {
+      "min_pairwise_accuracy": 0.9,
+      "min_direct_pair_coverage": 1.0,
+      "max_malformed_rate": 0.1,
+      "min_fatal_flaw_detection_rate": 0.8,
+      "min_correctness_accuracy": 0.9,
+      "min_writing_accuracy": 0.9
+    },
+    "meaning": "Absolute scores and award prediction require independent human calibration"
+  },
+  "proxy_reliability": {
+    "ready": false,
+    "checks": {
+      "all_papers_scored": true,
+      "split_axis_coverage": true,
+      "direct_pair_coverage": true,
+      "pairwise_accuracy": false,
+      "malformed_output_rate": true,
+      "fatal_flaw_detection": true,
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "scope": [
+      "objective_defect_detection",
+      "perturbation_pairwise_comparison"
+    ],
+    "meaning": "Safe only for bounded A/B comparisons against deterministic perturbations"
+  },
+  "human_calibration": {
+    "ready": false,
+    "reason": "no independent human ground truth"
+  },
+  "award_prediction_ready": false
+}

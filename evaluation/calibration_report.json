@@ -7,9 +7,19 @@
       "category": "real_awarded",
       "paper_path": "reference_papers/national_1_B/national1_24B_production.pdf",
       "result_path": "evaluation/results/national_1_B_eval.json",
-      "status": "MISSING",
-      "score": null,
-      "fatal_flaw_detected": false
+      "calibration_result_path": "evaluation/results/calibration/paper_national1_2024b.json",
+      "status": "AVAILABLE",
+      "score": 55.0,
+      "correctness_score": 10.0,
+      "writing_dimensions": {
+        "answer_completeness": 60.0,
+        "argument_chain": 30.0,
+        "result_traceability": 40.0,
+        "section_organization": 70.0,
+        "figure_narrative": 50.0,
+        "language_maturity": 60.0
+      },
+      "fatal_flaw_detected": true
     },
     {
       "id": "provincial1_2024b",
@@ -18,8 +28,18 @@
       "category": "real_awarded",
       "paper_path": "reference_papers/provincial_1/henryers_24B_provincial1.pdf",
       "result_path": "evaluation/results/ext_sheng1_2024b_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_provincial1_2024b.json",
       "status": "AVAILABLE",
-      "score": 76.4,
+      "score": 55.0,
+      "correctness_score": 20.0,
+      "writing_dimensions": {
+        "answer_completeness": 70.0,
+        "argument_chain": 40.0,
+        "result_traceability": 50.0,
+        "section_organization": 70.0,
+        "figure_narrative": 60.0,
+        "language_maturity": 60.0
+      },
       "fatal_flaw_detected": true
     },
     {
@@ -29,20 +49,40 @@
       "category": "real_awarded",
       "paper_path": "reference_papers/provincial_3/cherzing_24B_provincial3.pdf",
       "result_path": "evaluation/results/provincial_3_2024b_eval.json",
-      "status": "MISSING",
-      "score": null,
-      "fatal_flaw_detected": false
+      "calibration_result_path": "evaluation/results/calibration/paper_provincial3_2024b.json",
+      "status": "AVAILABLE",
+      "score": 35.0,
+      "correctness_score": 20.0,
+      "writing_dimensions": {
+        "answer_completeness": 50.0,
+        "argument_chain": 30.0,
+        "result_traceability": 20.0,
+        "section_organization": 70.0,
+        "figure_narrative": 40.0,
+        "language_maturity": 30.0
+      },
+      "fatal_flaw_detected": true
     },
     {
       "id": "generated_2024b",
       "problem_id": "CUMCM-2024-B",
       "award_tier": null,
       "category": "generated_baseline",
-      "paper_path": "complete/test_cumcm2024b/test_cumcm2024b_paper.pdf",
+      "paper_path": "papers/test_cumcm2024b_paper.pdf",
       "result_path": "evaluation/results/test_cumcm2024b_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024b.json",
       "status": "AVAILABLE",
-      "score": 91.6,
-      "fatal_flaw_detected": false
+      "score": 94.0,
+      "correctness_score": 35.0,
+      "writing_dimensions": {
+        "answer_completeness": 95.0,
+        "argument_chain": 90.0,
+        "result_traceability": 95.0,
+        "section_organization": 95.0,
+        "figure_narrative": 95.0,
+        "language_maturity": 95.0
+      },
+      "fatal_flaw_detected": true
     },
     {
       "id": "generated_2024a_known_fatal",
@@ -51,50 +91,87 @@
       "category": "generated_baseline",
       "paper_path": "complete/test_cumcm2024a_polished/test_cumcm2024a_paper.pdf",
       "result_path": "evaluation/results/test_cumcm2024a_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024a_known_fatal.json",
       "status": "AVAILABLE",
-      "score": 66.3,
-      "fatal_flaw_detected": true
+      "score": 98.0,
+      "correctness_score": 100.0,
+      "writing_dimensions": {
+        "answer_completeness": 100.0,
+        "argument_chain": 100.0,
+        "result_traceability": 90.0,
+        "section_organization": 100.0,
+        "figure_narrative": 100.0,
+        "language_maturity": 100.0
+      },
+      "fatal_flaw_detected": false
     }
   ],
-  "missing_results": [
-    "national1_2024b",
-    "provincial3_2024b"
-  ],
+  "missing_results": [],
   "pairs": [
     {
       "higher": "national1_2024b",
       "lower": "provincial1_2024b",
-      "status": "MISSING",
-      "credit": null
+      "status": "CORRECT",
+      "credit": 1.0,
+      "source": "BLIND_PAIRWISE",
+      "winner": "national1_2024b",
+      "correctness_winner": "national1_2024b",
+      "writing_winner": "national1_2024b",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true
     },
     {
       "higher": "provincial1_2024b",
       "lower": "provincial3_2024b",
-      "status": "MISSING",
-      "credit": null
+      "status": "CORRECT",
+      "credit": 1.0,
+      "source": "BLIND_PAIRWISE",
+      "winner": "provincial1_2024b",
+      "correctness_winner": "provincial1_2024b",
+      "writing_winner": "provincial1_2024b",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true
+    },
+    {
+      "higher": "provincial3_2024b",
+      "lower": "generated_2024b",
+      "status": "REVERSED",
+      "credit": 0.0,
+      "source": "BLIND_PAIRWISE",
+      "winner": "generated_2024b",
+      "correctness_winner": "generated_2024b",
+      "writing_winner": "generated_2024b",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true
     }
   ],
   "pairwise": {
-    "evaluated": 0,
-    "total": 2,
-    "correct_points": 0.0,
-    "accuracy": null
+    "evaluated": 3,
+    "total": 3,
+    "correct_points": 2.0,
+    "accuracy": 0.6666666666666666,
+    "direct_evaluated": 3,
+    "direct_complete": 3,
+    "direct_coverage": 1.0
   },
   "ordering": {
-    "concordant": 0,
-    "discordant": 0,
+    "concordant": 2,
+    "discordant": 1,
     "ties": 0,
-    "kendall_style_tau": null
+    "kendall_style_tau": 0.3333333333333333
   },
   "malformed_outputs": {
     "malformed": 0,
-    "total_runs": 9,
+    "total_runs": 24,
     "rate": 0.0
   },
   "fatal_flaw_detection": {
-    "detected": 1,
+    "detected": 0,
     "expected": 1,
-    "rate": 1.0
+    "rate": 0.0
   },
   "coverage_by_problem": {
     "CUMCM-2024-A": {
@@ -103,9 +180,28 @@
       "coverage": 1.0
     },
     "CUMCM-2024-B": {
-      "available": 2,
+      "available": 4,
       "total": 4,
-      "coverage": 0.5
+      "coverage": 1.0
     }
+  },
+  "split_axis_coverage": 1.0,
+  "score_reliability": {
+    "ready": false,
+    "checks": {
+      "all_papers_scored": true,
+      "split_axis_coverage": true,
+      "direct_pair_coverage": true,
+      "pairwise_accuracy": false,
+      "malformed_output_rate": true,
+      "fatal_flaw_detection": false
+    },
+    "policy": {
+      "min_pairwise_accuracy": 0.75,
+      "min_direct_pair_coverage": 1.0,
+      "max_malformed_rate": 0.1,
+      "min_fatal_flaw_detection_rate": 1.0
+    },
+    "meaning": "Step 13 absolute scores are optimization-safe only when ready=true"
   }
 }

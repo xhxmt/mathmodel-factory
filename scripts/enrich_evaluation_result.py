@@ -35,12 +35,18 @@ def enrich_aggregate(
     precheck: dict[str, Any] | None,
     unmatched_numbers: str,
     inloop_total: str,
+    calibration_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     precheck_data = precheck or {}
     precheck_passed = bool(precheck_data.get("passed"))
     llm_scored = int(aggregate.get("n_scored") or 0)
     min_recomputed = aggregate.get("min_recomputed")
     max_recomputed = aggregate.get("max_recomputed")
+    calibration = calibration_report or {}
+    reliability = calibration.get("score_reliability") if isinstance(calibration.get("score_reliability"), dict) else {}
+    proxy = calibration.get("proxy_reliability") if isinstance(calibration.get("proxy_reliability"), dict) else {}
+    human_ready = bool(reliability.get("ready"))
+    proxy_ready = bool(proxy.get("ready"))
 
     aggregate["structural"] = {
         "precheck_passed": precheck_passed,
@@ -59,9 +65,24 @@ def enrich_aggregate(
         "verdict_distribution": verdict_distribution(aggregate.get("verdicts", [])),
     }
     aggregate["inloop_total"] = inloop_total
+    aggregate["calibration"] = {
+        "ready": proxy_ready,
+        "proxy_ready": proxy_ready,
+        "human_ready": human_ready,
+        "award_prediction_ready": bool(calibration.get("award_prediction_ready")),
+        "checks": proxy.get("checks", reliability.get("checks", {})),
+        "pairwise_accuracy": (calibration.get("pairwise") or {}).get("accuracy")
+        if isinstance(calibration.get("pairwise"), dict)
+        else None,
+        "fatal_flaw_detection_rate": (calibration.get("fatal_flaw_detection") or {}).get("rate")
+        if isinstance(calibration.get("fatal_flaw_detection"), dict)
+        else None,
+    }
     aggregate["precheck_passed"] = precheck_passed
     aggregate["unmatched_numbers"] = unmatched_numbers
-    aggregate["comparison_ready"] = precheck_passed and llm_scored > 0
+    aggregate["comparison_ready_proxy"] = precheck_passed and llm_scored > 0 and proxy_ready
+    aggregate["comparison_ready_human"] = precheck_passed and llm_scored > 0 and human_ready
+    aggregate["comparison_ready"] = aggregate["comparison_ready_proxy"]
     return aggregate
 
 
@@ -71,17 +92,25 @@ def main() -> int:
     parser.add_argument("--precheck", required=True, help="Path to evaluate_modeling_project.py --json output.")
     parser.add_argument("--unmatched", required=True, help="UNMATCHED number count or NA.")
     parser.add_argument("--inloop", required=True, help="In-loop judge total or NA.")
+    parser.add_argument("--calibration-report", help="Calibration report JSON; comparison_ready requires ready=true.")
     args = parser.parse_args()
 
     aggregate_path = Path(args.aggregate_json)
     precheck_path = Path(args.precheck)
     aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
     precheck = json.loads(precheck_path.read_text(encoding="utf-8")) if precheck_path.is_file() else None
+    calibration_path = Path(args.calibration_report) if args.calibration_report else None
+    calibration = (
+        json.loads(calibration_path.read_text(encoding="utf-8"))
+        if calibration_path and calibration_path.is_file()
+        else None
+    )
     enriched = enrich_aggregate(
         aggregate,
         precheck=precheck,
         unmatched_numbers=args.unmatched,
         inloop_total=args.inloop,
+        calibration_report=calibration,
     )
     aggregate_path.write_text(json.dumps(enriched, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(enriched, ensure_ascii=False, indent=2))

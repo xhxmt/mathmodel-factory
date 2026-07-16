@@ -27,6 +27,7 @@ def test_enrich_aggregate_splits_structural_and_llm_signals():
         precheck=precheck,
         unmatched_numbers="2",
         inloop_total="86.4",
+        calibration_report={"proxy_reliability": {"ready": False, "checks": {"pairwise_accuracy": False}}},
     )
 
     assert enriched["structural"]["precheck_passed"] is False
@@ -39,6 +40,31 @@ def test_enrich_aggregate_splits_structural_and_llm_signals():
         "REOPEN_REVISION_TEXT": 1,
     }
     assert enriched["comparison_ready"] is False
+    assert enriched["calibration"]["ready"] is False
+
+
+def test_comparison_ready_requires_calibration_readiness():
+    aggregate = {"n": 1, "n_scored": 1, "median_recomputed": 80, "verdicts": ["PASS"]}
+    precheck = {"passed": True, "checks": []}
+
+    blocked = enrich_aggregate(
+        aggregate.copy(),
+        precheck=precheck,
+        unmatched_numbers="0",
+        inloop_total="80",
+        calibration_report={"proxy_reliability": {"ready": False}},
+    )
+    ready = enrich_aggregate(
+        aggregate.copy(),
+        precheck=precheck,
+        unmatched_numbers="0",
+        inloop_total="80",
+        calibration_report={"proxy_reliability": {"ready": True}},
+    )
+
+    assert blocked["comparison_ready"] is False
+    assert ready["comparison_ready"] is True
+    assert ready["comparison_ready_human"] is False
 
 
 def test_run_evaluation_uses_enrichment_module():
@@ -47,3 +73,4 @@ def test_run_evaluation_uses_enrichment_module():
     assert "PRECHECK_JSON=" in text
     assert "enrich_evaluation_result.py" in text
     assert "--precheck \"$PRECHECK_JSON\"" in text
+    assert "--calibration-report" in text

@@ -127,3 +127,153 @@ def test_report_writer_lists_missing_entries(tmp_path):
 
     assert json.loads(json_path.read_text(encoding="utf-8"))["missing_results"] == ["n1"]
     assert "MISSING" in md_path.read_text(encoding="utf-8")
+
+
+def test_direct_blind_pairwise_result_takes_priority_over_absolute_scores(tmp_path):
+    _result(tmp_path / "high.json", 60)
+    _result(tmp_path / "low.json", 95)
+    (tmp_path / "pair.json").write_text(
+        json.dumps(
+            {
+                "kind": "blind_pairwise",
+                "overall_winner": "high",
+                "correctness_winner": "high",
+                "writing_winner": "low",
+                "samples_requested": 3,
+                "samples_scored": 3,
+                "malformed": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "papers": [
+            {"id": "high", "problem_id": "2024B", "result_path": "high.json"},
+            {"id": "low", "problem_id": "2024B", "result_path": "low.json"},
+        ],
+        "pairs": [
+            {"higher": "high", "lower": "low", "result_path": "pair.json"}
+        ],
+    }
+
+    report = evaluate_calibration(manifest, tmp_path)
+
+    assert report["pairs"][0]["source"] == "BLIND_PAIRWISE"
+    assert report["pairs"][0]["status"] == "CORRECT"
+    assert report["pairwise"]["direct_coverage"] == 1.0
+
+
+def test_score_reliability_requires_direct_pairs_and_split_fatal_detection(tmp_path):
+    for paper_id, score, fatal_rate in (("n1", 90, 0.0), ("p1", 80, 0.0), ("fatal", 55, 1.0)):
+        (tmp_path / f"{paper_id}.json").write_text(
+            json.dumps(
+                {
+                    "samples_requested": 3,
+                    "samples_scored": 3,
+                    "writing": {
+                        "median_score": score,
+                        "dimensions": {f"d{i}": score for i in range(6)},
+                    },
+                    "correctness": {"median_score": score, "fatal_flaw_rate": fatal_rate},
+                }
+            ),
+            encoding="utf-8",
+        )
+    (tmp_path / "pair.json").write_text(
+        json.dumps(
+            {
+                "kind": "blind_pairwise",
+                "overall_winner": "n1",
+                "correctness_winner": "n1",
+                "writing_winner": "n1",
+                "samples_requested": 3,
+                "samples_scored": 3,
+                "malformed": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "readiness_policy": {
+            "min_pairwise_accuracy": 1.0,
+            "min_direct_pair_coverage": 1.0,
+            "max_malformed_rate": 0.0,
+            "min_fatal_flaw_detection_rate": 1.0,
+        },
+        "papers": [
+            {"id": "n1", "problem_id": "2024B", "result_path": "n1.json"},
+            {"id": "p1", "problem_id": "2024B", "result_path": "p1.json"},
+            {
+                "id": "fatal",
+                "problem_id": "2024A",
+                "result_path": "fatal.json",
+                "expected_fatal_flaw": True,
+            },
+        ],
+        "pairs": [{"higher": "n1", "lower": "p1", "result_path": "pair.json"}],
+    }
+
+    report = evaluate_calibration(manifest, tmp_path)
+
+    assert report["fatal_flaw_detection"]["rate"] == 1.0
+    assert report["score_reliability"]["ready"] is False
+    assert report["human_calibration"]["ready"] is False
+
+
+def test_proxy_readiness_uses_axis_specific_expected_winners(tmp_path):
+    for paper_id, fatal_rate in (("clean", 0.0), ("broken", 1.0)):
+        (tmp_path / f"paper_{paper_id}.json").write_text(
+            json.dumps(
+                {
+                    "samples_requested": 3,
+                    "samples_scored": 3,
+                    "writing": {"median_score": 80, "dimensions": {f"d{i}": 80 for i in range(6)}},
+                    "correctness": {"median_score": 80, "fatal_flaw_rate": fatal_rate},
+                }
+            ),
+            encoding="utf-8",
+        )
+    (tmp_path / "pair.json").write_text(
+        json.dumps(
+            {
+                "kind": "blind_pairwise",
+                "overall_winner": "clean",
+                "correctness_winner": "clean",
+                "writing_winner": "TIE",
+                "samples_requested": 3,
+                "samples_scored": 3,
+                "malformed": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "readiness_kind": "proxy",
+        "calibration_results_dir": ".",
+        "readiness_policy": {
+            "min_pairwise_accuracy": 1.0,
+            "min_correctness_accuracy": 1.0,
+            "min_writing_accuracy": 1.0,
+            "min_direct_pair_coverage": 1.0,
+            "max_malformed_rate": 0.0,
+            "min_fatal_flaw_detection_rate": 1.0,
+        },
+        "papers": [
+            {"id": "clean", "problem_id": "X"},
+            {"id": "broken", "problem_id": "X", "expected_fatal_flaw": True},
+        ],
+        "pairs": [
+            {
+                "higher": "clean",
+                "lower": "broken",
+                "result_path": "pair.json",
+                "expected_overall_winner": "clean",
+                "expected_correctness_winner": "clean",
+                "expected_writing_winner": "TIE",
+            }
+        ],
+    }
+    report = evaluate_calibration(manifest, tmp_path)
+    assert report["proxy_reliability"]["ready"] is True
+    assert report["score_reliability"]["ready"] is False
+    assert report["award_prediction_ready"] is False

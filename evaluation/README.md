@@ -21,6 +21,9 @@
 |---|---|
 | `run_evaluation.sh` | 主入口：预检门 → 编译 → 隔离评审包 → 三角色 ×K → 否决聚合 |
 | `calibration_manifest.json` | 真实获奖论文与生成基线的离线标签、同题奖项顺序和结果路径 |
+| `prompts/calibration_pairwise.txt` | 隐藏身份和奖级后的同题两两比较契约 |
+| `prompts/calibration_absolute.txt` | 数学正确性与写作质量分轨绝对评分契约 |
+| `scripts/calibration_judge.py` | 面向独立获奖 PDF 的盲评与分轨校准入口 |
 | `../scripts/evaluate_calibration.py` | 计算奖项顺序准确率、Kendall-style 次序、缺失覆盖、格式失败和致命缺陷检出率 |
 | `../scripts/llm_judge_call.py` | 共享 LLM 调用器：按 model 名分派 DeepSeek / Gemini / Claude 三后端（run_evaluation.sh 与 perturbation_harness.py 共用） |
 | `../scripts/enrich_evaluation_result.py` | 将聚合结果拆成 `structural` 硬证据和 `llm_score` 软评分 |
@@ -54,7 +57,51 @@
   - `llm_score`：`median_recomputed`、`min/max/spread_recomputed`、`median_total`、`verdict_distribution`
   - `comparison_ready`：结构门禁通过且至少一个 LLM 样本可解析时为 `true`
 - 一行汇总打到 stdout，例如：
-  `test_cumcm2024b: external=85.x/100 (spread 84.x-87.x), in-loop=86.4, unmatched=N, precheck=PASS`
+`test_cumcm2024b: external=85.x/100 (spread 84.x-87.x), in-loop=86.4, unmatched=N, precheck=PASS`
+
+## 获奖论文校准
+
+获奖论文通常只有 PDF，没有项目代码、日志和 canonical results，因此不能直接伪装成
+完整项目交给 `run_evaluation.sh`。使用专门的校准入口：
+
+```bash
+source scripts/load_secrets.sh
+python3 scripts/calibration_judge.py evaluation/calibration_manifest.json \
+  --model deepseek-chat --samples 3
+python3 scripts/evaluate_calibration.py evaluation/calibration_manifest.json \
+  --existing-results --require-ready
+```
+
+校准严格按以下顺序执行：
+
+1. 隐藏论文身份、学校和奖级，先进行同题两两比较；
+2. 再分别给出数学正确性和论文写作绝对评分；
+3. 写作专项包含答案完整度、论证链、结果可核验性、段落组织、图表叙事和语言成熟度；
+4. `score_reliability.ready=false` 时，Step 13 绝对分数不得作为可靠的优化目标或奖级预测。
+
+数学正确性与写作得分不能相互抵消。真实盲比结果优先于两个绝对分数之差；绝对分数
+排序只作为旧结果兼容的后备信号。
+
+## 无人工复核时的代理校准
+
+当暂时没有人工评审条件时，可使用 `proxy_calibration_manifest.json` 做有限范围的代理校准：
+它把完整论文与确定性单缺陷版本配对，真值是“原文应优于该缺陷版本”。代理校准只可用于
+检验评委是否能识别已知退化、以及同一提示词的 A/B 比较；它不等价于人工真值，不得用于
+奖级预测或解释绝对分数。代理结果写入 `proxy_reliability`，人工校准状态仍保持
+`human_calibration.ready=false`。
+
+```bash
+source scripts/load_secrets.sh
+python3 scripts/calibration_judge.py evaluation/proxy_calibration_manifest.json \
+  --model deepseek-chat --samples 3
+python3 scripts/evaluate_calibration.py evaluation/proxy_calibration_manifest.json \
+  --existing-results --require-proxy-ready \
+  --json-output evaluation/proxy_calibration_report.json \
+  --markdown-output evaluation/proxy_calibration_report.md
+```
+
+代理集的扰动实现位于 `scripts/proxy_calibration.py`，覆盖数值矛盾、符号/灵敏度缺失、
+无证据最优性、答案删减和机器式重复等类型。
 
 ## 与 in-loop Step 13 的对照
 

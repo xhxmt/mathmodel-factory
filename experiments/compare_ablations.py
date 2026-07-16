@@ -77,6 +77,12 @@ def load(base: str) -> dict | None:
         print(f"WARN: no eval JSON for '{base}' (looked in {RESULTS})", file=sys.stderr)
         return None
     agg = json.loads(jp.read_text(encoding="utf-8"))
+    if agg.get("comparison_ready_proxy") is not True and agg.get("comparison_ready") is not True:
+        print(
+            f"ERROR: '{base}' is not proxy-comparison-ready; run calibrated evaluation first.",
+            file=sys.stderr,
+        )
+        return None
     return {
         "base": base,
         "total": agg.get("median_recomputed"),

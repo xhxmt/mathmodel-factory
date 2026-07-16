@@ -193,7 +193,8 @@ INLOOP="$(python3 "$SCRIPTS/parse_judge_score.py" "$PROJECT/judge_evaluation.md"
 python3 "$SCRIPTS/enrich_evaluation_result.py" "$AGG_JSON" \
   --precheck "$PRECHECK_JSON" \
   --unmatched "$UNMATCHED" \
-  --inloop "$INLOOP" >/dev/null
+  --inloop "$INLOOP" \
+  --calibration-report "$REPO_ROOT/evaluation/proxy_calibration_report.json" >/dev/null
 
 SUMMARY="$(AGG_JSON="$AGG_JSON" PRECHECK_PASSED="$PRECHECK_PASSED" UNMATCHED="$UNMATCHED" \
            INLOOP="$INLOOP" BASE="$BASE" python3 - <<'PY'

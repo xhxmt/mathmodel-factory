@@ -23,8 +23,10 @@ def _load_result(path: Path) -> dict[str, Any] | None:
 
 
 def _score(data: dict[str, Any]) -> float | None:
+    writing = data.get("writing") if isinstance(data.get("writing"), dict) else {}
     llm = data.get("llm_score") if isinstance(data.get("llm_score"), dict) else {}
     for value in (
+        writing.get("median_score"),
         llm.get("median_recomputed"),
         data.get("median_recomputed"),
         llm.get("median_total"),
@@ -33,6 +35,29 @@ def _score(data: dict[str, Any]) -> float | None:
         if isinstance(value, (int, float)):
             return float(value)
     return None
+
+
+def _correctness_score(data: dict[str, Any]) -> float | None:
+    section = data.get("correctness") if isinstance(data.get("correctness"), dict) else {}
+    value = section.get("median_score")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _writing_dimensions(data: dict[str, Any]) -> dict[str, float]:
+    writing = data.get("writing") if isinstance(data.get("writing"), dict) else {}
+    dimensions = writing.get("dimensions") if isinstance(writing.get("dimensions"), dict) else {}
+    return {
+        str(name): float(value)
+        for name, value in dimensions.items()
+        if isinstance(value, (int, float))
+    }
+
+
+def _pair_result(path: Path) -> dict[str, Any] | None:
+    data = _load_result(path)
+    if not data or data.get("kind") != "blind_pairwise":
+        return None
+    return data
 
 
 def _verdicts(data: dict[str, Any]) -> list[str | None]:
@@ -51,13 +76,19 @@ def _verdicts(data: dict[str, Any]) -> list[str | None]:
 
 
 def _fatal_detected(data: dict[str, Any]) -> bool:
+    correctness = data.get("correctness") if isinstance(data.get("correctness"), dict) else {}
+    fatal_rate = correctness.get("fatal_flaw_rate")
+    if isinstance(fatal_rate, (int, float)):
+        return fatal_rate >= 0.5
     verdicts = [value for value in _verdicts(data) if value]
     if not verdicts:
         return False
     return sum(value == MODEL_REOPEN for value in verdicts) * 2 >= len(verdicts)
 
 
-def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]:
+def evaluate_calibration(
+    manifest: dict[str, Any], root: Path, results_dir_override: str | None = None
+) -> dict[str, Any]:
     root = root.resolve()
     paper_rows: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
@@ -67,12 +98,21 @@ def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]
     fatal_expected = 0
     fatal_detected = 0
     coverage: dict[str, dict[str, int]] = {}
+    models: set[str] = set()
 
     for item in manifest.get("papers", []):
         paper_id = str(item["id"])
         problem_id = str(item.get("problem_id") or "UNKNOWN")
-        result_path = root / str(item.get("result_path") or "")
+        result_ref = item.get("calibration_result_path") or item.get("result_path")
+        if results_dir_override:
+            result_ref = f"{results_dir_override.rstrip('/')}/paper_{paper_id}.json"
+        if not result_ref and manifest.get("calibration_results_dir"):
+            result_ref = f"{str(manifest['calibration_results_dir']).rstrip('/')}/paper_{paper_id}.json"
+        result_ref = result_ref or ""
+        result_path = root / str(result_ref)
         data = _load_result(result_path)
+        if data and data.get("model"):
+            models.add(str(data["model"]))
         score = _score(data) if data else None
         available = data is not None and score is not None
         row = {
@@ -82,8 +122,11 @@ def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]
             "category": item.get("category"),
             "paper_path": item.get("paper_path"),
             "result_path": item.get("result_path"),
+            "calibration_result_path": item.get("calibration_result_path"),
             "status": "AVAILABLE" if available else "MISSING",
             "score": score,
+            "correctness_score": _correctness_score(data) if data else None,
+            "writing_dimensions": _writing_dimensions(data) if data else {},
             "fatal_flaw_detected": _fatal_detected(data) if data else False,
         }
         paper_rows.append(row)
@@ -98,6 +141,10 @@ def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]
         if data:
             n = data.get("n")
             n_scored = data.get("n_scored")
+            if not isinstance(n, int):
+                n = data.get("samples_requested")
+            if not isinstance(n_scored, int):
+                n_scored = data.get("samples_scored")
             if not isinstance(n, int):
                 llm = data.get("llm_score")
                 n = llm.get("n") if isinstance(llm, dict) else None
@@ -116,14 +163,84 @@ def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]
     pair_rows: list[dict[str, Any]] = []
     correct_points = 0.0
     concordant = discordant = ties = 0
+    direct_evaluated = 0
+    direct_complete = 0
+    pair_total_runs = 0
+    pair_malformed = 0
+    axis_correct = {"overall": 0.0, "correctness": 0.0, "writing": 0.0}
+    axis_evaluated = {"overall": 0, "correctness": 0, "writing": 0}
     for pair in manifest.get("pairs", []):
         higher_id = str(pair["higher"])
         lower_id = str(pair["lower"])
         higher = by_id.get(higher_id)
         lower = by_id.get(lower_id)
+        direct_path_ref = pair.get("result_path")
+        if results_dir_override:
+            pair_id = str(pair.get("id") or f"{higher_id}__vs__{lower_id}")
+            direct_path_ref = f"{results_dir_override.rstrip('/')}/pair_{pair_id}.json"
+        direct = _pair_result(root / str(direct_path_ref)) if direct_path_ref else None
+        if direct and direct.get("model"):
+            models.add(str(direct["model"]))
+        if direct and direct.get("overall_winner") in {higher_id, lower_id, "TIE"}:
+            requested = direct.get("samples_requested")
+            scored = direct.get("samples_scored")
+            malformed_count = direct.get("malformed")
+            if isinstance(requested, int) and requested >= 0:
+                pair_total_runs += requested
+            if isinstance(malformed_count, int) and malformed_count >= 0:
+                pair_malformed += malformed_count
+            complete = (
+                isinstance(requested, int)
+                and requested > 0
+                and isinstance(scored, int)
+                and scored == requested
+                and malformed_count == 0
+            )
+            expected_overall = str(pair.get("expected_overall_winner") or higher_id)
+            winner = direct["overall_winner"]
+            if winner == expected_overall:
+                credit, status = 1.0, "CORRECT"
+                concordant += 1
+            elif winner == "TIE":
+                credit, status = 0.5, "TIE"
+                ties += 1
+            else:
+                credit, status = 0.0, "REVERSED"
+                discordant += 1
+            direct_evaluated += 1
+            direct_complete += int(complete)
+            correct_points += credit
+            for axis, result_key in (
+                ("overall", "overall_winner"),
+                ("correctness", "correctness_winner"),
+                ("writing", "writing_winner"),
+            ):
+                expected = pair.get(f"expected_{axis}_winner")
+                actual = direct.get(result_key)
+                if expected in {higher_id, lower_id, "TIE"} and actual in {higher_id, lower_id, "TIE"}:
+                    axis_evaluated[axis] += 1
+                    axis_correct[axis] += 1.0 if actual == expected else 0.0
+            pair_rows.append(
+                {
+                    "higher": higher_id,
+                    "lower": lower_id,
+                    "status": status,
+                    "credit": credit,
+                    "source": "BLIND_PAIRWISE",
+                    "winner": winner,
+                    "correctness_winner": direct.get("correctness_winner"),
+                    "writing_winner": direct.get("writing_winner"),
+                    "samples_scored": direct.get("samples_scored"),
+                    "samples_requested": direct.get("samples_requested"),
+                    "complete": complete,
+                    "label_type": pair.get("label_type") or "AWARD_WEAK_PRIOR",
+                    "expected_overall_winner": expected_overall,
+                }
+            )
+            continue
         if not higher or not lower or higher["score"] is None or lower["score"] is None:
             pair_rows.append(
-                {"higher": higher_id, "lower": lower_id, "status": "MISSING", "credit": None}
+                {"higher": higher_id, "lower": lower_id, "status": "MISSING", "credit": None, "source": "NONE"}
             )
             continue
         delta = float(higher["score"]) - float(lower["score"])
@@ -146,6 +263,7 @@ def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]
                 "lower": lower_id,
                 "status": status,
                 "credit": credit,
+                "source": "ABSOLUTE_SCORE_FALLBACK",
                 "higher_score": higher["score"],
                 "lower_score": lower["score"],
             }
@@ -161,7 +279,53 @@ def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]
         }
         for problem, values in sorted(coverage.items())
     }
+    malformed += pair_malformed
+    total_runs += pair_total_runs
+    pair_accuracy = correct_points / evaluated_pairs if evaluated_pairs else None
+    malformed_rate = malformed / total_runs if total_runs else None
+    fatal_rate = fatal_detected / fatal_expected if fatal_expected else None
+    policy = manifest.get("readiness_policy") if isinstance(manifest.get("readiness_policy"), dict) else {}
+    required_pair_accuracy = float(policy.get("min_pairwise_accuracy", 0.75))
+    required_direct_coverage = float(policy.get("min_direct_pair_coverage", 1.0))
+    max_malformed_rate = float(policy.get("max_malformed_rate", 0.1))
+    min_fatal_rate = float(policy.get("min_fatal_flaw_detection_rate", 1.0))
+    min_correctness_accuracy = float(policy.get("min_correctness_accuracy", required_pair_accuracy))
+    min_writing_accuracy = float(policy.get("min_writing_accuracy", required_pair_accuracy))
+    direct_coverage = direct_complete / len(pair_rows) if pair_rows else None
+    split_axis_coverage = (
+        sum(
+            row.get("correctness_score") is not None
+            and row.get("score") is not None
+            and len(row.get("writing_dimensions") or {}) >= 6
+            for row in paper_rows
+        ) / len(paper_rows)
+        if paper_rows else None
+    )
+    readiness_checks = {
+        "all_papers_scored": not missing,
+        "split_axis_coverage": split_axis_coverage == 1.0,
+        "direct_pair_coverage": direct_coverage is not None and direct_coverage >= required_direct_coverage,
+        "pairwise_accuracy": pair_accuracy is not None and pair_accuracy >= required_pair_accuracy,
+        "malformed_output_rate": malformed_rate is not None and malformed_rate <= max_malformed_rate,
+        "fatal_flaw_detection": fatal_rate is not None and fatal_rate >= min_fatal_rate,
+    }
+    axis_accuracy = {
+        axis: axis_correct[axis] / axis_evaluated[axis] if axis_evaluated[axis] else None
+        for axis in axis_evaluated
+    }
+    if manifest.get("readiness_kind") == "proxy":
+        readiness_checks["correctness_pairwise_accuracy"] = (
+            axis_accuracy["correctness"] is not None
+            and axis_accuracy["correctness"] >= min_correctness_accuracy
+        )
+        readiness_checks["writing_pairwise_accuracy"] = (
+            axis_accuracy["writing"] is not None
+            and axis_accuracy["writing"] >= min_writing_accuracy
+        )
+    proxy_ready = manifest.get("readiness_kind") == "proxy" and all(readiness_checks.values())
+    human_ready = manifest.get("readiness_kind") == "human" and all(readiness_checks.values())
     return {
+        "models": sorted(models),
         "papers": paper_rows,
         "missing_results": sorted(missing),
         "pairs": pair_rows,
@@ -169,7 +333,12 @@ def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]
             "evaluated": evaluated_pairs,
             "total": len(pair_rows),
             "correct_points": correct_points,
-            "accuracy": correct_points / evaluated_pairs if evaluated_pairs else None,
+            "accuracy": pair_accuracy,
+            "direct_evaluated": direct_evaluated,
+            "direct_complete": direct_complete,
+            "direct_coverage": direct_coverage,
+            "axis_accuracy": axis_accuracy,
+            "axis_evaluated": axis_evaluated,
         },
         "ordering": {
             "concordant": concordant,
@@ -182,14 +351,39 @@ def evaluate_calibration(manifest: dict[str, Any], root: Path) -> dict[str, Any]
         "malformed_outputs": {
             "malformed": malformed,
             "total_runs": total_runs,
-            "rate": malformed / total_runs if total_runs else None,
+            "rate": malformed_rate,
         },
         "fatal_flaw_detection": {
             "detected": fatal_detected,
             "expected": fatal_expected,
-            "rate": fatal_detected / fatal_expected if fatal_expected else None,
+            "rate": fatal_rate,
         },
         "coverage_by_problem": coverage_out,
+        "split_axis_coverage": split_axis_coverage,
+        "score_reliability": {
+            "ready": human_ready,
+            "checks": readiness_checks,
+            "policy": {
+                "min_pairwise_accuracy": required_pair_accuracy,
+                "min_direct_pair_coverage": required_direct_coverage,
+                "max_malformed_rate": max_malformed_rate,
+                "min_fatal_flaw_detection_rate": min_fatal_rate,
+                "min_correctness_accuracy": min_correctness_accuracy,
+                "min_writing_accuracy": min_writing_accuracy,
+            },
+            "meaning": "Absolute scores and award prediction require independent human calibration",
+        },
+        "proxy_reliability": {
+            "ready": proxy_ready,
+            "checks": readiness_checks,
+            "scope": ["objective_defect_detection", "perturbation_pairwise_comparison"],
+            "meaning": "Safe only for bounded A/B comparisons against deterministic perturbations",
+        },
+        "human_calibration": {
+            "ready": human_ready,
+            "reason": None if human_ready else "no independent human ground truth",
+        },
+        "award_prediction_ready": human_ready,
     }
 
 
@@ -209,20 +403,24 @@ def write_reports(report: dict[str, Any], json_path: Path, md_path: Path) -> Non
     lines = [
         "# Evaluation Calibration Report",
         "",
+        f"Models: {', '.join(report.get('models', [])) or 'N/A'}",
+        "",
         "## Paper Coverage",
         "",
-        "| Paper | Problem | Award tier | Status | Score |",
-        "|---|---|---|---|---:|",
+        "| Paper | Problem | Award tier | Status | Correctness | Writing |",
+        "|---|---|---|---|---:|---:|",
     ]
     for row in report["papers"]:
         lines.append(
             f"| {row['id']} | {row.get('problem_id', '')} | {row.get('award_tier') or ''} | "
-            f"{row['status']} | {_fmt(row['score'])} |"
+            f"{row['status']} | {_fmt(row.get('correctness_score'))} | {_fmt(row['score'])} |"
         )
     pairwise = report["pairwise"]
     ordering = report["ordering"]
     malformed = report["malformed_outputs"]
     fatal = report["fatal_flaw_detection"]
+    reliability = report.get("score_reliability", {})
+    proxy = report.get("proxy_reliability", {})
     lines.extend(
         [
             "",
@@ -235,11 +433,28 @@ def write_reports(report: dict[str, Any], json_path: Path, md_path: Path) -> Non
             f"({malformed['malformed']}/{malformed['total_runs']})",
             f"- Fatal-flaw detection rate: {_fmt(fatal['rate'])} "
             f"({fatal['detected']}/{fatal['expected']})",
+            f"- Direct blind-pair coverage: {_fmt(pairwise.get('direct_coverage'))}",
+            f"- Split correctness/writing coverage: {_fmt(report.get('split_axis_coverage'))}",
+            f"- Step 13 score reliability: {'READY' if reliability.get('ready') else 'NOT READY'}",
+            f"- Proxy A/B reliability: {'READY' if proxy.get('ready') else 'NOT READY'}",
+            f"- Human calibration: {'READY' if report.get('human_calibration', {}).get('ready') else 'NOT READY'}",
+            f"- Award prediction: {'READY' if report.get('award_prediction_ready') else 'NOT READY'}",
             "",
-            "## Missing Results",
+            "## Blind Pairwise Results",
             "",
+            "| Expected higher | Expected lower | Result | Source | Complete |",
+            "|---|---|---|---|---|",
         ]
     )
+    for row in report.get("pairs", []):
+        lines.append(
+            f"| {row['higher']} | {row['lower']} | {row['status']} | "
+            f"{row.get('source', '')} | {row.get('complete', 'N/A')} |"
+        )
+    lines.extend(["", "## Reliability Checks", ""])
+    for name, ok in (proxy.get("checks") or reliability.get("checks", {})).items():
+        lines.append(f"- {'PASS' if ok else 'FAIL'}: {name}")
+    lines.extend(["", "## Missing Results", ""])
     if report["missing_results"]:
         lines.extend(f"- {paper_id}: MISSING" for paper_id in report["missing_results"])
     else:
@@ -253,15 +468,22 @@ def main() -> int:
     parser.add_argument("--existing-results", action="store_true")
     parser.add_argument("--json-output")
     parser.add_argument("--markdown-output")
+    parser.add_argument("--require-ready", action="store_true", help="Exit 1 unless human score reliability is ready.")
+    parser.add_argument("--require-proxy-ready", action="store_true", help="Exit 1 unless proxy A/B reliability is ready.")
+    parser.add_argument("--results-dir", help="Override result directory referenced by the manifest.")
     args = parser.parse_args()
     manifest_path = Path(args.manifest).resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     root = (manifest_path.parent / str(manifest.get("path_root") or ".")).resolve()
-    report = evaluate_calibration(manifest, root)
+    report = evaluate_calibration(manifest, root, args.results_dir)
     json_path = Path(args.json_output) if args.json_output else manifest_path.parent / "calibration_report.json"
     md_path = Path(args.markdown_output) if args.markdown_output else manifest_path.parent / "calibration_report.md"
     write_reports(report, json_path, md_path)
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.require_ready and not report["score_reliability"]["ready"]:
+        return 1
+    if args.require_proxy_ready and not report["proxy_reliability"]["ready"]:
+        return 1
     return 0
 
 
