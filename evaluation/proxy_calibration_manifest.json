@@ -11,6 +11,10 @@
     "max_malformed_rate": 0.1,
     "min_fatal_flaw_detection_rate": 0.8
   },
+  "problem_contexts": {
+    "CUMCM-2024-A": {"path":"benchmark/cumcm_2024/A题/A题.md","max_bytes":16000},
+    "CUMCM-2024-B": {"path":"benchmark/cumcm_2024/B题/B题.md","max_bytes":16000}
+  },
   "papers": [
     {"id":"n1a_clean","problem_id":"CUMCM-2024-A","paper_path":"reference_papers/national_1_A/ocr/full.md","label_type":"DETERMINISTIC_PROXY"},
     {"id":"n1a_no_symbols","problem_id":"CUMCM-2024-A","paper_path":"reference_papers/national_1_A/ocr/full.md","proxy_perturbation":"no_symbols","label_type":"DETERMINISTIC_PROXY"},

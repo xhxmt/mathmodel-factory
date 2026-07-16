@@ -9,6 +9,7 @@ from scripts.calibration_judge import (
     comparison_dossier,
     _derive_overall,
     _select_pairs,
+    load_problem_context,
     _needs_adjudication,
     parse_json_output,
     validate_absolute,
@@ -107,6 +108,18 @@ def test_select_pairs_supports_resumable_targeted_runs():
     assert _select_pairs(pairs, {"two"}) == [pairs[1]]
     with pytest.raises(ValueError):
         _select_pairs(pairs, {"missing"})
+
+
+def test_problem_context_loads_frozen_problem_and_review_focus(tmp_path):
+    (tmp_path / "problem.md").write_text("正式赛题内容", encoding="utf-8")
+    manifest = {
+        "problem_contexts": {
+            "X": {"path": "problem.md", "review_focus": ["检查约束", "检查答案"]}
+        }
+    }
+    context = load_problem_context(manifest, "X", tmp_path)
+    assert "正式赛题内容" in context
+    assert "检查约束" in context
 
 
 def test_absolute_contract_requires_all_writing_dimensions():

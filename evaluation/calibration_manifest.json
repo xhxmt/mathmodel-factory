@@ -13,6 +13,26 @@
     "max_malformed_rate": 0.1,
     "min_fatal_flaw_detection_rate": 1.0
   },
+  "problem_contexts": {
+    "CUMCM-2024-A": {
+      "path": "benchmark/cumcm_2024/A题/A题.md",
+      "max_bytes": 20000,
+      "review_focus": [
+        "逐问检查盘入、碰撞、调头与速度约束是否对应原题",
+        "离散采样结论必须说明加密或连续事件验证",
+        "启发式算法不得无证据宣称唯一全局最优"
+      ]
+    },
+    "CUMCM-2024-B": {
+      "path": "benchmark/cumcm_2024/B题/B题.md",
+      "max_bytes": 20000,
+      "review_focus": [
+        "抽样方案必须同时给出样本量和接收或拒收规则",
+        "期望利润必须遵守退货、调换、拆解和重复购买的资金流守恒",
+        "有限离散决策空间中的启发式结果应与穷举或最优性证据核对"
+      ]
+    }
+  },
   "papers": [
     {
       "id": "national1_2024b",
@@ -54,14 +74,15 @@
       "expected_fatal_flaw": false
     },
     {
-      "id": "generated_2024a_known_fatal",
+      "id": "generated_2024a_repaired",
       "problem_id": "CUMCM-2024-A",
       "category": "generated_baseline",
       "award_tier": null,
       "paper_path": "complete/test_cumcm2024a_polished/test_cumcm2024a_paper.pdf",
       "result_path": "evaluation/results/test_cumcm2024a_eval.json",
-      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024a_known_fatal.json",
-      "expected_fatal_flaw": true
+      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024a_repaired.json",
+      "expected_fatal_flaw": false,
+      "label_note": "The current PDF contains the later P3/P5 dense-sampling corrections; the former known-fatal label was stale."
     }
   ],
   "pairs": [

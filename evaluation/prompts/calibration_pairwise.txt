@@ -36,6 +36,9 @@
 
 题目标识：__PROBLEM_ID__
 
+=== 官方赛题与冻结评阅重点 ===
+__PROBLEM_CONTEXT__
+
 === 机器差异线索 ===
 __COMPARISON_DOSSIER__
 

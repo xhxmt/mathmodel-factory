@@ -168,6 +168,23 @@ def _render_prompt(name: str, replacements: dict[str, str]) -> str:
     return text
 
 
+def load_problem_context(
+    manifest: dict[str, Any], problem_id: str, root: Path, limit: int = 20000
+) -> str:
+    contexts = manifest.get("problem_contexts")
+    config = contexts.get(problem_id) if isinstance(contexts, dict) else None
+    if isinstance(config, str):
+        config = {"path": config}
+    if not isinstance(config, dict):
+        return "未提供赛题正文；评委必须降低无法核验题意细节时的置信度。"
+    path = root / str(config.get("path") or "")
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    focus = config.get("review_focus")
+    if isinstance(focus, list):
+        text += "\n\n评阅重点：\n" + "\n".join(f"- {item}" for item in focus if isinstance(item, str))
+    return _truncate(text, int(config.get("max_bytes") or limit)) if text else "赛题正文不可用。"
+
+
 def _select_pairs(pairs: list[dict[str, Any]], selected: set[str]) -> list[dict[str, Any]]:
     if not selected:
         return pairs
@@ -310,6 +327,7 @@ def run_pair(
     timeout: int,
     text_limit: int = 80_000,
     adjudicator_model: str | None = None,
+    problem_context: str = "",
 ) -> dict[str, Any]:
     text_cache: dict[str, str] = {}
     runs: list[dict[str, Any]] = []
@@ -324,6 +342,7 @@ def run_pair(
             "calibration_pairwise.txt",
             {
                 "PROBLEM_ID": str(papers[a_id].get("problem_id") or "UNKNOWN"),
+                "PROBLEM_CONTEXT": problem_context,
                 "COMPARISON_DOSSIER": dossier,
                 "PAPER_A": text_cache[a_id],
                 "PAPER_B": text_cache[b_id],
@@ -352,6 +371,7 @@ def run_pair(
             "calibration_pairwise.txt",
             {
                 "PROBLEM_ID": str(papers[a_id].get("problem_id") or "UNKNOWN"),
+                "PROBLEM_CONTEXT": problem_context,
                 "COMPARISON_DOSSIER": reference_dossier,
                 "PAPER_A": text_cache[a_id],
                 "PAPER_B": text_cache[b_id],
@@ -407,6 +427,7 @@ def run_absolute(
     model: str,
     samples: int,
     timeout: int,
+    problem_context: str = "",
 ) -> dict[str, Any]:
     paper_text = extract_paper_text(item, root)
     runs: list[dict[str, Any]] = []
@@ -414,7 +435,11 @@ def run_absolute(
     for sample in range(1, samples + 1):
         prompt = _render_prompt(
             "calibration_absolute.txt",
-            {"PROBLEM_ID": str(item.get("problem_id") or "UNKNOWN"), "PAPER": paper_text},
+            {
+                "PROBLEM_ID": str(item.get("problem_id") or "UNKNOWN"),
+                "PROBLEM_CONTEXT": problem_context,
+                "PAPER": paper_text,
+            },
         )
         try:
             parsed = validate_absolute(parse_json_output(call_judge(prompt, model, timeout, 6000)))
@@ -488,6 +513,9 @@ def main() -> int:
                 pair, papers, root, model=args.model, samples=args.samples,
                 timeout=args.timeout, text_limit=args.pair_text_limit,
                 adjudicator_model=args.adjudicator_model,
+                problem_context=load_problem_context(
+                    manifest, str(papers[str(pair["higher"])].get("problem_id") or "UNKNOWN"), root
+                ),
             )
             path = results / f"pair_{pair_id}.json"
             path.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -495,7 +523,11 @@ def main() -> int:
 
     if not args.pairwise_only:
         for item in manifest.get("papers", []):
-            output = run_absolute(item, root, model=args.model, samples=args.samples, timeout=args.timeout)
+            problem_id = str(item.get("problem_id") or "UNKNOWN")
+            output = run_absolute(
+                item, root, model=args.model, samples=args.samples, timeout=args.timeout,
+                problem_context=load_problem_context(manifest, problem_id, root),
+            )
             path = results / f"paper_{item['id']}.json"
             path.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(f"paper {item['id']}: writing={output['writing']['median_score']} -> {path}")
