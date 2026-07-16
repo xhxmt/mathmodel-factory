@@ -275,5 +275,61 @@ def test_proxy_readiness_uses_axis_specific_expected_winners(tmp_path):
     }
     report = evaluate_calibration(manifest, tmp_path)
     assert report["proxy_reliability"]["ready"] is True
+    assert report["axis_reliability"]["ready"] is True
     assert report["score_reliability"]["ready"] is False
     assert report["award_prediction_ready"] is False
+
+
+def test_proxy_overall_ranking_can_be_ready_while_subaxes_are_not(tmp_path):
+    for paper_id, fatal_rate in (("clean", 0.0), ("broken", 1.0)):
+        (tmp_path / f"paper_{paper_id}.json").write_text(
+            json.dumps(
+                {
+                    "samples_requested": 1,
+                    "samples_scored": 1,
+                    "writing": {"median_score": 80, "dimensions": {f"d{i}": 80 for i in range(6)}},
+                    "correctness": {"median_score": 80, "fatal_flaw_rate": fatal_rate},
+                }
+            ), encoding="utf-8",
+        )
+    (tmp_path / "pair.json").write_text(
+        json.dumps(
+            {
+                "kind": "blind_pairwise",
+                "overall_winner": "clean",
+                "correctness_winner": "TIE",
+                "writing_winner": "TIE",
+                "samples_requested": 2,
+                "samples_scored": 1,
+                "malformed": 1,
+                "adjudicated": True,
+                "runs": [{"role": "adjudicator", "status": "OK"}],
+            }
+        ), encoding="utf-8",
+    )
+    manifest = {
+        "readiness_kind": "proxy",
+        "calibration_results_dir": ".",
+        "readiness_policy": {
+            "min_pairwise_accuracy": 1.0,
+            "min_correctness_accuracy": 1.0,
+            "min_writing_accuracy": 1.0,
+            "min_direct_pair_coverage": 1.0,
+            "max_malformed_rate": 0.5,
+            "min_fatal_flaw_detection_rate": 1.0,
+        },
+        "papers": [
+            {"id": "clean", "problem_id": "X"},
+            {"id": "broken", "problem_id": "X", "expected_fatal_flaw": True},
+        ],
+        "pairs": [{
+            "higher": "clean", "lower": "broken", "result_path": "pair.json",
+            "expected_overall_winner": "clean",
+            "expected_correctness_winner": "clean",
+            "expected_writing_winner": "clean",
+        }],
+    }
+    report = evaluate_calibration(manifest, tmp_path)
+    assert report["pairwise"]["direct_coverage"] == 1.0
+    assert report["proxy_reliability"]["ready"] is True
+    assert report["axis_reliability"]["ready"] is False

@@ -189,7 +189,13 @@ def evaluate_calibration(
                 pair_total_runs += requested
             if isinstance(malformed_count, int) and malformed_count >= 0:
                 pair_malformed += malformed_count
-            complete = (
+            adjudicator_recovered = bool(direct.get("adjudicated")) and any(
+                isinstance(run, dict)
+                and run.get("role") == "adjudicator"
+                and run.get("status") != "MALFORMED"
+                for run in direct.get("runs", [])
+            )
+            complete = adjudicator_recovered or (
                 isinstance(requested, int)
                 and requested > 0
                 and isinstance(scored, int)
@@ -313,16 +319,18 @@ def evaluate_calibration(
         axis: axis_correct[axis] / axis_evaluated[axis] if axis_evaluated[axis] else None
         for axis in axis_evaluated
     }
-    if manifest.get("readiness_kind") == "proxy":
-        readiness_checks["correctness_pairwise_accuracy"] = (
+    axis_checks = {
+        "correctness_pairwise_accuracy": (
             axis_accuracy["correctness"] is not None
             and axis_accuracy["correctness"] >= min_correctness_accuracy
-        )
-        readiness_checks["writing_pairwise_accuracy"] = (
+        ),
+        "writing_pairwise_accuracy": (
             axis_accuracy["writing"] is not None
             and axis_accuracy["writing"] >= min_writing_accuracy
-        )
+        ),
+    }
     proxy_ready = manifest.get("readiness_kind") == "proxy" and all(readiness_checks.values())
+    axis_ready = proxy_ready and all(axis_checks.values())
     human_ready = manifest.get("readiness_kind") == "human" and all(readiness_checks.values())
     return {
         "models": sorted(models),
@@ -376,8 +384,15 @@ def evaluate_calibration(
         "proxy_reliability": {
             "ready": proxy_ready,
             "checks": readiness_checks,
-            "scope": ["objective_defect_detection", "perturbation_pairwise_comparison"],
-            "meaning": "Safe only for bounded A/B comparisons against deterministic perturbations",
+            "axis_ready": axis_ready,
+            "axis_checks": axis_checks,
+            "scope": ["overall_pairwise_ranking", "fatal_defect_detection"],
+            "meaning": "Safe only for bounded overall A/B ranking against deterministic perturbations",
+        },
+        "axis_reliability": {
+            "ready": axis_ready,
+            "checks": axis_checks,
+            "meaning": "Correctness and writing sub-axis labels require separate validation",
         },
         "human_calibration": {
             "ready": human_ready,
@@ -421,6 +436,7 @@ def write_reports(report: dict[str, Any], json_path: Path, md_path: Path) -> Non
     fatal = report["fatal_flaw_detection"]
     reliability = report.get("score_reliability", {})
     proxy = report.get("proxy_reliability", {})
+    axis = report.get("axis_reliability", {})
     lines.extend(
         [
             "",
@@ -437,6 +453,7 @@ def write_reports(report: dict[str, Any], json_path: Path, md_path: Path) -> Non
             f"- Split correctness/writing coverage: {_fmt(report.get('split_axis_coverage'))}",
             f"- Step 13 score reliability: {'READY' if reliability.get('ready') else 'NOT READY'}",
             f"- Proxy A/B reliability: {'READY' if proxy.get('ready') else 'NOT READY'}",
+            f"- Correctness/writing axis reliability: {'READY' if axis.get('ready') else 'NOT READY'}",
             f"- Human calibration: {'READY' if report.get('human_calibration', {}).get('ready') else 'NOT READY'}",
             f"- Award prediction: {'READY' if report.get('award_prediction_ready') else 'NOT READY'}",
             "",
@@ -453,6 +470,8 @@ def write_reports(report: dict[str, Any], json_path: Path, md_path: Path) -> Non
         )
     lines.extend(["", "## Reliability Checks", ""])
     for name, ok in (proxy.get("checks") or reliability.get("checks", {})).items():
+        lines.append(f"- {'PASS' if ok else 'FAIL'}: {name}")
+    for name, ok in axis.get("checks", {}).items():
         lines.append(f"- {'PASS' if ok else 'FAIL'}: {name}")
     lines.extend(["", "## Missing Results", ""])
     if report["missing_results"]:

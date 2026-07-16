@@ -117,6 +117,10 @@ python3 scripts/evaluate_calibration.py evaluation/proxy_calibration_manifest.js
 代理集的扰动实现位于 `scripts/proxy_calibration.py`，覆盖数值矛盾、符号/灵敏度缺失、
 无证据最优性、答案删减和机器式重复等类型。
 
+报告将总体成对排序和细分轴可靠性分开：`proxy_reliability.ready=true` 仅表示可用于
+有限范围的总体 A/B 排序与致命缺陷筛查；只有 `axis_reliability.ready=true` 时，
+才可解释“数学正确性”和“写作质量”两个子轴。两者都不代表奖级预测已经可用。
+
 ## 与 in-loop Step 13 的对照
 
 | | in-loop Step 13 | 外部 evaluation/ |

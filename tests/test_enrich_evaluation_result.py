@@ -67,6 +67,23 @@ def test_comparison_ready_requires_calibration_readiness():
     assert ready["comparison_ready_human"] is False
 
 
+def test_axis_readiness_is_reported_without_blocking_overall_pairwise_use():
+    aggregate = {"n": 1, "n_scored": 1, "verdicts": ["PASS"]}
+    calibration = {
+        "proxy_reliability": {"ready": True, "checks": {"pairwise_accuracy": True}},
+        "axis_reliability": {"ready": False, "checks": {"writing_pairwise_accuracy": False}},
+    }
+    enriched = enrich_aggregate(
+        aggregate,
+        precheck={"passed": True},
+        unmatched_numbers="0",
+        inloop_total="80",
+        calibration_report=calibration,
+    )
+    assert enriched["comparison_ready"] is True
+    assert enriched["calibration"]["axis_ready"] is False
+
+
 def test_run_evaluation_uses_enrichment_module():
     text = Path("evaluation/run_evaluation.sh").read_text(encoding="utf-8")
 

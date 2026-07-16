@@ -45,6 +45,7 @@ def enrich_aggregate(
     calibration = calibration_report or {}
     reliability = calibration.get("score_reliability") if isinstance(calibration.get("score_reliability"), dict) else {}
     proxy = calibration.get("proxy_reliability") if isinstance(calibration.get("proxy_reliability"), dict) else {}
+    axis = calibration.get("axis_reliability") if isinstance(calibration.get("axis_reliability"), dict) else {}
     human_ready = bool(reliability.get("ready"))
     proxy_ready = bool(proxy.get("ready"))
 
@@ -68,9 +69,11 @@ def enrich_aggregate(
     aggregate["calibration"] = {
         "ready": proxy_ready,
         "proxy_ready": proxy_ready,
+        "axis_ready": bool(axis.get("ready")),
         "human_ready": human_ready,
         "award_prediction_ready": bool(calibration.get("award_prediction_ready")),
         "checks": proxy.get("checks", reliability.get("checks", {})),
+        "axis_checks": axis.get("checks", {}),
         "pairwise_accuracy": (calibration.get("pairwise") or {}).get("accuracy")
         if isinstance(calibration.get("pairwise"), dict)
         else None,
