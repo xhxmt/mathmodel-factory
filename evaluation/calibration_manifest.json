@@ -105,6 +105,8 @@
       "higher": "provincial3_2024b",
       "lower": "generated_2024b",
       "basis": "real_award_chain_vs_ordinary_generated_baseline",
+      "readiness_eligible": false,
+      "label_note": "No independent human judgment establishes that this non-submitted generated paper must rank below the provincial-third paper.",
       "result_path": "evaluation/results/calibration/pair_provincial3_vs_generated_2024b.json"
     }
   ]

@@ -333,3 +333,41 @@ def test_proxy_overall_ranking_can_be_ready_while_subaxes_are_not(tmp_path):
     assert report["pairwise"]["direct_coverage"] == 1.0
     assert report["proxy_reliability"]["ready"] is True
     assert report["axis_reliability"]["ready"] is False
+
+
+def test_diagnostic_weak_prior_is_reported_but_excluded_from_accuracy(tmp_path):
+    for paper_id in ("high", "low", "diagnostic"):
+        _result(tmp_path / f"{paper_id}.json", 80)
+    for name, winner in (("strong_pair", "high"), ("weak_pair", "diagnostic")):
+        (tmp_path / f"{name}.json").write_text(
+            json.dumps(
+                {
+                    "kind": "blind_pairwise",
+                    "overall_winner": winner,
+                    "correctness_winner": winner,
+                    "writing_winner": winner,
+                    "samples_requested": 1,
+                    "samples_scored": 1,
+                    "malformed": 0,
+                }
+            ), encoding="utf-8",
+        )
+    manifest = {
+        "papers": [
+            {"id": "high", "problem_id": "X", "result_path": "high.json"},
+            {"id": "low", "problem_id": "X", "result_path": "low.json"},
+            {"id": "diagnostic", "problem_id": "X", "result_path": "diagnostic.json"},
+        ],
+        "pairs": [
+            {"higher": "high", "lower": "low", "result_path": "strong_pair.json"},
+            {
+                "higher": "low", "lower": "diagnostic", "result_path": "weak_pair.json",
+                "readiness_eligible": False,
+            },
+        ],
+    }
+    report = evaluate_calibration(manifest, tmp_path)
+    assert report["pairwise"]["accuracy"] == 1.0
+    assert report["pairwise"]["readiness_total"] == 1
+    assert report["pairwise"]["diagnostic_pairs"] == 1
+    assert report["pairs"][1]["status"] == "REVERSED"

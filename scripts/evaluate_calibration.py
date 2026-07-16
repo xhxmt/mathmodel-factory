@@ -165,6 +165,7 @@ def evaluate_calibration(
     concordant = discordant = ties = 0
     direct_evaluated = 0
     direct_complete = 0
+    diagnostic_pairs = 0
     pair_total_runs = 0
     pair_malformed = 0
     axis_correct = {"overall": 0.0, "correctness": 0.0, "writing": 0.0}
@@ -172,6 +173,7 @@ def evaluate_calibration(
     for pair in manifest.get("pairs", []):
         higher_id = str(pair["higher"])
         lower_id = str(pair["lower"])
+        readiness_eligible = pair.get("readiness_eligible") is not False
         higher = by_id.get(higher_id)
         lower = by_id.get(lower_id)
         direct_path_ref = pair.get("result_path")
@@ -206,16 +208,22 @@ def evaluate_calibration(
             winner = direct["overall_winner"]
             if winner == expected_overall:
                 credit, status = 1.0, "CORRECT"
-                concordant += 1
+                if readiness_eligible:
+                    concordant += 1
             elif winner == "TIE":
                 credit, status = 0.5, "TIE"
-                ties += 1
+                if readiness_eligible:
+                    ties += 1
             else:
                 credit, status = 0.0, "REVERSED"
-                discordant += 1
-            direct_evaluated += 1
-            direct_complete += int(complete)
-            correct_points += credit
+                if readiness_eligible:
+                    discordant += 1
+            if readiness_eligible:
+                direct_evaluated += 1
+                direct_complete += int(complete)
+                correct_points += credit
+            else:
+                diagnostic_pairs += 1
             for axis, result_key in (
                 ("overall", "overall_winner"),
                 ("correctness", "correctness_winner"),
@@ -223,7 +231,7 @@ def evaluate_calibration(
             ):
                 expected = pair.get(f"expected_{axis}_winner")
                 actual = direct.get(result_key)
-                if expected in {higher_id, lower_id, "TIE"} and actual in {higher_id, lower_id, "TIE"}:
+                if readiness_eligible and expected in {higher_id, lower_id, "TIE"} and actual in {higher_id, lower_id, "TIE"}:
                     axis_evaluated[axis] += 1
                     axis_correct[axis] += 1.0 if actual == expected else 0.0
             pair_rows.append(
@@ -241,6 +249,7 @@ def evaluate_calibration(
                     "complete": complete,
                     "label_type": pair.get("label_type") or "AWARD_WEAK_PRIOR",
                     "expected_overall_winner": expected_overall,
+                    "readiness_eligible": readiness_eligible,
                 }
             )
             continue
@@ -262,7 +271,8 @@ def evaluate_calibration(
             credit = 0.0
             status = "REVERSED"
             discordant += 1
-        correct_points += credit
+        if readiness_eligible:
+            correct_points += credit
         pair_rows.append(
             {
                 "higher": higher_id,
@@ -272,10 +282,13 @@ def evaluate_calibration(
                 "source": "ABSOLUTE_SCORE_FALLBACK",
                 "higher_score": higher["score"],
                 "lower_score": lower["score"],
+                "readiness_eligible": readiness_eligible,
             }
         )
 
-    evaluated_pairs = sum(row["credit"] is not None for row in pair_rows)
+    evaluated_pairs = sum(
+        row["credit"] is not None and row.get("readiness_eligible", True) for row in pair_rows
+    )
     tau_denominator = concordant + discordant + ties
     coverage_out = {
         problem: {
@@ -297,7 +310,8 @@ def evaluate_calibration(
     min_fatal_rate = float(policy.get("min_fatal_flaw_detection_rate", 1.0))
     min_correctness_accuracy = float(policy.get("min_correctness_accuracy", required_pair_accuracy))
     min_writing_accuracy = float(policy.get("min_writing_accuracy", required_pair_accuracy))
-    direct_coverage = direct_complete / len(pair_rows) if pair_rows else None
+    eligible_pair_count = sum(pair.get("readiness_eligible") is not False for pair in manifest.get("pairs", []))
+    direct_coverage = direct_complete / eligible_pair_count if eligible_pair_count else None
     split_axis_coverage = (
         sum(
             row.get("correctness_score") is not None
@@ -340,6 +354,8 @@ def evaluate_calibration(
         "pairwise": {
             "evaluated": evaluated_pairs,
             "total": len(pair_rows),
+            "readiness_total": eligible_pair_count,
+            "diagnostic_pairs": diagnostic_pairs,
             "correct_points": correct_points,
             "accuracy": pair_accuracy,
             "direct_evaluated": direct_evaluated,
@@ -443,7 +459,8 @@ def write_reports(report: dict[str, Any], json_path: Path, md_path: Path) -> Non
             "## Metrics",
             "",
             f"- Pairwise award-order accuracy: {_fmt(pairwise['accuracy'])} "
-            f"({pairwise['evaluated']}/{pairwise['total']} pairs evaluated)",
+            f"({pairwise['evaluated']}/{pairwise.get('readiness_total', pairwise['total'])} readiness pairs; "
+            f"{pairwise.get('diagnostic_pairs', 0)} diagnostic pairs excluded)",
             f"- Kendall-style ordering: {_fmt(ordering['kendall_style_tau'])}",
             f"- Malformed-output rate: {_fmt(malformed['rate'])} "
             f"({malformed['malformed']}/{malformed['total_runs']})",
@@ -465,7 +482,8 @@ def write_reports(report: dict[str, Any], json_path: Path, md_path: Path) -> Non
     )
     for row in report.get("pairs", []):
         lines.append(
-            f"| {row['higher']} | {row['lower']} | {row['status']} | "
+            f"| {row['higher']} | {row['lower']} | "
+            f"{row['status'] if row.get('readiness_eligible', True) else 'DIAGNOSTIC_' + row['status']} | "
             f"{row.get('source', '')} | {row.get('complete', 'N/A')} |"
         )
     lines.extend(["", "## Reliability Checks", ""])

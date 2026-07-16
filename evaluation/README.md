@@ -96,6 +96,10 @@ python3 scripts/calibration_judge.py evaluation/calibration_manifest.json \
 数学正确性与写作得分不能相互抵消。真实盲比结果优先于两个绝对分数之差；绝对分数
 排序只作为旧结果兼容的后备信号。
 
+只有具有独立奖级顺序或人工真值的比较才能进入可靠性分母。类似“真实获奖论文必然
+优于某篇未参赛生成稿”的弱先验保留为 `readiness_eligible=false` 诊断项，报告其结果，
+但不得用它训练、选择或惩罚评委。
+
 ## 无人工复核时的代理校准
 
 当暂时没有人工评审条件时，可使用 `proxy_calibration_manifest.json` 做有限范围的代理校准：
