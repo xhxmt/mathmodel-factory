@@ -84,7 +84,7 @@ def extract_paper_text(item: dict[str, Any], root: Path, limit: int = 120_000) -
             text = ocr.read_text(encoding="utf-8", errors="replace")
     if len(text.strip()) < 1000:
         raise ValueError(f"paper text unavailable or too short: {paper}")
-    text = anonymize_text(text, item)
+    text = _truncate(anonymize_text(text, item), limit)
     text = apply_perturbation(text, item.get("proxy_perturbation"))
     return _truncate(text, limit)
 
@@ -206,6 +206,19 @@ def _median(values: list[float]) -> float | None:
     return round(statistics.median(values), 2) if values else None
 
 
+def _derive_overall(correctness: str, writing: str, reported: str) -> str:
+    """Do not let an unexplained overall tie erase a clear axis-level loss."""
+    if correctness == writing:
+        return correctness
+    if correctness == "TIE" and writing != "TIE":
+        return writing
+    if writing == "TIE" and correctness != "TIE":
+        return correctness
+    if correctness != "TIE" and writing != "TIE" and correctness != writing:
+        return correctness
+    return reported
+
+
 def _majority(runs: list[dict[str, Any]], key: str) -> str | None:
     counts: dict[str, int] = {}
     for run in runs:
@@ -244,12 +257,15 @@ def _pair_judgment(
     fatal_b = bool(parsed["fatal_flaw_b"])
     overall = _unblind(parsed["overall_winner"], a_id, b_id)
     correctness = _unblind(parsed["correctness_winner"], a_id, b_id)
+    writing = _unblind(parsed["writing_winner"], a_id, b_id)
     fatal_override = False
     if fatal_a != fatal_b:
         nonfatal = b_id if fatal_a else a_id
         overall = nonfatal
         correctness = nonfatal
         fatal_override = True
+    else:
+        overall = _derive_overall(correctness, writing, overall)
     return {
         "sample": sample,
         "role": role,
@@ -258,7 +274,7 @@ def _pair_judgment(
         "b_id": b_id,
         "overall_winner": overall,
         "correctness_winner": correctness,
-        "writing_winner": _unblind(parsed["writing_winner"], a_id, b_id),
+        "writing_winner": writing,
         "confidence": parsed["confidence"],
         "fatal_flaw_a": fatal_a,
         "fatal_flaw_b": fatal_b,

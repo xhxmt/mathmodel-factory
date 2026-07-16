@@ -7,6 +7,7 @@ from scripts.calibration_judge import (
     _anonymous_order,
     anonymize_text,
     comparison_dossier,
+    _derive_overall,
     _needs_adjudication,
     parse_json_output,
     validate_absolute,
@@ -87,6 +88,14 @@ def test_stable_distinct_document_result_does_not_require_adjudication():
         },
     ]
     assert not _needs_adjudication(runs, malformed=0, has_comparison_differences=False)
+
+
+def test_overall_uses_clear_writing_loss_when_correctness_ties():
+    assert _derive_overall("TIE", "clean", "TIE") == "clean"
+
+
+def test_overall_uses_correctness_when_axes_conflict():
+    assert _derive_overall("mathematically_correct", "better_written", "TIE") == "mathematically_correct"
 
 
 def test_absolute_contract_requires_all_writing_dimensions():
