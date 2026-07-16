@@ -1,4 +1,8 @@
 {
+  "models": [
+    "deepseek-chat",
+    "gemini-3.1-pro-preview"
+  ],
   "papers": [
     {
       "id": "national1_2024b",
@@ -85,13 +89,13 @@
       "fatal_flaw_detected": true
     },
     {
-      "id": "generated_2024a_known_fatal",
+      "id": "generated_2024a_repaired",
       "problem_id": "CUMCM-2024-A",
       "award_tier": null,
       "category": "generated_baseline",
       "paper_path": "complete/test_cumcm2024a_polished/test_cumcm2024a_paper.pdf",
       "result_path": "evaluation/results/test_cumcm2024a_eval.json",
-      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024a_known_fatal.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024a_repaired.json",
       "status": "AVAILABLE",
       "score": 98.0,
       "correctness_score": 100.0,
@@ -119,7 +123,10 @@
       "writing_winner": "national1_2024b",
       "samples_scored": 3,
       "samples_requested": 3,
-      "complete": true
+      "complete": true,
+      "label_type": "AWARD_WEAK_PRIOR",
+      "expected_overall_winner": "national1_2024b",
+      "readiness_eligible": true
     },
     {
       "higher": "provincial1_2024b",
@@ -132,7 +139,10 @@
       "writing_winner": "provincial1_2024b",
       "samples_scored": 3,
       "samples_requested": 3,
-      "complete": true
+      "complete": true,
+      "label_type": "AWARD_WEAK_PRIOR",
+      "expected_overall_winner": "provincial1_2024b",
+      "readiness_eligible": true
     },
     {
       "higher": "provincial3_2024b",
@@ -145,23 +155,38 @@
       "writing_winner": "generated_2024b",
       "samples_scored": 3,
       "samples_requested": 3,
-      "complete": true
+      "complete": true,
+      "label_type": "AWARD_WEAK_PRIOR",
+      "expected_overall_winner": "provincial3_2024b",
+      "readiness_eligible": false
     }
   ],
   "pairwise": {
-    "evaluated": 3,
+    "evaluated": 2,
     "total": 3,
+    "readiness_total": 2,
+    "diagnostic_pairs": 1,
     "correct_points": 2.0,
-    "accuracy": 0.6666666666666666,
-    "direct_evaluated": 3,
-    "direct_complete": 3,
-    "direct_coverage": 1.0
+    "accuracy": 1.0,
+    "direct_evaluated": 2,
+    "direct_complete": 2,
+    "direct_coverage": 1.0,
+    "axis_accuracy": {
+      "overall": null,
+      "correctness": null,
+      "writing": null
+    },
+    "axis_evaluated": {
+      "overall": 0,
+      "correctness": 0,
+      "writing": 0
+    }
   },
   "ordering": {
     "concordant": 2,
-    "discordant": 1,
+    "discordant": 0,
     "ties": 0,
-    "kendall_style_tau": 0.3333333333333333
+    "kendall_style_tau": 1.0
   },
   "malformed_outputs": {
     "malformed": 0,
@@ -170,8 +195,8 @@
   },
   "fatal_flaw_detection": {
     "detected": 0,
-    "expected": 1,
-    "rate": 0.0
+    "expected": 0,
+    "rate": null
   },
   "coverage_by_problem": {
     "CUMCM-2024-A": {
@@ -192,7 +217,7 @@
       "all_papers_scored": true,
       "split_axis_coverage": true,
       "direct_pair_coverage": true,
-      "pairwise_accuracy": false,
+      "pairwise_accuracy": true,
       "malformed_output_rate": true,
       "fatal_flaw_detection": false
     },
@@ -200,8 +225,44 @@
       "min_pairwise_accuracy": 0.75,
       "min_direct_pair_coverage": 1.0,
       "max_malformed_rate": 0.1,
-      "min_fatal_flaw_detection_rate": 1.0
+      "min_fatal_flaw_detection_rate": 1.0,
+      "min_correctness_accuracy": 0.75,
+      "min_writing_accuracy": 0.75
     },
-    "meaning": "Step 13 absolute scores are optimization-safe only when ready=true"
-  }
+    "meaning": "Absolute scores and award prediction require independent human calibration"
+  },
+  "proxy_reliability": {
+    "ready": false,
+    "checks": {
+      "all_papers_scored": true,
+      "split_axis_coverage": true,
+      "direct_pair_coverage": true,
+      "pairwise_accuracy": true,
+      "malformed_output_rate": true,
+      "fatal_flaw_detection": false
+    },
+    "axis_ready": false,
+    "axis_checks": {
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "scope": [
+      "overall_pairwise_ranking",
+      "fatal_defect_detection"
+    ],
+    "meaning": "Safe only for bounded overall A/B ranking against deterministic perturbations"
+  },
+  "axis_reliability": {
+    "ready": false,
+    "checks": {
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "meaning": "Correctness and writing sub-axis labels require separate validation"
+  },
+  "human_calibration": {
+    "ready": false,
+    "reason": "no independent human ground truth"
+  },
+  "award_prediction_ready": false
 }

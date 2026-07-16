@@ -22,14 +22,15 @@ Models: deepseek-chat
 
 ## Metrics
 
-- Pairwise award-order accuracy: 0.5 (11/11 pairs evaluated)
-- Kendall-style ordering: 0
-- Malformed-output rate: 0.028 (2/72)
+- Pairwise award-order accuracy: 0.909 (11/11 readiness pairs; 0 diagnostic pairs excluded)
+- Kendall-style ordering: 0.818
+- Malformed-output rate: 0.042 (3/72)
 - Fatal-flaw detection rate: 1 (4/4)
 - Direct blind-pair coverage: 1
 - Split correctness/writing coverage: 1
 - Step 13 score reliability: NOT READY
-- Proxy A/B reliability: NOT READY
+- Proxy A/B reliability: READY
+- Correctness/writing axis reliability: NOT READY
 - Human calibration: NOT READY
 - Award prediction: NOT READY
 
@@ -37,24 +38,24 @@ Models: deepseek-chat
 
 | Expected higher | Expected lower | Result | Source | Complete |
 |---|---|---|---|---|
-| n1a_clean | n1a_no_symbols | TIE | BLIND_PAIRWISE | True |
-| n1a_clean | n1a_numeric_contradiction | TIE | BLIND_PAIRWISE | True |
-| n1a_clean | n1a_unsupported_optimality | TIE | BLIND_PAIRWISE | True |
-| n1a_clean | n1a_robotic_repetition | TIE | BLIND_PAIRWISE | True |
+| n1a_clean | n1a_no_symbols | CORRECT | BLIND_PAIRWISE | True |
+| n1a_clean | n1a_numeric_contradiction | CORRECT | BLIND_PAIRWISE | True |
+| n1a_clean | n1a_unsupported_optimality | CORRECT | BLIND_PAIRWISE | True |
+| n1a_clean | n1a_robotic_repetition | CORRECT | BLIND_PAIRWISE | True |
 | n1a_clean | n1a_missing_answers | TIE | BLIND_PAIRWISE | True |
-| n1b_clean | n1b_no_sensitivity | TIE | BLIND_PAIRWISE | True |
-| n1b_clean | n1b_no_symbols | TIE | BLIND_PAIRWISE | True |
+| n1b_clean | n1b_no_sensitivity | CORRECT | BLIND_PAIRWISE | True |
+| n1b_clean | n1b_no_symbols | CORRECT | BLIND_PAIRWISE | True |
 | n1b_clean | n1b_numeric_contradiction | TIE | BLIND_PAIRWISE | True |
-| n1b_clean | n1b_unsupported_optimality | TIE | BLIND_PAIRWISE | True |
-| n1b_clean | n1b_robotic_repetition | TIE | BLIND_PAIRWISE | True |
-| n1b_clean | n1b_missing_answers | TIE | BLIND_PAIRWISE | True |
+| n1b_clean | n1b_unsupported_optimality | CORRECT | BLIND_PAIRWISE | True |
+| n1b_clean | n1b_robotic_repetition | CORRECT | BLIND_PAIRWISE | True |
+| n1b_clean | n1b_missing_answers | CORRECT | BLIND_PAIRWISE | True |
 
 ## Reliability Checks
 
 - PASS: all_papers_scored
 - PASS: split_axis_coverage
 - PASS: direct_pair_coverage
-- FAIL: pairwise_accuracy
+- PASS: pairwise_accuracy
 - PASS: malformed_output_rate
 - PASS: fatal_flaw_detection
 - FAIL: correctness_pairwise_accuracy

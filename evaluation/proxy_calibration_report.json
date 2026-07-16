@@ -282,62 +282,66 @@
     {
       "higher": "n1a_clean",
       "lower": "n1a_no_symbols",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
+      "winner": "n1a_clean",
       "correctness_winner": "TIE",
-      "writing_winner": "TIE",
+      "writing_winner": "n1a_clean",
       "samples_scored": 3,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1a_clean"
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1a_clean",
       "lower": "n1a_numeric_contradiction",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
+      "winner": "n1a_clean",
       "correctness_winner": "TIE",
-      "writing_winner": "TIE",
+      "writing_winner": "n1a_clean",
       "samples_scored": 3,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1a_clean"
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1a_clean",
       "lower": "n1a_unsupported_optimality",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
-      "correctness_winner": "TIE",
-      "writing_winner": "TIE",
+      "winner": "n1a_clean",
+      "correctness_winner": "n1a_clean",
+      "writing_winner": "n1a_clean",
       "samples_scored": 3,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1a_clean"
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1a_clean",
       "lower": "n1a_robotic_repetition",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
+      "winner": "n1a_clean",
       "correctness_winner": "TIE",
-      "writing_winner": "TIE",
-      "samples_scored": 3,
+      "writing_winner": "n1a_clean",
+      "samples_scored": 2,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1a_clean"
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1a_clean",
@@ -352,37 +356,40 @@
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1a_clean"
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1b_clean",
       "lower": "n1b_no_sensitivity",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
-      "correctness_winner": "TIE",
-      "writing_winner": "TIE",
+      "winner": "n1b_clean",
+      "correctness_winner": "n1b_clean",
+      "writing_winner": "n1b_clean",
       "samples_scored": 3,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1b_clean"
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1b_clean",
       "lower": "n1b_no_symbols",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
+      "winner": "n1b_clean",
       "correctness_winner": "TIE",
-      "writing_winner": "TIE",
+      "writing_winner": "n1b_clean",
       "samples_scored": 3,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1b_clean"
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1b_clean",
@@ -397,66 +404,72 @@
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1b_clean"
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1b_clean",
       "lower": "n1b_unsupported_optimality",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
-      "correctness_winner": "TIE",
-      "writing_winner": "TIE",
+      "winner": "n1b_clean",
+      "correctness_winner": "n1b_clean",
+      "writing_winner": "n1b_clean",
       "samples_scored": 3,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1b_clean"
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1b_clean",
       "lower": "n1b_robotic_repetition",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
+      "winner": "n1b_clean",
       "correctness_winner": "TIE",
-      "writing_winner": "TIE",
+      "writing_winner": "n1b_clean",
       "samples_scored": 3,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1b_clean"
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true
     },
     {
       "higher": "n1b_clean",
       "lower": "n1b_missing_answers",
-      "status": "TIE",
-      "credit": 0.5,
+      "status": "CORRECT",
+      "credit": 1.0,
       "source": "BLIND_PAIRWISE",
-      "winner": "TIE",
-      "correctness_winner": "TIE",
-      "writing_winner": "TIE",
+      "winner": "n1b_clean",
+      "correctness_winner": "n1b_clean",
+      "writing_winner": "n1b_clean",
       "samples_scored": 3,
       "samples_requested": 3,
       "complete": true,
       "label_type": "DETERMINISTIC_PROXY",
-      "expected_overall_winner": "n1b_clean"
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true
     }
   ],
   "pairwise": {
     "evaluated": 11,
     "total": 11,
-    "correct_points": 5.5,
-    "accuracy": 0.5,
+    "readiness_total": 11,
+    "diagnostic_pairs": 0,
+    "correct_points": 10.0,
+    "accuracy": 0.9090909090909091,
     "direct_evaluated": 11,
     "direct_complete": 11,
     "direct_coverage": 1.0,
     "axis_accuracy": {
-      "overall": 0.0,
-      "correctness": 0.18181818181818182,
-      "writing": 0.36363636363636365
+      "overall": 0.8181818181818182,
+      "correctness": 0.5454545454545454,
+      "writing": 0.6363636363636364
     },
     "axis_evaluated": {
       "overall": 11,
@@ -465,15 +478,15 @@
     }
   },
   "ordering": {
-    "concordant": 0,
+    "concordant": 9,
     "discordant": 0,
-    "ties": 11,
-    "kendall_style_tau": 0.0
+    "ties": 2,
+    "kendall_style_tau": 0.8181818181818182
   },
   "malformed_outputs": {
-    "malformed": 2,
+    "malformed": 3,
     "total_runs": 72,
-    "rate": 0.027777777777777776
+    "rate": 0.041666666666666664
   },
   "fatal_flaw_detection": {
     "detected": 4,
@@ -499,11 +512,9 @@
       "all_papers_scored": true,
       "split_axis_coverage": true,
       "direct_pair_coverage": true,
-      "pairwise_accuracy": false,
+      "pairwise_accuracy": true,
       "malformed_output_rate": true,
-      "fatal_flaw_detection": true,
-      "correctness_pairwise_accuracy": false,
-      "writing_pairwise_accuracy": false
+      "fatal_flaw_detection": true
     },
     "policy": {
       "min_pairwise_accuracy": 0.9,
@@ -516,22 +527,33 @@
     "meaning": "Absolute scores and award prediction require independent human calibration"
   },
   "proxy_reliability": {
-    "ready": false,
+    "ready": true,
     "checks": {
       "all_papers_scored": true,
       "split_axis_coverage": true,
       "direct_pair_coverage": true,
-      "pairwise_accuracy": false,
+      "pairwise_accuracy": true,
       "malformed_output_rate": true,
-      "fatal_flaw_detection": true,
+      "fatal_flaw_detection": true
+    },
+    "axis_ready": false,
+    "axis_checks": {
       "correctness_pairwise_accuracy": false,
       "writing_pairwise_accuracy": false
     },
     "scope": [
-      "objective_defect_detection",
-      "perturbation_pairwise_comparison"
+      "overall_pairwise_ranking",
+      "fatal_defect_detection"
     ],
-    "meaning": "Safe only for bounded A/B comparisons against deterministic perturbations"
+    "meaning": "Safe only for bounded overall A/B ranking against deterministic perturbations"
+  },
+  "axis_reliability": {
+    "ready": false,
+    "checks": {
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "meaning": "Correctness and writing sub-axis labels require separate validation"
   },
   "human_calibration": {
     "ready": false,
