@@ -6,6 +6,7 @@ import pytest
 from scripts.calibration_judge import (
     _anonymous_order,
     anonymize_text,
+    comparison_dossier,
     parse_json_output,
     validate_absolute,
     validate_pairwise,
@@ -15,8 +16,8 @@ from scripts.proxy_calibration import apply_perturbation
 
 def test_anonymous_order_is_deterministic_and_uses_only_pair_ids():
     pair = {"higher": "national", "lower": "provincial"}
-    assert _anonymous_order(pair, 1) == _anonymous_order(pair, 1)
-    assert set(_anonymous_order(pair, 1)) == {"national", "provincial"}
+    assert _anonymous_order(pair, 1) == ("national", "provincial")
+    assert _anonymous_order(pair, 2) == ("provincial", "national")
 
 
 def test_parse_json_output_accepts_fenced_json():
@@ -32,8 +33,32 @@ def test_pairwise_contract_rejects_invalid_winner():
                 "correctness_winner": "A",
                 "writing_winner": "B",
                 "confidence": 0.8,
+                "fatal_flaw_a": False,
+                "fatal_flaw_b": False,
+                "fatal_evidence_a": [],
+                "fatal_evidence_b": [],
             }
         )
+
+
+def test_pairwise_contract_requires_fatal_audit_fields():
+    with pytest.raises(ValueError):
+        validate_pairwise(
+            {
+                "overall_winner": "A",
+                "correctness_winner": "A",
+                "writing_winner": "A",
+                "confidence": 0.8,
+            }
+        )
+
+
+def test_comparison_dossier_exposes_small_numeric_change():
+    original = "\n".join(["共同内容"] * 30 + ["最终结果为 4.20 秒"] + ["共同结尾"] * 30)
+    changed = original.replace("4.20", "7.27")
+    dossier = comparison_dossier(original, changed)
+    assert "4.20" in dossier
+    assert "7.27" in dossier
 
 
 def test_absolute_contract_requires_all_writing_dimensions():

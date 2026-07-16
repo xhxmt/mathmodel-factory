@@ -11,6 +11,7 @@ quality, and performs anonymous pairwise comparisons before absolute scoring.
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import re
@@ -126,6 +127,13 @@ def validate_pairwise(data: dict[str, Any]) -> dict[str, Any]:
     confidence = data.get("confidence")
     if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
         raise ValueError("confidence must be between 0 and 1")
+    for key in ("fatal_flaw_a", "fatal_flaw_b"):
+        if not isinstance(data.get(key), bool):
+            raise ValueError(f"{key} must be boolean")
+    for key in ("fatal_evidence_a", "fatal_evidence_b"):
+        value = data.get(key)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{key} must be a string list")
     return data
 
 
@@ -162,8 +170,28 @@ def _render_prompt(name: str, replacements: dict[str, str]) -> str:
 
 def _anonymous_order(pair: dict[str, Any], sample: int) -> tuple[str, str]:
     higher, lower = str(pair["higher"]), str(pair["lower"])
-    token = hashlib.sha256(f"{higher}|{lower}|{sample}".encode()).digest()[0]
-    return (higher, lower) if token % 2 == 0 else (lower, higher)
+    return (higher, lower) if sample % 2 == 1 else (lower, higher)
+
+
+def comparison_dossier(text_a: str, text_b: str, limit: int = 8000) -> str:
+    """Expose small but decisive changes that are easy to miss in long papers."""
+    lines_a = text_a.splitlines()
+    lines_b = text_b.splitlines()
+    matcher = difflib.SequenceMatcher(a=lines_a, b=lines_b, autojunk=False)
+    if matcher.quick_ratio() < 0.72:
+        return "两篇论文整体差异较大；差异线索未展开，必须按题目逐问独立比较。"
+    chunks: list[str] = []
+    for tag, a1, a2, b1, b2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        before_a = "\n".join(lines_a[max(0, a1 - 2) : min(len(lines_a), a2 + 2)])
+        before_b = "\n".join(lines_b[max(0, b1 - 2) : min(len(lines_b), b2 + 2)])
+        chunks.append(f"差异类型={tag}\n[A片段]\n{before_a}\n[B片段]\n{before_b}")
+        if sum(len(chunk.encode("utf-8")) for chunk in chunks) >= limit:
+            break
+    if not chunks:
+        return "机器逐行比较未发现文本差异；仍需独立核验公式、图表和结论。"
+    return _truncate("\n\n".join(chunks), limit)
 
 
 def _unblind(winner: str, a_id: str, b_id: str) -> str:
@@ -200,6 +228,7 @@ def run_pair(
             "calibration_pairwise.txt",
             {
                 "PROBLEM_ID": str(papers[a_id].get("problem_id") or "UNKNOWN"),
+                "COMPARISON_DOSSIER": comparison_dossier(text_cache[a_id], text_cache[b_id]),
                 "PAPER_A": text_cache[a_id],
                 "PAPER_B": text_cache[b_id],
             },
@@ -208,15 +237,30 @@ def run_pair(
             parsed = validate_pairwise(
                 parse_json_output(call_judge(prompt, model, timeout, 5000))
             )
+            fatal_a = bool(parsed["fatal_flaw_a"])
+            fatal_b = bool(parsed["fatal_flaw_b"])
+            overall = _unblind(parsed["overall_winner"], a_id, b_id)
+            correctness = _unblind(parsed["correctness_winner"], a_id, b_id)
+            fatal_override = False
+            if fatal_a != fatal_b:
+                nonfatal = b_id if fatal_a else a_id
+                overall = nonfatal
+                correctness = nonfatal
+                fatal_override = True
             runs.append(
                 {
                     "sample": sample,
                     "a_id": a_id,
                     "b_id": b_id,
-                    "overall_winner": _unblind(parsed["overall_winner"], a_id, b_id),
-                    "correctness_winner": _unblind(parsed["correctness_winner"], a_id, b_id),
+                    "overall_winner": overall,
+                    "correctness_winner": correctness,
                     "writing_winner": _unblind(parsed["writing_winner"], a_id, b_id),
                     "confidence": parsed["confidence"],
+                    "fatal_flaw_a": fatal_a,
+                    "fatal_flaw_b": fatal_b,
+                    "fatal_evidence_a": parsed["fatal_evidence_a"],
+                    "fatal_evidence_b": parsed["fatal_evidence_b"],
+                    "fatal_override": fatal_override,
                     "reasons": parsed.get("reasons", {}),
                 }
             )
