@@ -8,6 +8,7 @@ from scripts.calibration_judge import (
     anonymize_text,
     comparison_dossier,
     _derive_overall,
+    _select_pairs,
     _needs_adjudication,
     parse_json_output,
     validate_absolute,
@@ -96,6 +97,16 @@ def test_overall_uses_clear_writing_loss_when_correctness_ties():
 
 def test_overall_uses_correctness_when_axes_conflict():
     assert _derive_overall("mathematically_correct", "better_written", "TIE") == "mathematically_correct"
+
+
+def test_select_pairs_supports_resumable_targeted_runs():
+    pairs = [
+        {"id": "one", "higher": "a", "lower": "b"},
+        {"id": "two", "higher": "c", "lower": "d"},
+    ]
+    assert _select_pairs(pairs, {"two"}) == [pairs[1]]
+    with pytest.raises(ValueError):
+        _select_pairs(pairs, {"missing"})
 
 
 def test_absolute_contract_requires_all_writing_dimensions():

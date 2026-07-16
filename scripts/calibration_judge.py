@@ -168,6 +168,21 @@ def _render_prompt(name: str, replacements: dict[str, str]) -> str:
     return text
 
 
+def _select_pairs(pairs: list[dict[str, Any]], selected: set[str]) -> list[dict[str, Any]]:
+    if not selected:
+        return pairs
+    output = [
+        pair for pair in pairs
+        if str(pair.get("id") or f"{pair['higher']}__vs__{pair['lower']}") in selected
+    ]
+    missing = selected - {
+        str(pair.get("id") or f"{pair['higher']}__vs__{pair['lower']}") for pair in output
+    }
+    if missing:
+        raise ValueError(f"unknown pair ids: {', '.join(sorted(missing))}")
+    return output
+
+
 def _anonymous_order(pair: dict[str, Any], sample: int) -> tuple[str, str]:
     higher, lower = str(pair["higher"]), str(pair["lower"])
     return (higher, lower) if sample % 2 == 1 else (lower, higher)
@@ -451,6 +466,7 @@ def main() -> int:
     parser.add_argument("--results-dir", help="Override calibration_results_dir from the manifest.")
     parser.add_argument("--pair-text-limit", type=int, default=80000, help="UTF-8 byte budget per paper in pairwise prompts.")
     parser.add_argument("--adjudicator-model", help="Independent model used only for ties, instability, or close-document disputes.")
+    parser.add_argument("--pair-id", action="append", default=[], help="Run only this pair id; repeatable for resumable calibration.")
     args = parser.parse_args()
     if args.samples < 1 or (args.pairwise_only and args.absolute_only):
         parser.error("invalid mode or sample count")
@@ -462,7 +478,11 @@ def main() -> int:
     papers = {str(item["id"]): item for item in manifest.get("papers", [])}
 
     if not args.absolute_only:
-        for pair in manifest.get("pairs", []):
+        try:
+            pairs = _select_pairs(list(manifest.get("pairs", [])), set(args.pair_id))
+        except ValueError as exc:
+            parser.error(str(exc))
+        for pair in pairs:
             pair_id = str(pair.get("id") or f"{pair['higher']}__vs__{pair['lower']}")
             output = run_pair(
                 pair, papers, root, model=args.model, samples=args.samples,

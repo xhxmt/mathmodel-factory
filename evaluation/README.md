@@ -73,6 +73,15 @@ python3 scripts/evaluate_calibration.py evaluation/calibration_manifest.json \
   --existing-results --require-ready
 ```
 
+长上下文调用中断后可只重跑缺失或失败的比较：
+
+```bash
+python3 scripts/calibration_judge.py evaluation/calibration_manifest.json \
+  --model deepseek-chat --samples 2 --pairwise-only \
+  --adjudicator-model gemini-3.1-pro-preview \
+  --pair-id national1_vs_provincial1_2024b
+```
+
 校准严格按以下顺序执行：
 
 1. 隐藏论文身份、学校和奖级，先进行同题两两比较；
