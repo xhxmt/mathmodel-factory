@@ -206,6 +206,69 @@ def _median(values: list[float]) -> float | None:
     return round(statistics.median(values), 2) if values else None
 
 
+def _majority(runs: list[dict[str, Any]], key: str) -> str | None:
+    counts: dict[str, int] = {}
+    for run in runs:
+        winner = str(run[key])
+        counts[winner] = counts.get(winner, 0) + 1
+    if not counts:
+        return None
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    if len(ordered) > 1 and ordered[0][1] == ordered[1][1]:
+        return "TIE"
+    return ordered[0][0]
+
+
+def _needs_adjudication(
+    runs: list[dict[str, Any]], *, malformed: int, has_comparison_differences: bool
+) -> bool:
+    if malformed or has_comparison_differences or not runs:
+        return True
+    winners = {str(run["overall_winner"]) for run in runs}
+    fatal_states = {(bool(run["fatal_flaw_a"]), bool(run["fatal_flaw_b"])) for run in runs}
+    return len(winners) > 1 or len(fatal_states) > 1 or _majority(runs, "overall_winner") == "TIE"
+
+
+def _pair_judgment(
+    *,
+    prompt: str,
+    model: str,
+    timeout: int,
+    a_id: str,
+    b_id: str,
+    sample: int | str,
+    role: str,
+) -> dict[str, Any]:
+    parsed = validate_pairwise(parse_json_output(call_judge(prompt, model, timeout, 5000)))
+    fatal_a = bool(parsed["fatal_flaw_a"])
+    fatal_b = bool(parsed["fatal_flaw_b"])
+    overall = _unblind(parsed["overall_winner"], a_id, b_id)
+    correctness = _unblind(parsed["correctness_winner"], a_id, b_id)
+    fatal_override = False
+    if fatal_a != fatal_b:
+        nonfatal = b_id if fatal_a else a_id
+        overall = nonfatal
+        correctness = nonfatal
+        fatal_override = True
+    return {
+        "sample": sample,
+        "role": role,
+        "model": model,
+        "a_id": a_id,
+        "b_id": b_id,
+        "overall_winner": overall,
+        "correctness_winner": correctness,
+        "writing_winner": _unblind(parsed["writing_winner"], a_id, b_id),
+        "confidence": parsed["confidence"],
+        "fatal_flaw_a": fatal_a,
+        "fatal_flaw_b": fatal_b,
+        "fatal_evidence_a": parsed["fatal_evidence_a"],
+        "fatal_evidence_b": parsed["fatal_evidence_b"],
+        "fatal_override": fatal_override,
+        "reasons": parsed.get("reasons", {}),
+    }
+
+
 def run_pair(
     pair: dict[str, Any],
     papers: dict[str, dict[str, Any]],
@@ -215,6 +278,7 @@ def run_pair(
     samples: int,
     timeout: int,
     text_limit: int = 80_000,
+    adjudicator_model: str | None = None,
 ) -> dict[str, Any]:
     text_cache: dict[str, str] = {}
     runs: list[dict[str, Any]] = []
@@ -224,63 +288,63 @@ def run_pair(
         for paper_id in (a_id, b_id):
             if paper_id not in text_cache:
                 text_cache[paper_id] = extract_paper_text(papers[paper_id], root, text_limit)
+        dossier = comparison_dossier(text_cache[a_id], text_cache[b_id])
         prompt = _render_prompt(
             "calibration_pairwise.txt",
             {
                 "PROBLEM_ID": str(papers[a_id].get("problem_id") or "UNKNOWN"),
-                "COMPARISON_DOSSIER": comparison_dossier(text_cache[a_id], text_cache[b_id]),
+                "COMPARISON_DOSSIER": dossier,
                 "PAPER_A": text_cache[a_id],
                 "PAPER_B": text_cache[b_id],
             },
         )
         try:
-            parsed = validate_pairwise(
-                parse_json_output(call_judge(prompt, model, timeout, 5000))
-            )
-            fatal_a = bool(parsed["fatal_flaw_a"])
-            fatal_b = bool(parsed["fatal_flaw_b"])
-            overall = _unblind(parsed["overall_winner"], a_id, b_id)
-            correctness = _unblind(parsed["correctness_winner"], a_id, b_id)
-            fatal_override = False
-            if fatal_a != fatal_b:
-                nonfatal = b_id if fatal_a else a_id
-                overall = nonfatal
-                correctness = nonfatal
-                fatal_override = True
-            runs.append(
-                {
-                    "sample": sample,
-                    "a_id": a_id,
-                    "b_id": b_id,
-                    "overall_winner": overall,
-                    "correctness_winner": correctness,
-                    "writing_winner": _unblind(parsed["writing_winner"], a_id, b_id),
-                    "confidence": parsed["confidence"],
-                    "fatal_flaw_a": fatal_a,
-                    "fatal_flaw_b": fatal_b,
-                    "fatal_evidence_a": parsed["fatal_evidence_a"],
-                    "fatal_evidence_b": parsed["fatal_evidence_b"],
-                    "fatal_override": fatal_override,
-                    "reasons": parsed.get("reasons", {}),
-                }
-            )
+            runs.append(_pair_judgment(
+                prompt=prompt, model=model, timeout=timeout, a_id=a_id, b_id=b_id,
+                sample=sample, role="primary",
+            ))
         except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as exc:
             malformed += 1
             runs.append({"sample": sample, "status": "MALFORMED", "error": str(exc)})
 
     valid = [run for run in runs if run.get("status") != "MALFORMED"]
+    reference_dossier = comparison_dossier(text_cache[str(pair["higher"])], text_cache[str(pair["lower"])])
+    adjudication_required = _needs_adjudication(
+        valid,
+        malformed=malformed,
+        has_comparison_differences="差异类型=" in reference_dossier,
+    )
+    adjudication: dict[str, Any] | None = None
+    if adjudicator_model and adjudication_required:
+        a_id, b_id = str(pair["higher"]), str(pair["lower"])
+        prompt = _render_prompt(
+            "calibration_pairwise.txt",
+            {
+                "PROBLEM_ID": str(papers[a_id].get("problem_id") or "UNKNOWN"),
+                "COMPARISON_DOSSIER": reference_dossier,
+                "PAPER_A": text_cache[a_id],
+                "PAPER_B": text_cache[b_id],
+            },
+        )
+        try:
+            adjudication = _pair_judgment(
+                prompt=prompt, model=adjudicator_model, timeout=timeout,
+                a_id=a_id, b_id=b_id, sample="adjudication", role="adjudicator",
+            )
+            runs.append(adjudication)
+        except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as exc:
+            malformed += 1
+            runs.append({
+                "sample": "adjudication", "role": "adjudicator", "model": adjudicator_model,
+                "status": "MALFORMED", "error": str(exc),
+            })
 
-    def majority(key: str) -> str | None:
-        counts: dict[str, int] = {}
-        for run in valid:
-            winner = str(run[key])
-            counts[winner] = counts.get(winner, 0) + 1
-        if not counts:
-            return None
-        ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-        if len(ordered) > 1 and ordered[0][1] == ordered[1][1]:
-            return "TIE"
-        return ordered[0][0]
+    primary_valid = [run for run in valid if run.get("role") == "primary"]
+
+    def final_winner(key: str) -> str | None:
+        if adjudication:
+            return str(adjudication[key])
+        return _majority(primary_valid, key)
 
     return {
         "schema_version": 2,
@@ -289,13 +353,18 @@ def run_pair(
         "higher": pair["higher"],
         "lower": pair["lower"],
         "basis": pair.get("basis"),
-        "samples_requested": samples,
-        "samples_scored": len(valid),
+        "samples_requested": samples + (1 if adjudicator_model and adjudication_required else 0),
+        "samples_scored": sum(run.get("status") != "MALFORMED" for run in runs),
         "malformed": malformed,
-        "overall_winner": majority("overall_winner"),
-        "correctness_winner": majority("correctness_winner"),
-        "writing_winner": majority("writing_winner"),
-        "median_confidence": _median([float(run["confidence"]) for run in valid]),
+        "overall_winner": final_winner("overall_winner"),
+        "correctness_winner": final_winner("correctness_winner"),
+        "writing_winner": final_winner("writing_winner"),
+        "median_confidence": _median([
+            float(run["confidence"]) for run in runs if run.get("status") != "MALFORMED"
+        ]),
+        "adjudication_required": adjudication_required,
+        "adjudicated": adjudication is not None,
+        "adjudicator_model": adjudicator_model,
         "runs": runs,
     }
 
@@ -365,6 +434,7 @@ def main() -> int:
     parser.add_argument("--absolute-only", action="store_true")
     parser.add_argument("--results-dir", help="Override calibration_results_dir from the manifest.")
     parser.add_argument("--pair-text-limit", type=int, default=80000, help="UTF-8 byte budget per paper in pairwise prompts.")
+    parser.add_argument("--adjudicator-model", help="Independent model used only for ties, instability, or close-document disputes.")
     args = parser.parse_args()
     if args.samples < 1 or (args.pairwise_only and args.absolute_only):
         parser.error("invalid mode or sample count")
@@ -381,6 +451,7 @@ def main() -> int:
             output = run_pair(
                 pair, papers, root, model=args.model, samples=args.samples,
                 timeout=args.timeout, text_limit=args.pair_text_limit,
+                adjudicator_model=args.adjudicator_model,
             )
             path = results / f"pair_{pair_id}.json"
             path.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

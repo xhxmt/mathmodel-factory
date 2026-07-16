@@ -7,6 +7,7 @@ from scripts.calibration_judge import (
     _anonymous_order,
     anonymize_text,
     comparison_dossier,
+    _needs_adjudication,
     parse_json_output,
     validate_absolute,
     validate_pairwise,
@@ -59,6 +60,33 @@ def test_comparison_dossier_exposes_small_numeric_change():
     dossier = comparison_dossier(original, changed)
     assert "4.20" in dossier
     assert "7.27" in dossier
+
+
+def test_close_document_difference_always_routes_to_independent_adjudication():
+    runs = [
+        {
+            "overall_winner": "A",
+            "fatal_flaw_a": False,
+            "fatal_flaw_b": False,
+        }
+    ]
+    assert _needs_adjudication(runs, malformed=0, has_comparison_differences=True)
+
+
+def test_stable_distinct_document_result_does_not_require_adjudication():
+    runs = [
+        {
+            "overall_winner": "A",
+            "fatal_flaw_a": False,
+            "fatal_flaw_b": False,
+        },
+        {
+            "overall_winner": "A",
+            "fatal_flaw_a": False,
+            "fatal_flaw_b": False,
+        },
+    ]
+    assert not _needs_adjudication(runs, malformed=0, has_comparison_differences=False)
 
 
 def test_absolute_contract_requires_all_writing_dimensions():

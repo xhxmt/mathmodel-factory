@@ -67,7 +67,8 @@
 ```bash
 source scripts/load_secrets.sh
 python3 scripts/calibration_judge.py evaluation/calibration_manifest.json \
-  --model deepseek-chat --samples 3
+  --model deepseek-chat --samples 2 \
+  --adjudicator-model gemini-3.1-pro-preview
 python3 scripts/evaluate_calibration.py evaluation/calibration_manifest.json \
   --existing-results --require-ready
 ```
@@ -78,6 +79,10 @@ python3 scripts/evaluate_calibration.py evaluation/calibration_manifest.json \
 2. 再分别给出数学正确性和论文写作绝对评分；
 3. 写作专项包含答案完整度、论证链、结果可核验性、段落组织、图表叙事和语言成熟度；
 4. `score_reliability.ready=false` 时，Step 13 绝对分数不得作为可靠的优化目标或奖级预测。
+
+成对评审采用严格的 A/B、B/A 平衡顺序。两次初评结论不一致、出现平局、格式失败，
+或者机器发现两篇文档高度相似但存在局部差异时，自动交给独立 Gemini 评委复议；
+复议结论作为争议裁决，不与初评分数做简单平均。
 
 数学正确性与写作得分不能相互抵消。真实盲比结果优先于两个绝对分数之差；绝对分数
 排序只作为旧结果兼容的后备信号。
