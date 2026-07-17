@@ -109,6 +109,15 @@ gate2_delivery_override_active() {
         && ! gate2_passed_for_path "$PROJECT"
 }
 
+submission_hash_for_path() {
+    local project="$1" base="$2"
+    python3 "$FACTORY/scripts/submission_fingerprint.py" "$project" --base "$base" 2>/dev/null
+}
+
+final_submission_judge_current_for_path() {
+    python3 "$FACTORY/scripts/submission_fingerprint.py" "$1" --base "$2" --check 2>/dev/null
+}
+
 step8_5_verdict_for_path() {
     local proj_dir="$1"
     python3 "$FACTORY/scripts/workflow_state.py" step8_5-verdict "$proj_dir" 2>/dev/null || true
@@ -708,7 +717,8 @@ infer_step() {
     # quality gates still passing. A stale PDF/zip pair is not enough.
     if [[ -f "$FACTORY/papers/${base}_paper.pdf" && -f "$FACTORY/papers/${base}_submission.zip" ]] \
         && gate2_delivery_allowed_for_path "$P" \
-        && step8_5_passed_for_path "$P"; then
+        && step8_5_passed_for_path "$P" \
+        && final_submission_judge_current_for_path "$P" "$base"; then
         echo 16
         return
     fi
@@ -1418,6 +1428,133 @@ gate2_requests_reopen() {
     [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]
 }
 
+# Return the last completed step to resume from for a Gate-2 reopen.  The main
+# loop executes STEP+1, so math failures rewind through model construction
+# (Step 4), execution failures through solving (Step 5), and paper-only issues
+# through the revision step (Step 12).  Unknown model failures take the safer
+# math route instead of pretending that prose-only revision can repair them.
+gate2_resume_step() {
+    local verdict="${1:-$(gate2_verdict)}"
+    if [[ "$verdict" == "REOPEN_REVISION_TEXT" ]]; then
+        echo 11
+        return
+    fi
+    if [[ "$verdict" == "REOPEN_REVISION_MODEL" ]]; then
+        if grep -qiE '^Correctness vetoes:.*math|^Indeterminate roles:.*math|"vetoes"[[:space:]]*:[[:space:]]*\[[^]]*"math"|"indeterminate_roles"[[:space:]]*:[[:space:]]*\[[^]]*"math"' \
+                "$PROJECT/judge_evaluation.md" 2>/dev/null; then
+            echo 3
+        elif grep -qiE '^Correctness vetoes:.*execution|^Indeterminate roles:.*execution|"vetoes"[[:space:]]*:[[:space:]]*\[[^]]*"execution"|"indeterminate_roles"[[:space:]]*:[[:space:]]*\[[^]]*"execution"' \
+                "$PROJECT/judge_evaluation.md" 2>/dev/null; then
+            echo 4
+        elif grep -qiE '^Indeterminate roles:.*paper|"indeterminate_roles"[[:space:]]*:[[:space:]]*\[[^]]*"paper"' \
+                "$PROJECT/judge_evaluation.md" 2>/dev/null; then
+            echo 11
+        else
+            echo 3
+        fi
+        return
+    fi
+    echo 11
+}
+
+# Recover the durable Gate-2 state when the runner previously died after
+# writing judge_evaluation.md but before executing the in-memory reopen branch.
+# File-state inference deliberately recognizes the artifact as Step 13; this
+# recovery step restores the missing control transition before Step 14 starts.
+recover_pending_gate2_reopen() {
+    local verdict resume
+    verdict=$(gate2_verdict)
+    [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]] || return 0
+    gate2_delivery_override_active && return 0
+
+    # Final-submission judging has an independent repair budget.  Resolve its
+    # durable state before consulting the ordinary Step-13 markers, otherwise a
+    # crash can either consume the provisional repair or grant an extra final
+    # repair depending on the exact process death window.
+    if [[ -f "$(final_judge_reopen_pending_file)" ]]; then
+        touch "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)"
+        rm -f "$(final_judge_in_progress_file)"
+        resume=$(gate2_resume_step "$verdict")
+        STEP=$resume
+        log "  recovering pending final-submission reopen $verdict -> resume after Step $STEP"
+        _set_checkpoint_step "$STEP"
+        return 0
+    fi
+    if [[ -f "$(final_judge_in_progress_file)" ]]; then
+        if [[ -f "$(final_judge_reopened_once_file)" ]]; then
+            rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)"
+            block_gate2_after_reopen "$verdict"
+            return 1
+        fi
+        touch "$(final_judge_reopen_pending_file)" \
+              "$(final_judge_reopened_once_file)" \
+              "$(gate2_reopen_marker)"
+        rm -f "$(final_judge_in_progress_file)"
+        resume=$(gate2_resume_step "$verdict")
+        STEP=$resume
+        log "  recovered interrupted final-submission verdict $verdict -> resume after Step $STEP"
+        _set_checkpoint_step "$STEP"
+        return 0
+    fi
+
+    if [[ -f "$(gate2_reopen_marker)" ]]; then
+        resume=$(gate2_resume_step "$verdict")
+        STEP=$resume
+        log "  recovering pending Gate-2 reopen $verdict -> resume after Step $STEP"
+        _set_checkpoint_step "$STEP"
+        return 0
+    fi
+    if [[ -f "$(gate2_reopened_once_file)" ]]; then
+        block_gate2_after_reopen "$verdict"
+        return 1
+    fi
+
+    touch "$(gate2_reopened_once_file)" "$(gate2_reopen_marker)"
+    resume=$(gate2_resume_step "$verdict")
+    STEP=$resume
+    log "  recovered interrupted Gate-2 verdict $verdict -> resume after Step $STEP"
+    _set_checkpoint_step "$STEP"
+}
+
+final_judge_reopened_once_file() {
+    echo "$PROJECT/.final_judge_reopened_once"
+}
+
+final_judge_in_progress_file() {
+    echo "$PROJECT/.final_judge_in_progress"
+}
+
+final_judge_reopen_pending_file() {
+    echo "$PROJECT/.final_judge_reopen_pending"
+}
+
+final_judge_hash_file() {
+    echo "$PROJECT/judge_outputs/final_submission.sha256"
+}
+
+final_submission_hash() {
+    submission_hash_for_path "$PROJECT" "$BASE"
+}
+
+compile_final_submission_pdf() {
+    local pdf="$PROJECT/${BASE}_paper.pdf"
+    log "   Compiling the exact PDF that will be final-judged and delivered"
+    # A failed TeX run can leave a previously successful PDF in place.  Remove
+    # it first so failure can never fall through to delivery of stale bytes.
+    rm -f "$pdf"
+    if ! "$FACTORY/compile_paper.sh" "$PROJECT" "$BASE" >> "$PROJECT/logs/runner.log" 2>&1; then
+        rm -f "$pdf"
+        log "   ERROR: compile_paper.sh failed — no PDF will be judged or delivered"
+        return 1
+    fi
+    if [[ ! -s "$pdf" ]]; then
+        rm -f "$pdf"
+        log "   ERROR: compile_paper.sh returned success without a nonempty PDF"
+        return 1
+    fi
+    log "   Fresh final PDF compiled"
+}
+
 block_gate2_after_reopen() {
     local verdict="$1"
     log "   Step 13 verdict $verdict after prior reopen — blocking delivery"
@@ -1535,6 +1672,15 @@ fi
 if (( INFERRED != FROM_CP )); then
     log "  checkpoint disagrees with file-state ($FROM_CP vs $INFERRED) — correcting"
     _set_checkpoint_step "$INFERRED"
+fi
+
+# A Gate-2 verdict is a durable state transition, not merely a branch in the
+# process that happened to create the file.  Recover it before deciding that a
+# Step-13 artifact means Step 14 may begin.
+if (( STEP >= 13 && STEP < 16 )); then
+    if ! recover_pending_gate2_reopen; then
+        exit 1
+    fi
 fi
 
 # Write heartbeat immediately so the lock staleness check always has a
@@ -3004,7 +3150,7 @@ api_step_output_file() {
 api_step_context_files() {
     local step="$1"
     if [[ "$step" == 13 && -n "${JUDGE_PACKET_CONTEXT:-}" ]]; then
-        echo "$JUDGE_PACKET_CONTEXT"
+        echo "$JUDGE_PACKET_CONTEXT ${JUDGE_PACKET_CONTEXT%/context.txt}/manifest.json"
         return 0
     fi
     local common="problem/problem_brief.md model.md symbol_table.md assumption_ledger.md"
@@ -3056,6 +3202,7 @@ NOTE FROM THE RESEARCHER: $note"
             --prompt-file "$prompt_tmp" \
             --project "$PROJECT" \
             --output-file "$out_rel" \
+            --overwrite \
             "${ctx_args[@]}" \
             --timeout "$inner" \
     ) > "$api_log" 2>&1
@@ -3719,14 +3866,20 @@ run_independent_judge_role() {
         entry="$(get_model_entry "$model_id" 2>/dev/null || true)"
         IFS=$'\x1f' read -r backend _ <<<"$entry"
         case "$backend" in
-            openai|deepseek|gemini) ;;
+            openai|deepseek|gemini|claude) ;;
             *)
                 log "   Step 13 ${role}: skipping non-isolated backend ${model_id} (${backend:-unknown})"
                 continue
                 ;;
         esac
         log "   Step 13 ${role}: isolated judge via ${model_id}"
-        run_backend "$model_id" "$prompt_file" 3600 1800 || true
+        if [[ "$backend" == "claude" ]]; then
+            local _backend _model _effort _base_url _key_env
+            IFS=$'\x1f' read -r _backend _model _effort _base_url _key_env <<<"$entry"
+            run_api_model "$prompt_file" 3600 "$_model" "claude" "$_base_url" "$_key_env" || true
+        else
+            run_backend "$model_id" "$prompt_file" 3600 1800 || true
+        fi
         if [[ -s "$PROJECT/$output_rel" ]] \
             && head -1 "$PROJECT/$output_rel" | grep -q '^VERDICT:'; then
             unset JUDGE_ROLE_OUTPUT JUDGE_PACKET_CONTEXT
@@ -3763,25 +3916,148 @@ run_step_13() {
         --math "$PROJECT/judge_outputs/math.md" \
         --execution "$PROJECT/judge_outputs/execution.md" \
         --paper "$PROJECT/judge_outputs/paper.md" \
+        --math-manifest "$PROJECT/judge_packets/math/manifest.json" \
+        --execution-manifest "$PROJECT/judge_packets/execution/manifest.json" \
+        --paper-manifest "$PROJECT/judge_packets/paper/manifest.json" \
         --output "$PROJECT/judge_evaluation.md" \
         --json "$PROJECT/judge_outputs/aggregate.json" \
         --base "$BASE" >> "$PROJECT/logs/runner.log" 2>&1 || return 1
 
 }
 
+# Re-evaluate the actual submission after Step 14/15 have changed the abstract,
+# citations, tables, and prose.  A cached PASS is reusable only when all three
+# current role packets *and the compiled PDF* hash to the recorded value.  On a
+# cache miss we compile first, then judge and deliver those exact PDF bytes.
+run_final_submission_judge() {
+    local current_hash recorded_hash verdict post_judge_hash
+    current_hash=$(final_submission_hash)
+    recorded_hash=$(cat "$(final_judge_hash_file)" 2>/dev/null || true)
+
+    if [[ -n "$current_hash" && "$current_hash" == "$recorded_hash" ]] \
+        && [[ -s "$PROJECT/${BASE}_paper.pdf" ]]; then
+        if _ablate_on "$ABLATE_NO_JUDGE" \
+            && [[ -f "$PROJECT/judge_outputs/final_submission.ablation.json" ]]; then
+            rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
+                  "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)"
+            log "   Final submission ablation cache HIT (judge inputs and PDF unchanged)"
+            return 0
+        fi
+        if gate2_delivery_override_active; then
+            rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
+                  "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)"
+            log "   Final submission override cache HIT (judge inputs and PDF unchanged)"
+            return 0
+        fi
+        if gate2_passed_for_path "$PROJECT"; then
+            rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
+                  "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)"
+            log "   Final submission judge cache HIT (all role packets and PDF unchanged)"
+            return 0
+        fi
+    fi
+
+    compile_final_submission_pdf || return 1
+    current_hash=$(final_submission_hash)
+    if [[ -z "$current_hash" ]]; then
+        log "   ERROR: unable to fingerprint the freshly compiled final submission"
+        return 1
+    fi
+
+    if _ablate_on "$ABLATE_NO_JUDGE"; then
+        rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
+              "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)"
+        mkdir -p "$PROJECT/judge_outputs"
+        printf '%s\n' "$current_hash" > "$(final_judge_hash_file)"
+        printf '{"ablation":"ABLATE_NO_JUDGE","judge_executed":false}\n' \
+            > "$PROJECT/judge_outputs/final_submission.ablation.json"
+        log "   ABLATION: final submission judge disabled; compiled-PDF hash recorded without a quality PASS"
+        return 0
+    fi
+
+    if gate2_delivery_override_active; then
+        rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
+              "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)"
+        mkdir -p "$PROJECT/judge_outputs"
+        printf '%s\n' "$current_hash" > "$(final_judge_hash_file)"
+        log "   Final submission judge bypassed by explicit delivery override; compiled-PDF hash recorded"
+        return 0
+    fi
+
+    # A pending marker belongs to the repair that just completed.  Clear it
+    # before the final recheck, while retaining the once marker so a second
+    # REOPEN is blocked.  The in-progress marker closes the crash window after
+    # run_step_13 writes judge_evaluation.md but before this function branches.
+    rm -f "$(final_judge_reopen_pending_file)"
+    touch "$(final_judge_in_progress_file)"
+    log "   Running final submission judge on freshly compiled post-polish submission"
+    run_step_13 || return 1
+    verdict=$(gate2_verdict)
+    if [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]]; then
+        if [[ -f "$(final_judge_reopened_once_file)" ]]; then
+            rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
+                  "$(gate2_reopen_marker)"
+            log "   Final submission judge still requests $verdict after one repair cycle"
+            block_gate2_after_reopen "$verdict"
+            return 44
+        fi
+        # Persist the control transition before returning to the main loop.
+        # Recovery therefore sees final-specific state even if the runner dies
+        # immediately after judge_evaluation.md is written.
+        touch "$(final_judge_reopen_pending_file)" \
+              "$(final_judge_reopened_once_file)" \
+              "$(gate2_reopen_marker)"
+        rm -f "$(final_judge_in_progress_file)"
+        log "   Final submission judge verdict ${verdict:-MISSING} — reopen required"
+        return 43
+    fi
+    if [[ "$verdict" != "PASS" ]]; then
+        rm -f "$(final_judge_in_progress_file)"
+        log "   Final submission judge verdict ${verdict:-MISSING} is invalid"
+        return 1
+    fi
+
+    post_judge_hash=$(final_submission_hash)
+    if [[ -z "$post_judge_hash" || "$post_judge_hash" != "$current_hash" ]]; then
+        log "   Final submission inputs changed while judging — refusing to cache PASS"
+        return 1
+    fi
+
+    mkdir -p "$PROJECT/judge_outputs"
+    printf '%s\n' "$post_judge_hash" > "$(final_judge_hash_file)"
+    rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
+          "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)" \
+          "$PROJECT/.gate2_blocked"
+    log "   Final submission judge PASS"
+    return 0
+}
+
 run_step_14() { dispatch_step step14_abstract.txt 7200 1800 run_claude_then_codex; }
 run_step_15() { dispatch_step step15_polish.txt 10800 3600 run_codex_then_claude; }
 
 run_step_16() {
-    log "   Recompiling PDF"
-    if "$FACTORY/compile_paper.sh" "$PROJECT" "$BASE" >> "$PROJECT/logs/runner.log" 2>&1; then
-        log "   compile_paper.sh finished"
-    else
-        log "   WARNING: compile_paper.sh failed — copying existing PDF if present"
-    fi
+    run_final_submission_judge
+    local final_judge_rc=$?
+    (( final_judge_rc == 0 )) || return "$final_judge_rc"
+
     log "   Delivering final PDF"
     mkdir -p "$FACTORY/papers"
-    cp "$PROJECT/${BASE}_paper.pdf" "$FACTORY/papers/" 2>/dev/null || true
+    local delivery_tmp="$FACTORY/papers/.${BASE}_paper.pdf.tmp"
+    rm -f "$delivery_tmp"
+    if ! cp "$PROJECT/${BASE}_paper.pdf" "$delivery_tmp"; then
+        rm -f "$delivery_tmp"
+        log "   ERROR: failed to copy the reviewed final PDF"
+        return 1
+    fi
+    if ! mv -f "$delivery_tmp" "$FACTORY/papers/${BASE}_paper.pdf"; then
+        rm -f "$delivery_tmp"
+        log "   ERROR: failed to publish the reviewed final PDF"
+        return 1
+    fi
+    if ! cmp -s "$PROJECT/${BASE}_paper.pdf" "$FACTORY/papers/${BASE}_paper.pdf"; then
+        log "   ERROR: delivered PDF bytes differ from the final-judged PDF"
+        return 1
+    fi
     if [[ -x "$FACTORY/scripts/package_submission.py" ]]; then
         log "   Creating submission bundle"
         if "$FACTORY/scripts/package_submission.py" "$PROJECT" "$BASE" "$FACTORY/papers/${BASE}_submission.zip" >> "$PROJECT/logs/runner.log" 2>&1; then
@@ -3938,6 +4214,18 @@ while (( STEP < 16 )); do
             break
         fi
 
+        if (( NEXT == 16 && STEP_RC == 43 )); then
+            verdict=$(gate2_verdict)
+            STEP=$(gate2_resume_step "$verdict")
+            log "   Final submission judge verdict $verdict — resuming after Step $STEP"
+            _set_checkpoint_step "$STEP"
+            echo "FINAL_JUDGE_REOPEN:$verdict $(date +%s)" > "$PROJECT/.heartbeat"
+            break
+        fi
+        if (( NEXT == 16 && STEP_RC == 44 )); then
+            exit 1
+        fi
+
         # Verify step completed regardless of exit code.
         # First check file-state (infer_step), then semantic validation.
         if verify_step "$NEXT" && verify_step_output "$NEXT"; then
@@ -3962,8 +4250,8 @@ while (( STEP < 16 )); do
                     if [[ ! -f "$(gate2_reopened_once_file)" ]]; then
                         touch "$(gate2_reopened_once_file)"
                         touch "$(gate2_reopen_marker)"
-                        log "   Step 13 verdict $verdict — reopening Step 12 once"
-                        STEP=11
+                        STEP=$(gate2_resume_step "$verdict")
+                        log "   Step 13 verdict $verdict — reopening after Step $STEP once"
                         echo "$STEP $(date +%s)" > "$PROJECT/.heartbeat"
                         _set_checkpoint_step "$STEP"
                         break
@@ -4052,7 +4340,9 @@ done
 if (( PROJECT_KILLED )); then
     log "Project terminated by the viability gate. See kill_memo.md."
     rm -f "$PROJECT/.step11_reopen_to_step10" "$PROJECT/.step11_reopened_once" \
-          "$PROJECT/.gate2_reopen_to_revision" "$PROJECT/.gate2_reopened_once" 2>/dev/null || true
+          "$PROJECT/.gate2_reopen_to_revision" "$PROJECT/.gate2_reopened_once" \
+          "$PROJECT/.final_judge_reopened_once" "$PROJECT/.final_judge_in_progress" \
+          "$PROJECT/.final_judge_reopen_pending" 2>/dev/null || true
     log "========================================"
     exit 0
 fi
@@ -4060,7 +4350,9 @@ fi
 log "All 16 steps complete. Paper delivered."
 
 rm -f "$PROJECT/.step11_reopen_to_step10" "$PROJECT/.step11_reopened_once" \
-      "$PROJECT/.gate2_reopen_to_revision" "$PROJECT/.gate2_reopened_once" 2>/dev/null || true
+      "$PROJECT/.gate2_reopen_to_revision" "$PROJECT/.gate2_reopened_once" \
+      "$PROJECT/.final_judge_reopened_once" "$PROJECT/.final_judge_in_progress" \
+      "$PROJECT/.final_judge_reopen_pending" 2>/dev/null || true
 
 # Move completed project from ongoing/ to complete/
 DEST="$FACTORY/complete/$BASE"

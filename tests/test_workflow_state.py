@@ -13,6 +13,17 @@ def write_zip(path: Path) -> None:
         zf.writestr("paper.pdf", b"pdf")
 
 
+def mark_final_judge_current(project: Path, base: str) -> None:
+    from scripts.submission_fingerprint import submission_fingerprint
+
+    write_file(project / f"{base}_paper.tex", "\\begin{document}\nfinal\n\\end{document}\n")
+    write_file(project / f"{base}_paper.pdf", "pdf\n")
+    write_file(
+        project / "judge_outputs" / "final_submission.sha256",
+        submission_fingerprint(project, base) + "\n",
+    )
+
+
 def test_verdict_parser_uses_first_verdict_line(tmp_path):
     path = tmp_path / "judge_evaluation.md"
     write_file(path, "notes\nVERDICT: PASS\r\nVERDICT: REOPEN_REVISION_TEXT\n")
@@ -42,6 +53,7 @@ def test_delivery_artifacts_and_step16_ready(tmp_path):
     write_file(project / "anchor_figure_plan.md", "# anchors\n")
     write_file(project / "entry_gate.md", "VERDICT: PASS\n")
     write_file(project / "judge_evaluation.md", "VERDICT: PASS\n")
+    mark_final_judge_current(project, "demo")
     write_file(root / "papers" / "demo_paper.pdf", "pdf\n")
     write_zip(root / "papers" / "demo_submission.zip")
 
@@ -49,6 +61,9 @@ def test_delivery_artifacts_and_step16_ready(tmp_path):
 
     assert delivery_artifacts_ready(root, "demo") is True
     assert step16_ready(project, root, "demo") is True
+
+    write_file(project / "demo_paper.tex", "\\begin{document}\nchanged after judging\n\\end{document}\n")
+    assert step16_ready(project, root, "demo") is False
 
 
 def test_gate2_delivery_override_allows_step16_without_faking_pass(tmp_path):
@@ -63,6 +78,7 @@ def test_gate2_delivery_override_allows_step16_without_faking_pass(tmp_path):
         '{"enabled": true, "scope": "continue_to_step16", "reason": "user_requested"}\n',
     )
     write_file(root / "papers" / "demo_paper.pdf", "pdf\n")
+    mark_final_judge_current(project, "demo")
     write_zip(root / "papers" / "demo_submission.zip")
 
     from scripts.workflow_state import (

@@ -5,17 +5,33 @@
 - 禁止读取 `evaluation.md`、`judge_evaluation.md`、`review_comments.md`、`revision_summary.md` 或其他评委输出。
 - 不得修改代码、结果或校验报告。
 
-重点检查：求解入口是否真实可运行，结果是否来自当前代码，日志和结果是否新鲜，规范化结果是否完整，是否存在 stub/伪造/修复性手填，质量契约与数字/符号/不变量校验是否通过，失败分支是否被隐藏。
+重点检查：求解入口与当前代码是否一致，结果是否可追溯到当前执行，日志和结果是否新鲜，规范化结果是否完整，是否存在 stub、伪造或修复性手填，质量契约与数字、符号、不变量校验是否通过，失败分支是否被隐藏。
 
-将完整结果写入 `__PROJECT_PATH__/judge_outputs/execution.md`。输出必须以以下两行开头：
+将结果写入 `__PROJECT_PATH__/judge_outputs/execution.md`。文件必须严格满足以下协议：
 
-VERDICT: PASS | FAIL
-FATAL_FLAWS: <非负整数>
+1. 第一行只能是 `VERDICT: PASS`、`VERDICT: FAIL` 或 `VERDICT: INDETERMINATE`。
+2. 第二行起只能有一个合法 JSON 对象；不得使用 Markdown 代码围栏，不得在 JSON 前后添加解释。
+3. JSON 必须且只能包含以下字段：
 
-随后给出：
-1. 已核验的执行链；
-2. 每个致命问题的文件与具体依据；
-3. 非致命可复现性风险；
-4. 最终结论。
+{
+  "schema_version": "judge-role-v1",
+  "role": "execution",
+  "verdict": "PASS | FAIL | INDETERMINATE",
+  "fatal_flaws": 0,
+  "evidence": [
+    {
+      "claim": "被核验的具体计算或可复现性主张",
+      "location": "context.txt 中可复查的文件名及行号/结果键/报告项",
+      "finding": "该证据如何支持或否定主张",
+      "severity": "support | fatal | risk"
+    }
+  ],
+  "limitations": ["审计覆盖不到或无法实际执行的具体事项"],
+  "conclusion": "简明结论"
+}
 
-只要存在一个无法由当前可执行证据重现的主要数值结论，必须 `VERDICT: FAIL`。缺少关键日志、规范化结果或机器报告时也必须 FAIL。
+判定约束：
+- `PASS`：`fatal_flaws` 必须为 0，且至少有一条 `support` 证据；只有当前证据链足以追溯主要计算结论时才能 PASS。
+- `FAIL`：已有证据证实主要数值不可由当前代码/结果链产生，或证实存在 stub、伪造、手填等致命问题；每个致命错误必须各有一条 `fatal` 证据，数量与 `fatal_flaws` 完全相等。
+- `INDETERMINATE`：缺少关键日志、规范化结果、机器报告，或当前审计环境不能实际执行而静态材料又不足；`fatal_flaws` 必须为 0，`limitations` 必须写明缺口。缺证据不等于已证实失败。
+- 第一行 verdict 必须与 JSON 中的 `verdict` 完全一致。所有 evidence 必须给出可定位依据，不能把项目自报 PASS 当成独立证据。

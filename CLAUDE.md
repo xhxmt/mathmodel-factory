@@ -159,10 +159,10 @@ See `STEPS.md` for exact outputs and line/file gates. In short:
 - Step 10: Gate 1 numerical and code consistency check.
 - Step 11: constructive review.
 - Step 12: revision and archive of the pre-revision draft.
-- Step 13: Gate 2 judge simulation via `judge_evaluation.md` verdict.
+- Step 13: provisional Gate 2 via isolated math, execution, and paper roles.
 - Step 14: abstract replacement.
-- Step 15: citation audit, table/prose polish, de-robotification.
-- Step 16: compile, copy PDF to `papers/`, cleanup, move project to `complete/`.
+- Step 15: citation audit, table/prose polish, de-robotification; these edits invalidate the provisional judge fingerprint.
+- Step 16: compile a fresh PDF, rerun Gate 2 on the post-Step-15 three-role text packets, bind the PASS, prompts, evaluator implementation, Step-13 model routing, and those exact PDF bytes to `judge_outputs/final_submission.sha256`, then write the `final_judge_v3` delivery contract, copy, package, cleanup, and move to `complete/`. The hash proves delivery consistency; the automated reviewer does not inspect rendered PDF pixels, so layout and visual quality require machine preflight or human review. Only an unchanged evaluator+packet+PDF fingerprint may reuse the final PASS; compilation failure stops delivery.
 
 Gate 2 verdict tokens in modeling mode are:
 
@@ -170,7 +170,9 @@ Gate 2 verdict tokens in modeling mode are:
 - `VERDICT: REOPEN_REVISION_TEXT`
 - `VERDICT: REOPEN_REVISION_MODEL`
 
-The runner allows one reopen cycle and then proceeds by policy to avoid loops.
+Math and execution use the hard three-valued state `PASS / FAIL / INDETERMINATE`. Paper six-dimension scores are conditional: they are comparable only when both hard roles PASS and every role output satisfies `judge-role-v1`. A hard FAIL, missing evidence, malformed output, or INDETERMINATE state must not be averaged into a score.
+
+The runner allows one repair cycle. If the reopened or final-submission judge still does not PASS, normal delivery is blocked. Legacy Markdown scorecards are `LEGACY_UNVERIFIED` and are never comparison-ready under the current contract.
 
 ## Cross-Step State
 
@@ -184,7 +186,8 @@ Important project files include:
 - `solve_log.md`, `results/**`: numerical evidence.
 - `sensitivity_report.md`, `evaluation.md`, `visualization_log.md`: downstream evidence.
 - `audit_issue_ledger.md`: issue status tracker. Blocking issues must not be silently dropped.
-- `judge_evaluation.md`: Gate 2 control file.
+- `judge_evaluation.md`: current `judge-aggregate-v1` Gate 2 control file.
+- `judge_packets/**`, `judge_outputs/**`: isolated evidence manifests, strict role outputs, aggregate JSON, and final-submission fingerprint. Each manifest carries `judge-packet-completeness-v1`; required evidence that is missing, truncated, or omitted forces the role to `INDETERMINATE`, while non-critical truncation must remain visible in `limitations`.
 
 Protected assumptions or issues must not be deleted or downgraded without a
 clear evidence-backed reason.

@@ -166,10 +166,10 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 - Step 10：门禁1 - 数值与代码一致性检查。
 - Step 11：建设性审稿。
 - Step 12：论文修订。
-- Step 13：门禁2 - 模拟评委打分。
+- Step 13：门禁2 - 数学有效性、执行证据和论文质量三角色隔离评审（此时为预提交结果）。
 - Step 14：撰写摘要。
-- Step 15：引用、图表及排版润色。
-- Step 16：编译、打包、清理目录，并将项目移至 `complete/`。
+- Step 15：引用、图表及排版润色；任何修改都会使 Step 13 的预提交结果失效。
+- Step 16：缓存未命中时先编译最终 PDF，再对 Step 15 后的三角色文本 packet 重新执行 Gate 2，并把通过结果绑定到该 PDF 的精确字节；自动评委不读取 PDF 画面，视觉质量另行检查。之后打包、清理并移至 `complete/`。
 
 完整的详细步骤要求，请参阅 `STEPS.md`，这也是 `run_paper.sh --infer-step` 所遵循的文件状态契约。
 
@@ -178,7 +178,7 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 - 文件状态具有最高权威。`run_paper.sh --infer-step <project_dir>` 会检查实际产出的文件，并且修复并对齐检查点文本。
 - 当 `modeling_guide.md` 和遗留的 `analysis_guide.md` 同时存在时，以 `modeling_guide.md` 为准。
 - 已完成的项目将从 `ongoing/` 移至 `complete/`。
-- Step 16 会将最终版本的 PDF 复制到 `papers/`，生成 `papers/<base>_submission.zip` 文件，并写入项目内 `delivery_manifest.json`。
+- Step 16 在缓存未命中时先成功编译新 PDF，再以当前数学 / 执行 / 论文三角色文本 packet 执行最终 Gate 2；`judge_outputs/final_submission.sha256` 同时绑定 packet、角色 prompts、聚合 / 调用实现、Step 13 模型路由与该 PDF 的精确字节，证明交付物和评审契约版本一致。它不表示自动评委观察过 PDF 渲染或图片像素。编译失败会立即停止，不会复制旧 PDF。之后才复制到 `papers/`、生成 `papers/<base>_submission.zip` 并按 `final_judge_v3` 契约写入 `delivery_manifest.json`。
 - `complete/` 是历史交付目录，不等价于“符合当前最新契约”。使用 `python3 scripts/audit_complete_projects.py --write-manifests` 生成 `complete/_validation_index.json`，将项目分为 `CURRENT_PASS`、`LEGACY_DELIVERED` 和 `INVALID_OR_INCOMPLETE`。
 
 ## 评测与消融实验
@@ -187,13 +187,16 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 
 ### 外部评估系统
 
-**`evaluation/`** 目录提供独立的论文质量评估框架：
+**`evaluation/`** 目录提供独立的有效性门禁与条件论文质量评估框架：
 
-- 使用校准的外部 LLM 评委（默认 `deepseek-chat`，可配置为 Claude Opus/Sonnet/Gemini）
-- 在 6 个维度上评分：模型合理性、求解正确性、创新性、写作清晰度、结果说服力、灵敏度分析
-- 支持重复采样（K=3）和方差分析，确保评估稳定性
-- 与流水线内部 Step 13 评委解耦，消除自我偏好（self-preference bias）
-- 输出 JSON 同时包含 `structural` 硬门禁证据与 `llm_score` 软评分，横向比较时不要只看单个总分。
+- 数学审计和执行审计使用 `PASS / FAIL / INDETERMINATE` 三值硬门；任一非 PASS 都不能被论文分数抵消。
+- 只有两个硬角色 PASS 后，才解释六维论文质量：模型呈现、求解叙事、创新性、写作清晰度、结果说服力、敏感性与局限。
+- 自动 paper 角色只评价 LaTeX / 文本可观察的结构、论证、图题 / 表题及正文中的图表叙事；分页、字体、颜色、图像清晰度、裁切和真实版式不进入当前自动分数，必须由编译 / 版式机器预检或人工查看最终 PDF。
+- 角色输出和聚合结果使用严格版本化 JSON；缺失、格式错误或证据不足均降为 `INDETERMINATE`。
+- 每个 packet manifest 还执行确定性的 `judge-packet-completeness-v1`：paper 必须完整包含最终论文与主问题文本；math 必须完整包含问题、最终论文和主要数学阐述；execution 必须完整包含最终论文、主要结果、实现代码与执行轨迹。任一关键项被截断 / 省略都会由聚合器强制将对应角色改为 `INDETERMINATE`，模型自身不能宣告 PASS 绕过。非关键大型代码可截断，但会在 manifest `limitations` 中披露。
+- 默认 K=3 只用于重复执行同一评审契约并暴露不一致。当前 API 路径使用 temperature=0，因此这些运行不是独立统计重复，min/max spread 也不是置信区间。
+- `proxy_reliability` 只诊断 paper-only 配对 harness；它不能自动赋予运行时评分可比性。`comparison_ready_proxy/human` 还要求 manifest 明确验证精确的 `judge-role-v1` 与 `modeling-factory-judge-packet-v2` 构造，并分别具备代理或人类真值支持。人工校准未 READY 前，不得解释绝对分或预测奖级。
+- 旧 Markdown 评分卡统一为 `LEGACY_UNVERIFIED`，只能诊断查看，不能与当前 `judge-aggregate-v1` 结果横比。
 
 ```bash
 # 评估已完成的项目
@@ -211,14 +214,16 @@ python3 experiments/compare_ablations.py \
 
 **`experiments/`** 目录提供系统化的机制验证工具：
 
-通过环境变量选择性关闭流水线机制，量化各组件对最终质量的贡献：
+通过环境变量选择性关闭流水线机制，探索各组件可能造成的差异。下表是旧评委契约下、单题且每条件仅一次生成的**历史观察值**，已降级为 `LEGACY_UNVERIFIED`，不能证明因果贡献或统计显著性：
 
-| 消融开关 | 关闭的机制 | 已验证影响 (CUMCM 2024 B题) |
+| 消融开关 | 关闭的机制 | 历史观察差值（不可作当前比较） |
 |---|---|---|
-| `ABLATE_NO_METHOD_LIB=1` | 方法库引用硬门 | **-6.3分** (基础设施级) |
-| `ABLATE_NO_JUDGE=1` | Step 13 评委 + reopen循环 | **-3.4分** (质量门禁) |
-| `ABLATE_NO_INNOVATION_PROTECT=1` | PROTECTED标记保护 | **-2.7分** (创新性-0.7) |
-| `ABLATE_NO_CONSULTATION=1` | Step 1 web文献检索 | **-1.7分** (非瓶颈) |
+| `ABLATE_NO_METHOD_LIB=1` | 方法库引用硬门 | -6.3（历史读数） |
+| `ABLATE_NO_JUDGE=1` | Step 13 评委 + reopen循环 | -3.4（历史读数） |
+| `ABLATE_NO_INNOVATION_PROTECT=1` | PROTECTED标记保护 | -2.7（历史读数） |
+| `ABLATE_NO_CONSULTATION=1` | Step 1 web文献检索 | -1.7（历史读数） |
+
+重新形成可用消融结论至少需要：当前三角色 schema、最终稿指纹一致、人工校准可比性、多题目、每条件多个生成重复，以及将生成方差与评委重复分开。
 
 **快速启动消融实验**：
 

@@ -1,10 +1,47 @@
 {
-  "version": 1,
+  "version": 2,
   "path_root": "..",
+  "calibration_results_dir": "evaluation/results/calibration",
+  "calibration_contract": {
+    "schema_version": 3,
+    "prompt_schema_version": 1,
+    "models": ["gemini-3.1-pro-preview"],
+    "identity_required": ["model", "prompt_sha256", "prompt_template_sha256", "input_fingerprint", "result_sha256"]
+  },
   "policy": {
     "mode": "offline_only",
     "score_use": "pairwise_ordering_primary_absolute_score_secondary",
     "runtime_answer_keys": "forbidden"
+  },
+  "readiness_policy": {
+    "min_pairwise_accuracy": 0.75,
+    "min_direct_pair_coverage": 1.0,
+    "max_malformed_rate": 0.1,
+    "min_fatal_flaw_detection_rate": 1.0,
+    "min_fatal_sensitivity": 1.0,
+    "min_fatal_specificity": 0.8,
+    "min_fatal_precision": 0.8,
+    "max_fatal_false_positive_rate": 0.2
+  },
+  "problem_contexts": {
+    "CUMCM-2024-A": {
+      "path": "benchmark/cumcm_2024/A题/A题.md",
+      "max_bytes": 20000,
+      "review_focus": [
+        "逐问检查盘入、碰撞、调头与速度约束是否对应原题",
+        "离散采样结论必须说明加密或连续事件验证",
+        "启发式算法不得无证据宣称唯一全局最优"
+      ]
+    },
+    "CUMCM-2024-B": {
+      "path": "benchmark/cumcm_2024/B题/B题.md",
+      "max_bytes": 20000,
+      "review_focus": [
+        "抽样方案必须同时给出样本量和接收或拒收规则",
+        "期望利润必须遵守退货、调换、拆解和重复购买的资金流守恒",
+        "有限离散决策空间中的启发式结果应与穷举或最优性证据核对"
+      ]
+    }
   },
   "papers": [
     {
@@ -13,7 +50,9 @@
       "category": "real_awarded",
       "award_tier": "national_first",
       "paper_path": "reference_papers/national_1_B/national1_24B_production.pdf",
-      "result_path": "evaluation/results/national_1_B_eval.json"
+      "ocr_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": "evaluation/results/national_1_B_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_national1_2024b.json"
     },
     {
       "id": "provincial1_2024b",
@@ -21,7 +60,8 @@
       "category": "real_awarded",
       "award_tier": "provincial_first",
       "paper_path": "reference_papers/provincial_1/henryers_24B_provincial1.pdf",
-      "result_path": "evaluation/results/ext_sheng1_2024b_eval.json"
+      "result_path": "evaluation/results/ext_sheng1_2024b_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_provincial1_2024b.json"
     },
     {
       "id": "provincial3_2024b",
@@ -29,37 +69,55 @@
       "category": "real_awarded",
       "award_tier": "provincial_third",
       "paper_path": "reference_papers/provincial_3/cherzing_24B_provincial3.pdf",
-      "result_path": "evaluation/results/provincial_3_2024b_eval.json"
+      "ocr_path": "reference_papers/provincial_3/ocr/full.md",
+      "result_path": "evaluation/results/provincial_3_2024b_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_provincial3_2024b.json"
     },
     {
       "id": "generated_2024b",
       "problem_id": "CUMCM-2024-B",
       "category": "generated_baseline",
       "award_tier": null,
-      "paper_path": "complete/test_cumcm2024b/test_cumcm2024b_paper.pdf",
+      "paper_path": "papers/test_cumcm2024b_paper.pdf",
       "result_path": "evaluation/results/test_cumcm2024b_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024b.json",
       "expected_fatal_flaw": false
     },
     {
-      "id": "generated_2024a_known_fatal",
+      "id": "generated_2024a_repaired",
       "problem_id": "CUMCM-2024-A",
       "category": "generated_baseline",
       "award_tier": null,
       "paper_path": "complete/test_cumcm2024a_polished/test_cumcm2024a_paper.pdf",
       "result_path": "evaluation/results/test_cumcm2024a_eval.json",
-      "expected_fatal_flaw": true
+      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024a_repaired.json",
+      "expected_fatal_flaw": false,
+      "label_note": "The current PDF contains the later P3/P5 dense-sampling corrections; the former known-fatal label was stale."
     }
   ],
   "pairs": [
     {
+      "id": "national1_vs_provincial1_2024b",
       "higher": "national1_2024b",
       "lower": "provincial1_2024b",
-      "basis": "same_problem_award_order"
+      "basis": "same_problem_award_order",
+      "result_path": "evaluation/results/calibration/pair_national1_vs_provincial1_2024b.json"
     },
     {
+      "id": "provincial1_vs_provincial3_2024b",
       "higher": "provincial1_2024b",
       "lower": "provincial3_2024b",
-      "basis": "same_problem_award_order"
+      "basis": "same_problem_award_order",
+      "result_path": "evaluation/results/calibration/pair_provincial1_vs_provincial3_2024b.json"
+    },
+    {
+      "id": "provincial3_vs_generated_2024b",
+      "higher": "provincial3_2024b",
+      "lower": "generated_2024b",
+      "basis": "real_award_chain_vs_ordinary_generated_baseline",
+      "readiness_eligible": false,
+      "label_note": "No independent human judgment establishes that this non-submitted generated paper must rank below the provincial-third paper.",
+      "result_path": "evaluation/results/calibration/pair_provincial3_vs_generated_2024b.json"
     }
   ]
 }

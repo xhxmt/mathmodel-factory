@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "path_root": "..",
+  "calibration_results_dir": "evaluation/results/proxy_calibration",
+  "readiness_kind": "proxy",
+  "calibration_contract": {
+    "schema_version": 3,
+    "prompt_schema_version": 1,
+    "models": ["deepseek-chat"],
+    "identity_required": ["model", "prompt_sha256", "prompt_template_sha256", "input_fingerprint", "result_sha256"]
+  },
+  "readiness_policy": {
+    "min_pairwise_accuracy": 0.9,
+    "min_correctness_accuracy": 0.9,
+    "min_writing_accuracy": 0.9,
+    "min_direct_pair_coverage": 1.0,
+    "max_malformed_rate": 0.1,
+    "min_fatal_flaw_detection_rate": 0.8,
+    "min_fatal_sensitivity": 0.8,
+    "min_fatal_specificity": 0.8,
+    "min_fatal_precision": 0.8,
+    "max_fatal_false_positive_rate": 0.2
+  },
+  "problem_contexts": {
+    "CUMCM-2024-A": {"path":"benchmark/cumcm_2024/A题/A题.md","max_bytes":16000},
+    "CUMCM-2024-B": {"path":"benchmark/cumcm_2024/B题/B题.md","max_bytes":16000}
+  },
+  "papers": [
+    {"id":"n1a_clean","problem_id":"CUMCM-2024-A","paper_path":"reference_papers/national_1_A/ocr/full.md","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false},
+    {"id":"n1a_no_symbols","problem_id":"CUMCM-2024-A","paper_path":"reference_papers/national_1_A/ocr/full.md","proxy_perturbation":"no_symbols","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false},
+    {"id":"n1a_numeric_contradiction","problem_id":"CUMCM-2024-A","paper_path":"reference_papers/national_1_A/ocr/full.md","proxy_perturbation":"numeric_contradiction","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":true},
+    {"id":"n1a_unsupported_optimality","problem_id":"CUMCM-2024-A","paper_path":"reference_papers/national_1_A/ocr/full.md","proxy_perturbation":"unsupported_optimality","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":true},
+    {"id":"n1a_robotic_repetition","problem_id":"CUMCM-2024-A","paper_path":"reference_papers/national_1_A/ocr/full.md","proxy_perturbation":"robotic_repetition","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false},
+    {"id":"n1a_missing_answers","problem_id":"CUMCM-2024-A","paper_path":"reference_papers/national_1_A/ocr/full.md","proxy_perturbation":"missing_answers","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false},
+
+    {"id":"n1b_clean","problem_id":"CUMCM-2024-B","paper_path":"reference_papers/national_1_B/ocr/full.md","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false},
+    {"id":"n1b_no_sensitivity","problem_id":"CUMCM-2024-B","paper_path":"reference_papers/national_1_B/ocr/full.md","proxy_perturbation":"no_sensitivity","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false},
+    {"id":"n1b_no_symbols","problem_id":"CUMCM-2024-B","paper_path":"reference_papers/national_1_B/ocr/full.md","proxy_perturbation":"no_symbols","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false},
+    {"id":"n1b_numeric_contradiction","problem_id":"CUMCM-2024-B","paper_path":"reference_papers/national_1_B/ocr/full.md","proxy_perturbation":"numeric_contradiction","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":true},
+    {"id":"n1b_unsupported_optimality","problem_id":"CUMCM-2024-B","paper_path":"reference_papers/national_1_B/ocr/full.md","proxy_perturbation":"unsupported_optimality","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":true},
+    {"id":"n1b_robotic_repetition","problem_id":"CUMCM-2024-B","paper_path":"reference_papers/national_1_B/ocr/full.md","proxy_perturbation":"robotic_repetition","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false},
+    {"id":"n1b_missing_answers","problem_id":"CUMCM-2024-B","paper_path":"reference_papers/national_1_B/ocr/full.md","proxy_perturbation":"missing_answers","label_type":"DETERMINISTIC_PROXY","expected_fatal_flaw":false}
+  ],
+  "pairs": [
+    {"id":"n1a_no_symbols","higher":"n1a_clean","lower":"n1a_no_symbols","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1a_clean","expected_correctness_winner":"n1a_clean","expected_writing_winner":"n1a_clean","result_path":"evaluation/results/proxy_calibration/pair_n1a_no_symbols.json"},
+    {"id":"n1a_numeric_contradiction","higher":"n1a_clean","lower":"n1a_numeric_contradiction","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1a_clean","expected_correctness_winner":"n1a_clean","expected_writing_winner":"TIE","result_path":"evaluation/results/proxy_calibration/pair_n1a_numeric_contradiction.json"},
+    {"id":"n1a_unsupported_optimality","higher":"n1a_clean","lower":"n1a_unsupported_optimality","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1a_clean","expected_correctness_winner":"n1a_clean","expected_writing_winner":"TIE","result_path":"evaluation/results/proxy_calibration/pair_n1a_unsupported_optimality.json"},
+    {"id":"n1a_robotic_repetition","higher":"n1a_clean","lower":"n1a_robotic_repetition","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1a_clean","expected_correctness_winner":"TIE","expected_writing_winner":"n1a_clean","result_path":"evaluation/results/proxy_calibration/pair_n1a_robotic_repetition.json"},
+    {"id":"n1a_missing_answers","higher":"n1a_clean","lower":"n1a_missing_answers","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1a_clean","expected_correctness_winner":"n1a_clean","expected_writing_winner":"n1a_clean","result_path":"evaluation/results/proxy_calibration/pair_n1a_missing_answers.json"},
+
+    {"id":"n1b_no_sensitivity","higher":"n1b_clean","lower":"n1b_no_sensitivity","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1b_clean","expected_correctness_winner":"n1b_clean","expected_writing_winner":"n1b_clean","result_path":"evaluation/results/proxy_calibration/pair_n1b_no_sensitivity.json"},
+    {"id":"n1b_no_symbols","higher":"n1b_clean","lower":"n1b_no_symbols","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1b_clean","expected_correctness_winner":"n1b_clean","expected_writing_winner":"n1b_clean","result_path":"evaluation/results/proxy_calibration/pair_n1b_no_symbols.json"},
+    {"id":"n1b_numeric_contradiction","higher":"n1b_clean","lower":"n1b_numeric_contradiction","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1b_clean","expected_correctness_winner":"n1b_clean","expected_writing_winner":"TIE","result_path":"evaluation/results/proxy_calibration/pair_n1b_numeric_contradiction.json"},
+    {"id":"n1b_unsupported_optimality","higher":"n1b_clean","lower":"n1b_unsupported_optimality","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1b_clean","expected_correctness_winner":"n1b_clean","expected_writing_winner":"TIE","result_path":"evaluation/results/proxy_calibration/pair_n1b_unsupported_optimality.json"},
+    {"id":"n1b_robotic_repetition","higher":"n1b_clean","lower":"n1b_robotic_repetition","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1b_clean","expected_correctness_winner":"TIE","expected_writing_winner":"n1b_clean","result_path":"evaluation/results/proxy_calibration/pair_n1b_robotic_repetition.json"},
+    {"id":"n1b_missing_answers","higher":"n1b_clean","lower":"n1b_missing_answers","label_type":"DETERMINISTIC_PROXY","expected_overall_winner":"n1b_clean","expected_correctness_winner":"n1b_clean","expected_writing_winner":"n1b_clean","result_path":"evaluation/results/proxy_calibration/pair_n1b_missing_answers.json"}
+  ]
+}

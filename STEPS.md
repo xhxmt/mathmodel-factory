@@ -193,19 +193,27 @@ Produce:
 ### Step 13: Gate 2 — Judge Simulation
 
 Produce:
-- `judge_evaluation.md` — three independent judge agents grade the paper against the CUMCM official rubric. Each judge writes: 6 dimension scores (建模合理性 20% / 求解正确性 20% / 创新性 20% / 写作清晰度 15% / 结果说服力 15% / 灵敏度分析 10%), per-dimension comments, top-3 improvement suggestions. Aggregate score + per-dimension mean reported at top.
+- `judge_packets/{math,execution,paper}/` — three isolated, hash-addressed evidence packets. Paper text and project artifacts are untrusted data; each packet records included / truncated / omitted files plus a deterministic `judge-packet-completeness-v1` decision.
+- `judge_outputs/{math,execution,paper}.md` — strict `judge-role-v1` envelopes. Math and execution auditors return one of `PASS / FAIL / INDETERMINATE`; missing evidence is `INDETERMINATE`, not an inferred PASS or FAIL.
+- `judge_evaluation.md` — strict `judge-aggregate-v1` control file. The paper reviewer reports six conditional quality dimensions: 模型呈现 20 / 求解叙事 20 / 创新性 20 / 写作清晰度 15 / 结果说服力 15 / 敏感性与局限 10. These dimensions describe presentation quality; they do not replace the hard validity auditors.
+- The automated paper role sees only packetized LaTeX / text. It may assess structure, prose, captions, labels, and how the text uses figures/tables as evidence; it MUST NOT claim to inspect rendered pagination, fonts, colors, image sharpness, cropping, overlap, or visual aesthetics. Those require compile/layout checks or human PDF review and are outside the current automated score.
 - One verdict line at the very top:
-  - `VERDICT: PASS` (aggregate ≥ threshold, no BLOCKING gaps) — continue to Step 14
-  - `VERDICT: REOPEN_REVISION_TEXT` (writing / formatting issues only — rewind to Step 12 once, gated by `.step13_reopened_once`)
-  - `VERDICT: REOPEN_REVISION_MODEL` (substantive modeling / solving issues — rewind to Step 12 once, may cascade rerun of Step 5/6 outputs)
+  - `VERDICT: PASS` — both hard auditors PASS and the schema-valid paper score is at least the configured threshold; continue to Step 14.
+  - `VERDICT: REOPEN_REVISION_TEXT` — both hard auditors PASS, but the paper-quality review requires revision; rewind to Step 12 once.
+  - `VERDICT: REOPEN_REVISION_MODEL` — either hard auditor FAILs, any role is INDETERMINATE / malformed, or substantive modeling evidence is missing; rewind to the responsible modeling / solving step through the Gate-2 resume policy.
+
+**Non-compensatory scoring contract**:
+- Math and execution are hard validity gates. A high paper score cannot average away a correctness failure.
+- Packet completeness is a pre-model hard gate enforced again during aggregation. Paper requires the complete final paper and primary problem statement; math requires the complete problem statement, final paper, and primary mathematical exposition; execution requires the complete final paper, primary results, primary implementation, and an execution / verification trace. A missing, truncated, or omitted required artifact forces that role to `INDETERMINATE` even if its model output says PASS. Truncated or omitted non-critical material remains permitted only when disclosed under manifest `limitations`.
+- `overall_score` and `comparison_ready` exist only when both hard auditors PASS and the paper role is schema-valid. Otherwise the comparable score is `null`; a paper-only score may remain diagnostic.
+- Legacy Markdown scorecards without `judge-aggregate-v1` evidence are `LEGACY_UNVERIFIED`. They may be inspected historically but MUST NOT be ranked against current results.
+- This Step 13 result is provisional because Step 14 replaces the abstract and Step 15 changes citations, tables, figures, and prose. Step 16 MUST rerun the isolated judge on the post-Step-15 submission inputs and bind the PASS to their content fingerprint before delivery.
 
 **Quality checks** (introduced 2026-06-24):
 - **Excellent paper writing benchmark**: abstract structure (opening + per-question delivery), problem analysis indexing, result presentation order (adopted solution first), validation phrasing (support credibility, not amplify uncertainty), internal traces removal
 - **Excellent paper visualization benchmark**: visual anchor per sub-question, explanatory diagrams for complex criteria, credibility figures for search/optimization, main-result figure placement, limitation figure deferral
 
-Runner allows one reopen; second reopen proceeds by policy to avoid loops. Evaluator cache (`scripts/step13_judge_cache.py`) prevents redundant re-evaluation of unchanged papers.
-
-Modeled on the original Step 11 reopen-gate; allowed at most once.
+Runner allows one repair cycle. A repeated reopen verdict blocks delivery instead of being converted into PASS. The final-submission judge may reuse a PASS only when the exact submission-input fingerprint is unchanged.
 
 ### Step 14: Abstract (human intervention point)
 
@@ -232,13 +240,16 @@ Single-step polish bundle (formerly three separate steps in the social-science v
 - **Internal traces removal**: `m1`/`m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache` → rewrite to paper-readable model/validation language (required submission files like `result*.xlsx` may remain)
 - **Risk phrasing rewrite**: "脆弱"/"翻转"/"风险暴露"/"乐观上界" → "抽样加密验证"/"步长收敛性"/"独立算法复核"/"稳定性检验"
 
-### Step 16: Compile + Appendix + Package
+Any Step 14 / Step 15 change invalidates the provisional Step 13 fingerprint. Do not treat the pre-abstract score as the delivered-paper score.
+
+### Step 16: Final Compile + Judge + Appendix + Package
 
 Produce:
-- compiled `{base}_paper.pdf` (via `../../compile_paper.sh`)
+- a freshly compiled `{base}_paper.pdf` (via `../../compile_paper.sh`); compilation failure is fatal and may not fall back to an older PDF
+- a fresh final-submission Gate-2 result whose `judge_outputs/final_submission.sha256` matches all current math / execution / paper packet fingerprints, role prompts, evaluator implementation, Step-13 model registry/config selection, paper assets, and the exact compiled PDF bytes. The PDF hash is a delivery-consistency binding, not evidence that the text-only LLM inspected its rendered appearance. Delivery manifests use the `final_judge_v3` contract.
 - code appendix integrated as `paper/appendix_code.tex` or `\inputminted{}` chunks
 - `papers/{base}_paper.pdf` — copy delivered to the factory's papers/ dir
 - `papers/{base}_submission.zip` — submission bundle (PDF + code + selected data, matching `problem/feasibility_constraints.md` § 提交格式硬约束)
 - `scripts/cleanup_project_artifacts.py` invoked to prune rebuildable intermediates
 
-After delivery, the runner moves the project from `ongoing/` to `complete/`.
+On a fingerprint cache miss, compilation runs before the final-submission judge so the PASS binds the exact PDF that will be copied and packaged. A compile failure, non-PASS, INDETERMINATE, malformed, or stale-fingerprint result blocks normal delivery. After a current final PASS and successful delivery, the runner moves the project from `ongoing/` to `complete/`.

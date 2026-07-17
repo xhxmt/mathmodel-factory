@@ -19,6 +19,12 @@ def make_current_contract_project(project: Path) -> None:
     write_file(project / "numbers_manifest.json", "{}\n")
     write_file(project / "results" / "p1" / "values.json", "{\"status\":\"OPTIMAL\",\"objective\":1.0}\n")
     write_file(project / f"{base}_paper.pdf", "pdf\n")
+    from scripts.submission_fingerprint import submission_fingerprint
+
+    write_file(
+        project / "judge_outputs" / "final_submission.sha256",
+        submission_fingerprint(project, base) + "\n",
+    )
     write_file(root / "method_library" / "demo.md", "# demo\n")
     make_valid_zip(root / "papers" / f"{base}_submission.zip")
 
@@ -39,6 +45,7 @@ def test_delivery_manifest_records_contract_and_artifact_hashes(tmp_path, monkey
     manifest = delivery_contract.build_delivery_manifest(project, tmp_path, ev)
 
     assert manifest["contract_version"] == delivery_contract.CURRENT_CONTRACT_VERSION
+    assert manifest["contract_version"].endswith(".final_judge_v3")
     assert manifest["status"] == "CURRENT_PASS"
     assert manifest["project"]["base"] == "demo"
     assert manifest["evaluation"]["passed"] is True

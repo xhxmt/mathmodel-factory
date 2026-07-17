@@ -7,15 +7,31 @@
 
 重点检查：题意语义是否正确形式化，几何/物理判据是否精确，定理或最优性主张是否有充分条件，约束与目标是否一致，近似是否被误写成精确结论，硬主张是否有独立证据。
 
-将完整结果写入 `__PROJECT_PATH__/judge_outputs/math.md`。输出必须以以下两行开头：
+将结果写入 `__PROJECT_PATH__/judge_outputs/math.md`。文件必须严格满足以下协议：
 
-VERDICT: PASS | FAIL
-FATAL_FLAWS: <非负整数>
+1. 第一行只能是 `VERDICT: PASS`、`VERDICT: FAIL` 或 `VERDICT: INDETERMINATE`。
+2. 第二行起只能有一个合法 JSON 对象；不得使用 Markdown 代码围栏，不得在 JSON 前后添加解释。
+3. JSON 必须且只能包含以下字段：
 
-随后给出：
-1. 已核验的关键数学主张；
-2. 每个致命问题的文件与具体依据；
-3. 非致命风险；
-4. 最终结论。
+{
+  "schema_version": "judge-role-v1",
+  "role": "math",
+  "verdict": "PASS | FAIL | INDETERMINATE",
+  "fatal_flaws": 0,
+  "evidence": [
+    {
+      "claim": "被核验的具体数学主张",
+      "location": "context.txt 中可复查的文件名及页码/行号/章节",
+      "finding": "该证据如何支持或否定主张",
+      "severity": "support | fatal | risk"
+    }
+  ],
+  "limitations": ["审计覆盖不到的具体事项"],
+  "conclusion": "简明结论"
+}
 
-只要存在一个会改变主要答案、可行性或最优性结论的数学错误，必须 `VERDICT: FAIL`。证据不足以判断硬主张时也必须 FAIL，并明确标注“未获独立证明”。
+判定约束：
+- `PASS`：`fatal_flaws` 必须为 0，且至少有一条 `support` 证据。
+- `FAIL`：存在会改变主要答案、可行性或最优性结论的已证实错误；每个致命错误必须各有一条 `fatal` 证据，数量与 `fatal_flaws` 完全相等。
+- `INDETERMINATE`：现有材料不足以判断硬主张；`fatal_flaws` 必须为 0，`limitations` 必须明确缺失的独立证明或证据。证据不足不得伪装成 FAIL 或 PASS。
+- 第一行 verdict 必须与 JSON 中的 `verdict` 完全一致。所有 evidence 必须给出可定位依据，空泛评价不算证据。

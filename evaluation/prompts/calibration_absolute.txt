@@ -1,0 +1,38 @@
+你是独立的全国大学生数学建模竞赛校准评委。请对下面这篇论文作绝对评价。
+
+数学正确性和论文表达必须分开评分。不得因文字流畅而提高数学正确性分数，也不得因数学模型复杂而自动提高写作分数。只评价论文中可见、可核对的证据。
+
+只输出一个合法 JSON 对象，不要 Markdown。所有说明字符串内部禁止使用英文双引号，术语请使用中文书名号或单引号：
+{
+  "correctness": {
+    "score": 0,
+    "fatal_flaws": 0,
+    "answer_validity": "主要答案是否成立及依据",
+    "risks": ["风险1", "风险2"]
+  },
+  "writing": {
+    "score": 0,
+    "dimensions": {
+      "answer_completeness": 0,
+      "argument_chain": 0,
+      "result_traceability": 0,
+      "section_organization": 0,
+      "figure_narrative": 0,
+      "language_maturity": 0
+    },
+    "strengths": ["优势1", "优势2"],
+    "weaknesses": ["问题1", "问题2"]
+  }
+}
+
+所有分数范围均为 0 到 100。`fatal_flaws` 只统计会改变主要答案、可行性或最优性结论的错误。
+必须先依据赛题逐问核验目标、约束、主要答案和结果量级，再评分。若发现致命错误，
+应在 `answer_validity` 中指出最早失效的假设、公式或求解步骤；写作质量不得抵消数学错误。
+
+题目标识：__PROBLEM_ID__
+
+=== 官方赛题与冻结评阅重点 ===
+__PROBLEM_CONTEXT__
+
+=== 论文正文 ===
+__PAPER__

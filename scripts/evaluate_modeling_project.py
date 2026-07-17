@@ -319,6 +319,18 @@ def evaluate(project: Path, root: Path) -> Evaluation:
             else f"VERDICT: {verdict or 'missing'}"
         ),
     )
+    final_judge_current = workflow_state.final_judge_is_current(project, base)
+    ev.add(
+        "final_submission_judge_current",
+        final_judge_current or gate2_override,
+        (
+            "final submission hash matches the latest judge"
+            if final_judge_current
+            else "delivery override active; final judge freshness bypassed"
+            if gate2_override
+            else "final paper inputs changed after the latest judge or were never final-judged"
+        ),
+    )
 
     methods = method_paths_in(project)
     missing_methods = sorted(path for path in methods if not (root / path).is_file())

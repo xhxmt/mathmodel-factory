@@ -1,0 +1,1349 @@
+{
+  "models": [
+    "deepseek-chat"
+  ],
+  "calibration_contract": {
+    "present": true,
+    "schema_version": 3,
+    "models": [
+      "deepseek-chat"
+    ],
+    "identity_required": [
+      "input_fingerprint",
+      "model",
+      "prompt_sha256",
+      "prompt_template_sha256",
+      "result_sha256"
+    ],
+    "prompt_templates": {
+      "pairwise": "5c51db63b12d061a3ca4e2212d28d17aa2872ce2312dadd9ea265374a6ad3e80",
+      "absolute": "097a9590a983ac86f95b7f479bcba3b09fb73682244e02e3ec6ba9cca84a57e5"
+    },
+    "manifest_sha256": "057de1be3833c4e5f1c6b3aea153e92e194505059131764b7d3037986d3e3552"
+  },
+  "calibration_identity": {
+    "fresh": false,
+    "stale_results": [
+      {
+        "id": "n1a_clean",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_no_symbols",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_numeric_contradiction",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_unsupported_optimality",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_robotic_repetition",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_missing_answers",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_clean",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_no_sensitivity",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_no_symbols",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_numeric_contradiction",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_unsupported_optimality",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_robotic_repetition",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_missing_answers",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_no_symbols",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_numeric_contradiction",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_unsupported_optimality",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_robotic_repetition",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1a_missing_answers",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_no_sensitivity",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_no_symbols",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_numeric_contradiction",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_unsupported_optimality",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_robotic_repetition",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "n1b_missing_answers",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      }
+    ],
+    "result_sha256": {
+      "paper:n1a_clean": "494d3c30df7acdd21140f4523e3e9b0940b5ea5ec35fe6fdc8dc89c7bc840205",
+      "paper:n1a_no_symbols": "687a89ace167b9618cc171f506b5813e40cb476f229b3376065dd2b00570617a",
+      "paper:n1a_numeric_contradiction": "03dad31911591d1f1d262e3b50cb7a9066590a4a73d4ee689b64c7d93dd5eceb",
+      "paper:n1a_unsupported_optimality": "b01c304e610ade242a2cbd935d6a9fc15e4e441ea9f1048956fd3c97743c5461",
+      "paper:n1a_robotic_repetition": "d3a071d052850c776234a91e6ffebe422585d18fcc809f89f9b8645acb251566",
+      "paper:n1a_missing_answers": "1bb3161f864913f2b1e0639824b4a4b9a3b1dfec709b3f651b11ea7a9a58f0df",
+      "paper:n1b_clean": "4c552f1b2ab88a3d9361b4f67c52b5200ca02805759d71e12169b908239897a7",
+      "paper:n1b_no_sensitivity": "0ec9c2ec99a8c8d4aa8b3e2efebe05d2b6de912742a682530f10825975cd78f4",
+      "paper:n1b_no_symbols": "31bc1523e4204d8a68333ede35163da0260b55c425966096345cc73f9821b5f2",
+      "paper:n1b_numeric_contradiction": "671b8758e36029b58276187a60e08ea14d83d4cf62d51da6824ff3f15b68705a",
+      "paper:n1b_unsupported_optimality": "e5a86dd072e93b281bdc706873343f23188ed49973c3d2ffc35deff521bcdec4",
+      "paper:n1b_robotic_repetition": "b0821e727b574f6bee26aafb941279188a03d40250be25fac09ae45f91f5637f",
+      "paper:n1b_missing_answers": "5e64d027247b5ed5f5b1361a6d9a7d4c3d729bd01f68c449cf78aba3f87bfb4a",
+      "pair:n1a_no_symbols": "5e4c5647795583572ea3532abe05b74cbb471156889018c1b1fec469befa1538",
+      "pair:n1a_numeric_contradiction": "9e1fe840de6db71250c593ee830a41868ea2f0e68cd012b71a99fd52e032442b",
+      "pair:n1a_unsupported_optimality": "c05c46f5d8f2c0b4afa009ea6167ace7b247463e2dd6c76e6e4b6ac880a6e209",
+      "pair:n1a_robotic_repetition": "72a8925ff249d80cce03980064d852b257aa15cde556cdc670f1619d3ca7c5da",
+      "pair:n1a_missing_answers": "4ed36ca7716ed943ec9c457803c13ad11b32450fd7cfd0215f6931767d4c852c",
+      "pair:n1b_no_sensitivity": "3943f54d1137f6a88dc1175993f51cd1ca68392187d6afecc73e08007e6ac995",
+      "pair:n1b_no_symbols": "0c84de8aa4b3ea99620c19dafa3219f4b3cd5db24db434374f8ab5b41b68e99b",
+      "pair:n1b_numeric_contradiction": "10c93799403b5fa4c922dbf0a47ee9f03e5b3c5c4c2e127fc9ed87ad3064453f",
+      "pair:n1b_unsupported_optimality": "7eb86335b5dfec8e5ea7c18fa4e607ce9b174c4ef75663e674961de33a7c1b5c",
+      "pair:n1b_robotic_repetition": "5a64f513790225cde415e00cc1cdec7f7e4b7323f5a08e51e432b14b9e82997b",
+      "pair:n1b_missing_answers": "386f6ee064456c929378de34fb5d9df8a4b4269258a14732d63ffd8de43164c8"
+    },
+    "paper_sha256": {
+      "n1a_clean": "484cd6f94f0d56ababe3800a28108854547ca3ece50520de2a5187d7f6de8996",
+      "n1a_no_symbols": "484cd6f94f0d56ababe3800a28108854547ca3ece50520de2a5187d7f6de8996",
+      "n1a_numeric_contradiction": "484cd6f94f0d56ababe3800a28108854547ca3ece50520de2a5187d7f6de8996",
+      "n1a_unsupported_optimality": "484cd6f94f0d56ababe3800a28108854547ca3ece50520de2a5187d7f6de8996",
+      "n1a_robotic_repetition": "484cd6f94f0d56ababe3800a28108854547ca3ece50520de2a5187d7f6de8996",
+      "n1a_missing_answers": "484cd6f94f0d56ababe3800a28108854547ca3ece50520de2a5187d7f6de8996",
+      "n1b_clean": "df127dd75fde2207b88cb529fa55c322318f441eec42a5f973b013934571e05a",
+      "n1b_no_sensitivity": "df127dd75fde2207b88cb529fa55c322318f441eec42a5f973b013934571e05a",
+      "n1b_no_symbols": "df127dd75fde2207b88cb529fa55c322318f441eec42a5f973b013934571e05a",
+      "n1b_numeric_contradiction": "df127dd75fde2207b88cb529fa55c322318f441eec42a5f973b013934571e05a",
+      "n1b_unsupported_optimality": "df127dd75fde2207b88cb529fa55c322318f441eec42a5f973b013934571e05a",
+      "n1b_robotic_repetition": "df127dd75fde2207b88cb529fa55c322318f441eec42a5f973b013934571e05a",
+      "n1b_missing_answers": "df127dd75fde2207b88cb529fa55c322318f441eec42a5f973b013934571e05a"
+    },
+    "source_fingerprint": "178449df117e1a2ff7e09ea03608f786a58fec043d23cf4a8d472867fda48fd0"
+  },
+  "papers": [
+    {
+      "id": "n1a_clean",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 70.0,
+      "correctness_score": 55.0,
+      "writing_dimensions": {
+        "answer_completeness": 70.0,
+        "argument_chain": 65.0,
+        "result_traceability": 70.0,
+        "section_organization": 80.0,
+        "figure_narrative": 70.0,
+        "language_maturity": 70.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "494d3c30df7acdd21140f4523e3e9b0940b5ea5ec35fe6fdc8dc89c7bc840205"
+    },
+    {
+      "id": "n1a_no_symbols",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 70.0,
+      "correctness_score": 55.0,
+      "writing_dimensions": {
+        "answer_completeness": 70.0,
+        "argument_chain": 65.0,
+        "result_traceability": 75.0,
+        "section_organization": 80.0,
+        "figure_narrative": 70.0,
+        "language_maturity": 65.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "687a89ace167b9618cc171f506b5813e40cb476f229b3376065dd2b00570617a"
+    },
+    {
+      "id": "n1a_numeric_contradiction",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 71.0,
+      "correctness_score": 60.0,
+      "writing_dimensions": {
+        "answer_completeness": 75.0,
+        "argument_chain": 67.5,
+        "result_traceability": 75.0,
+        "section_organization": 77.5,
+        "figure_narrative": 70.0,
+        "language_maturity": 67.5
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "03dad31911591d1f1d262e3b50cb7a9066590a4a73d4ee689b64c7d93dd5eceb"
+    },
+    {
+      "id": "n1a_unsupported_optimality",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 72.0,
+      "correctness_score": 65.0,
+      "writing_dimensions": {
+        "answer_completeness": 75.0,
+        "argument_chain": 75.0,
+        "result_traceability": 65.0,
+        "section_organization": 80.0,
+        "figure_narrative": 70.0,
+        "language_maturity": 75.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "b01c304e610ade242a2cbd935d6a9fc15e4e441ea9f1048956fd3c97743c5461"
+    },
+    {
+      "id": "n1a_robotic_repetition",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 70.0,
+      "correctness_score": 55.0,
+      "writing_dimensions": {
+        "answer_completeness": 75.0,
+        "argument_chain": 65.0,
+        "result_traceability": 70.0,
+        "section_organization": 80.0,
+        "figure_narrative": 60.0,
+        "language_maturity": 70.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "d3a071d052850c776234a91e6ffebe422585d18fcc809f89f9b8645acb251566"
+    },
+    {
+      "id": "n1a_missing_answers",
+      "problem_id": "CUMCM-2024-A",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_A/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 72.0,
+      "correctness_score": 65.0,
+      "writing_dimensions": {
+        "answer_completeness": 75.0,
+        "argument_chain": 70.0,
+        "result_traceability": 68.0,
+        "section_organization": 78.0,
+        "figure_narrative": 70.0,
+        "language_maturity": 72.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "1bb3161f864913f2b1e0639824b4a4b9a3b1dfec709b3f651b11ea7a9a58f0df"
+    },
+    {
+      "id": "n1b_clean",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 45.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 40.0,
+        "result_traceability": 30.0,
+        "section_organization": 60.0,
+        "figure_narrative": 50.0,
+        "language_maturity": 55.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "4c552f1b2ab88a3d9361b4f67c52b5200ca02805759d71e12169b908239897a7"
+    },
+    {
+      "id": "n1b_no_sensitivity",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 45.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 40.0,
+        "result_traceability": 20.0,
+        "section_organization": 60.0,
+        "figure_narrative": 50.0,
+        "language_maturity": 60.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "0ec9c2ec99a8c8d4aa8b3e2efebe05d2b6de912742a682530f10825975cd78f4"
+    },
+    {
+      "id": "n1b_no_symbols",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 40.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 35.0,
+        "result_traceability": 20.0,
+        "section_organization": 50.0,
+        "figure_narrative": 45.0,
+        "language_maturity": 55.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "31bc1523e4204d8a68333ede35163da0260b55c425966096345cc73f9821b5f2"
+    },
+    {
+      "id": "n1b_numeric_contradiction",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 55.0,
+      "correctness_score": 35.0,
+      "writing_dimensions": {
+        "answer_completeness": 50.0,
+        "argument_chain": 45.0,
+        "result_traceability": 40.0,
+        "section_organization": 60.0,
+        "figure_narrative": 50.0,
+        "language_maturity": 65.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "671b8758e36029b58276187a60e08ea14d83d4cf62d51da6824ff3f15b68705a"
+    },
+    {
+      "id": "n1b_unsupported_optimality",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 55.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 45.0,
+        "argument_chain": 47.5,
+        "result_traceability": 30.0,
+        "section_organization": 70.0,
+        "figure_narrative": 55.0,
+        "language_maturity": 72.5
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "e5a86dd072e93b281bdc706873343f23188ed49973c3d2ffc35deff521bcdec4"
+    },
+    {
+      "id": "n1b_robotic_repetition",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 40.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 35.0,
+        "result_traceability": 20.0,
+        "section_organization": 50.0,
+        "figure_narrative": 40.0,
+        "language_maturity": 55.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "b0821e727b574f6bee26aafb941279188a03d40250be25fac09ae45f91f5637f"
+    },
+    {
+      "id": "n1b_missing_answers",
+      "problem_id": "CUMCM-2024-B",
+      "award_tier": null,
+      "category": null,
+      "paper_path": "reference_papers/national_1_B/ocr/full.md",
+      "result_path": null,
+      "calibration_result_path": null,
+      "status": "AVAILABLE",
+      "score": 45.0,
+      "correctness_score": 25.0,
+      "writing_dimensions": {
+        "answer_completeness": 30.0,
+        "argument_chain": 35.0,
+        "result_traceability": 30.0,
+        "section_organization": 55.0,
+        "figure_narrative": 40.0,
+        "language_maturity": 60.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "5e64d027247b5ed5f5b1361a6d9a7d4c3d729bd01f68c449cf78aba3f87bfb4a"
+    }
+  ],
+  "missing_results": [],
+  "pairs": [
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_no_symbols",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_numeric_contradiction",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_unsupported_optimality",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_robotic_repetition",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1a_clean",
+      "lower": "n1a_missing_answers",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1a_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_no_sensitivity",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_no_symbols",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_numeric_contradiction",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_unsupported_optimality",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_robotic_repetition",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    },
+    {
+      "higher": "n1b_clean",
+      "lower": "n1b_missing_answers",
+      "status": "TIE",
+      "credit": 0.5,
+      "source": "BLIND_PAIRWISE",
+      "winner": "TIE",
+      "correctness_winner": "TIE",
+      "writing_winner": "TIE",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "DETERMINISTIC_PROXY",
+      "expected_overall_winner": "n1b_clean",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "deepseek-chat"
+      ]
+    }
+  ],
+  "pairwise": {
+    "evaluated": 11,
+    "total": 11,
+    "readiness_total": 11,
+    "diagnostic_pairs": 0,
+    "correct_points": 5.5,
+    "accuracy": 0.5,
+    "direct_evaluated": 11,
+    "direct_complete": 11,
+    "direct_coverage": 1.0,
+    "axis_accuracy": {
+      "overall": 0.0,
+      "correctness": 0.18181818181818182,
+      "writing": 0.36363636363636365
+    },
+    "axis_evaluated": {
+      "overall": 11,
+      "correctness": 11,
+      "writing": 11
+    }
+  },
+  "ordering": {
+    "concordant": 0,
+    "discordant": 0,
+    "ties": 11,
+    "kendall_style_tau": 0.0
+  },
+  "malformed_outputs": {
+    "malformed": 2,
+    "total_runs": 72,
+    "rate": 0.027777777777777776
+  },
+  "fatal_flaw_detection": {
+    "detected": 4,
+    "expected": 4,
+    "rate": 1.0,
+    "true_positive": 4,
+    "false_negative": 0,
+    "true_negative": 0,
+    "false_positive": 9,
+    "sensitivity": 1.0,
+    "specificity": 0.0,
+    "precision": 0.3076923076923077,
+    "false_positive_rate": 1.0
+  },
+  "coverage_by_problem": {
+    "CUMCM-2024-A": {
+      "available": 6,
+      "total": 6,
+      "coverage": 1.0
+    },
+    "CUMCM-2024-B": {
+      "available": 7,
+      "total": 7,
+      "coverage": 1.0
+    }
+  },
+  "split_axis_coverage": 1.0,
+  "score_reliability": {
+    "ready": false,
+    "checks": {
+      "all_papers_scored": true,
+      "split_axis_coverage": true,
+      "direct_pair_coverage": true,
+      "pairwise_accuracy": false,
+      "malformed_output_rate": true,
+      "fatal_flaw_detection": true,
+      "fatal_sensitivity": true,
+      "fatal_specificity": false,
+      "fatal_precision": false,
+      "fatal_false_positive_rate": false,
+      "calibration_freshness": false,
+      "model_config_match": false,
+      "schema_match": false
+    },
+    "policy": {
+      "min_pairwise_accuracy": 0.9,
+      "min_direct_pair_coverage": 1.0,
+      "max_malformed_rate": 0.1,
+      "min_fatal_flaw_detection_rate": 0.8,
+      "min_fatal_sensitivity": 0.8,
+      "min_fatal_specificity": 0.8,
+      "min_fatal_precision": 0.8,
+      "max_fatal_false_positive_rate": 0.2,
+      "min_correctness_accuracy": 0.9,
+      "min_writing_accuracy": 0.9
+    },
+    "meaning": "Absolute scores and award prediction require independent human calibration"
+  },
+  "proxy_reliability": {
+    "ready": false,
+    "checks": {
+      "all_papers_scored": true,
+      "split_axis_coverage": true,
+      "direct_pair_coverage": true,
+      "pairwise_accuracy": false,
+      "malformed_output_rate": true,
+      "fatal_flaw_detection": true,
+      "fatal_sensitivity": true,
+      "fatal_specificity": false,
+      "fatal_precision": false,
+      "fatal_false_positive_rate": false,
+      "calibration_freshness": false,
+      "model_config_match": false,
+      "schema_match": false
+    },
+    "axis_ready": false,
+    "axis_checks": {
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "scope": [
+      "overall_pairwise_ranking",
+      "fatal_defect_detection"
+    ],
+    "evaluator_composition": {
+      "primary_only": 0,
+      "composite": 0,
+      "adjudicator_decisions": 0,
+      "legacy_or_unidentified": 11
+    },
+    "meaning": "Safe only for bounded overall A/B ranking against deterministic perturbations"
+  },
+  "runtime_score_reliability": {
+    "ready": false,
+    "proxy_ready": false,
+    "human_ready": false,
+    "checks": {
+      "explicitly_validated": false,
+      "evaluator_schema_match": false,
+      "packet_modality_match": false
+    },
+    "declared_contract": {
+      "validated": false,
+      "evaluator_schema": null,
+      "packet_modality": null
+    },
+    "required_contract": {
+      "evaluator_schema": "judge-role-v1",
+      "packet_modality": "modeling-factory-judge-packet-v2"
+    },
+    "meaning": "Runtime comparison requires calibration of the exact judge-role-v1 evaluator over Modeling Factory judge packet v2 inputs"
+  },
+  "axis_reliability": {
+    "ready": false,
+    "checks": {
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "meaning": "Correctness and writing sub-axis labels require separate validation"
+  },
+  "human_calibration": {
+    "ready": false,
+    "reason": "no independent human ground truth"
+  },
+  "award_prediction_ready": false
+}

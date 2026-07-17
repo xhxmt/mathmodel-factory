@@ -15,6 +15,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.step8_5_gate import collect_step8_5_state
+from scripts.submission_fingerprint import final_judge_is_current
 
 
 VERDICT_RE = re.compile(r"^VERDICT:\s*(\S+)", re.M)
@@ -90,6 +91,7 @@ def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:
         delivery_artifacts_ready(root, resolved_base)
         and gate2_delivery_allowed(project)
         and step8_5_passed(project)
+        and final_judge_is_current(project, resolved_base)
     )
 
 
@@ -103,6 +105,7 @@ def collect_state(project: Path, root: Path, base: str | None = None) -> dict[st
         "gate2_delivery_allowed": gate2_delivery_allowed(project),
         "step8_5": collect_step8_5_state(project),
         "delivery_artifacts_ready": delivery_artifacts_ready(root, resolved_base),
+        "final_submission_judge_current": final_judge_is_current(project, resolved_base),
         "step16_ready": step16_ready(project, root, resolved_base),
     }
 

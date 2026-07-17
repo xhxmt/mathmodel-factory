@@ -59,6 +59,111 @@ def test_step16_writes_delivery_manifest_after_quality_gate():
     assert text.index("Final delivery quality gate PASS") < text.index("delivery_manifest.json")
 
 
+def test_step16_rejudges_the_post_polish_submission_before_delivery():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    step16 = text[text.index("run_step_16() {") : text.index("# ── Main step loop")]
+
+    assert "run_final_submission_judge" in step16
+    final_judge = text[
+        text.index("run_final_submission_judge() {") : text.index("run_step_14() {")
+    ]
+    assert final_judge.index("compile_final_submission_pdf") < final_judge.index("run_step_13 || return 1")
+    assert step16.index("run_final_submission_judge") < step16.index("Delivering final PDF")
+    assert 'rm -f "$pdf"' in text
+    assert "no PDF will be judged or delivered" in text
+    assert 'cp "$PROJECT/${BASE}_paper.pdf" "$delivery_tmp"' in step16
+    assert 'cmp -s "$PROJECT/${BASE}_paper.pdf" "$FACTORY/papers/${BASE}_paper.pdf"' in step16
+    assert 'cp "$PROJECT/${BASE}_paper.pdf" "$FACTORY/papers/" 2>/dev/null || true' not in step16
+    assert "final_submission_hash" in text
+    assert 'gate2_passed_for_path "$PROJECT"' in text
+
+
+def test_runner_recovers_a_persisted_gate2_reopen_before_step14():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+
+    recovery_call = "if ! recover_pending_gate2_reopen; then"
+    assert recovery_call in text
+    assert text.index(recovery_call) < text.index("if (( STEP >= 16 )); then")
+    assert 'STEP=$(gate2_resume_step "$verdict")' in text
+    assert "FINAL_JUDGE_REOPEN:" in text
+
+
+def test_final_judge_reopen_state_is_durable_before_main_loop_routing():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    final_judge = text[
+        text.index("run_final_submission_judge() {") : text.index("run_step_14() {")
+    ]
+    main_reopen = text[
+        text.index("if (( NEXT == 16 && STEP_RC == 43 )); then") :
+        text.index("# Verify step completed regardless of exit code.")
+    ]
+
+    assert 'touch "$(final_judge_in_progress_file)"' in final_judge
+    assert final_judge.index('touch "$(final_judge_in_progress_file)"') < final_judge.index("run_step_13 || return 1")
+    assert 'touch "$(final_judge_reopen_pending_file)"' in final_judge
+    assert final_judge.index('touch "$(final_judge_reopen_pending_file)"') < final_judge.index("return 43")
+    assert '"$(final_judge_reopened_once_file)"' in final_judge
+    assert final_judge.index('"$(final_judge_reopened_once_file)"') < final_judge.index("return 43")
+    assert 'touch "$(final_judge_reopened_once_file)"' not in main_reopen
+    assert "STEP_RC == 44" in main_reopen
+
+
+def test_final_judge_crash_recovery_precedes_ordinary_gate2_budget():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    recovery = text[
+        text.index("recover_pending_gate2_reopen() {") :
+        text.index("final_judge_reopened_once_file() {")
+    ]
+
+    pending = recovery.index('[[ -f "$(final_judge_reopen_pending_file)" ]]')
+    in_progress = recovery.index('[[ -f "$(final_judge_in_progress_file)" ]]')
+    ordinary_once = recovery.index('[[ -f "$(gate2_reopened_once_file)" ]]')
+    assert pending < ordinary_once
+    assert in_progress < ordinary_once
+    assert 'touch "$(final_judge_reopen_pending_file)"' in recovery
+    assert 'touch "$(final_judge_reopened_once_file)"' in recovery
+
+
+def test_paper_reviewer_scope_excludes_unseen_pdf_visual_quality():
+    prompt = (Path(REPO_ROOT) / "prompts/judges/paper_reviewer.txt").read_text(
+        encoding="utf-8"
+    )
+    human_rubric = (Path(REPO_ROOT) / "evaluation/human_rubric.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "不向你提供 PDF 渲染画面或图片像素" in prompt
+    assert "不得评价分页、字体" in prompt
+    assert "PDF 字节指纹只证明交付版本一致" in prompt
+    assert "渲染与视觉复核（独立记录，不进入当前自动六维分数）" in human_rubric
+
+
+def test_gate2_model_reopen_routes_to_the_earliest_responsible_step():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    helper = text[text.index("gate2_resume_step() {") : text.index("recover_pending_gate2_reopen()")]
+
+    assert "Correctness vetoes:.*math" in helper
+    assert "echo 3" in helper
+    assert "Correctness vetoes:.*execution" in helper
+    assert "echo 4" in helper
+    assert '[[ "$verdict" == "REOPEN_REVISION_TEXT" ]]' in helper
+    assert "echo 11" in helper
+
+
+def test_gate2_indeterminate_roles_route_by_responsible_stage():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    helper = text[text.index("gate2_resume_step() {") : text.index("recover_pending_gate2_reopen()")]
+
+    math_check = helper.index("Indeterminate roles:.*math")
+    execution_check = helper.index("Indeterminate roles:.*execution")
+    paper_check = helper.index("Indeterminate roles:.*paper")
+    assert math_check < execution_check < paper_check
+    assert "Indeterminate roles:.*math" in helper[math_check : helper.index("echo 3", math_check)]
+    assert "Indeterminate roles:.*execution" in helper[execution_check : helper.index("echo 4", execution_check)]
+    assert "Indeterminate roles:.*paper" in helper[paper_check : helper.index("echo 11", paper_check)]
+    assert "else\n            echo 3" in helper
+
+
 def test_verify_step_output_rejects_step9_without_step8_5_pass(tmp_path):
     project = tmp_path / "ongoing" / "demo_step9"
     write_file(project / "problem" / "problem_brief.md", "# brief\n")
@@ -396,6 +501,17 @@ def test_claude_backend_passes_dispatch_hang_timeout_to_worker():
 
     assert 'run_claude_worker "$prompt_file" "$timeout" "" "$model" "$hang"' in backend
     assert '_default_claude_worker() { run_claude_worker "$1" "$2" "" "" "$3"; }' in wrapper
+
+
+def test_step13_claude_is_routed_through_the_non_agentic_isolated_caller():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    role_runner = text[
+        text.index("run_independent_judge_role() {") : text.index("run_step_13() {")
+    ]
+
+    assert "openai|deepseek|gemini|claude" in role_runner
+    assert '[[ "$backend" == "claude" ]]' in role_runner
+    assert 'run_api_model "$prompt_file" 3600 "$_model" "claude"' in role_runner
 
 
 def test_step6_precheck_parses_markdown_assumption_table(tmp_path):

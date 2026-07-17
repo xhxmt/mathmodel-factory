@@ -1,4 +1,153 @@
 {
+  "models": [
+    "gemini-3.1-pro-preview"
+  ],
+  "calibration_contract": {
+    "present": true,
+    "schema_version": 3,
+    "models": [
+      "gemini-3.1-pro-preview"
+    ],
+    "identity_required": [
+      "input_fingerprint",
+      "model",
+      "prompt_sha256",
+      "prompt_template_sha256",
+      "result_sha256"
+    ],
+    "prompt_templates": {
+      "pairwise": "5c51db63b12d061a3ca4e2212d28d17aa2872ce2312dadd9ea265374a6ad3e80",
+      "absolute": "097a9590a983ac86f95b7f479bcba3b09fb73682244e02e3ec6ba9cca84a57e5"
+    },
+    "manifest_sha256": "293e3ab6ba759c8764656cb87bfe25994cf10d571aaa25d1958cf770e0c5a585"
+  },
+  "calibration_identity": {
+    "fresh": false,
+    "stale_results": [
+      {
+        "id": "national1_2024b",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "provincial1_2024b",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "provincial3_2024b",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "generated_2024b",
+        "kind": "paper",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "generated_2024a_repaired",
+        "kind": "paper",
+        "reasons": [
+          "missing_result"
+        ]
+      },
+      {
+        "id": "national1_vs_provincial1_2024b",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "provincial1_vs_provincial3_2024b",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      },
+      {
+        "id": "provincial3_vs_generated_2024b",
+        "kind": "pair",
+        "reasons": [
+          "schema_mismatch",
+          "prompt_schema_mismatch",
+          "model_config_mismatch",
+          "evaluator_identity_missing",
+          "prompt_hash_missing",
+          "prompt_template_hash_missing",
+          "input_fingerprint_missing",
+          "result_hash_unpinned"
+        ]
+      }
+    ],
+    "result_sha256": {
+      "paper:national1_2024b": "8cfb023a91f5e1c498bc7ece987a9e05d013d9736c7ed6b5226c110bfa224194",
+      "paper:provincial1_2024b": "bb214d74fe0ea83c85d1b5ca3dfe53f42bef03edae12d54bef3afa0d8e7bcc73",
+      "paper:provincial3_2024b": "ac83a188e9ce058e1ab34f66e1da0ab301e0122008fdf46aa02d66eb201eb7e6",
+      "paper:generated_2024b": "508c3511f7f5993ad88d92a0ba5ce31c367177ba97dbd095cf4bff69d23afac4",
+      "pair:national1_vs_provincial1_2024b": "35402b0962f8d6c3fef64f42f8f251d46119ac119f4b9b8d2f693ca8056bcb7c",
+      "pair:provincial1_vs_provincial3_2024b": "fccef603096a789e3fd52a69ef28bbcc3a9c043198cd58fd447533161c722b78",
+      "pair:provincial3_vs_generated_2024b": "86b42f95b7bdfce52ee63c896378fe911caa22d5969c727ee3741d9ed94c4747"
+    },
+    "paper_sha256": {
+      "national1_2024b": "3e3dc06208668e6c45f2d78c7dfc1942cd6450a7b0ce50f2237591b1b40ac25f",
+      "provincial1_2024b": "f1d09494c62f6835fa9003cf4fed8af3d8187d9d983c9b2969ef605477182824",
+      "provincial3_2024b": "e0b76e0253552ab3246e6f19e85314426836d4cfcfb1f42f9f7823e6601704a8",
+      "generated_2024b": "99eb6b84d46ac8659da15b1fd16bee3ec6c9d1ec0c5f2b7e088a8852587ee108",
+      "generated_2024a_repaired": "a38b2cacff086693f337b880150ed829110961a35b2f7ca62ee3dd914d262386"
+    },
+    "source_fingerprint": "0c652d42e9f1bdcb422c6e3d157fb04269548d3bc0f1ee19f1f61f6a2bcb4caf"
+  },
   "papers": [
     {
       "id": "national1_2024b",
@@ -7,9 +156,31 @@
       "category": "real_awarded",
       "paper_path": "reference_papers/national_1_B/national1_24B_production.pdf",
       "result_path": "evaluation/results/national_1_B_eval.json",
-      "status": "MISSING",
-      "score": null,
-      "fatal_flaw_detected": false
+      "calibration_result_path": "evaluation/results/calibration/paper_national1_2024b.json",
+      "status": "AVAILABLE",
+      "score": 55.0,
+      "correctness_score": 10.0,
+      "writing_dimensions": {
+        "answer_completeness": 60.0,
+        "argument_chain": 30.0,
+        "result_traceability": 40.0,
+        "section_organization": 70.0,
+        "figure_narrative": 50.0,
+        "language_maturity": 60.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "8cfb023a91f5e1c498bc7ece987a9e05d013d9736c7ed6b5226c110bfa224194"
     },
     {
       "id": "provincial1_2024b",
@@ -18,9 +189,31 @@
       "category": "real_awarded",
       "paper_path": "reference_papers/provincial_1/henryers_24B_provincial1.pdf",
       "result_path": "evaluation/results/ext_sheng1_2024b_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_provincial1_2024b.json",
       "status": "AVAILABLE",
-      "score": 76.4,
-      "fatal_flaw_detected": true
+      "score": 55.0,
+      "correctness_score": 20.0,
+      "writing_dimensions": {
+        "answer_completeness": 70.0,
+        "argument_chain": 40.0,
+        "result_traceability": 50.0,
+        "section_organization": 70.0,
+        "figure_narrative": 60.0,
+        "language_maturity": 60.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "bb214d74fe0ea83c85d1b5ca3dfe53f42bef03edae12d54bef3afa0d8e7bcc73"
     },
     {
       "id": "provincial3_2024b",
@@ -29,83 +222,340 @@
       "category": "real_awarded",
       "paper_path": "reference_papers/provincial_3/cherzing_24B_provincial3.pdf",
       "result_path": "evaluation/results/provincial_3_2024b_eval.json",
-      "status": "MISSING",
-      "score": null,
-      "fatal_flaw_detected": false
+      "calibration_result_path": "evaluation/results/calibration/paper_provincial3_2024b.json",
+      "status": "AVAILABLE",
+      "score": 35.0,
+      "correctness_score": 20.0,
+      "writing_dimensions": {
+        "answer_completeness": 50.0,
+        "argument_chain": 30.0,
+        "result_traceability": 20.0,
+        "section_organization": 70.0,
+        "figure_narrative": 40.0,
+        "language_maturity": 30.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "ac83a188e9ce058e1ab34f66e1da0ab301e0122008fdf46aa02d66eb201eb7e6"
     },
     {
       "id": "generated_2024b",
       "problem_id": "CUMCM-2024-B",
       "award_tier": null,
       "category": "generated_baseline",
-      "paper_path": "complete/test_cumcm2024b/test_cumcm2024b_paper.pdf",
+      "paper_path": "papers/test_cumcm2024b_paper.pdf",
       "result_path": "evaluation/results/test_cumcm2024b_eval.json",
+      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024b.json",
       "status": "AVAILABLE",
-      "score": 91.6,
-      "fatal_flaw_detected": false
+      "score": 94.0,
+      "correctness_score": 35.0,
+      "writing_dimensions": {
+        "answer_completeness": 95.0,
+        "argument_chain": 90.0,
+        "result_traceability": 95.0,
+        "section_organization": 95.0,
+        "figure_narrative": 95.0,
+        "language_maturity": 95.0
+      },
+      "fatal_flaw_detected": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "result_sha256": "508c3511f7f5993ad88d92a0ba5ce31c367177ba97dbd095cf4bff69d23afac4"
     },
     {
-      "id": "generated_2024a_known_fatal",
+      "id": "generated_2024a_repaired",
       "problem_id": "CUMCM-2024-A",
       "award_tier": null,
       "category": "generated_baseline",
       "paper_path": "complete/test_cumcm2024a_polished/test_cumcm2024a_paper.pdf",
       "result_path": "evaluation/results/test_cumcm2024a_eval.json",
-      "status": "AVAILABLE",
-      "score": 66.3,
-      "fatal_flaw_detected": true
+      "calibration_result_path": "evaluation/results/calibration/paper_generated_2024a_repaired.json",
+      "status": "MISSING",
+      "score": null,
+      "correctness_score": null,
+      "writing_dimensions": {},
+      "fatal_flaw_detected": false,
+      "identity_ok": false,
+      "identity_reasons": [
+        "missing_result"
+      ],
+      "result_sha256": null
     }
   ],
   "missing_results": [
-    "national1_2024b",
-    "provincial3_2024b"
+    "generated_2024a_repaired"
   ],
   "pairs": [
     {
       "higher": "national1_2024b",
       "lower": "provincial1_2024b",
-      "status": "MISSING",
-      "credit": null
+      "status": "CORRECT",
+      "credit": 1.0,
+      "source": "BLIND_PAIRWISE",
+      "winner": "national1_2024b",
+      "correctness_winner": "national1_2024b",
+      "writing_winner": "national1_2024b",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "AWARD_WEAK_PRIOR",
+      "expected_overall_winner": "national1_2024b",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "gemini-3.1-pro-preview"
+      ]
     },
     {
       "higher": "provincial1_2024b",
       "lower": "provincial3_2024b",
-      "status": "MISSING",
-      "credit": null
+      "status": "CORRECT",
+      "credit": 1.0,
+      "source": "BLIND_PAIRWISE",
+      "winner": "provincial1_2024b",
+      "correctness_winner": "provincial1_2024b",
+      "writing_winner": "provincial1_2024b",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "AWARD_WEAK_PRIOR",
+      "expected_overall_winner": "provincial1_2024b",
+      "readiness_eligible": true,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "gemini-3.1-pro-preview"
+      ]
+    },
+    {
+      "higher": "provincial3_2024b",
+      "lower": "generated_2024b",
+      "status": "REVERSED",
+      "credit": 0.0,
+      "source": "BLIND_PAIRWISE",
+      "winner": "generated_2024b",
+      "correctness_winner": "generated_2024b",
+      "writing_winner": "generated_2024b",
+      "samples_scored": 3,
+      "samples_requested": 3,
+      "complete": true,
+      "label_type": "AWARD_WEAK_PRIOR",
+      "expected_overall_winner": "provincial3_2024b",
+      "readiness_eligible": false,
+      "identity_ok": false,
+      "identity_reasons": [
+        "schema_mismatch",
+        "prompt_schema_mismatch",
+        "model_config_mismatch",
+        "evaluator_identity_missing",
+        "prompt_hash_missing",
+        "prompt_template_hash_missing",
+        "input_fingerprint_missing",
+        "result_hash_unpinned"
+      ],
+      "evaluator_kind": null,
+      "decision_source": "primary_or_legacy",
+      "models": [
+        "gemini-3.1-pro-preview"
+      ]
     }
   ],
   "pairwise": {
-    "evaluated": 0,
-    "total": 2,
-    "correct_points": 0.0,
-    "accuracy": null
+    "evaluated": 2,
+    "total": 3,
+    "readiness_total": 2,
+    "diagnostic_pairs": 1,
+    "correct_points": 2.0,
+    "accuracy": 1.0,
+    "direct_evaluated": 2,
+    "direct_complete": 2,
+    "direct_coverage": 1.0,
+    "axis_accuracy": {
+      "overall": null,
+      "correctness": null,
+      "writing": null
+    },
+    "axis_evaluated": {
+      "overall": 0,
+      "correctness": 0,
+      "writing": 0
+    }
   },
   "ordering": {
-    "concordant": 0,
+    "concordant": 2,
     "discordant": 0,
     "ties": 0,
-    "kendall_style_tau": null
+    "kendall_style_tau": 1.0
   },
   "malformed_outputs": {
     "malformed": 0,
-    "total_runs": 9,
+    "total_runs": 21,
     "rate": 0.0
   },
   "fatal_flaw_detection": {
-    "detected": 1,
-    "expected": 1,
-    "rate": 1.0
+    "detected": 0,
+    "expected": 0,
+    "rate": null,
+    "true_positive": 0,
+    "false_negative": 0,
+    "true_negative": 1,
+    "false_positive": 1,
+    "sensitivity": null,
+    "specificity": 0.5,
+    "precision": 0.0,
+    "false_positive_rate": 0.5
   },
   "coverage_by_problem": {
     "CUMCM-2024-A": {
-      "available": 1,
+      "available": 0,
       "total": 1,
-      "coverage": 1.0
+      "coverage": 0.0
     },
     "CUMCM-2024-B": {
-      "available": 2,
+      "available": 4,
       "total": 4,
-      "coverage": 0.5
+      "coverage": 1.0
     }
-  }
+  },
+  "split_axis_coverage": 0.8,
+  "score_reliability": {
+    "ready": false,
+    "checks": {
+      "all_papers_scored": false,
+      "split_axis_coverage": false,
+      "direct_pair_coverage": true,
+      "pairwise_accuracy": true,
+      "malformed_output_rate": true,
+      "fatal_flaw_detection": false,
+      "fatal_sensitivity": false,
+      "fatal_specificity": false,
+      "fatal_precision": false,
+      "fatal_false_positive_rate": false,
+      "calibration_freshness": false,
+      "model_config_match": false,
+      "schema_match": false
+    },
+    "policy": {
+      "min_pairwise_accuracy": 0.75,
+      "min_direct_pair_coverage": 1.0,
+      "max_malformed_rate": 0.1,
+      "min_fatal_flaw_detection_rate": 1.0,
+      "min_fatal_sensitivity": 1.0,
+      "min_fatal_specificity": 0.8,
+      "min_fatal_precision": 0.8,
+      "max_fatal_false_positive_rate": 0.2,
+      "min_correctness_accuracy": 0.75,
+      "min_writing_accuracy": 0.75
+    },
+    "meaning": "Absolute scores and award prediction require independent human calibration"
+  },
+  "proxy_reliability": {
+    "ready": false,
+    "checks": {
+      "all_papers_scored": false,
+      "split_axis_coverage": false,
+      "direct_pair_coverage": true,
+      "pairwise_accuracy": true,
+      "malformed_output_rate": true,
+      "fatal_flaw_detection": false,
+      "fatal_sensitivity": false,
+      "fatal_specificity": false,
+      "fatal_precision": false,
+      "fatal_false_positive_rate": false,
+      "calibration_freshness": false,
+      "model_config_match": false,
+      "schema_match": false
+    },
+    "axis_ready": false,
+    "axis_checks": {
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "scope": [
+      "overall_pairwise_ranking",
+      "fatal_defect_detection"
+    ],
+    "evaluator_composition": {
+      "primary_only": 0,
+      "composite": 0,
+      "adjudicator_decisions": 0,
+      "legacy_or_unidentified": 3
+    },
+    "meaning": "Safe only for bounded overall A/B ranking against deterministic perturbations"
+  },
+  "runtime_score_reliability": {
+    "ready": false,
+    "proxy_ready": false,
+    "human_ready": false,
+    "checks": {
+      "explicitly_validated": false,
+      "evaluator_schema_match": false,
+      "packet_modality_match": false
+    },
+    "declared_contract": {
+      "validated": false,
+      "evaluator_schema": null,
+      "packet_modality": null
+    },
+    "required_contract": {
+      "evaluator_schema": "judge-role-v1",
+      "packet_modality": "modeling-factory-judge-packet-v2"
+    },
+    "meaning": "Runtime comparison requires calibration of the exact judge-role-v1 evaluator over Modeling Factory judge packet v2 inputs"
+  },
+  "axis_reliability": {
+    "ready": false,
+    "checks": {
+      "correctness_pairwise_accuracy": false,
+      "writing_pairwise_accuracy": false
+    },
+    "meaning": "Correctness and writing sub-axis labels require separate validation"
+  },
+  "human_calibration": {
+    "ready": false,
+    "reason": "no independent human ground truth"
+  },
+  "award_prediction_ready": false
 }

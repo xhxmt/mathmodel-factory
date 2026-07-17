@@ -32,8 +32,24 @@ ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "evaluation" / "results"
 PARSER = ROOT / "scripts" / "parse_judge_score.py"
 
-# 6 CUMCM rubric dimensions, in canonical order (parse_judge_score.py:44).
-DIMS = ("模型合理性", "求解正确性", "创新性", "写作清晰度", "结果说服力", "灵敏度分析")
+# Current judge-aggregate-v1 paper dimensions.  Math and execution validity are
+# hard states and must not be averaged into these conditional quality scores.
+DIMS = (
+    "model_presentation",
+    "solution_narrative",
+    "innovation",
+    "writing_clarity",
+    "result_persuasiveness",
+    "sensitivity_limitations",
+)
+DIM_LABELS = {
+    "model_presentation": "模型呈现",
+    "solution_narrative": "求解叙事",
+    "innovation": "创新性",
+    "writing_clarity": "写作清晰",
+    "result_persuasiveness": "结果说服",
+    "sensitivity_limitations": "敏感局限",
+}
 
 
 def resolve_json(base: str) -> Path | None:
@@ -77,6 +93,20 @@ def load(base: str) -> dict | None:
         print(f"WARN: no eval JSON for '{base}' (looked in {RESULTS})", file=sys.stderr)
         return None
     agg = json.loads(jp.read_text(encoding="utf-8"))
+    # The parser-level ``comparison_ready`` field only means that every role
+    # output is current-schema and both hard auditors passed.  It does not prove
+    # that the runtime evaluator is calibrated for comparison.  Require an
+    # enriched purpose-specific readiness flag: human truth is stronger than
+    # proxy truth, but the generic parser flag is never a substitute for either.
+    if (
+        agg.get("comparison_ready_proxy") is not True
+        and agg.get("comparison_ready_human") is not True
+    ):
+        print(
+            f"ERROR: '{base}' is not calibrated-comparison-ready; run proxy- or human-calibrated evaluation first.",
+            file=sys.stderr,
+        )
+        return None
     return {
         "base": base,
         "total": agg.get("median_recomputed"),
@@ -134,7 +164,7 @@ def main() -> int:
         return 0
 
     # Text table.
-    short = {d: d[:4] for d in DIMS}
+    short = {d: DIM_LABELS[d][:4] for d in DIMS}
     hdr = f"{'project':<34} {'total':>6}  " + "  ".join(f"{short[d]:>5}" for d in DIMS)
     print(hdr)
     print("-" * len(hdr))
@@ -154,7 +184,10 @@ def main() -> int:
         drops = {d: v["dims"][d] - base["dims"][d]
                  for d in DIMS if d in v["dims"] and d in base["dims"]}
         worst = min(drops, key=drops.get) if drops else None
-        worst_s = f"  ↓most: {worst} ({drops[worst]:+.1f})" if worst is not None else ""
+        worst_s = (
+            f"  ↓most: {DIM_LABELS[worst]} ({drops[worst]:+.1f})"
+            if worst is not None else ""
+        )
         print(f"{v['base']:<34} {fmt_delta(tdelta):>6}  {cells}{worst_s}")
 
     return 0

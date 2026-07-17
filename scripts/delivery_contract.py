@@ -18,7 +18,7 @@ if __package__ in (None, ""):
 from scripts import evaluate_modeling_project, workflow_state
 
 
-CURRENT_CONTRACT_VERSION = "2026-07-10.quality_contract_v1"
+CURRENT_CONTRACT_VERSION = "2026-07-17.final_judge_v3"
 
 
 def utc_now() -> str:

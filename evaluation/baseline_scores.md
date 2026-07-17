@@ -1,45 +1,46 @@
-# 外部评估校准基线 — Baseline Scores
+# 外部评估基线状态 — Baseline Scores
 
-> **状态更新（2026-07-10）**：下列分数来自旧的合并上下文评委，现仅作历史记录。
-> 当前评测已改为数学、执行、论文三类隔离调用并采用正确性否决；新的活跃校准入口是
-> `evaluation/calibration_manifest.json` 与 `scripts/evaluate_calibration.py`。在真实论文缺失的新结果补齐前，
-> 不得把下列绝对分数宣称为当前评委精度。
-
-> 由 `evaluation/run_evaluation.sh` 在两道已完成真题上跑出的客观外部读数，
-> 提交进 git 作为后续 prompt 迭代（5.3）/ 消融实验（5.4）的对照基线。
-> 这不是流水线自评（in-loop Step 13），而是**独立外部评委**给出的分数。
+> **当前状态（2026-07-17）：没有可用于绝对分或奖级预测的活跃基线。**
 >
-> **当前基线评委：`deepseek-chat`**（2026-06-04 重跑）。早期 `haiku[1m]` 读数见文末
-> "附录 A：haiku 时代基线（已归档）"，保留作历史对照，不再作为活跃基线。
+> 本页保留的 2026-06 读数来自旧合并上下文评分卡，统一视为 `LEGACY_UNVERIFIED`。
+> 它们缺少当前 `judge-role-v1` / `judge-aggregate-v1`、数学与执行硬角色状态、packet / prompt / 配置指纹及最终提交输入指纹，因此不能与当前结果横比，也不能继续作为消融效应或模型精度的 ground truth。
 
-## 运行配置（可复现）
+## 当前基线准入条件
 
-| 项 | 值 |
-|---|---|
-| 日期 | 2026-06-04 |
-| 评委模型 | `deepseek-chat`（DeepSeek API，`DEEPSEEK_API_KEY`；经 `scripts/llm_judge_call.py` 分派） |
-| 采样 | K=3，取中位数；记录 min/max spread |
-| 入参 | 论文 `.tex` + 6 个证据文件 + `verify_numbers` 的 UNMATCHED 计数 |
-| 命令 | `JUDGE_TIMEOUT=300 ./evaluation/run_evaluation.sh complete/<base> --samples 3` |
-| 总分口径 | **`median_recomputed`**（夹紧后六维加权均分之和），而非评委手写的 `整体得分`——理由见下方"评委的总分锚定"。 |
+新的基线条目必须同时满足：
 
-## 结果
+1. 对 Step 15 后的最终提交输入评分，且 `judge_outputs/final_submission.sha256` 与当前三角色 packet、论文资产和实际交付 PDF 字节一致；
+2. 数学审计和执行审计均为 `PASS`，没有 `FAIL` 或 `INDETERMINATE`；
+3. 论文角色与聚合结果分别满足当前严格 schema，所有请求运行都可解析；
+4. 结果位于不可变 `evaluation/results/runs/<base>/<run_id>/`，并记录模型、prompt、实现和 packet 的配置指纹；
+5. 校准报告身份新鲜且与运行模型 / schema 匹配；
+6. 只在 `comparison_ready_proxy=true` 时做已知退化范围内的 A/B 诊断；只在 `comparison_ready_human=true` 时做有人类真值支持的质量横比；只有 `award_prediction_ready=true` 时才讨论奖级。
 
-| 项目 | 外部中位数(重算) | 外部 spread | 评委手写总分(锚定) | in-loop ground truth |
-|---|---:|---:|---:|---:|
-| `test_cumcm2024a` | **66.3** | 65.3 – 69.0 | 68.2 | 80.2（良） |
-| `test_cumcm2024b` | **70.6** | 70.3 – 74.0 | 68.2 | 86.4（优） |
+在这些条件补齐前，`/100` 只能是条件论文质量的诊断读数，不能解释为获奖概率或真实评委绝对分。
 
-### 健全性约束：序保持 ✅
+## K 次调用的正确解释
 
-外部 `2024b (70.6) > 2024a (66.3)`，与 in-loop 序（`86.4 > 80.2`）一致 → **未翻转**。
-两篇论文的**得分区间完全不重叠**（2024a 65.3–69.0 vs 2024b 70.3–74.0）——
-即每一个 2024b 采样都高于每一个 2024a 采样。DeepSeek 的方差极小（spread < 4 分，
-remarkably 比 haiku 的 13–16 分窄），区分度稳。
+旧记录使用 K=3 并报告 min/max spread。当前 API 评委路径使用 `temperature=0`，所以同一模型、同一 prompt、同一 packet 的 K 次调用不是独立统计重复：
 
-### 各维度中位数（满分：模型/求解/创新=20，写作/说服力=15，灵敏度=10）
+- 低 spread 不证明评分器可靠；
+- spread 不等于置信区间；
+- 三次相同结果不等于生成方差或人类评委方差为零；
+- K 次调用的当前用途是暴露格式失败、角色不一致和后端非确定性；任何一轮硬 FAIL / INDETERMINATE 都不能被其余轮次的中位数丢弃。
 
-| 维度 | 2024a 外部 | 2024a in-loop | 2024b 外部 | 2024b in-loop |
+真正的可靠性必须来自外部人类真值、位置平衡的盲比、致命错误的 sensitivity / specificity / precision，以及跨题型留出集。
+
+## 历史读数（`LEGACY_UNVERIFIED`）
+
+下列数据只用于重建旧实验发生过什么，不代表当前评分轴。
+
+| 项目 | 旧外部中位数 | 旧 spread | 旧评委手写总分 | 旧 in-loop 读数 | 当前状态 |
+|---|---:|---:|---:|---:|---|
+| `test_cumcm2024a` | 66.3 | 65.3–69.0 | 68.2 | 80.2 | `LEGACY_UNVERIFIED` |
+| `test_cumcm2024b` | 70.6 | 70.3–74.0 | 68.2 | 86.4 | `LEGACY_UNVERIFIED` |
+
+旧六维读数如下，同样不可与当前“模型呈现 / 求解叙事 / 敏感性与局限”schema 混用：
+
+| 旧维度 | 2024a 外部 | 2024a in-loop | 2024b 外部 | 2024b in-loop |
 |---|---:|---:|---:|---:|
 | 模型合理性 (20) | 13.0 | 16.7 | 13.0 | 17.7 |
 | 求解正确性 (20) | 11.0 | 16.3 | 14.0 | 17.7 |
@@ -48,69 +49,30 @@ remarkably 比 haiku 的 13–16 分窄），区分度稳。
 | 结果说服力 (15) | 9.0 | 12.7 | 11.0 | 13.7 |
 | 灵敏度分析 (10) | 6.3 | 8.7 | 6.3 | 9.0 |
 
-维度层面 2024b 在求解(14 vs 11)、说服力(11 vs 9)上明显占优，这正是序得以保持的来源。
-DeepSeek 普遍比 in-loop 严 3–5 分/维度，符合"独立外部评委更苛刻"的预期。
+历史上 `2024b > 2024a` 的顺序一致和区间不重叠，只能称为这六次旧调用中的观察现象。由于样本不是独立统计重复、评分契约已经变化且没有足量人类真值，不能据此宣称“区分度稳定”或“统计显著”。
 
-## 诚实的局限（必须随基线一起记）
+## 旧评委行为记录
 
-1. **评委的总分锚定（DeepSeek 的核心怪癖）。** `deepseek-chat` 倾向于把手写的
-   `整体得分:` 锁在一个近乎常数的值上，几乎不随它自己的六维评分变化——本轮 6 个 run 的
-   手写总分全在 **68.2–68.4**（方差 0.2），而底层夹紧六维加权和却从 65.3 跨到 74.0（跨度 8.7）。
-   若直接采信手写总分，两篇会假性打平、序崩。**对策：基线总分一律用 `median_recomputed`**
-   （夹紧后六维加权均分之和，六维满分合计 100 → 本身就是 0–100 分）。该口径在两个 in-loop
-   文件上验证为 81.8 / 88.1，与评委手写的 80.2 / 86.4 仅差恒定 ~1.6（手算舍入），序一致。
-   解析器（`scripts/parse_judge_score.py`）现同时输出 `total`（手写，向后兼容）、
-   `total_adjusted`（手写减溢出）、`total_recomputed`（横比用）。
-2. **维度满分溢出。** DeepSeek 偶发把"灵敏度分析"打成 13/10 或 14/10（6 个 run 中 2 次）。
-   解析器现**自动夹紧**到维度满分并在 `overflow_clamped` / `any_clamped` 标记，溢出量从
-   `total_adjusted` / `total_recomputed` 中剔除，故不再污染横比（这是从 harness 的
-   `_parse_score` 对齐过来的同款夹紧，消除了两个解析器的漂移）。
-3. **方差极小是优点也是提醒。** DeepSeek 的 spread < 4 分，远好于 haiku 的 13–16 分，
-   K=3 已足够稳。但低方差 + 总分锚定意味着**绝对值不可逐分采信**；基线的价值仍在
-   **序 / 区分度 / 独立视角**，而非与 in-loop 逐分对齐。
+- `deepseek-chat` 的手写总分曾集中在 68.2–68.4，而旧六维重算和为 65.3–74.0，显示明显总分锚定。
+- 旧输出曾出现维度超出满分；旧解析器用夹紧和重算维持数值可用性。当前严格 schema 不再静默夹紧，越界或总分不等于六维和会使角色结果 INDETERMINATE。
+- 旧扰动实验中，haiku 的总分扣分检出率为 0/15，DeepSeek 为 11/15；这只支持“DeepSeek 在该旧代理集上更敏感”，不等价于人类评分准确率或奖级校准。
 
-## 模型决策：为什么从 `haiku[1m]` 切到 `deepseek-chat`
-
-阶段 5.3b 的扰动实验（`scripts/perturbation_harness.py`）是决定性证据：故意破坏论文
-（删推导、篡改结果数字）后看评委能否扣分。
-
-| 评委 | 总分扣分检出率 | 维度扣分检出率 |
-|---|---:|---:|
-| `haiku[1m]` | 0/15 = **0%** | 6/15 = 40% |
-| `deepseek-chat` | 11/15 = **73%** | 8/13 = 62% |
-
-haiku 对"被破坏的论文"几乎无动于衷（总分零检出），不能作为可信的质量判别器。
-DeepSeek 检出率高一个数量级，且在本机路由上不像 `opus[1m]` 那样卡死（后者对重型评委
-请求 300s 0 字节，详见附录 A）。`deepseek-chat` 与流水线的 codex/gpt 谱系不同，
-self-preference 偏置的初衷仍成立。模型是 `CLAUDE_MODEL` 一行可覆盖的旋钮：
-若有直连 Anthropic key 的端点，可 `CLAUDE_MODEL=opus` 试更强评委。
-
-## 复现
+## 查看旧结果
 
 ```bash
-# 解析器对 in-loop 文件应得 total=80.2/86.4, recomputed=81.8/88.1
+# 当前解析器会保留旧数字用于诊断，同时返回 legacy=true、
+# status=LEGACY_UNVERIFIED、comparison_ready=false。
 python3 scripts/parse_judge_score.py complete/test_cumcm2024a/judge_evaluation.md
 python3 scripts/parse_judge_score.py complete/test_cumcm2024b/judge_evaluation.md
-
-# 重跑外部校准（DeepSeek 方差小；序应保持 2024b > 2024a，看 median_recomputed）
-JUDGE_TIMEOUT=300 ./evaluation/run_evaluation.sh complete/test_cumcm2024a --samples 3
-JUDGE_TIMEOUT=300 ./evaluation/run_evaluation.sh complete/test_cumcm2024b --samples 3
 ```
 
----
+不要把上述命令的 legacy 数字复制到新的对比报告。新基线应通过当前 `evaluation/run_evaluation.sh` 生成不可变运行，并在本页另建“当前 schema 基线”章节；在此之前保持空缺比伪造可比性更可靠。
 
-## 附录 A：haiku 时代基线（已归档，2026-06-02）
+## haiku 历史附录（已归档）
 
-下表为切换到 DeepSeek 之前、用 `haiku[1m]` 跑出的第一份外部读数，保留作历史对照。
-**不再是活跃基线**——haiku 的扰动检出率为 0%（见"模型决策"），不可信。
+| 项目 | 旧外部中位数 | 旧 spread | n_scored | 当前状态 |
+|---|---:|---:|---:|---|
+| `test_cumcm2024a` | 73.0 | 65.0–81.0 | 2/3 | `LEGACY_UNVERIFIED` |
+| `test_cumcm2024b` | 94.7 | 86.0–99.3 | 3/3 | `LEGACY_UNVERIFIED` |
 
-| 项目 | 外部中位数 | 外部 spread | n_scored | 偏差(外-内) |
-|---|---:|---:|---:|---:|
-| `test_cumcm2024a` | 73.0 | 65.0 – 81.0 | 2/3 | −7.2 |
-| `test_cumcm2024b` | 94.7 | 86.0 – 99.3 | 3/3 | +8.3 |
-
-haiku 时代的已知问题：单次方差 13–16 分；偶发首行非 `VERDICT:`（2024a 1/3 次无分）；
-1 次把灵敏度打成 18.33/10 把总分抬到 99.3（当时解析器不夹紧，现已修复）。
-当时的"模型决策"是：`opus[1m]` 在 `anyrouter.top` 路由上对重型评委请求卡死
-（300s 0 字节），`sonnet[1m]` 连 PONG 都超时，`haiku[1m]` 是唯一能完成的 Claude 模型
-（~40–150s）。这一路由限制依旧成立，故现选 DeepSeek 而非 Claude 大模型。
+这些读数还包含首行格式失败、维度溢出和路由超时等已知问题，只保留为历史诊断材料。
