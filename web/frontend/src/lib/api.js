@@ -6,6 +6,7 @@ import {
   normalizeCloudConfig,
   normalizeProjectRequest,
   normalizeProjectStatus,
+  normalizeShowcasePaper,
   normalizeStepsPayload,
 } from './contracts.js'
 
@@ -115,6 +116,13 @@ export const Projects = {
   paperUrl: (b, download = false) => `/api/projects/${b}/paper${download ? '?download=1' : ''}`,
 }
 
+export const Showcase = {
+  list: () => api.get('/api/showcase/papers').then((r) => (
+    Array.isArray(r.data) ? r.data.map(normalizeShowcasePaper) : []
+  )),
+  downloadUrl: (paper) => `${paper.pdf_url}?download=1`,
+}
+
 // Fetch an authenticated binary resource as an object URL (for <img>/<iframe>,
 // which cannot carry the Bearer header themselves).
 export async function fetchBlobUrl(url) {
@@ -151,7 +159,7 @@ export function relativeTime(ts) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m 前`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h 前`
   if (diff < 604800) return `${Math.floor(diff / 86400)}d 前`
-  return ts.split(' ')[0]
+  return ts.split(/[ T]/)[0]
 }
 
 export function formatBytes(n) {

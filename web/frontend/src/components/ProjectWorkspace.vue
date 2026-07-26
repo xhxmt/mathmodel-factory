@@ -472,6 +472,7 @@ export default {
     // absent ?tab leaves the consultation auto-jump / default 'overview' intact.
     watch(() => route.query.tab, (tab) => {
       if (typeof tab !== 'string' || !VALID_TABS.has(tab)) return
+      if (!tabs.value.some((available) => available.key === tab)) return
       if (tab === activeTab.value) return
       syncingTab = true
       activeTab.value = tab
@@ -567,6 +568,7 @@ export default {
 .ws {
   position: fixed; inset: 0; z-index: 200;
   display: flex; flex-direction: column;
+  min-width: 0; overflow-x: hidden;
   background: var(--bg);
   background-image:
     linear-gradient(var(--grid) 1px, transparent 1px),
@@ -659,7 +661,7 @@ export default {
 .ws-tab.attention { color: var(--amber); }
 .ws-tab.attention.on { border-color: var(--amber-line); background: var(--amber-dim); }
 
-.ws-scroll { flex: 1; overflow-y: auto; padding: 18px 20px 32px; display: flex; flex-direction: column; gap: 16px; }
+.ws-scroll { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 20px 32px; display: flex; flex-direction: column; gap: 16px; }
 
 .ws-split { display: grid; grid-template-columns: 0.92fr 1.25fr; gap: 16px; min-height: 520px; }
 .ws-logs { height: 62vh; min-height: 420px; }
@@ -705,8 +707,18 @@ export default {
   .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
+  .ws-head { padding: 10px 12px; gap: 8px; }
+  .wh-left { flex: 1; gap: 9px; }
+  .wh-id { overflow: hidden; }
+  .wh-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wh-sub { gap: 6px; }
+  .wh-right { gap: 4px; }
   .wh-right .btn span { display: none; }
+  .wh-right .btn { width: 32px; height: 32px; padding: 0; }
   .cloud-switch { padding-right: 5px; }
+  .cloud-switch .hide-xs { display: none; }
+  .ws-tabs { padding-inline: 12px; }
+  .ws-scroll { padding: 16px 12px 24px; }
   .overview-grid { grid-template-columns: 1fr; }
   .tab-panel { height: auto; min-height: 420px; }
 }

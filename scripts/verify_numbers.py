@@ -21,6 +21,7 @@ Usage:
 
 import glob
 import json
+import math
 import os
 import re
 import sys
@@ -48,6 +49,12 @@ def extract_tex_numbers(tex_path: str | Path) -> List[Dict[str, Any]]:
     if doc_start >= 0:
         text = text[doc_start:]
 
+    text = re.sub(
+        r'\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}',
+        '',
+        text,
+        flags=re.DOTALL,
+    )
     text = re.sub(
         r'\\(?:label|ref|input|includegraphics|cite[tp]?|citealp|hypersetup|bibliographystyle|bibliography)\{[^}]*\}',
         '',
@@ -271,6 +278,67 @@ def generate_manifest(project_dir: Path) -> None:
     print(f"  Total values: {sum(len(v) for v in manifest.values())}")
 
 
+def _resolve_dotted_json_path(document: Any, dotted_path: str) -> Any:
+    """Resolve paths such as ``decision.d.Si`` or ``cases[4].d_um``."""
+    current = document
+    for segment in dotted_path.split("."):
+        match = re.fullmatch(r"([^\[\]]+)((?:\[\d+\])*)", segment)
+        if match is None:
+            raise KeyError(f"invalid path segment: {segment}")
+        current = current[match.group(1)]
+        for index in re.findall(r"\[(\d+)\]", match.group(2)):
+            current = current[int(index)]
+    return current
+
+
+def validate_key_result_sources(project_dir: Path) -> List[Tuple[str, str, str]]:
+    """Check that each key-result value equals its declared canonical source."""
+    issues: List[Tuple[str, str, str]] = []
+    results_dir = project_dir / "results"
+    project_root = project_dir.resolve()
+    cache: Dict[Path, Any] = {}
+
+    for key_file in sorted(results_dir.rglob("*.json")):
+        try:
+            payload = json.loads(key_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or not isinstance(payload.get("key_results"), list):
+            continue
+
+        for item in payload["key_results"]:
+            if not isinstance(item, dict) or "canonical_source" not in item or "value" not in item:
+                continue
+            label = str(item.get("label", "unnamed key result"))
+            source_spec = str(item["canonical_source"])
+            try:
+                relative_path, dotted_path = source_spec.split("::", 1)
+                source_path = (project_dir / relative_path).resolve()
+                if source_path != project_root and project_root not in source_path.parents:
+                    raise ValueError("source escapes project directory")
+                if source_path not in cache:
+                    cache[source_path] = json.loads(source_path.read_text(encoding="utf-8"))
+                canonical_value = _resolve_dotted_json_path(cache[source_path], dotted_path)
+                declared_value = item["value"]
+                if isinstance(declared_value, bool) or isinstance(canonical_value, bool):
+                    equal = declared_value == canonical_value
+                elif isinstance(declared_value, (int, float)) and isinstance(canonical_value, (int, float)):
+                    equal = math.isclose(
+                        float(declared_value),
+                        float(canonical_value),
+                        rel_tol=1e-12,
+                        abs_tol=1e-12,
+                    )
+                else:
+                    equal = declared_value == canonical_value
+                if not equal:
+                    issues.append((label, source_spec, f"declared={declared_value!r}, canonical={canonical_value!r}"))
+            except (OSError, ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+                issues.append((label, source_spec, str(exc)))
+
+    return issues
+
+
 def _strip_non_content_latex(line: str) -> str:
     """Remove LaTeX commands whose numeric arguments are formatting, not results."""
     line = re.sub(r'\\includegraphics(?:\[[^\]]*\])?\{[^}]*\}', '', line)
@@ -301,6 +369,7 @@ def extract_numbers_from_tex(tex_file: Path) -> List[Tuple[int, str, float]]:
 
     in_document = False
     in_references = False
+    in_tikzpicture = False
 
     with open(tex_file) as f:
         for line_num, line in enumerate(f, start=1):
@@ -308,6 +377,14 @@ def extract_numbers_from_tex(tex_file: Path) -> List[Tuple[int, str, float]]:
                 in_document = True
                 line = line.split(r"\begin{document}", 1)[1]
             if not in_document:
+                continue
+            if r"\begin{tikzpicture}" in line:
+                in_tikzpicture = True
+                continue
+            if r"\end{tikzpicture}" in line:
+                in_tikzpicture = False
+                continue
+            if in_tikzpicture:
                 continue
             if r"\section{参考文献}" in line or r"\begin{thebibliography}" in line:
                 in_references = True
@@ -364,6 +441,7 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
     # Verify that the manifest still reflects current result artifacts.
     current_sources = scan_results_directory(project_dir)
     source_mismatches = []
+    key_result_source_issues = validate_key_result_sources(project_dir)
 
     # Build reverse lookup entries.  Do not collapse duplicate values: common
     # integers such as 0/1/2 may legitimately appear in multiple result files
@@ -416,7 +494,7 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
         f.write(f"Paper: `{base_name}_paper.tex`\n")
         f.write(f"Manifest: `numbers_manifest.json`\n\n")
 
-        if not untraced and not source_mismatches:
+        if not untraced and not source_mismatches and not key_result_source_issues:
             f.write("✓ All numerical values are traced to source files.\n")
             print("✓ Number verification passed")
             return True
@@ -433,6 +511,12 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
             f.write("The manifest is stale relative to current result artifacts:\n\n")
             for source, key, reason in source_mismatches:
                 f.write(f"- `{source}::{key}` ({reason})\n")
+            f.write("\n")
+
+        if key_result_source_issues:
+            f.write(f"## Key-Result Canonical Source Mismatches ({len(key_result_source_issues)})\n\n")
+            for label, source, reason in key_result_source_issues:
+                f.write(f"- `{label}` -> `{source}` ({reason})\n")
             f.write("\n")
 
     print(f"✗ Number verification found issues. See {report_file}")

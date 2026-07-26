@@ -90,10 +90,22 @@ export function normalizeArtifact(raw = {}) {
 
 export function normalizeStepsPayload(raw = {}) {
   const steps = Array.isArray(raw.steps) ? raw.steps : []
+  const openIssueItems = Array.isArray(raw.open_issue_items)
+    ? raw.open_issue_items.map((issue) => ({
+        id: String(issue?.id || ''),
+        step: String(issue?.step || ''),
+        severity: String(issue?.severity || ''),
+        status: String(issue?.status || ''),
+        location: String(issue?.location || ''),
+        issue: String(issue?.issue || ''),
+        required_action: String(issue?.required_action || ''),
+      }))
+    : []
   return {
     ...raw,
     current_step: numberOr(raw.current_step, -1),
-    open_issues: numberOr(raw.open_issues, 0),
+    open_issues: numberOr(raw.open_issues, openIssueItems.length),
+    open_issue_items: openIssueItems,
     paper_available: Boolean(raw.paper_available),
     steps: steps.map((step) => ({
       ...step,
@@ -130,6 +142,17 @@ export function normalizeAuthUser(raw = {}) {
     role: String(raw.role || 'user'),
     status: String(raw.status || ''),
     display_name: String(raw.display_name || ''),
+  }
+}
+
+export function normalizeShowcasePaper(raw = {}) {
+  return {
+    base_name: String(raw.base_name || ''),
+    title: String(raw.title || raw.base_name || ''),
+    collection: String(raw.collection || 'Paper Factory'),
+    updated_at: stringOrNull(raw.updated_at),
+    size_bytes: Math.max(0, numberOr(raw.size_bytes, 0)),
+    pdf_url: String(raw.pdf_url || ''),
   }
 }
 

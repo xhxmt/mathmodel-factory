@@ -386,6 +386,59 @@ def test_verify_numbers_handles_latex_commands_and_exponents(tmp_path):
     assert verify_paper(project, base) is True
 
 
+def test_verify_numbers_ignores_tikz_layout_coordinates_but_checks_caption(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(project / "results" / "p1" / "values.json", json.dumps({"result": 42.5}))
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n"
+        "\\begin{figure}\n"
+        "\\begin{tikzpicture}\n"
+        "\\draw (1.25,3.75) -- (8.5,9.5);\n"
+        "\\end{tikzpicture}\n"
+        "\\caption{Verified result: 42.5.}\n"
+        "\\end{figure}\n"
+        "\\end{document}\n",
+    )
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is True
+
+
+def test_verify_numbers_rejects_key_result_that_disagrees_with_canonical_source(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(project / "results" / "p1" / "values.json", json.dumps({"decision": {"d": 42.5}}))
+    write_file(
+        project / "results" / "key_results.json",
+        json.dumps(
+            {
+                "key_results": [
+                    {
+                        "label": "headline thickness",
+                        "value": 41.5,
+                        "canonical_source": "results/p1/values.json::decision.d",
+                    }
+                ]
+            }
+        ),
+    )
+    write_file(project / f"{base}_paper.tex", "\\begin{document}\nResult: 41.5.\n\\end{document}\n")
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is False
+    report = (project / "number_verification.md").read_text(encoding="utf-8")
+    assert "Key-Result Canonical Source Mismatches" in report
+    assert "headline thickness" in report
+
+
 def test_verify_symbols_treats_big_set_operators_as_latex_noise(tmp_path):
     project = tmp_path / "proj"
     base = "proj"
@@ -477,6 +530,65 @@ def test_codex_only_mode_blocks_claude_backend_and_default_fallbacks():
     assert 'CODEX_ONLY=1: using Codex instead of built-in default' in dispatch
     assert 'CODEX_ONLY=1: configured model(s) failed; not invoking built-in default' in dispatch
     assert 'CODEX_ONLY=1: Claude fallback disabled' in wrappers
+
+
+def test_codex_only_mode_uses_isolated_codex_judge_calls():
+    runner = Path(REPO_ROOT) / "run_paper.sh"
+    text = runner.read_text(encoding="utf-8")
+    backend = text[text.index("run_backend() {") : text.index("# Generic per-step dispatch")]
+    role_runner = text[
+        text.index("run_independent_judge_role() {") : text.index("run_step_13() {")
+    ]
+
+    assert '[[ "$backend" != "codex" ]]' in backend
+    assert '"$backend" == "gemini" && -n "${JUDGE_ROLE_OUTPUT:-}"' not in backend
+    assert "openai|deepseek|gemini|claude|codex" in role_runner
+    assert "run_codex_isolated_judge_role" in role_runner
+
+
+def test_step13_treats_unavailable_judge_role_as_retryable_error():
+    runner = Path(REPO_ROOT) / "run_paper.sh"
+    text = runner.read_text(encoding="utf-8")
+    step13 = text[text.index("run_step_13() {") : text.index("run_final_submission_judge() {")]
+
+    assert "run_independent_judge_role paper judges/paper_reviewer.txt || return 1" in step13
+    assert "run_independent_judge_role math judges/math_auditor.txt || return 1" in step13
+    assert "run_independent_judge_role execution judges/execution_auditor.txt || return 1" in step13
+
+
+def test_codex_judge_has_isolated_tui_fallback_for_exec_channel_outages():
+    runner = Path(REPO_ROOT) / "run_paper.sh"
+    text = runner.read_text(encoding="utf-8")
+    role = text[
+        text.index("run_codex_isolated_judge_role() {") : text.index("run_independent_judge_role() {")
+    ]
+
+    assert "scripts/run_codex_tui_judge.py" in role
+    assert '--workdir "$isolated_root"' in role
+    assert '--output-file "$isolated_output"' in role
+    assert 'printf \'%s\\n\' "$rendered" > "$role_prompt"' in role
+
+
+def test_step16_cleans_before_final_judge_fingerprint_is_built():
+    runner = Path(REPO_ROOT) / "run_paper.sh"
+    text = runner.read_text(encoding="utf-8")
+    step16 = text[text.index("run_step_16() {") : text.index("# ── Main step loop")]
+
+    cleanup = step16.index('cleanup_project_artifacts.py" "$PROJECT"')
+    hard_acceptance = step16.index('step16_hard_acceptance "$PROJECT"')
+    final_judge = step16.index("run_final_submission_judge")
+    delivery_gate = step16.index("delivery_quality_gate")
+
+    assert cleanup < hard_acceptance < final_judge < delivery_gate
+    assert step16.count('cleanup_project_artifacts.py" "$PROJECT"') == 1
+
+
+def test_step16_post_judge_verification_does_not_rewrite_fingerprinted_reports():
+    runner = Path(REPO_ROOT) / "run_paper.sh"
+    text = runner.read_text(encoding="utf-8")
+    verify_output = text[text.index("verify_step_output() {") : text.index("# ── Error classification")]
+
+    assert 'step16_hard_acceptance "$P" 0 || return 1' in verify_output
 
 
 def test_claude_worker_has_stale_activity_kill_path():

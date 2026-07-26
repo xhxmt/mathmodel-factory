@@ -84,10 +84,12 @@ def test_frontend_runtime_helpers_handle_bad_ws_messages_and_failed_status():
 import assert from 'node:assert/strict'
 import { parseRealtimeMessage } from './web/frontend/src/lib/realtime.js'
 import { statusLabel } from './web/frontend/src/lib/status.js'
+import { relativeTime } from './web/frontend/src/lib/api.js'
 
 assert.deepEqual(parseRealtimeMessage('{"type":"status_update"}'), { type: 'status_update' })
 assert.equal(parseRealtimeMessage('not-json'), null)
 assert.equal(statusLabel('failed'), '失败')
+assert.equal(relativeTime('2020-01-02T03:04:05+00:00'), '2020-01-02')
 """
     )
 
@@ -105,6 +107,26 @@ const html = renderMarkdown('[bad](javascript:alert(1)) [quote](https://example.
 assert.equal(html.includes('javascript:'), false)
 assert.equal(html.includes('onclick='), false)
 assert.match(html, /href="https:\\/\\/example\\.test\\/%22/)
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_markdown_renderer_renders_issue_ledger_math_and_inline_code():
+    result = run_node(
+        r"""
+import assert from 'node:assert/strict'
+import { renderMarkdown } from './web/frontend/src/lib/markdown.js'
+
+const html = renderMarkdown(
+  '使用 $0.416521499\\,\\mu$m，误差 $7.56\\times10^{-6}\\,\\mu$m，文件 `results/sensitivity/*.json`'
+)
+
+assert.equal((html.match(/class="katex"/g) || []).length, 2)
+assert.match(html, /class="md-code"/)
+assert.match(html, />μ</)
+assert.match(html, />×</)
 """
     )
 
@@ -146,7 +168,21 @@ assert.deepEqual(normalizeArtifact({ path: 'models/a.py', size: '42' }), {
   mtime: null,
 })
 
-assert.equal(normalizeStepsPayload({ steps: [{ artifacts: [{ path: 'paper.md' }] }] }).steps[0].artifacts[0].name, 'paper.md')
+const normalizedSteps = normalizeStepsPayload({
+  steps: [{ artifacts: [{ path: 'paper.md' }] }],
+  open_issue_items: [{ id: 7, step: 11, severity: 'MINOR', status: 'OPEN', issue: 'Fix appendix' }],
+})
+assert.equal(normalizedSteps.steps[0].artifacts[0].name, 'paper.md')
+assert.equal(normalizedSteps.open_issues, 1)
+assert.deepEqual(normalizedSteps.open_issue_items[0], {
+  id: '7',
+  step: '11',
+  severity: 'MINOR',
+  status: 'OPEN',
+  location: '',
+  issue: 'Fix appendix',
+  required_action: '',
+})
 assert.deepEqual(normalizeCloudConfig({ enabled: 1, solver_types: 'python,julia' }).solver_types, ['python', 'julia'])
 """
     )
@@ -161,6 +197,7 @@ import assert from 'node:assert/strict'
 import {
   normalizeAuthUser,
   normalizeProjectRequest,
+  normalizeShowcasePaper,
 } from './web/frontend/src/lib/contracts.js'
 
 assert.deepEqual(normalizeAuthUser({ username: 'alice', role: 'user', status: 'active', display_name: 'Alice' }), {
@@ -170,6 +207,14 @@ assert.deepEqual(normalizeAuthUser({ username: 'alice', role: 'user', status: 'a
   display_name: 'Alice',
 })
 assert.equal(normalizeAuthUser({ username: 'admin' }).role, 'user')
+assert.deepEqual(normalizeShowcasePaper({ base_name: 'demo', size_bytes: '42', pdf_url: '/demo.pdf' }), {
+  base_name: 'demo',
+  title: 'demo',
+  collection: 'Paper Factory',
+  updated_at: null,
+  size_bytes: 42,
+  pdf_url: '/demo.pdf',
+})
 assert.deepEqual(normalizeProjectRequest({ id: '7', requester: 'alice', base_name: 'demo', consult: 1 }), {
   id: 7,
   requester: 'alice',
@@ -448,6 +493,7 @@ const tabs = workspaceTabs({
 })
 assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'logs', 'artifacts', 'diagnostics', 'consultation', 'cloud'])
 assert.equal(tabs.find((t) => t.key === 'diagnostics').attention, true)
+assert.equal(workspaceTabs({}).some((t) => t.key === 'consultation'), false)
 assert.equal(workspaceTabs({ selectionPending: true }).find((t) => t.key === 'selection').attention, true)
 
 const artifacts = priorityArtifacts([

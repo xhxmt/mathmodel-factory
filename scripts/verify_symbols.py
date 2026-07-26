@@ -245,6 +245,14 @@ def extract_used_symbols(paper_path: str):
                 ' ',
                 m.group(1),
             )
+            # Environment names and textual operator labels are structure, not
+            # mathematical symbols (for example "aligned" and "MAD").
+            expr = re.sub(r'\\(?:begin|end)\{[^{}]*\}', ' ', expr)
+            expr = re.sub(
+                r'\\(?:operatorname|text|mathrm|textrm|texttt)\{[^{}]*\}',
+                ' ',
+                expr,
+            )
             ln = line_of(m.start())
             for tok in _split_math_tokens(expr):
                 base = normalize_symbol(tok)

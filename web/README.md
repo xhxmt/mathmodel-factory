@@ -8,6 +8,7 @@
 - JWT Token 认证，安全的会话管理
 - 密码保护，支持环境变量配置
 - Token 自动过期（默认 24 小时）
+- 未登录时使用只读「默认用户」进入论文展厅，仅可浏览白名单中的展示论文
 
 ### 🚀 Web 界面创建项目
 - 无需命令行，直接在网页上新建项目
@@ -80,6 +81,8 @@ cd web
 ### 步骤 3：登录系统
 
 打开浏览器访问：**http://localhost:5173**
+
+未登录用户会默认进入只读论文展厅。需要创建或管理项目时，点击右上角「登录」。公开展示项目可通过 `SHOWCASE_PROJECTS` 环境变量配置（逗号分隔）。
 
 默认登录凭据：
 - 用户名：`admin`
@@ -188,6 +191,12 @@ python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
   ```
 - `GET /api/auth/me` - 获取当前用户信息
 - `POST /api/auth/logout` - 登出
+
+### 公开论文展厅（无需认证）
+
+- `GET /api/showcase/papers` - 获取白名单中的展示论文
+- `GET /api/showcase/papers/{base_name}/pdf` - 在线阅读展示 PDF
+- `GET /api/showcase/papers/{base_name}/pdf?download=1` - 下载展示 PDF
 
 ### 项目管理（需要认证）
 

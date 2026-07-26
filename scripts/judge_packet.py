@@ -175,7 +175,8 @@ def _math_priority(project: Path, path: Path, base_name: str) -> tuple[int, str]
 
 def _selected_paths(project: Path, base_name: str) -> dict[str, list[Path]]:
     files = _project_files(project)
-    paper_names = {f"{base_name}_paper.tex", "paper/paper.tex"}
+    root_paper = f"{base_name}_paper.tex"
+    paper_names = {root_paper} if (project / root_paper).is_file() else {"paper/paper.tex"}
     math_names = {
         "model.md",
         "symbol_table.md",
@@ -294,6 +295,13 @@ def _role_requirements(
         project,
         paths,
         lambda relative: relative.startswith("models/")
+        and Path(relative).stem.lower() == "03_solve"
+        and Path(relative).suffix.lower() in solver_suffixes,
+    )
+    implementation = implementation or _first_path(
+        project,
+        paths,
+        lambda relative: relative.startswith("models/")
         and Path(relative).suffix.lower() in solver_suffixes
         and any(marker in Path(relative).stem.lower() for marker in solver_name_markers),
     )
@@ -303,15 +311,22 @@ def _role_requirements(
         lambda relative: relative.startswith("models/")
         and Path(relative).suffix.lower() in solver_suffixes,
     )
+    model_definition = _first_path(
+        project,
+        paths,
+        lambda relative: relative.startswith("models/")
+        and Path(relative).stem.lower() == "02_model"
+        and Path(relative).suffix.lower() in solver_suffixes,
+    )
     execution_trace = _first_path(
+        project, paths, lambda relative: relative == "solve_log.md"
+    )
+    execution_trace = execution_trace or _first_path(
         project,
         paths,
         lambda relative: Path(relative).name.endswith(
             ("_verification.latest.json", "_verification.latest.txt")
         ),
-    )
-    execution_trace = execution_trace or _first_path(
-        project, paths, lambda relative: relative == "solve_log.md"
     )
     execution_trace = execution_trace or _first_path(
         project, paths, lambda relative: relative.startswith("logs/")
@@ -322,12 +337,28 @@ def _role_requirements(
         lambda relative: relative.startswith("models/")
         and Path(relative).suffix.lower() == ".log",
     )
-    return [
+    requirements = [
         requirement("final_paper", "final paper text containing reported claims", final_paper),
         requirement("primary_results", "canonical or primary machine-readable results", primary_result),
         requirement("implementation", "primary model implementation", implementation),
         requirement("execution_trace", "solver or verification execution evidence", execution_trace),
     ]
+    if model_definition and model_definition != implementation:
+        requirements.append(
+            requirement("model_definition", "model equations and prediction implementation", model_definition)
+        )
+    for filename, identifier, description in (
+        ("number_chain_verification.latest.txt", "number_chain", "key-number trace report"),
+        ("invariants_verification.latest.txt", "invariants", "numerical invariant report"),
+        ("provenance_verification.latest.txt", "provenance", "solver provenance report"),
+        ("spec_impl_verification.latest.txt", "spec_impl", "specification-implementation report"),
+        ("quality_contract_verification.latest.txt", "quality_contract", "project quality-contract report"),
+        ("deliverables_verification.latest.txt", "deliverables", "deliverables report"),
+    ):
+        report = _first_path(project, paths, lambda relative, name=filename: relative == name)
+        if report:
+            requirements.append(requirement(identifier, description, report))
+    return requirements
 
 
 def _truncate_text(text: str, byte_limit: int) -> str:
@@ -354,6 +385,26 @@ def _render_context(
         for relative in requirement["paths"]:
             normalized = str(relative)
             critical_for.setdefault(normalized, []).append(str(requirement["id"]))
+    if critical_for:
+        first_critical = next(
+            (
+                index
+                for index, path in enumerate(paths)
+                if path.relative_to(project).as_posix() in critical_for
+            ),
+            len(paths),
+        )
+        prefix = paths[:first_critical]
+        remainder = paths[first_critical:]
+        paths = prefix + [
+            path
+            for path in remainder
+            if path.relative_to(project).as_posix() in critical_for
+        ] + [
+            path
+            for path in remainder
+            if path.relative_to(project).as_posix() not in critical_for
+        ]
     for path in paths:
         relative = path.relative_to(project).as_posix()
         item = {"path": relative}

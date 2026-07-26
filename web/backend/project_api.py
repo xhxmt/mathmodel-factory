@@ -72,6 +72,39 @@ SKIP_PARTS = {".git", "__pycache__", ".pytest_cache", "source.mineru", "runner_s
 VALID_BACKENDS = {"claude", "codex", "agy", "openai", "gemini", "deepseek"}
 AGENTIC_BACKENDS = {"claude", "codex", "agy"}
 
+ISSUE_COLUMN_ALIASES = {
+    "id": {"id", "issue_id", "issue id", "编号"},
+    "step": {"step", "步骤"},
+    "severity": {"severity", "严重度", "严重程度"},
+    "status": {"status", "状态"},
+    "location": {"location", "位置"},
+    "issue": {"issue", "summary", "问题", "摘要"},
+    "required_action": {
+        "required action",
+        "required_action",
+        "recommended fix",
+        "recommended_fix",
+        "required fix",
+        "suggested_fix",
+        "处理要求",
+        "建议修复",
+    },
+}
+OPEN_ISSUE_STATUSES = {
+    "OPEN",
+    "IN_PROGRESS",
+    "IN PROGRESS",
+    "PENDING",
+    "UNRESOLVED",
+    "BLOCKING",
+    "MAJOR",
+    "MINOR",
+    "待处理",
+    "处理中",
+    "未解决",
+    "阻塞",
+}
+
 ARTIFACT_GROUPS = {
     "problem": [
         "problem/problem_brief.md",
@@ -152,6 +185,73 @@ STEP_ARTIFACTS = {
     15: ["citation_audit.md", "derobotification.md", "references.bib"],
     16: [],
 }
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    row = line.strip()
+    if row.startswith("|"):
+        row = row[1:]
+    if row.endswith("|") and not row.endswith(r"\|"):
+        row = row[:-1]
+    return [cell.strip().replace(r"\|", "|") for cell in re.split(r"(?<!\\)\|", row)]
+
+
+def _issue_column_name(value: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", value.strip().lower().replace("-", " "))
+    for name, aliases in ISSUE_COLUMN_ALIASES.items():
+        if normalized in {alias.replace("-", " ") for alias in aliases}:
+            return name
+    return None
+
+
+def _issue_status(value: str) -> str:
+    return re.sub(r"[`*]", "", value).strip().strip("_").strip().upper()
+
+
+def _parse_open_issue_items(content: str) -> list[dict[str, Any]]:
+    lines = content.splitlines()
+    for header_index, line in enumerate(lines):
+        if "|" not in line:
+            continue
+        header = _split_markdown_table_row(line)
+        columns = {_issue_column_name(cell): index for index, cell in enumerate(header)}
+        columns.pop(None, None)
+        if "status" not in columns or "issue" not in columns:
+            continue
+
+        items: list[dict[str, Any]] = []
+        for row_line in lines[header_index + 1 :]:
+            if "|" not in row_line:
+                if items:
+                    break
+                continue
+            cells = _split_markdown_table_row(row_line)
+            if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+                continue
+            if len(cells) < len(header):
+                continue
+
+            status_value = cells[columns["status"]]
+            if _issue_status(status_value) not in OPEN_ISSUE_STATUSES:
+                continue
+
+            def value(name: str) -> str:
+                index = columns.get(name)
+                return cells[index].strip() if index is not None and index < len(cells) else ""
+
+            items.append(
+                {
+                    "id": value("id"),
+                    "step": value("step"),
+                    "severity": value("severity"),
+                    "status": status_value.strip(),
+                    "location": value("location"),
+                    "issue": value("issue"),
+                    "required_action": value("required_action"),
+                }
+            )
+        return items
+    return []
 
 DEFAULT_MODEL_REGISTRY = [
     {
@@ -449,20 +549,19 @@ def get_steps(settings: Settings, project: Path, base_name: str) -> dict[str, An
         if match:
             verdict = match.group(1)
 
-    open_issues = None
+    open_issue_items = []
     issue_ledger = project / "audit_issue_ledger.md"
     if issue_ledger.is_file():
         text = issue_ledger.read_text(encoding="utf-8", errors="ignore")
-        open_issues = len(
-            re.findall(r"(?im)^\s*[-|*].*\b(open|blocking|unresolved|未解决|阻塞|待处理)\b", text)
-        )
+        open_issue_items = _parse_open_issue_items(text)
 
     return {
         "current_step": current_step,
         "steps": steps,
         "editorial_gate": _read_editorial_gate(project),
         "verdict": verdict,
-        "open_issues": open_issues,
+        "open_issues": len(open_issue_items),
+        "open_issue_items": open_issue_items,
         "paper_available": _find_paper(settings, project, base_name) is not None,
     }
 

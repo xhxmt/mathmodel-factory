@@ -38,6 +38,7 @@ from .schemas import (
     NewProjectRequest,
     WsTicketResponse,
 )
+from .showcase_api import create_showcase_router
 from .ws import ConnectionManager, create_monitor_task, create_ws_router
 
 
@@ -269,10 +270,12 @@ async def list_admin_audit_log(current_user: UserInfo = Depends(get_current_user
 project_router = create_project_router(settings, ticket_store, manager)
 cloud_router = create_cloud_router(settings)
 ws_router = create_ws_router(settings, ticket_store, manager)
+showcase_router = create_showcase_router(settings)
 
 app.include_router(project_router)
 app.include_router(cloud_router)
 app.include_router(ws_router)
+app.include_router(showcase_router)
 
 
 @app.post("/api/projects/{base_name}/action")

@@ -223,20 +223,27 @@ _verification_is_fresh() {
 #   3. the provenance/budget gate does not pass (repair/padding results)
 # Returns 0 only when all clear.  Legacy projects without a ledger skip (1).
 step16_hard_acceptance() {
-    local P="$1"
+    local P="$1" refresh_reports="${2:-1}"
     # (2) stub residue
     if find "$P/models" -name "*.stub" -print -quit 2>/dev/null | grep -q .; then
         log "   Step 16 BLOCKED: models/*.stub residue (declared solver never built)"
         return 1
     fi
     # (3) provenance / budget reality gate
-    if ! provenance_gate_passed "$P"; then
-        log "   Step 16 BLOCKED: provenance gate failed (see provenance_verification.latest.txt)"
-        return 1
-    fi
-    if ! quality_contract_gate_passed "$P"; then
-        log "   Step 16 BLOCKED: project quality contract failed (see quality_contract_verification.latest.txt)"
-        return 1
+    if [[ "$refresh_reports" == "1" ]]; then
+        if ! provenance_gate_passed "$P"; then
+            log "   Step 16 BLOCKED: provenance gate failed (see provenance_verification.latest.txt)"
+            return 1
+        fi
+        if ! quality_contract_gate_passed "$P"; then
+            log "   Step 16 BLOCKED: project quality contract failed (see quality_contract_verification.latest.txt)"
+            return 1
+        fi
+    else
+        grep -q '^VERDICT: PASS' "$P/provenance_verification.latest.txt" 2>/dev/null || return 1
+        grep -q '^VERDICT: PASS' "$P/quality_contract_verification.latest.txt" 2>/dev/null || return 1
+        _verification_is_fresh "$P" "$P/provenance_verification.latest.txt" || return 1
+        _verification_is_fresh "$P" "$P/quality_contract_verification.latest.txt" || return 1
     fi
     # (1) unresolved BLOCKING issues.  A ledger row is a markdown table line;
     # flag any row whose severity cell is BLOCKING and whose status cell is not
@@ -1288,7 +1295,7 @@ verify_step_output() {
             # D3: hard acceptance — a delivered paper must not rest on unresolved
             # BLOCKING issues, .stub solvers, or unreconcilable provenance
             # (rerun_0706 shipped with a stub MILP + repair-fabricated P3/P5).
-            step16_hard_acceptance "$P" || return 1
+            step16_hard_acceptance "$P" 0 || return 1
             ;;
         *)
             # For other steps, rely on file-state inference
@@ -3839,6 +3846,79 @@ run_step_11() { dispatch_step step11_constructive_review.txt 7200 1800 run_codex
 
 run_step_12() { dispatch_step step12_revision.txt 14400 3600 run_claude_then_codex; }
 
+run_codex_isolated_judge_role() {
+    local role="$1" prompt_file="$2" model="${3:-}" effort="${4:-xhigh}"
+    local isolated_root="$PROJECT/tmp/codex_judges/$role"
+    local isolated_packet="$isolated_root/judge_packets/$role"
+    local isolated_output="$isolated_root/judge_outputs/$role.md"
+    local final_response="$isolated_root/final_response.md"
+    local role_prompt="$isolated_root/role_prompt.txt"
+    local stamp codex_log rendered
+
+    rm -rf "$isolated_root"
+    mkdir -p "$isolated_packet" "$isolated_root/judge_outputs"
+    cp "$PROJECT/judge_packets/$role/context.txt" "$isolated_packet/context.txt" || return 1
+    cp "$PROJECT/judge_packets/$role/manifest.json" "$isolated_packet/manifest.json" || return 1
+
+    rendered=$(sed \
+        -e "s|__PROJECT_PATH__|$isolated_root|g" \
+        -e "s|__RESEARCH_QUESTION__|$QUESTION|g" \
+        -e "s|__BASE_NAME__|$BASE|g" \
+        "$PROMPTS/$prompt_file")
+    rendered="$rendered
+
+ISOLATED CODEX JUDGE MODE:
+- The current workspace contains only this role's prompt, context, manifest, Git metadata, and output directory.
+- Do not inspect paths outside the current workspace and do not use network access.
+- Perform no project edits. Write only the required judge output file.
+- Also return the exact same protocol text as the final response."
+    printf '%s\n' "$rendered" > "$role_prompt"
+
+    stamp=$(date +%Y%m%d_%H%M%S)
+    codex_log="$PROJECT/logs/step_${NEXT}_codex_judge_${role}_${stamp}.log"
+    local -a model_args=()
+    [[ -n "$model" ]] && model_args=(--model "$model")
+    log "   Step 13 ${role}: isolated Codex judge (model=${model:-default} effort=$effort)"
+    ( cd "$isolated_root" && timeout --kill-after=120 3600 \
+        codex exec \
+          "${model_args[@]}" \
+          -c "model_reasoning_effort=\"$effort\"" \
+          --full-auto \
+          --ephemeral \
+          -C "$isolated_root" \
+          --skip-git-repo-check \
+          --output-last-message "$final_response" \
+          "$rendered" \
+    ) > "$codex_log" 2>&1
+    local ec=$?
+    if (( ec != 0 )); then
+        log "   Step 13 ${role}: codex exec failed (exit $ec); trying isolated Codex TUI"
+        if ! python3 "$FACTORY/scripts/run_codex_tui_judge.py" \
+            --workdir "$isolated_root" \
+            --prompt-file "$role_prompt" \
+            --output-file "$isolated_output" \
+            --log-file "$codex_log" \
+            --model "${model:-gpt-5.5}" \
+            --effort "$effort" \
+            --timeout 3600; then
+            log "   Step 13 ${role}: isolated Codex failed in exec and TUI modes — see ${codex_log##*/}"
+            return 1
+        fi
+    fi
+
+    if [[ ! -s "$isolated_output" ]] \
+        || ! head -1 "$isolated_output" | grep -q '^VERDICT:'; then
+        if [[ -s "$final_response" ]] \
+            && head -1 "$final_response" | grep -q '^VERDICT:'; then
+            cp "$final_response" "$isolated_output"
+        else
+            log "   Step 13 ${role}: Codex produced no protocol-valid output"
+            return 1
+        fi
+    fi
+    cp "$isolated_output" "$PROJECT/judge_outputs/$role.md"
+}
+
 run_independent_judge_role() {
     local role="$1" prompt_file="$2"
     local output_rel="judge_outputs/${role}.md"
@@ -3866,14 +3946,18 @@ run_independent_judge_role() {
         entry="$(get_model_entry "$model_id" 2>/dev/null || true)"
         IFS=$'\x1f' read -r backend _ <<<"$entry"
         case "$backend" in
-            openai|deepseek|gemini|claude) ;;
+            openai|deepseek|gemini|claude|codex) ;;
             *)
                 log "   Step 13 ${role}: skipping non-isolated backend ${model_id} (${backend:-unknown})"
                 continue
                 ;;
         esac
         log "   Step 13 ${role}: isolated judge via ${model_id}"
-        if [[ "$backend" == "claude" ]]; then
+        if [[ "$backend" == "codex" ]]; then
+            local _backend _model _effort _base_url _key_env
+            IFS=$'\x1f' read -r _backend _model _effort _base_url _key_env <<<"$entry"
+            run_codex_isolated_judge_role "$role" "$prompt_file" "$_model" "${_effort:-xhigh}" || true
+        elif [[ "$backend" == "claude" ]]; then
             local _backend _model _effort _base_url _key_env
             IFS=$'\x1f' read -r _backend _model _effort _base_url _key_env <<<"$entry"
             run_api_model "$prompt_file" 3600 "$_model" "claude" "$_base_url" "$_key_env" || true
@@ -3908,9 +3992,11 @@ run_step_13() {
     python3 "$FACTORY/scripts/judge_packet.py" "$PROJECT" --base "$BASE" \
         >> "$PROJECT/logs/runner.log" 2>&1 || return 1
 
-    run_independent_judge_role math judges/math_auditor.txt || true
-    run_independent_judge_role execution judges/execution_auditor.txt || true
-    run_independent_judge_role paper judges/paper_reviewer.txt || true
+    # Probe the shortest role first.  Backend outages must remain retryable
+    # infrastructure errors, not be aggregated into a scientific REOPEN.
+    run_independent_judge_role paper judges/paper_reviewer.txt || return 1
+    run_independent_judge_role math judges/math_auditor.txt || return 1
+    run_independent_judge_role execution judges/execution_auditor.txt || return 1
 
     python3 "$FACTORY/scripts/aggregate_judges.py" \
         --math "$PROJECT/judge_outputs/math.md" \
@@ -4036,6 +4122,22 @@ run_step_14() { dispatch_step step14_abstract.txt 7200 1800 run_claude_then_code
 run_step_15() { dispatch_step step15_polish.txt 10800 3600 run_codex_then_claude; }
 
 run_step_16() {
+    # Cleanup must precede packet construction.  Removing temp/intermediate
+    # files after judging changes packet manifests and invalidates the PASS.
+    if [[ -x "$FACTORY/scripts/cleanup_project_artifacts.py" ]]; then
+        log "   Cleaning rebuildable intermediate data before final judging"
+        if "$FACTORY/scripts/cleanup_project_artifacts.py" "$PROJECT" >> "$PROJECT/logs/runner.log" 2>&1; then
+            log "   Intermediate data cleanup OK"
+        else
+            log "   WARNING: intermediate data cleanup failed (exit $?)"
+        fi
+    else
+        log "   WARNING: cleanup_project_artifacts.py not found or not executable"
+    fi
+
+    log "   Refreshing hard-acceptance reports before final judging"
+    step16_hard_acceptance "$PROJECT" || return 1
+
     run_final_submission_judge
     local final_judge_rc=$?
     (( final_judge_rc == 0 )) || return "$final_judge_rc"
@@ -4069,16 +4171,6 @@ run_step_16() {
     else
         log "   WARNING: package_submission.py not found or not executable"
         return 1
-    fi
-    if [[ -x "$FACTORY/scripts/cleanup_project_artifacts.py" ]]; then
-        log "   Cleaning rebuildable intermediate data"
-        if "$FACTORY/scripts/cleanup_project_artifacts.py" "$PROJECT" >> "$PROJECT/logs/runner.log" 2>&1; then
-            log "   Intermediate data cleanup OK"
-        else
-            log "   WARNING: intermediate data cleanup failed (exit $?)"
-        fi
-    else
-        log "   WARNING: cleanup_project_artifacts.py not found or not executable"
     fi
     log "   Running final delivery quality gate"
     if delivery_quality_gate "$PROJECT" > "$PROJECT/delivery_quality_gate.json" 2> "$PROJECT/delivery_quality_gate.stderr.log"; then
@@ -4277,6 +4369,15 @@ while (( STEP < 16 )); do
             fi
             log "   Step $NEXT VERIFIED"
             STEP=$NEXT
+            if (( NEXT == 6 )) \
+                && [[ -f "$PROJECT/tmp/pre_false_reopen/numbers_manifest.json" ]] \
+                && python3 "$FACTORY/scripts/fast_forward_after_false_reopen.py" \
+                    "$PROJECT" "$BASE" \
+                    "$PROJECT/tmp/pre_false_reopen/numbers_manifest.json" \
+                    >> "$PROJECT/logs/runner.log" 2>&1; then
+                STEP=15
+                log "   Scientific results unchanged after false reopen — fast-forwarding to Step 16"
+            fi
             echo "$STEP $(date +%s)" > "$PROJECT/.heartbeat"
             # Update checkpoint.md from shell (don't rely on LLM)
             _set_checkpoint_step "$STEP"

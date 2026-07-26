@@ -34,6 +34,11 @@ class Settings:
         "http://127.0.0.1:5173",
     )
     max_upload_size: int = 100 * 1024 * 1024
+    showcase_projects: tuple[str, ...] = (
+        "cumcm_2025_a",
+        "cumcm_2025_b",
+        "test_cumcm2024a_polished",
+    )
     gcp_project_id: str = ""
     gcp_region: str = "europe-west4"
     gcp_solver_service: str = "solver-api"
@@ -83,6 +88,12 @@ def load_settings() -> Settings:
     ) or Settings.cors_origins
 
     auth_db_env = (os.getenv("AUTH_DB_FILE") or "").strip()
+    showcase_projects_env = os.getenv("SHOWCASE_PROJECTS")
+    showcase_projects = (
+        tuple(part.strip() for part in showcase_projects_env.split(",") if part.strip())
+        if showcase_projects_env is not None
+        else Settings.showcase_projects
+    )
 
     return Settings(
         jwt_secret=(os.getenv("JWT_SECRET") or os.getenv("JWT_SECRET_KEY") or "").strip(),
@@ -92,6 +103,7 @@ def load_settings() -> Settings:
         auth_db_file=Path(auth_db_env) if auth_db_env else None,
         cors_origins=cors_origins,
         max_upload_size=int(os.getenv("MAX_UPLOAD_SIZE") or 100 * 1024 * 1024),
+        showcase_projects=showcase_projects,
         gcp_project_id=(os.getenv("GCP_PROJECT_ID") or "").strip(),
         gcp_region=(os.getenv("GCP_REGION") or "europe-west4").strip(),
         gcp_solver_service=(os.getenv("GCP_SOLVER_SERVICE") or "solver-api").strip(),

@@ -39,9 +39,11 @@ export function workspaceTabs({ consultationPending = false, selectionPending = 
     { key: 'logs', label: '日志', icon: 'terminal' },
     { key: 'artifacts', label: '产物', icon: 'folder' },
     { key: 'diagnostics', label: '诊断', icon: 'alert-triangle', attention: hasDiagnostics },
-    { key: 'consultation', label: '咨询', icon: 'message-square', attention: consultationPending },
     { key: 'cloud', label: '云端', icon: 'zap', attention: cloudEnabled },
   ]
+  if (consultationPending) {
+    tabs.splice(5, 0, { key: 'consultation', label: '咨询', icon: 'message-square', attention: true })
+  }
   if (selectionPending) {
     tabs.splice(5, 0, { key: 'selection', label: '选方案', icon: 'git-branch', attention: true })
   }

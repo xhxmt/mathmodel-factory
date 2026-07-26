@@ -15,6 +15,12 @@ export function stepPayloadFingerprint(payload) {
     payload.current_step,
     payload.verdict,
     payload.open_issues,
+    JSON.stringify((payload.open_issue_items || []).map((issue) => [
+      issue.id,
+      issue.status,
+      issue.issue,
+      issue.required_action,
+    ])),
     payload.paper_available,
     gate?.ready,
     gate?.verdict,

@@ -179,6 +179,15 @@ class ProjectStatus(BaseModel):
     diagnostic_priority: int = 999
 
 
+class ShowcasePaper(BaseModel):
+    base_name: str
+    title: str
+    collection: str = "Paper Factory"
+    updated_at: str
+    size_bytes: int
+    pdf_url: str
+
+
 class ConsultationRequest(BaseModel):
     gate: str
     step: int

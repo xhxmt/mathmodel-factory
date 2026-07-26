@@ -13,14 +13,60 @@
         <span v-if="verdict" class="tag" :class="verdictClass">
           <Icon name="scale" :size="12" /> {{ verdictLabel }}
         </span>
-        <span v-if="openIssues > 0" class="tag tag-amber">
-          <Icon name="alert-triangle" :size="12" /> {{ openIssues }} 待办
-        </span>
+        <button
+          v-if="openIssues > 0"
+          type="button"
+          class="tag tag-amber issue-toggle"
+          :aria-expanded="issuesOpen ? 'true' : 'false'"
+          aria-controls="pipeline-open-issues"
+          @click="issuesOpen = !issuesOpen"
+        >
+          <Icon name="alert-triangle" :size="12" />
+          {{ openIssues }} 待办
+          <Icon :name="issuesOpen ? 'chevron-up' : 'chevron-down'" :size="12" />
+        </button>
         <button v-if="paperAvailable" class="btn btn-sm btn-amber" @click="$emit('open-paper')">
           <Icon name="book-open" :size="13" /> 查看论文
         </button>
       </div>
     </div>
+
+    <section v-if="issuesOpen" id="pipeline-open-issues" class="issue-panel">
+      <div class="issue-head">
+        <div>
+          <div class="issue-title">未解决事项</div>
+          <div class="issue-summary mono">{{ openIssues }} 项来自审计台账</div>
+        </div>
+        <button
+          type="button"
+          class="btn btn-sm btn-ghost"
+          @click="$emit('open-file', { path: 'audit_issue_ledger.md', type: 'markdown', name: 'audit_issue_ledger.md' })"
+        >
+          <Icon name="file-text" :size="13" /> 查看完整台账
+        </button>
+      </div>
+
+      <div v-if="openIssueItems.length" class="issue-list">
+        <article v-for="(item, index) in openIssueItems" :key="item.id || index" class="issue-row">
+          <div class="issue-row-top">
+            <span class="issue-id mono">{{ item.id || `ISSUE-${index + 1}` }}</span>
+            <span v-if="item.step" class="issue-step mono">STEP {{ item.step }}</span>
+            <span v-if="item.severity" class="issue-severity mono">{{ item.severity }}</span>
+            <span class="issue-status mono">{{ item.status || 'OPEN' }}</span>
+          </div>
+          <div class="issue-text issue-rich" v-html="md(item.issue)"></div>
+          <div v-if="item.location" class="issue-meta">
+            <span class="issue-meta-label">位置</span>
+            <div class="issue-rich mono" v-html="md(item.location)"></div>
+          </div>
+          <div v-if="item.required_action" class="issue-action">
+            <span class="issue-meta-label">处理</span>
+            <div class="issue-rich" v-html="md(item.required_action)"></div>
+          </div>
+        </article>
+      </div>
+      <div v-else class="issue-empty">待办明细未返回，请查看完整台账。</div>
+    </section>
 
     <!-- track -->
     <div class="track-scroll">
@@ -123,6 +169,7 @@
 <script>
 import Icon from './Icon.vue'
 import { STEPS, EDITORIAL_GATE_STEP, stepStatus, VERDICT_LABEL, stepModelMeta, stepConfigKey } from '../lib/steps.js'
+import { renderMarkdown } from '../lib/markdown.js'
 
 export default {
   name: 'PipelineTimeline',
@@ -136,7 +183,7 @@ export default {
   },
   emits: ['open-file', 'open-paper', 'assign', 'manage-models'],
   data() {
-    return { selectedIndex: this.defaultIndex(), userPicked: false }
+    return { selectedIndex: this.defaultIndex(), userPicked: false, issuesOpen: false }
   },
   computed: {
     displayStep() { return this.currentStep },
@@ -144,6 +191,7 @@ export default {
     verdictLabel() { return VERDICT_LABEL[this.verdict] || this.verdict },
     verdictClass() { return this.verdict === 'PASS' ? 'tag-ok' : 'tag-amber' },
     openIssues() { return this.stepsData?.open_issues || 0 },
+    openIssueItems() { return this.stepsData?.open_issue_items || [] },
     paperAvailable() { return !!this.stepsData?.paper_available },
     timelineSteps() {
       return [...STEPS.slice(0, 9), EDITORIAL_GATE_STEP, ...STEPS.slice(9)]
@@ -170,6 +218,7 @@ export default {
     stepsData() { if (!this.userPicked) this.selectedIndex = this.defaultIndex() },
   },
   methods: {
+    md(value) { return renderMarkdown(value) },
     stepId(s) { return s.key || s.index },
     isSegmentOn(s) {
       if (s.key === '8_5') return this.currentStep >= 8
@@ -231,7 +280,7 @@ export default {
 </script>
 
 <style scoped>
-.pipeline { padding: 16px 18px 18px; }
+.pipeline { min-width: 0; max-width: 100%; padding: 16px 18px 18px; }
 
 .pl-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -240,9 +289,32 @@ export default {
 .pl-title { display: flex; align-items: center; gap: 8px; color: var(--ink-2); }
 .pl-meta { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .step-counter { font-size: 12px; color: var(--ink-2); letter-spacing: 0.08em; }
+.issue-toggle { cursor: pointer; }
+.issue-toggle:hover { border-color: var(--amber); }
+
+.issue-panel { margin: -4px 0 18px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
+.issue-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.issue-title { font-size: 14px; font-weight: 700; color: var(--ink); }
+.issue-summary { margin-top: 3px; font-size: 10.5px; color: var(--ink-3); }
+.issue-list { max-height: 360px; overflow-y: auto; border-top: 1px solid var(--line); }
+.issue-row { padding: 12px 2px; border-bottom: 1px solid var(--line); }
+.issue-row:last-child { border-bottom: 0; }
+.issue-row-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.issue-id { font-size: 11px; font-weight: 700; color: var(--ink); }
+.issue-step, .issue-severity, .issue-status { font-size: 9.5px; padding: 3px 6px; border-radius: var(--r-xs); background: var(--panel-2); color: var(--ink-3); }
+.issue-severity, .issue-status { color: var(--amber); background: var(--amber-dim); }
+.issue-text { margin-top: 7px; font-size: 13px; line-height: 1.55; color: var(--ink); overflow-wrap: anywhere; }
+.issue-meta, .issue-action { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; margin-top: 7px; font-size: 11.5px; line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; }
+.issue-meta-label { color: var(--ink-3); }
+.issue-rich { min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.issue-rich :deep(p) { margin: 0; }
+.issue-rich :deep(.md-code) { font-family: var(--mono); font-size: 0.9em; white-space: normal; overflow-wrap: anywhere; background: var(--panel-2); border: 1px solid var(--line); padding: 0.08em 0.35em; border-radius: var(--r-xs); color: var(--live); }
+.issue-rich :deep(.katex) { max-width: 100%; font-size: 0.98em; }
+.issue-rich :deep(.katex-display) { max-width: 100%; overflow-x: auto; overflow-y: hidden; margin: 0.45em 0; }
+.issue-empty { padding: 16px 0; color: var(--ink-3); font-size: 12px; }
 
 /* ---- track ---- */
-.track-scroll { overflow-x: auto; padding: 4px 2px 2px; margin: 0 -4px; }
+.track-scroll { width: 100%; max-width: 100%; overflow-x: auto; padding: 4px 2px 2px; margin: 0 -4px; }
 .track { display: flex; min-width: 640px; }
 .col {
   position: relative;
@@ -374,4 +446,12 @@ export default {
 .state-live { color: var(--live); }
 .state-attention { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
 .state-pending { color: var(--ink-3); }
+@media (max-width: 640px) {
+  .pl-meta { width: 100%; min-width: 0; }
+  .issue-head { align-items: flex-start; }
+  .issue-head { flex-wrap: wrap; }
+  .issue-head .btn { flex-shrink: 0; }
+  .d-right, .artifacts { min-width: 0; max-width: 100%; }
+  .issue-meta, .issue-action { grid-template-columns: 36px minmax(0, 1fr); }
+}
 </style>

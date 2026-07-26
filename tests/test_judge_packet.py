@@ -194,6 +194,22 @@ def test_execution_packet_includes_claim_ledger_and_paper_before_results(tmp_pat
     assert '"claim_id": "objective"' in context
 
 
+def test_packets_do_not_duplicate_mirrored_final_paper(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _write(project, "demo_paper.tex", "FINAL PAPER")
+    _write(project, "paper/paper.tex", "FINAL PAPER")
+    _write(project, "problem/source.md", "PROBLEM")
+    _write(project, "results/canonical_results.json", '{"objective": 42}')
+
+    manifests = build_packets(project, base_name="demo")
+
+    for role in ("paper", "math", "execution"):
+        selected = [item["path"] for item in manifests[role]["files"]]
+        assert "demo_paper.tex" in selected
+        assert "paper/paper.tex" not in selected
+
+
 def test_execution_completeness_selects_solver_code_not_readme_or_config(tmp_path):
     project = tmp_path / "demo"
     project.mkdir()
@@ -212,6 +228,55 @@ def test_execution_completeness_selects_solver_code_not_readme_or_config(tmp_pat
 
     assert requirements["implementation"]["paths"] == ["models/a/02_model.py"]
     assert requirements["implementation"]["satisfied"] is True
+
+
+def test_execution_packet_places_required_implementation_before_secondary_evidence(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _write(project, "demo_paper.tex", "FINAL PAPER")
+    _write(project, "claim_ledger.json", '{"claim": "headline"}')
+    _write(project, "results/canonical_results.json", '{"objective": 42}')
+    _write(project, "deliverables_verification.latest.txt", "VERDICT: PASS")
+    for index in range(5):
+        _write(project, f"results/secondary_{index}.json", "x" * 50_000)
+    _write(project, "models/a/02_model.py", "def solve(): return 42")
+
+    manifest = build_packets(project, base_name="demo")["execution"]
+    requirements = {
+        item["id"]: item for item in manifest["completeness"]["requirements"]
+    }
+    usable = [item["path"] for item in manifest["files"] if item["status"] != "omitted"]
+
+    assert usable[0] == "claim_ledger.json"
+    assert requirements["implementation"]["satisfied"] is True
+    assert usable.index("models/a/02_model.py") < usable.index("results/secondary_0.json")
+
+
+def test_execution_packet_prioritizes_solver_trace_and_machine_reports(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _write(project, "demo_paper.tex", "FINAL PAPER")
+    _write(project, "results/canonical_results.json", '{"objective": 42}')
+    _write(project, "results/secondary.json", "x" * 100_000)
+    _write(project, "models/a/02_model.py", "def predict(): return 42")
+    _write(project, "models/a/03_solve.py", "from .02_model import predict")
+    _write(project, "solve_log.md", "solver completed")
+    _write(project, "number_chain_verification.latest.txt", "VERDICT: PASS")
+    _write(project, "provenance_verification.latest.txt", "VERDICT: PASS")
+
+    manifest = build_packets(project, base_name="demo")["execution"]
+    requirements = {
+        item["id"]: item for item in manifest["completeness"]["requirements"]
+    }
+    usable = [item["path"] for item in manifest["files"] if item["status"] != "omitted"]
+
+    assert requirements["implementation"]["paths"] == ["models/a/03_solve.py"]
+    assert requirements["model_definition"]["paths"] == ["models/a/02_model.py"]
+    assert requirements["execution_trace"]["paths"] == ["solve_log.md"]
+    assert requirements["number_chain"]["satisfied"] is True
+    assert requirements["provenance"]["satisfied"] is True
+    assert usable.index("models/a/03_solve.py") < usable.index("results/secondary.json")
+    assert usable.index("number_chain_verification.latest.txt") < usable.index("results/secondary.json")
 
 
 def test_context_fits_api_limit_and_preserves_priority_math_evidence(tmp_path):

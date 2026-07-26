@@ -12,11 +12,21 @@
           </div>
         </div>
       </div>
-      <span class="ch-flag label">需要你决定</span>
+      <span v-if="req" class="ch-flag label">需要你决定</span>
     </div>
 
     <div v-if="loading" class="cons-state"><div class="spinner"></div></div>
-    <div v-else-if="!req" class="cons-state">无法加载咨询请求</div>
+    <div v-else-if="loadState === 'empty'" class="cons-state">
+      <Icon name="check-circle" :size="24" />
+      <span>当前无待处理咨询</span>
+    </div>
+    <div v-else-if="loadState === 'error'" class="cons-state is-error">
+      <Icon name="alert-triangle" :size="24" />
+      <span>{{ loadError }}</span>
+      <button class="btn btn-sm btn-ghost" @click="fetch">
+        <Icon name="refresh" :size="13" /> 重试
+      </button>
+    </div>
 
     <div v-else class="cons-body">
       <section class="workflow sec">
@@ -178,7 +188,7 @@ export default {
   setup() { return { toasts: useToasts() } },
   data() {
     return {
-      req: null, loading: true, answer: '', submitting: false, draftSaved: false,
+      req: null, loading: true, loadState: 'loading', loadError: '', answer: '', submitting: false, draftSaved: false,
       templates: [
         { name: '方案', body: '## 方案结论\n\n推荐主模型：\n\n关键参数：\n\n理由：\n' },
         { name: '灵敏度', body: '\n## 灵敏度 / 鲁棒性\n\n- 扰动范围：±\n- 验证方式：\n' },
@@ -204,8 +214,20 @@ export default {
     md(t) { return renderMarkdown(t) },
     async fetch() {
       this.loading = true
-      try { this.req = await Projects.consultation(this.base) }
-      catch (e) { this.req = null }
+      this.loadState = 'loading'
+      this.loadError = ''
+      try {
+        this.req = await Projects.consultation(this.base)
+        this.loadState = 'ready'
+      } catch (e) {
+        this.req = null
+        if (e.response?.status === 404) {
+          this.loadState = 'empty'
+        } else {
+          this.loadState = 'error'
+          this.loadError = e.response?.data?.detail || '咨询请求加载失败'
+        }
+      }
       finally { this.loading = false }
     },
     guessType(f) {
@@ -260,7 +282,8 @@ export default {
 .ch-sub .dim { color: var(--ink-3); }
 .ch-flag { color: var(--amber); }
 
-.cons-state { padding: 40px; text-align: center; color: var(--ink-3); display: flex; justify-content: center; }
+.cons-state { padding: 40px; text-align: center; color: var(--ink-3); display: flex; align-items: center; justify-content: center; gap: 10px; flex-direction: column; }
+.cons-state.is-error { color: var(--bad); }
 .cons-body { padding: 18px; }
 
 .sec { margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }

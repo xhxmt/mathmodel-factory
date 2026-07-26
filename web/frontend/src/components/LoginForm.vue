@@ -1,6 +1,9 @@
 <template>
-  <div class="boot">
+  <div class="boot" role="dialog" aria-modal="true" aria-label="账号登录">
     <div class="boot-card panel rise">
+      <button v-if="closable" type="button" class="bc-close" @click="$emit('close')" title="返回论文展厅">
+        <Icon name="x" :size="16" />
+      </button>
       <div class="bc-brand">
         <div class="mono-mark"><Icon name="layers" :size="22" /></div>
         <div>
@@ -65,7 +68,10 @@
       </form>
 
       <div class="bc-foot mono">
-        {{ mode === 'register' ? '注册后需管理员批准才能登录' : '请使用已批准账号登录' }}
+        <button v-if="closable" type="button" class="guest-return" @click="$emit('close')">
+          <Icon name="book-open" :size="13" /> 默认用户 · 返回论文展厅
+        </button>
+        <template v-else>{{ mode === 'register' ? '注册后需管理员批准才能登录' : '请使用已批准账号登录' }}</template>
       </div>
     </div>
   </div>
@@ -78,7 +84,8 @@ import { authLogin, authRegister } from '../lib/api.js'
 export default {
   name: 'LoginForm',
   components: { Icon },
-  emits: ['login-success'],
+  props: { closable: { type: Boolean, default: false } },
+  emits: ['login-success', 'close'],
   data() {
     return {
       mode: 'login',
@@ -132,8 +139,10 @@ export default {
 </script>
 
 <style scoped>
-.boot { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; }
-.boot-card { width: 100%; max-width: 400px; padding: 30px; box-shadow: var(--shadow-lg); }
+.boot { position: fixed; inset: 0; z-index: 400; display: flex; align-items: center; justify-content: center; padding: 20px; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(8px); }
+.boot-card { position: relative; width: 100%; max-width: 400px; padding: 30px; box-shadow: var(--shadow-lg); }
+.bc-close { position: absolute; top: 13px; right: 13px; display: flex; padding: 7px; border: 0; border-radius: 50%; background: transparent; color: var(--ink-3); cursor: pointer; }
+.bc-close:hover { color: var(--ink); background: var(--panel-2); }
 
 .bc-brand { display: flex; align-items: center; gap: 13px; margin-bottom: 22px; }
 .mono-mark { width: 46px; height: 46px; border-radius: var(--r); background: var(--amber); color: var(--amber-ink); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 24px var(--amber-glow); }
@@ -166,4 +175,6 @@ export default {
 
 .bc-foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); text-align: center; font-size: 11px; color: var(--ink-3); }
 .bc-foot b { color: var(--amber); font-weight: 700; }
+.guest-return { display: inline-flex; align-items: center; gap: 7px; padding: 3px; border: 0; background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; }
+.guest-return:hover { color: var(--live); }
 </style>

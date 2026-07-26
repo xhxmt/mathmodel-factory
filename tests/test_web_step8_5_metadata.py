@@ -118,6 +118,57 @@ def test_get_steps_exposes_editorial_gate(tmp_path):
     assert data["editorial_gate"]["ready"] is False
 
 
+def test_get_steps_counts_only_open_status_column_values(tmp_path):
+    mod = load_app_module()
+
+    write_file(
+        tmp_path / "audit_issue_ledger.md",
+        """# Audit issues
+
+| ID | Step | Severity | Location | Issue | Required action | Status |
+|---|---:|---|---|---|---|---|
+| B1 | 11 | BLOCKING | abstract | Placeholder remains | Fill abstract | RESOLVED |
+| m1 | 11 | MINOR | appendix | Internal path remains | Use public name | OPEN |
+| m2 | 18 | MINOR | results | Baseline unresolved in prose | Align anchor | RESOLVED |
+""",
+    )
+
+    data = mod.get_steps(tmp_path, "demo")
+
+    assert data["open_issues"] == 1
+    assert data["open_issue_items"] == [
+        {
+            "id": "m1",
+            "step": "11",
+            "severity": "MINOR",
+            "status": "OPEN",
+            "location": "appendix",
+            "issue": "Internal path remains",
+            "required_action": "Use public name",
+        }
+    ]
+
+
+def test_get_steps_supports_legacy_severity_in_status_column(tmp_path):
+    mod = load_app_module()
+
+    write_file(
+        tmp_path / "audit_issue_ledger.md",
+        """| issue_id | step | status | location | summary | recommended_fix |
+|---|---:|---|---|---|---|
+| B1 | 11 | BLOCKING | abstract | Missing result | Add result |
+| M1 | 11 | MAJOR | model | Missing bound | Add bound |
+| m1 | 11 | IN_PROGRESS | appendix | Internal path | Rename output |
+| B2 | 11 | RESOLVED | cover | Wrong year | Fixed |
+""",
+    )
+
+    data = mod.get_steps(tmp_path, "demo")
+
+    assert data["open_issues"] == 3
+    assert [item["id"] for item in data["open_issue_items"]] == ["B1", "M1", "m1"]
+
+
 def test_valid_step_key_accepts_step_8_5():
     mod = load_app_module()
 

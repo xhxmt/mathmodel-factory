@@ -1,21 +1,22 @@
 <template>
   <Toasts />
 
-  <LoginForm v-if="!isAuthenticated" @login-success="onLogin" />
+  <div v-if="!authReady" class="app-boot"><div class="spinner"></div></div>
 
   <template v-else>
-    <div class="console">
-      <!-- status rail -->
+    <LoginForm v-if="showLogin && !isAuthenticated" closable @login-success="onLogin" @close="showLogin = false" />
+
+    <div v-show="!selectedProject" class="console" :class="{ 'guest-console': !isAuthenticated }" :aria-hidden="selectedProject ? 'true' : 'false'">
       <header class="rail">
         <div class="brand">
           <div class="mark"><Icon name="layers" :size="18" /></div>
           <div class="brand-tx">
             <div class="brand-name mono">PAPER FACTORY</div>
-            <div class="brand-sub mono">建模工坊 · CONTROL</div>
+            <div class="brand-sub mono">{{ isAuthenticated ? '建模工坊 · CONTROL' : '论文展厅 · SHOWCASE' }}</div>
           </div>
         </div>
 
-        <div class="kpis">
+        <div v-if="isAuthenticated" class="kpis">
           <button class="kpi amber" :class="{ flash: counts.needs > 0 }" @click="jumpNeeds" :disabled="!counts.needs">
             <span class="k-val tnum">{{ counts.needs }}</span><span class="k-lbl">待你处理</span>
           </button>
@@ -23,27 +24,40 @@
           <div class="kpi"><span class="k-val ok tnum">{{ counts.completed }}</span><span class="k-lbl">已完成</span></div>
           <div class="kpi"><span class="k-val tnum">{{ counts.total }}</span><span class="k-lbl">总数</span></div>
         </div>
+        <div v-else class="guest-count mono">
+          <Icon name="book-open" :size="14" />
+          <span class="tnum">{{ showcasePapers.length }}</span> 篇展示论文
+        </div>
 
         <div class="rr">
-          <button class="btn btn-amber" @click="openNew"><Icon :name="isAdmin ? 'plus' : 'send'" :size="15" /> <span class="hide-sm">{{ isAdmin ? '新建' : '申请' }}</span></button>
-          <div class="hb mono" :class="{ off: !wsConnected }" :title="wsConnected ? '实时连接正常' : '正在重连'">
-            <span class="dot" :class="wsConnected ? 'live' : 'bad'"></span>{{ wsConnected ? 'LIVE' : 'RECONN' }}
-          </div>
-          <button class="btn btn-icon btn-ghost" @click="showPalette = true" title="命令面板 (⌘K)"><Icon name="command" :size="15" /></button>
-          <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showAdmin = true" title="管理员"><Icon name="shield" :size="15" /></button>
-          <button class="btn btn-icon btn-ghost" @click="showRequests = true" title="项目申请"><Icon name="inbox" :size="15" /></button>
-          <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showModels = true" title="模型管理"><Icon name="cpu" :size="15" /></button>
+          <template v-if="isAuthenticated">
+            <button class="btn btn-amber" @click="openNew"><Icon :name="isAdmin ? 'plus' : 'send'" :size="15" /> <span class="hide-sm">{{ isAdmin ? '新建' : '申请' }}</span></button>
+            <div class="hb mono" :class="{ off: !wsConnected }" :title="wsConnected ? '实时连接正常' : '正在重连'">
+              <span class="dot" :class="wsConnected ? 'live' : 'bad'"></span>{{ wsConnected ? 'LIVE' : 'RECONN' }}
+            </div>
+            <button class="btn btn-icon btn-ghost" @click="showPalette = true" title="命令面板 (⌘K)"><Icon name="command" :size="15" /></button>
+            <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showAdmin = true" title="管理员"><Icon name="shield" :size="15" /></button>
+            <button class="btn btn-icon btn-ghost" @click="showRequests = true" title="项目申请"><Icon name="inbox" :size="15" /></button>
+            <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showModels = true" title="模型管理"><Icon name="cpu" :size="15" /></button>
+          </template>
           <button class="btn btn-icon btn-ghost" @click="toggleTheme" title="切换主题"><Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="15" /></button>
-          <div class="user">
+          <div v-if="isAuthenticated" class="user">
             <Icon name="user" :size="14" />
             <span class="mono u-name hide-sm">{{ username }}</span>
             <button class="u-out" @click="logout" title="退出登录"><Icon name="log-out" :size="14" /></button>
           </div>
+          <div v-else class="user guest-user" title="当前为只读默认用户">
+            <Icon name="user" :size="14" />
+            <span class="mono u-name">默认用户</span>
+            <span class="guest-badge mono">访客</span>
+          </div>
+          <button v-if="!isAuthenticated" class="btn btn-amber login-btn" @click="showLogin = true">
+            <Icon name="lock" :size="14" /> <span>登录</span>
+          </button>
         </div>
       </header>
 
-      <main class="main">
-        <!-- needs-you lane -->
+      <main v-if="isAuthenticated" class="main">
         <section v-if="needsYou.length" class="lane">
           <div class="lane-h">
             <Icon name="alert-triangle" :size="14" />
@@ -55,7 +69,6 @@
           </div>
         </section>
 
-        <!-- fleet -->
         <section class="fleet">
           <div class="fleet-h">
             <span class="label">项目 · PROJECTS <b class="mono">{{ others.length }}</b></span>
@@ -84,28 +97,64 @@
           </div>
         </section>
       </main>
+
+      <main v-else class="main showcase-main">
+        <section class="showcase-heading">
+          <div>
+            <span class="label">PUBLIC PAPER ARCHIVE</span>
+            <h1>展示论文</h1>
+          </div>
+          <div class="readonly mono"><Icon name="shield" :size="13" /> READ ONLY</div>
+        </section>
+
+        <section class="fleet">
+          <div class="fleet-h">
+            <span class="label">论文 · PAPERS <b class="mono">{{ filteredShowcasePapers.length }}</b></span>
+            <div class="search">
+              <Icon name="search" :size="13" />
+              <input v-model="showcaseQuery" class="search-in mono" placeholder="搜索展示论文…" spellcheck="false" />
+              <button v-if="showcaseQuery" class="clr" @click="showcaseQuery = ''" title="清除搜索"><Icon name="x" :size="11" /></button>
+            </div>
+          </div>
+
+          <div v-if="showcaseLoading" class="grid showcase-grid">
+            <div v-for="i in 3" :key="i" class="skel showcase-skel panel"></div>
+          </div>
+          <div v-else-if="filteredShowcasePapers.length" class="grid showcase-grid">
+            <ShowcasePaperCard v-for="paper in filteredShowcasePapers" :key="paper.base_name" :paper="paper" @open="openShowcasePaper" />
+          </div>
+          <div v-else class="empty panel">
+            <Icon :name="showcaseError ? 'alert-triangle' : 'book-open'" :size="34" />
+            <p>{{ showcaseError || (showcaseQuery ? '无匹配论文' : '暂无展示论文') }}</p>
+            <button v-if="showcaseError" class="btn btn-sm btn-ghost" @click="loadShowcase"><Icon name="refresh" :size="13" /> 重试</button>
+          </div>
+        </section>
+      </main>
     </div>
 
-    <ProjectWorkspace v-if="selectedProject" :project="selectedProject" :is-admin="isAdmin" @close="closeWorkspace" @action="onAction" @refresh="fetchProjects" />
-    <NewProjectModal v-if="showNew" :is-admin="isAdmin" @close="showNew = false" @project-created="onCreated" @project-requested="onRequested" />
-    <AdminPanel v-if="showAdmin" @close="showAdmin = false" @changed="onAdminChanged" />
-    <ProjectRequestsPanel v-if="showRequests" :admin="isAdmin" @close="showRequests = false" @changed="onAdminChanged" />
-    <CommandPalette :visible="showPalette" :projects="projects" @close="showPalette = false" @open-project="openByBase" @new-project="openNew" @toggle-theme="toggleTheme" />
-    <ModelManager v-if="showModels && isAdmin" @close="showModels = false" @saved="() => {}" />
+    <ProjectWorkspace v-if="isAuthenticated && selectedProject" :project="selectedProject" :is-admin="isAdmin" @close="closeWorkspace" @action="onAction" @refresh="fetchProjects" />
+    <NewProjectModal v-if="isAuthenticated && showNew" :is-admin="isAdmin" @close="showNew = false" @project-created="onCreated" @project-requested="onRequested" />
+    <AdminPanel v-if="isAuthenticated && showAdmin" @close="showAdmin = false" @changed="onAdminChanged" />
+    <ProjectRequestsPanel v-if="isAuthenticated && showRequests" :admin="isAdmin" @close="showRequests = false" @changed="onAdminChanged" />
+    <CommandPalette v-if="isAuthenticated" :visible="showPalette" :projects="projects" @close="showPalette = false" @open-project="openByBase" @new-project="openNew" @toggle-theme="toggleTheme" />
+    <ModelManager v-if="isAuthenticated && showModels && isAdmin" @close="showModels = false" @saved="() => {}" />
+    <ShowcasePaperViewer v-if="!isAuthenticated && selectedShowcasePaper" :paper="selectedShowcasePaper" @close="selectedShowcasePaper = null" />
   </template>
 </template>
 
 <script>
-import { defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from './components/Icon.vue'
 import Toasts from './components/Toasts.vue'
 import LoginForm from './components/LoginForm.vue'
 import ProjectCard from './components/ProjectCard.vue'
+import ShowcasePaperCard from './components/ShowcasePaperCard.vue'
+import ShowcasePaperViewer from './components/ShowcasePaperViewer.vue'
 import NewProjectModal from './components/NewProjectModal.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ModelManager from './components/ModelManager.vue'
-import { Projects, setUnauthorizedHandler, setServerErrorHandler } from './lib/api.js'
+import { Projects, Showcase, setUnauthorizedHandler, setServerErrorHandler } from './lib/api.js'
 import { useTheme } from './composables/useTheme.js'
 import { useToasts, notifyDesktop } from './composables/useToasts.js'
 import { useModels } from './composables/useModels.js'
@@ -134,7 +183,7 @@ const AsyncProjectRequestsPanel = defineAsyncComponent({ loader: () => import('.
 
 export default {
   name: 'App',
-  components: { Icon, Toasts, LoginForm, ProjectCard, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager, AdminPanel: AsyncAdminPanel, ProjectRequestsPanel: AsyncProjectRequestsPanel },
+  components: { Icon, Toasts, LoginForm, ProjectCard, ShowcasePaperCard, ShowcasePaperViewer, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager, AdminPanel: AsyncAdminPanel, ProjectRequestsPanel: AsyncProjectRequestsPanel },
   setup() {
     const { theme, toggle: toggleTheme } = useTheme()
     const route = useRoute()
@@ -169,6 +218,20 @@ export default {
     const showModels = ref(false)
     const showAdmin = ref(false)
     const showRequests = ref(false)
+    const authReady = ref(false)
+    const showLogin = ref(false)
+    const showcasePapers = ref([])
+    const showcaseLoading = ref(true)
+    const showcaseError = ref('')
+    const showcaseQuery = ref('')
+    const selectedShowcasePaper = ref(null)
+    const filteredShowcasePapers = computed(() => {
+      const needle = showcaseQuery.value.trim().toLowerCase()
+      if (!needle) return showcasePapers.value
+      return showcasePapers.value.filter((paper) => (
+        `${paper.title} ${paper.base_name} ${paper.collection}`.toLowerCase().includes(needle)
+      ))
+    })
 
     function notifyAwaiting(baseName) {
       toasts.warn(`项目 ${baseName} 需要你的决策`, '人工咨询')
@@ -218,8 +281,23 @@ export default {
       toasts.warn(detail, '模型配置')
     }
 
+    async function loadShowcase() {
+      showcaseLoading.value = true
+      showcaseError.value = ''
+      try {
+        showcasePapers.value = await Showcase.list()
+      } catch (error) {
+        showcasePapers.value = []
+        showcaseError.value = '展示论文暂不可用'
+      } finally {
+        showcaseLoading.value = false
+      }
+    }
+
     // ---- auth ----
     async function onLogin(data) {
+      showLogin.value = false
+      selectedShowcasePaper.value = null
       loading.value = true
       await runLoginFlow(
         {
@@ -236,8 +314,15 @@ export default {
       clearAuth()
       close()
       resetProjects()
+      selectedShowcasePaper.value = null
+      showLogin.value = false
+      router.replace({ name: 'dashboard' }).catch(() => {})
+      void loadShowcase()
     }
-    setUnauthorizedHandler(logout)
+    setUnauthorizedHandler(() => {
+      if (isAuthenticated.value) logout()
+      else clearAuth()
+    })
     setServerErrorHandler((msg) => toasts.error(msg || '服务暂时不可用'))
 
     async function checkAuth() {
@@ -251,11 +336,19 @@ export default {
         })
         if (!ok) {
           loading.value = false
-          return
+          resetProjects()
+          selectedBase.value = null
+          await loadShowcase()
         }
       } catch (e) {
-        logout()
+        clearAuth()
+        close()
+        resetProjects()
+        selectedBase.value = null
         loading.value = false
+        await loadShowcase()
+      } finally {
+        authReady.value = true
       }
     }
 
@@ -288,17 +381,19 @@ export default {
     function closeSelectedWorkspace() { closeWorkspace() }
     function openNew() { showNew.value = true; showPalette.value = false }
     function jumpNeeds() { if (needsYou.value.length) openProject(needsYou.value[0]) }
+    function openShowcasePaper(paper) { selectedShowcasePaper.value = paper }
 
     function onKey(e) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      if (isAuthenticated.value && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault(); showPalette.value = !showPalette.value
       }
     }
 
     let syncingRoute = false
     watch(
-      () => route.params.baseName,
-      (baseName) => {
+      [() => route.params.baseName, isAuthenticated],
+      ([baseName, authenticated]) => {
+        if (!authenticated) return
         const next = baseName ? String(baseName) : null
         if (selectedBase.value === next) return
         syncingRoute = true
@@ -308,7 +403,7 @@ export default {
       { immediate: true },
     )
     watch(selectedBase, (baseName) => {
-      if (syncingRoute) return
+      if (syncingRoute || !isAuthenticated.value) return
       const target = baseName ? { name: 'project', params: { baseName } } : { name: 'dashboard' }
       router.replace(target).catch(() => {})
     })
@@ -324,15 +419,18 @@ export default {
 
     return {
       theme, toggleTheme,
-      isAuthenticated, username, role, status, isAdmin, projects, loading, wsConnected,
+      authReady, isAuthenticated, username, role, status, isAdmin, projects, loading, wsConnected,
       selectedBase, selectedProject, showNew, showPalette, showModels, showAdmin, showRequests, query, statusFilter, filterChips,
       needsYou, others, filteredOthers, counts,
+      showLogin, showcasePapers, showcaseLoading, showcaseError, showcaseQuery, filteredShowcasePapers, selectedShowcasePaper,
       onLogin, logout, onAction, onCreated, onRequested, onAdminChanged,
       openProject: openProjectFromCard,
       openByBase: openByBaseFromPalette,
       closeWorkspace: closeSelectedWorkspace,
       openNew,
       jumpNeeds,
+      loadShowcase,
+      openShowcasePaper,
       fetchProjects: refreshProjects,
     }
   },
@@ -340,6 +438,7 @@ export default {
 </script>
 
 <style scoped>
+.app-boot { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .console { min-height: 100vh; display: flex; flex-direction: column; }
 
 /* ---- status rail ---- */
@@ -378,6 +477,10 @@ export default {
 .u-name { font-size: 12px; }
 .u-out { background: none; border: none; color: var(--ink-3); cursor: pointer; display: flex; padding: 4px; border-radius: 50%; }
 .u-out:hover { color: var(--bad); background: var(--bad-dim); }
+.guest-count { display: inline-flex; align-items: center; gap: 7px; margin-left: 8px; padding: 7px 11px; border-left: 1px solid var(--line); color: var(--ink-3); font-size: 11px; }
+.guest-count svg, .guest-count .tnum { color: var(--live); }
+.guest-user { padding-right: 6px; }
+.guest-badge { padding: 3px 5px; border-radius: var(--r-xs); background: var(--live-dim); color: var(--live); font-size: 8.5px; font-weight: 700; }
 
 /* ---- main ---- */
 .main { flex: 1; max-width: 1480px; width: 100%; margin: 0 auto; padding: 22px 22px 60px; }
@@ -407,6 +510,14 @@ export default {
 .empty p { font-size: 15px; color: var(--ink-2); }
 .empty .hint { font-size: 11px; }
 
+/* ---- public paper showcase ---- */
+.showcase-main { padding-top: 28px; }
+.showcase-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 30px; padding: 0 2px 20px; border-bottom: 1px solid var(--line); }
+.showcase-heading h1 { margin-top: 7px; font-size: 27px; line-height: 1.15; letter-spacing: 0; }
+.readonly { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink-3); font-size: 9.5px; }
+.readonly svg { color: var(--ok); }
+.showcase-skel { height: 208px; }
+
 @media (max-width: 720px) {
   .rail { flex-wrap: wrap; gap: 14px; }
   .kpis { order: 3; width: 100%; justify-content: space-between; }
@@ -414,5 +525,23 @@ export default {
   .rr { margin-left: 0; }
   .hide-sm { display: none; }
   .grid { grid-template-columns: 1fr; }
+  .guest-console .rail { gap: 10px; padding: 9px 12px; }
+  .guest-console .rr { margin-left: auto; gap: 6px; }
+  .guest-count { order: 3; width: 100%; margin: 0; padding: 7px 0 2px; border-left: 0; border-top: 1px solid var(--line); }
+  .showcase-main { padding-top: 20px; }
+  .showcase-heading { margin-bottom: 22px; }
+}
+
+@media (max-width: 460px) {
+  .guest-console .brand { gap: 8px; }
+  .guest-console .brand-sub { display: none; }
+  .guest-console .mark { width: 34px; height: 34px; }
+  .guest-badge { display: none; }
+  .login-btn { padding: 8px; }
+  .login-btn span { display: none; }
+  .main { padding-left: 12px; padding-right: 12px; }
+  .showcase-heading { align-items: center; }
+  .showcase-heading h1 { font-size: 23px; }
+  .readonly { padding: 6px; }
 }
 </style>
