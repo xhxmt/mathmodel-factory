@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Parse schema-valid independent-judge aggregate reports.
 
-Current reports contain a ``judge-aggregate-v1`` JSON block.  Only reports for
-which every correctness auditor passed expose a comparable total.  Legacy
-Markdown scorecards are detected for diagnostics but are never promoted onto
-the current comparison axis.
+Current reports contain a ``judge-aggregate-v3`` JSON block.  A schema-valid
+score can be exposed as an uncalibrated diagnostic, but raw in-loop reports are
+never comparison-ready.  External calibration enrichment owns that promotion.
+Legacy aggregate envelopes and Markdown scorecards are diagnostic-only.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -19,7 +20,13 @@ from pathlib import Path
 from typing import Any
 
 
-AGGREGATE_SCHEMA_VERSION = "judge-aggregate-v1"
+# Keep this value in lockstep with scripts.aggregate_judges.  The v3 envelope
+# binds the three role states to evidence-grounding reports; accepting an older
+# envelope as current would silently bypass that binding.
+AGGREGATE_SCHEMA_VERSION = "judge-aggregate-v3"
+LEGACY_AGGREGATE_SCHEMA_VERSIONS = frozenset({"judge-aggregate-v1", "judge-aggregate-v2"})
+EVIDENCE_GROUNDING_SCHEMA_VERSION = "evidence-grounding-v1"
+SCORE_SEMANTICS = "UNCALIBRATED_DIAGNOSTIC"
 AGGREGATE_JSON_BEGIN = "<!-- JUDGE_AGGREGATE_JSON_BEGIN -->"
 AGGREGATE_JSON_END = "<!-- JUDGE_AGGREGATE_JSON_END -->"
 
@@ -34,7 +41,7 @@ DIMENSION_SPECS: tuple[tuple[str, str, int], ...] = (
 DIMENSION_MAX = {key: maximum for key, _, maximum in DIMENSION_SPECS}
 
 # Legacy-only diagnostics.  These fields are deliberately not comparable with
-# judge-aggregate-v1 because the old format lacks hard-auditor state and strict
+# judge-aggregate-v3 because the old format lacks hard-auditor state and strict
 # evidence binding.
 LEGACY_DIMENSION_MAX = {
     "模型合理性": 20,
@@ -99,13 +106,31 @@ def _validate_dimensions(value: object) -> dict[str, dict[str, Any]]:
             if not isinstance(evidence_item, dict):
                 raise ValueError(f"dimensions.{key}.evidence[{index}] must be an object")
             _require_exact_keys(
-                evidence_item, {"location", "finding"}, f"dimensions.{key}.evidence[{index}]"
+                evidence_item,
+                {"ref_id", "chunk_id", "quote", "quote_sha256", "finding"},
+                f"dimensions.{key}.evidence[{index}]",
             )
             if any(
                 not isinstance(evidence_item[field], str) or not evidence_item[field].strip()
-                for field in ("location", "finding")
+                for field in ("ref_id", "chunk_id", "quote", "quote_sha256", "finding")
             ):
                 raise ValueError(f"dimensions.{key}.evidence[{index}] fields must be non-empty")
+            if (
+                len(evidence_item["chunk_id"]) != 64
+                or not re.fullmatch(r"[0-9a-f]{64}", evidence_item["chunk_id"])
+                or len(evidence_item["quote_sha256"]) != 64
+                or not re.fullmatch(r"[0-9a-f]{64}", evidence_item["quote_sha256"])
+            ):
+                raise ValueError(
+                    f"dimensions.{key}.evidence[{index}] chunk/quote hashes must be SHA-256"
+                )
+            computed_quote_hash = hashlib.sha256(
+                evidence_item["quote"].encode("utf-8")
+            ).hexdigest()
+            if evidence_item["quote_sha256"] != computed_quote_hash:
+                raise ValueError(
+                    f"dimensions.{key}.evidence[{index}] quote_sha256 does not match quote"
+                )
         parsed[key] = {
             "label": label,
             "weight": maximum,
@@ -131,12 +156,94 @@ def _extract_aggregate_payload(text: str) -> dict[str, Any]:
     return payload
 
 
+def _validate_evidence_grounding(value: object) -> dict[str, dict[str, Any]]:
+    """Validate the compact grounding summaries embedded in an aggregate.
+
+    The full quote/chunk verification is performed by ``aggregate_judges``.
+    The parser still checks the summary envelope and role alignment so a caller
+    cannot remove or rewrite the grounding result after aggregation.
+    """
+
+    if not isinstance(value, dict):
+        raise ValueError("evidence_grounding must be an object")
+    _require_exact_keys(value, {"math", "execution", "paper"}, "evidence_grounding")
+    parsed: dict[str, dict[str, Any]] = {}
+    for role in ("math", "execution", "paper"):
+        summary = value[role]
+        if not isinstance(summary, dict):
+            raise ValueError(f"evidence_grounding.{role} must be an object")
+        if summary.get("schema_version") != EVIDENCE_GROUNDING_SCHEMA_VERSION:
+            raise ValueError(f"evidence_grounding.{role} has an unsupported schema")
+        if summary.get("role") != role:
+            raise ValueError(f"evidence_grounding.{role}.role does not match key")
+        if not isinstance(summary.get("enforced"), bool):
+            raise ValueError(f"evidence_grounding.{role}.enforced must be boolean")
+        valid = summary.get("valid")
+        if valid is not None and not isinstance(valid, bool):
+            raise ValueError(f"evidence_grounding.{role}.valid must be boolean or null")
+        refs = summary.get("refs")
+        errors = summary.get("errors")
+        if not isinstance(refs, list) or not isinstance(errors, list):
+            raise ValueError(f"evidence_grounding.{role} refs/errors must be arrays")
+        # A report that was actually enforced must be valid before a role can
+        # contribute to a current aggregate.  Invalid reports are expected to
+        # have been converted to INDETERMINATE by the aggregator; this check
+        # catches post-hoc tampering in the Markdown machine block.
+        parsed[role] = summary
+    return parsed
+
+
+def _legacy_aggregate_result(text: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a non-comparable diagnostic view of a v1/v2 aggregate.
+
+    Older reports are useful for historical inspection, but their score and
+    verdict were produced without the current grounding contract.  Preserve a
+    small amount of metadata while making every comparison-facing field inert.
+    """
+
+    verdict = payload.get("verdict") if isinstance(payload.get("verdict"), str) else None
+    raw_total = payload.get("overall_score")
+    raw_paper = payload.get("paper_score")
+    legacy_total = float(raw_total) if _is_number(raw_total) else None
+    legacy_paper = float(raw_paper) if _is_number(raw_paper) else None
+    return {
+        "schema_version": payload.get("schema_version"),
+        "schema_valid": False,
+        "legacy": True,
+        "verdict": verdict,
+        "status": "LEGACY_UNVERIFIED",
+        "score_available": False,
+        "score_semantics": "LEGACY_UNVERIFIED",
+        "comparison_ready": False,
+        "total": None,
+        "total_adjusted": None,
+        "total_recomputed": None,
+        "paper_score": None,
+        "legacy_total": legacy_total,
+        "legacy_paper_score": legacy_paper,
+        "legacy_recomputed": None,
+        "overflow_clamped": 0,
+        "grade": None,
+        "dims": {},
+        "vetoes": [],
+        "indeterminate_roles": [],
+        "role_statuses": {},
+        "evidence_grounding": {},
+        "parse_error": (
+            f"legacy {payload.get('schema_version', 'aggregate')} lacks current "
+            f"{AGGREGATE_SCHEMA_VERSION} evidence-grounding contract"
+        ),
+    }
+
+
 def _parse_current(text: str) -> dict[str, Any]:
     payload = _extract_aggregate_payload(text)
     expected = {
         "schema_version",
         "verdict",
         "status",
+        "score_available",
+        "score_semantics",
         "comparison_ready",
         "overall_score",
         "paper_score",
@@ -144,19 +251,31 @@ def _parse_current(text: str) -> dict[str, Any]:
         "indeterminate_roles",
         "dimensions",
         "role_statuses",
+        "evidence_grounding",
     }
     _require_exact_keys(payload, expected, "aggregate")
     if payload["schema_version"] != AGGREGATE_SCHEMA_VERSION:
         raise ValueError("unsupported aggregate schema_version")
-    if payload["verdict"] not in {"PASS", "REOPEN_REVISION_MODEL", "REOPEN_REVISION_TEXT"}:
+    if payload["verdict"] not in {
+        "PASS",
+        "REOPEN_REVISION_MODEL",
+        "REOPEN_REVISION_TEXT",
+        "INDETERMINATE_REVIEW",
+    }:
         raise ValueError("aggregate verdict is invalid")
     first_line = text.splitlines()[0] if text.splitlines() else ""
     if first_line != f"VERDICT: {payload['verdict']}":
         raise ValueError("first-line verdict does not match aggregate JSON")
     if payload["status"] not in {"PASS", "FAIL", "INDETERMINATE", "REVISE"}:
         raise ValueError("aggregate status is invalid")
+    if not isinstance(payload["score_available"], bool):
+        raise ValueError("score_available must be boolean")
+    if payload["score_semantics"] != SCORE_SEMANTICS:
+        raise ValueError("score_semantics must be UNCALIBRATED_DIAGNOSTIC")
     if not isinstance(payload["comparison_ready"], bool):
         raise ValueError("comparison_ready must be boolean")
+    if payload["comparison_ready"]:
+        raise ValueError("raw judge-aggregate-v3 cannot be comparison_ready")
     vetoes = _validate_string_list(payload["vetoes"], "vetoes")
     indeterminate = _validate_string_list(payload["indeterminate_roles"], "indeterminate_roles")
     role_statuses = payload["role_statuses"]
@@ -164,26 +283,50 @@ def _parse_current(text: str) -> dict[str, Any]:
         raise ValueError("role_statuses must be an object")
     _require_exact_keys(role_statuses, {"math", "execution", "paper"}, "role_statuses")
     if any(
-        status not in {"PASS", "FAIL", "INDETERMINATE", "REVISE"}
+        status not in {"PASS", "FAIL", "INDETERMINATE", "REVISE", "LEGACY_UNVERIFIED"}
         for status in role_statuses.values()
     ):
         raise ValueError("role_statuses contains an invalid status")
+    if any(
+        role_statuses[role] not in {"PASS", "FAIL", "INDETERMINATE", "LEGACY_UNVERIFIED"}
+        for role in ("math", "execution")
+    ):
+        raise ValueError("hard role has an invalid status")
+    if role_statuses["paper"] not in {
+        "PASS",
+        "REVISE",
+        "INDETERMINATE",
+        "LEGACY_UNVERIFIED",
+    }:
+        raise ValueError("paper role has an invalid status")
     expected_vetoes = [
         role for role in ("math", "execution") if role_statuses[role] == "FAIL"
     ]
     expected_indeterminate = [
         role for role in ("math", "execution", "paper")
-        if role_statuses[role] == "INDETERMINATE"
+        if role_statuses[role] in {"INDETERMINATE", "LEGACY_UNVERIFIED"}
     ]
     if vetoes != expected_vetoes:
         raise ValueError("vetoes do not match hard-role statuses")
     if indeterminate != expected_indeterminate:
         raise ValueError("indeterminate_roles do not match role statuses")
 
+    evidence_grounding = _validate_evidence_grounding(payload["evidence_grounding"])
+    for role, status in role_statuses.items():
+        summary = evidence_grounding[role]
+        if (
+            summary["enforced"]
+            and summary["valid"] is not True
+            and status not in {"INDETERMINATE", "LEGACY_UNVERIFIED"}
+        ):
+            raise ValueError(
+                f"evidence_grounding.{role} is invalid for role status {status}"
+            )
+
     if expected_vetoes:
         expected_status, expected_verdict = "FAIL", "REOPEN_REVISION_MODEL"
     elif expected_indeterminate:
-        expected_status, expected_verdict = "INDETERMINATE", "REOPEN_REVISION_MODEL"
+        expected_status, expected_verdict = "INDETERMINATE", "INDETERMINATE_REVIEW"
     elif role_statuses["paper"] == "REVISE":
         expected_status, expected_verdict = "REVISE", "REOPEN_REVISION_TEXT"
     elif all(role_statuses[role] == "PASS" for role in ("math", "execution", "paper")):
@@ -205,6 +348,15 @@ def _parse_current(text: str) -> dict[str, Any]:
     if role_statuses["paper"] == "INDETERMINATE":
         if paper_score is not None or dimensions is not None:
             raise ValueError("indeterminate paper role cannot expose a score")
+    elif role_statuses["paper"] == "LEGACY_UNVERIFIED":
+        if (paper_score is None) != (dimensions is None):
+            raise ValueError("legacy paper diagnostics must expose both score and dimensions or neither")
+        if paper_score is not None:
+            paper_recomputed = round(
+                sum(item["weighted_mean"] for item in dimensions.values()), 2
+            )
+            if not math.isclose(float(paper_score), paper_recomputed, abs_tol=0.01):
+                raise ValueError("legacy paper_score does not equal six-dimension sum")
     else:
         if paper_score is None or dimensions is None:
             raise ValueError("valid paper role requires score and all six dimensions")
@@ -214,32 +366,34 @@ def _parse_current(text: str) -> dict[str, Any]:
         if not math.isclose(float(paper_score), paper_recomputed, abs_tol=0.01):
             raise ValueError("paper_score does not equal six-dimension sum")
 
+    score_available = payload["score_available"]
     comparison_ready = payload["comparison_ready"]
     overall_score = payload["overall_score"]
     hard_pass = role_statuses["math"] == "PASS" and role_statuses["execution"] == "PASS"
     paper_valid = role_statuses["paper"] in {"PASS", "REVISE"}
-    if comparison_ready:
+    structurally_available = hard_pass and paper_valid and not vetoes and not indeterminate
+    if score_available != structurally_available:
+        raise ValueError("score_available conflicts with role states")
+    if score_available:
         if not hard_pass or not paper_valid or vetoes or indeterminate:
-            raise ValueError("comparison_ready conflicts with role states")
+            raise ValueError("score_available conflicts with role states")
         if payload["status"] not in {"PASS", "REVISE"}:
-            raise ValueError("comparison_ready requires PASS or REVISE aggregate status")
+            raise ValueError("score_available requires PASS or REVISE aggregate status")
         if not _is_number(overall_score) or not 0 <= float(overall_score) <= 100:
-            raise ValueError("comparable overall_score must be within 0..100")
+            raise ValueError("diagnostic overall_score must be within 0..100")
         if dimensions is None:
-            raise ValueError("comparable score requires all six dimensions")
+            raise ValueError("available score requires all six dimensions")
         recomputed = round(sum(item["weighted_mean"] for item in dimensions.values()), 2)
         if not math.isclose(float(overall_score), recomputed, abs_tol=0.01):
             raise ValueError("overall_score does not equal six-dimension sum")
         if paper_score is None or not math.isclose(
             float(overall_score), float(paper_score), abs_tol=0.01
         ):
-            raise ValueError("overall_score must equal paper_score when comparable")
+            raise ValueError("overall_score must equal paper_score when available")
     else:
         if overall_score is not None:
-            raise ValueError("non-comparable aggregate must set overall_score to null")
+            raise ValueError("score-unavailable aggregate must set overall_score to null")
         recomputed = None
-        if payload["status"] in {"PASS", "REVISE"}:
-            raise ValueError("PASS/REVISE aggregate must be comparison_ready")
 
     return {
         "schema_version": AGGREGATE_SCHEMA_VERSION,
@@ -247,6 +401,8 @@ def _parse_current(text: str) -> dict[str, Any]:
         "legacy": False,
         "verdict": payload["verdict"],
         "status": payload["status"],
+        "score_available": score_available,
+        "score_semantics": SCORE_SEMANTICS,
         "comparison_ready": comparison_ready,
         "total": float(overall_score) if overall_score is not None else None,
         "total_adjusted": float(overall_score) if overall_score is not None else None,
@@ -258,6 +414,7 @@ def _parse_current(text: str) -> dict[str, Any]:
         "vetoes": vetoes,
         "indeterminate_roles": indeterminate,
         "role_statuses": role_statuses,
+        "evidence_grounding": evidence_grounding,
         "parse_error": None,
     }
 
@@ -310,6 +467,8 @@ def _parse_legacy(text: str) -> dict[str, Any]:
         "legacy": True,
         "verdict": verdict_match.group(1) if verdict_match else None,
         "status": "LEGACY_UNVERIFIED",
+        "score_available": False,
+        "score_semantics": "LEGACY_UNVERIFIED",
         "comparison_ready": False,
         "total": None,
         "total_adjusted": None,
@@ -323,7 +482,8 @@ def _parse_legacy(text: str) -> dict[str, Any]:
         "vetoes": [],
         "indeterminate_roles": [],
         "role_statuses": {},
-        "parse_error": "legacy scorecard lacks judge-aggregate-v1 evidence and hard-gate state",
+        "evidence_grounding": {},
+        "parse_error": f"legacy scorecard lacks {AGGREGATE_SCHEMA_VERSION} evidence and hard-gate state",
     }
 
 
@@ -331,7 +491,12 @@ def parse_file(path: Path, base: str | None = None) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8", errors="replace")
     if AGGREGATE_JSON_BEGIN in text or AGGREGATE_JSON_END in text:
         try:
-            result = _parse_current(text)
+            payload = _extract_aggregate_payload(text)
+            schema = payload.get("schema_version")
+            if schema in LEGACY_AGGREGATE_SCHEMA_VERSIONS:
+                result = _legacy_aggregate_result(text, payload)
+            else:
+                result = _parse_current(text)
         except ValueError as exc:
             result = {
                 "schema_version": None,
@@ -339,6 +504,8 @@ def parse_file(path: Path, base: str | None = None) -> dict[str, Any]:
                 "legacy": False,
                 "verdict": None,
                 "status": "INDETERMINATE",
+                "score_available": False,
+                "score_semantics": None,
                 "comparison_ready": False,
                 "total": None,
                 "total_adjusted": None,
@@ -350,6 +517,7 @@ def parse_file(path: Path, base: str | None = None) -> dict[str, Any]:
                 "vetoes": [],
                 "indeterminate_roles": [],
                 "role_statuses": {},
+                "evidence_grounding": {},
                 "parse_error": str(exc),
             }
     else:
@@ -367,31 +535,34 @@ def parse_file(path: Path, base: str | None = None) -> dict[str, Any]:
 
 def aggregate(paths: list[Path], base: str | None = None) -> dict[str, Any]:
     runs = [parse_file(path, base=base) for path in paths]
-    ready_runs = [run for run in runs if run.get("comparison_ready")]
-    all_ready = bool(runs) and len(ready_runs) == len(runs)
-    totals = [float(run["total"]) for run in ready_runs]
-    recomputed = [float(run["total_recomputed"]) for run in ready_runs]
+    scored_runs = [run for run in runs if run.get("score_available")]
+    all_scored = bool(runs) and len(scored_runs) == len(runs)
+    totals = [float(run["total"]) for run in scored_runs]
+    recomputed = [float(run["total_recomputed"]) for run in scored_runs]
 
     # A partial median would silently discard a hard FAIL or INDETERMINATE run.
-    # Keep it diagnostic-only and expose headline comparison fields only when
-    # every requested run is current-schema and correctness-valid.
-    median_total = round(statistics.median(totals), 2) if all_ready else None
-    median_recomputed = round(statistics.median(recomputed), 2) if all_ready else None
+    # Keep partial samples diagnostic-only.  Even a complete set remains
+    # uncalibrated until enrich_evaluation_result applies an exact-runtime
+    # calibration report.
+    median_total = round(statistics.median(totals), 2) if all_scored else None
+    median_recomputed = round(statistics.median(recomputed), 2) if all_scored else None
     return {
         "base": base or next((run["base"] for run in runs if run.get("base")), None),
         "schema_version": AGGREGATE_SCHEMA_VERSION,
-        "comparison_ready": all_ready,
+        "score_available": all_scored,
+        "score_semantics": SCORE_SEMANTICS,
+        "comparison_ready": False,
         "n": len(runs),
-        "n_scored": len(ready_runs),
+        "n_scored": len(scored_runs),
         "median_total": median_total,
-        "min_total": min(totals) if all_ready else None,
-        "max_total": max(totals) if all_ready else None,
+        "min_total": min(totals) if all_scored else None,
+        "max_total": max(totals) if all_scored else None,
         "median_total_raw": median_total,
         "median_recomputed": median_recomputed,
-        "min_recomputed": min(recomputed) if all_ready else None,
-        "max_recomputed": max(recomputed) if all_ready else None,
+        "min_recomputed": min(recomputed) if all_scored else None,
+        "max_recomputed": max(recomputed) if all_scored else None,
         "diagnostic_median_valid": (
-            round(statistics.median(recomputed), 2) if ready_runs else None
+            round(statistics.median(recomputed), 2) if scored_runs else None
         ),
         "any_clamped": False,
         "all_schema_valid": all(bool(run.get("schema_valid")) for run in runs),
@@ -416,13 +587,13 @@ def main() -> int:
 
     if args.aggregate:
         output = aggregate(paths, base=args.base)
-        valid = bool(output.get("comparison_ready"))
+        valid = bool(output.get("score_available"))
     else:
         if len(paths) != 1:
             print("ERROR: single-file mode takes exactly one file", file=sys.stderr)
             return 2
         output = parse_file(paths[0], base=args.base)
-        valid = bool(output.get("comparison_ready"))
+        valid = bool(output.get("score_available"))
 
     print(json.dumps(output, ensure_ascii=False, indent=2, allow_nan=False))
     return 0 if valid else 1

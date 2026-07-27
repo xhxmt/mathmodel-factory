@@ -9,7 +9,7 @@
 - 数学与执行角色使用 `PASS / FAIL / INDETERMINATE` 三值逻辑。FAIL 是硬否决；证据不足是 INDETERMINATE，二者都不能产生可比较总分。
 - 论文角色使用六维条件质量 rubric：模型呈现 20、求解叙事 20、创新性 20、写作清晰度 15、结果说服力 15、敏感性与局限 10。
 - 当前自动论文角色只接收 packet 化的 LaTeX / 文本，因此六维分数只覆盖可观察的结构、论证、标题 / 图题 / 表题和正文图表叙事。它不评价 PDF 分页、字体、颜色、图片清晰度、裁切、重叠或视觉美学；这些必须由编译 / 版式机器预检或人工查看最终 PDF。
-- `judge-role-v1` 或 `judge-aggregate-v1` 缺字段、字段多余、分数越界、维度和总分不一致或证据不完整时，结果为 INDETERMINATE，不做正则修补或静默夹紧。
+- 当前角色契约为 `judge-hard-role-v2` / `judge-paper-role-v3`，聚合契约为 `judge-aggregate-v3`。缺字段、字段多余、分数越界、维度和总分不一致或证据不完整时，结果为 INDETERMINATE，不做正则修补或静默夹紧；旧 schema 只保留 `LEGACY_UNVERIFIED` 诊断。
 - packet manifest 使用 `judge-packet-completeness-v1` 独立判定各角色的最低证据：paper 要求完整最终论文和主问题文本；math 还要求完整数学阐述；execution 要求完整主要结果、实现和执行轨迹。关键证据只要被截断 / 省略，聚合器就强制对应角色为 `INDETERMINATE`，不信任模型自行降级。非关键大型代码可以截断，但必须出现在 `limitations`。
 - 旧 Markdown 评分卡缺少硬角色和证据绑定，只能解析为 `LEGACY_UNVERIFIED`，永远不进入当前比较轴。
 
@@ -24,14 +24,20 @@
 
 | 文件 | 作用 |
 |---|---|
-| `run_evaluation.sh` | 主入口：预检门 → 编译 → 隔离评审包 → 三角色 ×K → 否决聚合 |
+| `run_evaluation.sh` | 主入口：预检门 → 编译 → objective evidence → 隔离评审包 → 三角色 ×K → 否决聚合 |
 | `calibration_manifest.json` | 真实获奖论文与生成基线的离线标签、同题奖项顺序和结果路径 |
 | `prompts/calibration_pairwise.txt` | 隐藏身份和奖级后的同题两两比较契约 |
 | `prompts/calibration_absolute.txt` | 数学正确性与写作质量分轨绝对评分契约 |
 | `../scripts/calibration_judge.py` | 面向独立获奖 PDF 的盲评与分轨校准入口 |
 | `../scripts/evaluate_calibration.py` | 计算奖项顺序准确率、Kendall-style 次序、缺失覆盖、格式失败和致命缺陷检出率 |
+| `../scripts/capability_harness.py` | 生成带前置/后置 oracle 的 exact-runtime mutation packet，并计算带 Wilson 区间的能力矩阵 |
+| `../scripts/shadow_cutover.py` | 比较 legacy/new 决策并输出仅供人工批准的 shadow cutover readiness；绝不自动切换 |
+| `CAPABILITY_HARNESS.md` | 无人工真值时的 P2/P3 manifest、观测格式、holdout 与 CLI 合同 |
+| `../scripts/judge_reliability.py` | 固定 packet 的重复评委可靠性：多数/中位数、离散、位置无关的重复一致率与显式 UNKNOWN alpha；不驱动门禁 |
+| `JUDGE_RELIABILITY.md` | 无人工标签时的重复评委输入、身份绑定与保守聚合合同 |
 | `../scripts/llm_judge_call.py` | 共享 LLM 调用器：按 model 名分派 DeepSeek / Gemini / Claude 三后端（run_evaluation.sh 与 perturbation_harness.py 共用） |
 | `../scripts/enrich_evaluation_result.py` | 将聚合结果拆成 `structural` 硬证据和 `llm_score` 软评分 |
+| `../scripts/build_objective_evidence.py` | 生成带输入指纹的 `objective-evidence-v1` 机器证据 bundle |
 | `../prompts/judges/*.txt` | 当前数学、执行、论文三角色严格输出契约 |
 | `human_rubric.md` | 给真人评委的纸面打分表（同一把尺子） |
 | `baseline_scores.md` | 旧评分契约的历史读数及当前基线准入条件；不是活跃绝对分基线 |
@@ -41,7 +47,7 @@
 复用而非重造：
 - **rubric** 不重造——角色 schema 和六维权重以 `STEPS.md` 与 `scripts/aggregate_judges.py` 的版本化契约为准。它是内部操作性 rubric；奖级解释仍需人类校准。
 - 预检用 `scripts/evaluate_modeling_project.py` 记录结构 / 交付证据。外部评分的最低准入不由内部 Gate 2 选择：即使内部预检 FAIL，只要问题、最终论文和执行主张审计材料完整，外部评委仍可独立发现 false positive / false negative。
-- 数值可追溯信号用 `scripts/verify_numbers.py` 的 `UNMATCHED` 计数。
+- 客观证据由 `scripts/build_objective_evidence.py` 生成 `objective-evidence-v1` bundle，绑定选定输入的 SHA-256。`verify_numbers.py` 的 `UNMATCHED` 仅作为宽松启发式诊断；`UNKNOWN` 不等于 PASS，启发式 WARN 不得单独触发硬否决。
 - 评分卡解析用 `scripts/parse_judge_score.py`。当前 schema 才可比较；旧格式只保留诊断字段。
 
 ## 用法
@@ -63,14 +69,14 @@
 - `eval_run1.md … eval_run<K>.md` 与 `eval_run<k>_roles.json` —— 每轮三角色严格聚合及原始状态。
 - `precheck.json` —— `scripts/evaluate_modeling_project.py --json` 的结构证据。
 - `eval.json` —— 聚合结果，包含：
-  - `structural`：预检、评分准入、推断步骤、未匹配数字和 blocking evidence；
+  - `structural`：预检、评分准入、推断步骤、objective evidence bundle、未匹配数字和 blocking evidence；
   - `llm_score`：请求 / 有效运行数、条件中位数和运行一致性诊断；
   - `calibration`：代理 harness、人类、运行时评分、奖级校准状态及身份匹配；
   - `comparison_ready_proxy`：硬角色、schema、输入 / 校准身份均通过，且报告明确验证了精确的 `judge-role-v1` + `modeling-factory-judge-packet-v2` 运行时构造；
   - `comparison_ready_human`：在上述运行时构造验证基础上还具备人类真值校准；
   - `comparison_ready`：当前兼容字段，等于 `comparison_ready_proxy OR comparison_ready_human`；具体解释仍必须查看是哪一种证据成立，不能单凭此字段宣称奖级可信。
 - 一行汇总打到 stdout，例如：
-`test_cumcm2024b: external=85.x/100 (spread 84.x-87.x), in-loop=86.4, unmatched=N, precheck=PASS`
+`test_cumcm2024b: external=85.x/100 (spread 84.x-87.x), in-loop=86.4, unmatched=N (heuristic), precheck=PASS`
 
 stdout 分数是诊断摘要。只有对应 JSON 的 readiness 字段满足目标用途时才能进入比较；硬 FAIL / INDETERMINATE 时总分必须为 `null`。
 
@@ -170,7 +176,7 @@ python3 scripts/evaluate_calibration.py evaluation/proxy_calibration_manifest.js
 | VERDICT | 驱动 runner 回退 | 仅分类标签，不驱动任何循环 |
 | 硬有效性 | 数学 / 执行三值门禁 | 数学 / 执行三值门禁 |
 | 论文质量 | 硬角色 PASS 后的六维条件分 | 硬角色 PASS 后的六维条件分 |
-| 输出格式 | `judge-role-v1` + `judge-aggregate-v1` | 同版本 schema（同一解析器） |
+| 输出格式 | `judge-hard-role-v2`/`judge-paper-role-v3` + `judge-aggregate-v3` | 同版本 schema（同一解析器） |
 
 ## 校准
 

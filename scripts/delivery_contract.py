@@ -18,7 +18,7 @@ if __package__ in (None, ""):
 from scripts import evaluate_modeling_project, workflow_state
 
 
-CURRENT_CONTRACT_VERSION = "2026-07-17.final_judge_v3"
+CURRENT_CONTRACT_VERSION = "2026-07-26.evidence_judge_v4"
 
 
 def utc_now() -> str:
@@ -92,6 +92,21 @@ def build_delivery_manifest(
     base = project.name
     failed_checks = [check.__dict__ for check in ev.checks if not check.ok and check.severity != "warning"]
 
+    judgment_receipt_path = project / "judge_outputs" / "judgment_receipt.json"
+    decision_route_path = project / "judge_outputs" / "decision_route.json"
+    visual_gate_path = project / "judge_outputs" / "visual_gate.json"
+
+    def load_object(path: Path) -> dict[str, Any]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    receipt = load_object(judgment_receipt_path)
+    route = load_object(decision_route_path)
+    visual = load_object(visual_gate_path)
+
     return {
         "contract_version": CURRENT_CONTRACT_VERSION,
         "generated_at": generated_at or utc_now(),
@@ -107,12 +122,22 @@ def build_delivery_manifest(
             "gate2_verdict": workflow_state.gate2_verdict(project),
             "gate2_passed": workflow_state.gate2_passed(project),
             "gate2_delivery_override": workflow_state.gate2_delivery_override(project),
+            "judge_policy_mode": route.get("policy_mode"),
+            "new_judge_decision": route.get("new_decision"),
+            "effective_judge_decision": route.get("effective_decision"),
+            "visual_gate_status": visual.get("status"),
+            "judgment_receipt_status": receipt.get("status"),
+            "human_alignment": "UNAVAILABLE_WITHOUT_HUMAN_CALIBRATION",
+            "award_prediction": "UNAVAILABLE_WITHOUT_HUMAN_CALIBRATION",
             "failed_checks": failed_checks,
         },
         "artifacts": {
             "project_pdf": artifact_record(project / f"{base}_paper.pdf"),
             "papers_pdf": artifact_record(root / "papers" / f"{base}_paper.pdf"),
             "submission_zip": artifact_record(root / "papers" / f"{base}_submission.zip"),
+            "judgment_receipt": artifact_record(judgment_receipt_path),
+            "decision_route": artifact_record(decision_route_path),
+            "visual_gate": artifact_record(visual_gate_path),
         },
     }
 

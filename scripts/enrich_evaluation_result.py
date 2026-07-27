@@ -4,10 +4,84 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+
+OBJECTIVE_SCHEMA = "objective-evidence-v1"
+
+
+def _canonical_hash(value: Any) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _objective_summary(path: Path | None) -> tuple[dict[str, Any], list[str]]:
+    """Load and bind the objective bundle without making it a score gate."""
+
+    if path is None or not path.is_file():
+        return {
+            "schema_version": OBJECTIVE_SCHEMA,
+            "status": "UNKNOWN",
+            "valid": False,
+            "bundle_sha256": None,
+            "input_fingerprint": None,
+            "summary": None,
+            "metadata": {"reason": "missing"},
+        }, ["objective_evidence_missing"]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "schema_version": OBJECTIVE_SCHEMA,
+            "status": "UNKNOWN",
+            "valid": False,
+            "bundle_sha256": None,
+            "input_fingerprint": None,
+            "summary": None,
+            "metadata": {"reason": "invalid_json", "error": str(exc)},
+        }, ["objective_evidence_invalid_json"]
+    if not isinstance(payload, dict) or payload.get("schema_version") != OBJECTIVE_SCHEMA:
+        return {
+            "schema_version": OBJECTIVE_SCHEMA,
+            "status": "UNKNOWN",
+            "valid": False,
+            "bundle_sha256": None,
+            "input_fingerprint": None,
+            "summary": None,
+            "metadata": {"reason": "unsupported_schema"},
+        }, ["objective_evidence_schema_mismatch"]
+    declared = payload.get("bundle_sha256")
+    unsigned = dict(payload)
+    unsigned.pop("bundle_sha256", None)
+    valid_hash = isinstance(declared, str) and declared == _canonical_hash(unsigned)
+    input_fingerprint = payload.get("input_fingerprint")
+    valid_input = isinstance(input_fingerprint, str) and len(input_fingerprint) == 64
+    errors: list[str] = []
+    if not valid_hash:
+        errors.append("objective_evidence_bundle_hash_mismatch")
+    if not valid_input:
+        errors.append("objective_evidence_input_fingerprint_invalid")
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else None
+    if summary is None:
+        errors.append("objective_evidence_summary_missing")
+    return {
+        "schema_version": OBJECTIVE_SCHEMA,
+        "status": summary.get("decision") if summary else "UNKNOWN",
+        "valid": not errors,
+        "bundle_sha256": declared if valid_hash else None,
+        "input_fingerprint": input_fingerprint if valid_input else None,
+        "summary": summary,
+        "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        "decision_semantics": payload.get("decision_semantics"),
+        "quality_verdict": payload.get("quality_verdict"),
+        "path": str(path),
+    }, errors
 
 
 def failed_checks(precheck: dict[str, Any]) -> list[dict[str, Any]]:
@@ -102,6 +176,9 @@ def enrich_aggregate(
     precheck: dict[str, Any] | None,
     unmatched_numbers: str,
     inloop_total: str,
+    objective_evidence: dict[str, Any] | None = None,
+    objective_evidence_errors: list[str] | None = None,
+    reliability_report: dict[str, Any] | None = None,
     calibration_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     precheck_data = precheck or {}
@@ -135,6 +212,27 @@ def enrich_aggregate(
         "inferred_step": precheck_data.get("inferred_step"),
         "unmatched_numbers": unmatched_numbers,
         "blocking_evidence": failed_checks(precheck_data),
+        "objective_evidence": objective_evidence or {
+            "schema_version": OBJECTIVE_SCHEMA,
+            "status": "UNKNOWN",
+            "valid": False,
+            "bundle_sha256": None,
+            "input_fingerprint": None,
+            "summary": None,
+            "metadata": {"reason": "not_supplied"},
+        },
+        "objective_evidence_errors": list(objective_evidence_errors or []),
+    }
+    aggregate["objective_evidence"] = aggregate["structural"]["objective_evidence"]
+    aggregate["reliability"] = reliability_report or {
+        "schema": "judge-reliability-v1",
+        "input_valid": False,
+        "hard_gate_status": "INDETERMINATE",
+        "overall": {
+            "verdict": "INDETERMINATE",
+            "reason": "not_supplied",
+            "score_semantics": "UNCALIBRATED_DIAGNOSTIC_ONLY",
+        },
     }
     aggregate["llm_score"] = {
         "samples_requested": aggregate.get("n"),
@@ -191,6 +289,14 @@ def main() -> int:
     parser.add_argument("--unmatched", required=True, help="UNMATCHED number count or NA.")
     parser.add_argument("--inloop", required=True, help="In-loop judge total or NA.")
     parser.add_argument(
+        "--objective-evidence",
+        help="Hash-bound objective-evidence-v1 bundle; invalid/missing is UNKNOWN.",
+    )
+    parser.add_argument(
+        "--reliability-report",
+        help="Optional judge-reliability-v1 report for repeatability diagnostics.",
+    )
+    parser.add_argument(
         "--calibration-report",
         help="Calibration report JSON; comparison_ready requires runtime_score_reliability.ready=true.",
     )
@@ -206,11 +312,27 @@ def main() -> int:
         if calibration_path and calibration_path.is_file()
         else None
     )
+    objective, objective_errors = _objective_summary(
+        Path(args.objective_evidence) if args.objective_evidence else None
+    )
+    reliability = None
+    if args.reliability_report:
+        try:
+            reliability_value = json.loads(
+                Path(args.reliability_report).read_text(encoding="utf-8")
+            )
+            if isinstance(reliability_value, dict):
+                reliability = reliability_value
+        except (OSError, json.JSONDecodeError):
+            reliability = None
     enriched = enrich_aggregate(
         aggregate,
         precheck=precheck,
         unmatched_numbers=args.unmatched,
         inloop_total=args.inloop,
+        objective_evidence=objective,
+        objective_evidence_errors=objective_errors,
+        reliability_report=reliability,
         calibration_report=calibration,
     )
     aggregate_path.write_text(json.dumps(enriched, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

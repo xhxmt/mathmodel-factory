@@ -18,11 +18,13 @@ def test_external_evaluation_uses_independent_scoring_eligibility():
     assert "refusing to spend judge tokens on an incomplete project" not in text
 
 
-def test_role_prompt_receives_manifest_and_numeric_traceability_signal():
+def test_role_prompt_receives_manifest_and_hash_bound_objective_evidence():
     text = (REPO_ROOT / "evaluation/run_evaluation.sh").read_text(encoding="utf-8")
 
     assert 'cat "$PROJECT/judge_packets/$role/manifest.json"' in text
-    assert 'printf \'UNMATCHED_NUMBERS=%s\\n\' "$UNMATCHED"' in text
+    assert 'cat "$PROJECT/judge_packets/objective_evidence.json"' in text
+    assert "UNMATCHED_NUMBERS=%s" not in text
+    assert 'PROMPT_MANIFEST="$RUN_DIR/rendered_prompt_manifest.json"' in text
     assert "UNTRUSTED ISOLATED PACKET START" in text
 
 
@@ -51,6 +53,26 @@ def test_evaluation_configuration_binds_all_result_provenance_inputs():
     assert '"exists": exists' in text
     assert '"sha256": sha(path) if exists else None' in text
     assert '--calibration-report "$CALIBRATION_REPORT"' in text
+
+
+def test_external_evaluation_rejects_path_traversal_base(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    completed = subprocess.run(
+        [
+            str(REPO_ROOT / "evaluation/run_evaluation.sh"),
+            str(project),
+            "../../escape",
+            "--samples",
+            "1",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert completed.returncode == 2
+    assert "single safe path component" in completed.stderr
 
 
 def test_hard_fail_still_publishes_immutable_diagnostic_result(tmp_path):
@@ -130,12 +152,19 @@ print(json.dumps(d, ensure_ascii=False))
     assert aggregate["judge_config"]["configuration_fingerprint"]
     assert aggregate["calibration_schema_version"] == 3
     assert aggregate["overall_score"] is None
-    assert configuration["version"] == 2
+    assert (run_dirs[0] / "rendered_prompt_manifest.json").is_file()
+    calls = json.loads((run_dirs[0] / "eval_run1_calls.json").read_text(encoding="utf-8"))
+    assert calls["schema"] == "external-judge-calls-v1"
+    assert set(calls["roles"]) == {"math", "execution", "paper"}
+    assert all(calls["roles"][role]["stderr"]["sha256"] for role in calls["roles"])
+    assert configuration["version"] == 3
     assert configuration["calibration_report"] == {
-        "path": str(calibration_report),
+        "path": "EXTERNAL/calibration.json",
         "exists": True,
         "sha256": hashlib.sha256(calibration_report.read_bytes()).hexdigest(),
     }
+    assert configuration["objective_evidence"]["path"] == "PROJECT/judge_packets/objective_evidence.json"
+    assert configuration["judge_timeout_seconds"] == 360
     for key, relative in (
         ("parse_judge_score_sha256", "scripts/parse_judge_score.py"),
         ("enrich_evaluation_result_sha256", "scripts/enrich_evaluation_result.py"),

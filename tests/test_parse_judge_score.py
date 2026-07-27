@@ -18,13 +18,15 @@ DIMENSIONS = {
 def _hard(path: Path, role: str, verdict: str = "PASS", fatal: int = 0) -> Path:
     severity = "fatal" if verdict == "FAIL" else "support"
     evidence = [{
+        "ref_id": f"{role}-e{index + 1}",
         "claim": f"{role} claim",
-        "location": "context.txt:1",
+        "chunk_id": ("a" if role == "math" else "b") * 64,
+        "quote": f"{role} evidence quote {index + 1}",
         "finding": "specific finding",
         "severity": severity,
-    } for _ in range(fatal if verdict == "FAIL" else 1)]
+    } for index in range(fatal if verdict == "FAIL" else 1)]
     payload = {
-        "schema_version": "judge-role-v1",
+        "schema_version": "judge-hard-role-v2",
         "role": role,
         "verdict": verdict,
         "fatal_flaws": fatal,
@@ -38,19 +40,25 @@ def _hard(path: Path, role: str, verdict: str = "PASS", fatal: int = 0) -> Path:
 
 def _paper(path: Path) -> Path:
     payload = {
-        "schema_version": "judge-role-v1",
+        "schema_version": "judge-paper-role-v3",
         "role": "paper",
         "verdict": "PASS",
         "dimensions": {
             key: {
                 "score": score,
-                "evidence": [{"location": f"paper:{key}", "finding": "evidence"}],
+                "evidence": [{
+                    "ref_id": f"paper-{key}",
+                    "chunk_id": "c" * 64,
+                    "quote": f"paper evidence quote {key}",
+                    "finding": "evidence",
+                }],
             }
             for key, score in DIMENSIONS.items()
         },
         "overall_score": sum(DIMENSIONS.values()),
+        "issues": [],
         "limitations": [],
-        "recommendations": ["first", "second", "third"],
+        "recommendations": ["first"],
         "conclusion": "paper conclusion",
     }
     path.write_text(f"VERDICT: PASS\n{json.dumps(payload)}\n", encoding="utf-8")
@@ -111,7 +119,9 @@ def test_parse_current_schema_uses_validated_six_dimension_sum(tmp_path):
     parsed = parse_file(_report(tmp_path, "valid"))
 
     assert parsed["schema_valid"] is True
-    assert parsed["comparison_ready"] is True
+    assert parsed["score_available"] is True
+    assert parsed["score_semantics"] == "UNCALIBRATED_DIAGNOSTIC"
+    assert parsed["comparison_ready"] is False
     assert parsed["total"] == 90
     assert parsed["total_recomputed"] == 90
     assert set(parsed["dims"]) == {
@@ -128,6 +138,7 @@ def test_parse_hard_failure_keeps_only_diagnostic_paper_score(tmp_path):
     parsed = parse_file(_report(tmp_path, "blocked", math_verdict="FAIL"))
 
     assert parsed["schema_valid"] is True
+    assert parsed["score_available"] is False
     assert parsed["comparison_ready"] is False
     assert parsed["total"] is None
     assert parsed["total_recomputed"] is None
@@ -145,6 +156,32 @@ def test_parse_rejects_first_line_and_machine_verdict_mismatch(tmp_path):
     assert parsed["comparison_ready"] is False
     assert parsed["total"] is None
     assert parsed["parse_error"] == "first-line verdict does not match aggregate JSON"
+
+
+def test_parse_rejects_raw_aggregate_claiming_comparison_readiness(tmp_path):
+    path = _report(tmp_path, "fake-ready")
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('"comparison_ready": false', '"comparison_ready": true', 1)
+    path.write_text(text, encoding="utf-8")
+
+    parsed = parse_file(path)
+
+    assert parsed["schema_valid"] is False
+    assert parsed["score_available"] is False
+    assert parsed["comparison_ready"] is False
+    assert parsed["parse_error"] == "raw judge-aggregate-v3 cannot be comparison_ready"
+
+
+def test_parse_rejects_score_availability_that_conflicts_with_roles(tmp_path):
+    path = _report(tmp_path, "fake-unavailable")
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('"score_available": true', '"score_available": false', 1)
+    path.write_text(text, encoding="utf-8")
+
+    parsed = parse_file(path)
+
+    assert parsed["schema_valid"] is False
+    assert parsed["parse_error"] == "score_available conflicts with role states"
 
 
 def test_legacy_scorecard_is_not_comparison_ready(tmp_path):
@@ -175,12 +212,14 @@ def test_multi_run_aggregate_does_not_drop_a_hard_failure(tmp_path):
     assert result["diagnostic_median_valid"] == 90
 
 
-def test_multi_run_aggregate_scores_only_when_every_run_is_ready(tmp_path):
+def test_multi_run_aggregate_exposes_only_uncalibrated_diagnostics(tmp_path):
     first = _report(tmp_path, "first")
     second = _report(tmp_path, "second")
     result = aggregate([first, second])
 
-    assert result["comparison_ready"] is True
+    assert result["score_available"] is True
+    assert result["score_semantics"] == "UNCALIBRATED_DIAGNOSTIC"
+    assert result["comparison_ready"] is False
     assert result["median_total"] == 90
     assert result["median_recomputed"] == 90
 

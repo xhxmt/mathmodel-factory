@@ -1,5 +1,7 @@
 import argparse
+import hashlib
 import json
+import sys
 
 import pytest
 
@@ -98,3 +100,59 @@ def test_judge_packet_context_automatically_includes_manifest(tmp_path):
     ]
     assert "status_counts" in context
     assert "paper claim and result evidence" in context
+
+
+def test_main_persists_the_exact_effective_prompt_sent_to_the_api(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    prompt = project / "base_prompt.txt"
+    prompt.write_text("Judge the supplied packet.", encoding="utf-8")
+    context = project / "judge_packets" / "math" / "context.txt"
+    context.parent.mkdir(parents=True)
+    context.write_text("claim evidence", encoding="utf-8")
+    (context.parent / "manifest.json").write_text(
+        '{"role":"math"}', encoding="utf-8"
+    )
+    captured: dict[str, str] = {}
+
+    def fake_call(full_prompt, *args, **kwargs):
+        captured["full_prompt"] = full_prompt
+        return "VERDICT: PASS\n"
+
+    monkeypatch.setattr(api_agent_run.llm_judge_call, "call", fake_call)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "api_agent_run.py",
+            "--model",
+            "deepseek-chat",
+            "--backend",
+            "deepseek",
+            "--prompt-file",
+            str(prompt),
+            "--project",
+            str(project),
+            "--output-file",
+            "judge_outputs/math.md",
+            "--effective-prompt-file",
+            "judge_outputs/math.rendered_prompt.txt",
+            "--context-file",
+            "judge_packets/math/context.txt",
+        ],
+    )
+
+    assert api_agent_run.main() == 0
+
+    effective_prompt = project / "judge_outputs" / "math.rendered_prompt.txt"
+    persisted = effective_prompt.read_text(encoding="utf-8")
+    assert persisted == captured["full_prompt"]
+    metadata = json.loads(
+        (project / "judge_outputs" / "math.md.llm-result.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["effective_prompt_path"] == "judge_outputs/math.rendered_prompt.txt"
+    assert metadata["effective_prompt_sha256"] == hashlib.sha256(
+        persisted.encode("utf-8")
+    ).hexdigest()

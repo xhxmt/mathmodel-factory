@@ -37,7 +37,7 @@ Step 4 是论文质量的奠基步骤：评委读的论文「§模型建立」�
 13. `__FACTORY__/method_library/<dir>/<method>.md` —— PRIMARY 流对应的 method_library 索引文档（路径在 `chosen_method.md` § Load-bearing 文件清单中）；用于补全 model.md 中「主方法标准用法 vs 本流差异点」对照。
 14. `__PROJECT_PATH__/human_review.md`（如存在）—— **特殊处理**：若包含 `## Step 4 decision:` 开头的 H2 段落（不区分大小写），把其内容作为最高优先级指令，model.md 的 §人工指令承接 子节原话引用 + 执行说明。
 
-[输出契约 — 产生 4 个 markdown 文件、`quality_contract.json` + `models/m{N}_<short>/` 代码，runner 用磁盘文件判定本步骤是否 ready]
+[输出契约 — 产生 4 个 markdown 文件、`claim_registry.json`、`quality_contract.json` + `models/m{N}_<short>/` 代码，runner 用磁盘文件判定本步骤是否 ready]
 
 ═══════════════════════════════════════════════════════════════
 ### 0. `__PROJECT_PATH__/modeling_scope_gate.md`（首行 `VERDICT: PASS` 或 `VERDICT: BLOCKED`）
@@ -78,23 +78,83 @@ VERDICT: PASS | BLOCKED
 ```
 
 ═══════════════════════════════════════════════════════════════
+### 0.4 `__PROJECT_PATH__/claim_registry.json`（逐问题、逐主张覆盖契约）
+
+先把 `problem/problem_brief.md` 中的每个子问题和
+`problem/deliverables.json` 中的每项交付要求注册为可机检图。不得只写一个“全文已覆盖”的
+笼统主张。路径必须是项目根目录内的相对 POSIX 路径，禁止绝对路径、`..`、反斜杠和
+项目外 symlink。
+
+```json
+{
+  "contract_version": "claim-registry-v1",
+  "questions": [
+    {
+      "id": "Q1",
+      "statement": "<problem_brief 中问题 1 的要求>",
+      "source": {"path": "problem/problem_brief.md", "line": 15},
+      "required_roles": ["paper", "math", "execution"]
+    }
+  ],
+  "claims": [
+    {
+      "id": "Q1_MODEL_AND_RESULT",
+      "statement": "<问题 1 必须在论文、模型和结果中得到的具体回答>",
+      "question_ids": ["Q1"],
+      "required_roles": ["paper", "math", "execution"],
+      "artifacts": [
+        {"path": "__BASE_NAME___paper.tex", "roles": ["paper", "math", "execution"]},
+        {"path": "model.md", "roles": ["math"]},
+        {"path": "results/problem1/values.json", "roles": ["execution"]}
+      ]
+    }
+  ],
+  "delivery_requirements": [
+    {
+      "id": "Q3_RESULT_ATTACHMENT",
+      "statement": "<题面要求的结果附件及一致性检查>",
+      "question_ids": ["Q3"],
+      "required_roles": ["execution"],
+      "artifacts": [
+        {"path": "deliverables_verification.latest.txt", "roles": ["execution"]}
+      ]
+    }
+  ]
+}
+```
+
+- `questions` 必须与 `problem_brief.md` 的子问题一一对应，不能漏问，也不能把多个子问题压成一个 ID。
+- 每个 required question 在每个 `required_roles` 中至少有一条 required claim；每条 claim 的该角色必须至少登记一个 artifact。
+- artifact 是“让评委核验该主张所需的材料”，不是自称 PASS 的评审文件。二进制附件由 factory-owned verification report 证明存在性和一致性，不要把不可读的 xlsx 当文本证据。
+- Step 13/16 会把逐 question/claim 覆盖写入 packet manifest；未登记、文件缺失、截断或路径越界都会使对应角色 `INCOMPLETE`。
+
+═══════════════════════════════════════════════════════════════
 ### 0.5 `__PROJECT_PATH__/quality_contract.json`（项目级数学质量契约）
 
 把本题真正能从题面或已证明命题推出的硬主张，与仅用于发现可疑解的异常信号分开：
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "claims": [
     {
       "id": "P1_CORE_PREDICATE",
       "severity": "hard",
       "statement": "<可被判真假的数学主张>",
+      "question_ids": ["Q1"],
       "source": "problem/source.md#<题号或原文位置>",
       "implementation": ["models/m1_x/02_model.py::<函数>"],
       "evidence": [
-        {"type": "pytest", "argv": ["python3", "-m", "pytest", "-q", "models/m1_x/tests/test_core_predicate.py"]},
-        {"type": "oracle", "argv": ["python3", "models/m1_x/tests/independent_oracle.py", "--verify-project", "."]}
+        {"type": "pytest", "level": "project_test", "argv": ["python3", "-m", "pytest", "-q", "models/m1_x/tests/test_core_predicate.py"]},
+        {
+          "type": "cross_check",
+          "level": "dual_impl",
+          "implementations": [
+            "models/m1_x/02_model.py::<主实现函数>",
+            "models/m1_x/tests/independent_oracle.py::<独立实现函数>"
+          ],
+          "argv": ["python3", "models/m1_x/tests/compare_implementations.py"]
+        }
       ]
     }
   ],
@@ -110,6 +170,11 @@ VERDICT: PASS | BLOCKED
 }
 ```
 
+- `type` 描述命令用途，`level` 描述证据独立性；v2 的每条 evidence 都必须显式声明 `level`。
+- `level` 只能是 `factory_oracle`、`dual_impl`、`project_test`、`self_report`。只有前两类能单独支持 hard PASS。
+- `factory_oracle` 仅用于 `__FACTORY__/scripts/domain_oracles/` 或 factory 明确白名单内的脚本；项目代码即使把自己标成 factory oracle，也会被降为 `self_report`。
+- `dual_impl` 必须登记至少两个不同、存在且不越出项目根目录的实现文件。相同实现换入口、同一输出换断言，不算双实现。
+- `project_test` 与 `self_report` 可发现回归，但不能单独认证硬主张；旧 v1 中未声明 level 的命令会显式降为 `self_report` 并使 hard claim 失败。
 - `severity=hard` 的主张必须有独立可执行证据；不能只引用同一求解脚本自产的 JSON。
 - `gt_strict`、`nonzero_each`、`quantized_off`、固定预算阈值默认是异常检测，不是普遍定理。
 - 只有在 `source`/`justification` 给出题目级推导时，异常规则才可升级为硬否决。

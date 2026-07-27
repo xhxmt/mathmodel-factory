@@ -18,8 +18,10 @@ def render_text(result: ContractResult, contract_path: Path) -> str:
     lines = ["=== Project Quality Contract ===", f"Contract: {contract_path}", ""]
     for evidence in result.evidence_results:
         state = "PASS" if evidence.returncode == 0 else "FAIL"
+        trust = "hard-pass" if evidence.hard_pass_eligible else "diagnostic"
         lines.append(
-            f"[{state}] {evidence.claim_id} {evidence.evidence_type}: "
+            f"[{state}] {evidence.claim_id} {evidence.evidence_type} "
+            f"level={evidence.evidence_level} ({trust}): "
             f"{' '.join(evidence.argv)}"
         )
     for warning in result.warnings:

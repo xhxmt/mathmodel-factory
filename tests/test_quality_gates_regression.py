@@ -67,7 +67,13 @@ def test_step16_rejudges_the_post_polish_submission_before_delivery():
     final_judge = text[
         text.index("run_final_submission_judge() {") : text.index("run_step_14() {")
     ]
-    assert final_judge.index("compile_final_submission_pdf") < final_judge.index("run_step_13 || return 1")
+    judge_call = "run_step_13 || {"
+    assert final_judge.index("compile_final_submission_pdf") < final_judge.index(judge_call)
+    judge_failure = final_judge[
+        final_judge.index(judge_call) : final_judge.index("routed_decision=")
+    ]
+    assert 'rm -f "$(final_judge_in_progress_file)"' in judge_failure
+    assert "return 1" in judge_failure
     assert step16.index("run_final_submission_judge") < step16.index("Delivering final PDF")
     assert 'rm -f "$pdf"' in text
     assert "no PDF will be judged or delivered" in text
@@ -99,7 +105,7 @@ def test_final_judge_reopen_state_is_durable_before_main_loop_routing():
     ]
 
     assert 'touch "$(final_judge_in_progress_file)"' in final_judge
-    assert final_judge.index('touch "$(final_judge_in_progress_file)"') < final_judge.index("run_step_13 || return 1")
+    assert final_judge.index('touch "$(final_judge_in_progress_file)"') < final_judge.index("run_step_13 || {")
     assert 'touch "$(final_judge_reopen_pending_file)"' in final_judge
     assert final_judge.index('touch "$(final_judge_reopen_pending_file)"') < final_judge.index("return 43")
     assert '"$(final_judge_reopened_once_file)"' in final_judge
@@ -556,6 +562,42 @@ def test_step13_treats_unavailable_judge_role_as_retryable_error():
     assert "run_independent_judge_role execution judges/execution_auditor.txt || return 1" in step13
 
 
+def test_step13_binds_effective_prompts_and_configuration_group_before_aggregation():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    api_runner = text[text.index("run_api_model() {") : text.index("run_backend() {")]
+    role_runner = text[
+        text.index("run_independent_judge_role() {") : text.index("run_step_13() {")
+    ]
+    step13 = text[
+        text.index("run_step_13() {") : text.index("run_final_submission_judge() {")
+    ]
+
+    assert '--effective-prompt-file "$effective_prompt_rel"' in api_runner
+    assert 'receipt_args+=(--prompt-file "$canonical_prompt")' in role_runner
+    assert 'receipt_args+=(--timeout-seconds 3600)' in role_runner
+    bind_group = 'judgment_receipt.py" bind-group "$PROJECT"'
+    aggregate = 'aggregate_judges.py"'
+    assert bind_group in step13
+    assert step13.index(bind_group) < step13.index(aggregate)
+
+
+def test_codex_judge_receipt_distinguishes_exec_from_tui_transport():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    codex_role = text[
+        text.index("run_codex_isolated_judge_role() {") :
+        text.index("run_independent_judge_role() {")
+    ]
+    role_runner = text[
+        text.index("run_independent_judge_role() {") : text.index("run_step_13() {")
+    ]
+
+    assert 'execution_transport="isolated_codex_exec"' in codex_role
+    assert 'execution_transport="isolated_codex_tui"' in codex_role
+    assert 'LAST_JUDGE_TRANSPORT="$execution_transport"' in codex_role
+    assert "isolated_codex_exec|isolated_codex_tui" in role_runner
+    assert 'transport="$LAST_JUDGE_TRANSPORT"' in role_runner
+
+
 def test_codex_judge_has_isolated_tui_fallback_for_exec_channel_outages():
     runner = Path(REPO_ROOT) / "run_paper.sh"
     text = runner.read_text(encoding="utf-8")
@@ -566,7 +608,8 @@ def test_codex_judge_has_isolated_tui_fallback_for_exec_channel_outages():
     assert "scripts/run_codex_tui_judge.py" in role
     assert '--workdir "$isolated_root"' in role
     assert '--output-file "$isolated_output"' in role
-    assert 'printf \'%s\\n\' "$rendered" > "$role_prompt"' in role
+    assert 'printf \'%s\' "$rendered" > "$role_prompt"' in role
+    assert 'printf \'%s\\n\' "$rendered" > "$role_prompt"' not in role
 
 
 def test_step16_cleans_before_final_judge_fingerprint_is_built():

@@ -8,6 +8,7 @@ import pytest
 
 import scripts.submission_fingerprint as submission_fingerprint_module
 from scripts.judge_packet import build_packets
+from scripts.build_objective_evidence import build_objective_evidence
 from scripts.submission_fingerprint import (
     evaluator_contract_payload,
     final_judge_is_current,
@@ -89,12 +90,41 @@ def test_fingerprint_recomputes_role_packets_instead_of_trusting_stale_manifests
     assert submission_fingerprint(project, "demo") != fingerprint_before
 
 
+def test_fingerprint_binds_objective_bundle_used_by_role_packets(tmp_path: Path) -> None:
+    project = tmp_path / "demo"
+    make_submission(project)
+    objective_path = project / "judge_packets" / "objective_evidence.json"
+    objective_path.parent.mkdir(parents=True, exist_ok=True)
+    objective_path.write_text(
+        json.dumps(build_objective_evidence(project, "demo"), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    manifests = build_packets(project, "demo", objective_path)
+    payload = submission_fingerprint_payload(project, "demo")
+
+    assert payload["objective_evidence"]["bundle_sha256"]
+    assert payload["judge_packet_fingerprints"] == {
+        role: manifest["packet_fingerprint"] for role, manifest in manifests.items()
+    }
+
+    before = submission_fingerprint(project, "demo")
+    objective_path.unlink()
+    assert submission_fingerprint(project, "demo") != before
+
+
 def test_final_judge_current_requires_the_same_nonempty_pdf(tmp_path: Path) -> None:
     project = tmp_path / "demo"
     make_submission(project)
     write_file(
         project / "judge_outputs/final_submission.sha256",
         submission_fingerprint(project, "demo") + "\n",
+    )
+    assert final_judge_is_current(project, "demo") is False
+    # A bare hash is no longer a quality PASS.  This fixture explicitly models
+    # the documented delivery-override governance path.
+    write_file(
+        project / "gate2_delivery_override.json",
+        '{"enabled": true, "scope": "continue_to_step16", "reason": "test"}\n',
     )
     assert final_judge_is_current(project, "demo") is True
 

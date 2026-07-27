@@ -2,23 +2,34 @@
 """Validate and aggregate isolated judge outputs.
 
 Each role file is a strict envelope: the first line is the runner-compatible
-``VERDICT: ...`` header and the remaining content is one JSON object conforming
-to ``judge-role-v1``.  A malformed role is INDETERMINATE; it is never repaired
-or partially scored.
+``VERDICT: ...`` header and the remaining content is one JSON object. Current
+roles cite immutable packet chunks and exact quoted text; the citations are
+recomputed before a verdict can affect routing. A malformed or ungrounded role
+is INDETERMINATE; it is never repaired or partially scored.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.evidence_grounding import atomic_write_report, validate_grounding
+except ModuleNotFoundError:  # Direct execution from scripts/.
+    from evidence_grounding import atomic_write_report, validate_grounding  # type: ignore
 
-ROLE_SCHEMA_VERSION = "judge-role-v1"
-AGGREGATE_SCHEMA_VERSION = "judge-aggregate-v1"
+
+LEGACY_ROLE_SCHEMA_VERSION = "judge-role-v1"
+LEGACY_PAPER_SCHEMA_VERSION = "judge-paper-role-v2"
+ROLE_SCHEMA_VERSION = "judge-hard-role-v2"
+PAPER_ROLE_SCHEMA_VERSION = "judge-paper-role-v3"
+AGGREGATE_SCHEMA_VERSION = "judge-aggregate-v3"
+SCORE_SEMANTICS = "UNCALIBRATED_DIAGNOSTIC"
 AGGREGATE_JSON_BEGIN = "<!-- JUDGE_AGGREGATE_JSON_BEGIN -->"
 AGGREGATE_JSON_END = "<!-- JUDGE_AGGREGATE_JSON_END -->"
 PACKET_COMPLETENESS_VERSION = "judge-packet-completeness-v1"
@@ -54,11 +65,14 @@ class AggregateResult:
     status: str
     paper_score: float | None
     overall_score: float | None
+    score_available: bool
+    score_semantics: str
     comparison_ready: bool
     vetoes: tuple[str, ...]
     indeterminate_roles: tuple[str, ...]
     dimensions: dict[str, dict[str, Any]] | None
     packet_completeness: dict[str, dict[str, Any]]
+    evidence_grounding: dict[str, dict[str, Any]]
     roles: tuple[RoleResult, ...]
 
 
@@ -113,18 +127,30 @@ def _validate_hard_evidence(value: object) -> list[dict[str, str]]:
     if not isinstance(value, list):
         raise ValueError("evidence must be an array")
     validated: list[dict[str, str]] = []
-    expected = {"claim", "location", "finding", "severity"}
+    required = {
+        "ref_id",
+        "claim",
+        "chunk_id",
+        "quote",
+        "finding",
+        "severity",
+    }
     allowed_severity = {"support", "fatal", "risk"}
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             raise ValueError(f"evidence[{index}] must be an object")
-        _require_exact_keys(item, expected, f"evidence[{index}]")
+        _require_exact_keys(item, required | ({"quote_sha256"} if "quote_sha256" in item else set()), f"evidence[{index}]")
         evidence = {
-            "claim": _require_string(item["claim"], f"evidence[{index}].claim"),
-            "location": _require_string(item["location"], f"evidence[{index}].location"),
-            "finding": _require_string(item["finding"], f"evidence[{index}].finding"),
-            "severity": _require_string(item["severity"], f"evidence[{index}].severity"),
+            field: _require_string(item[field], f"evidence[{index}].{field}")
+            for field in required
         }
+        if len(evidence["chunk_id"]) != 64:
+            raise ValueError(f"evidence[{index}].chunk_id must be a SHA-256")
+        computed_quote_hash = hashlib.sha256(evidence["quote"].encode("utf-8")).hexdigest()
+        declared_quote_hash = item.get("quote_sha256")
+        if declared_quote_hash is not None and declared_quote_hash != computed_quote_hash:
+            raise ValueError(f"evidence[{index}].quote_sha256 does not match quote")
+        evidence["quote_sha256"] = computed_quote_hash
         if evidence["severity"] not in allowed_severity:
             raise ValueError(f"evidence[{index}].severity is invalid")
         validated.append(evidence)
@@ -138,13 +164,56 @@ def _validate_paper_evidence(value: object, where: str) -> list[dict[str, str]]:
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             raise ValueError(f"{where}[{index}] must be an object")
-        _require_exact_keys(item, {"location", "finding"}, f"{where}[{index}]")
-        validated.append(
-            {
-                "location": _require_string(item["location"], f"{where}[{index}].location"),
-                "finding": _require_string(item["finding"], f"{where}[{index}].finding"),
-            }
-        )
+        required = {"ref_id", "chunk_id", "quote", "finding"}
+        expected = required | ({"quote_sha256"} if "quote_sha256" in item else set())
+        _require_exact_keys(item, expected, f"{where}[{index}]")
+        evidence = {
+            field: _require_string(item[field], f"{where}[{index}].{field}")
+            for field in required
+        }
+        if len(evidence["chunk_id"]) != 64:
+            raise ValueError(f"{where}[{index}].chunk_id must be a SHA-256")
+        computed_quote_hash = hashlib.sha256(evidence["quote"].encode("utf-8")).hexdigest()
+        declared_quote_hash = item.get("quote_sha256")
+        if declared_quote_hash is not None and declared_quote_hash != computed_quote_hash:
+            raise ValueError(f"{where}[{index}].quote_sha256 does not match quote")
+        evidence["quote_sha256"] = computed_quote_hash
+        validated.append(evidence)
+    return validated
+
+
+def _validate_paper_issues(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise ValueError("issues must be an array")
+    validated: list[dict[str, str]] = []
+    required = {
+        "ref_id",
+        "severity",
+        "chunk_id",
+        "quote",
+        "finding",
+        "recommendation",
+    }
+    allowed_severity = {"blocking", "major", "minor"}
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"issues[{index}] must be an object")
+        expected = required | ({"quote_sha256"} if "quote_sha256" in item else set())
+        _require_exact_keys(item, expected, f"issues[{index}]")
+        issue = {
+            field: _require_string(item[field], f"issues[{index}].{field}")
+            for field in required
+        }
+        if issue["severity"] not in allowed_severity:
+            raise ValueError(f"issues[{index}].severity is invalid")
+        if len(issue["chunk_id"]) != 64:
+            raise ValueError(f"issues[{index}].chunk_id must be a SHA-256")
+        computed_quote_hash = hashlib.sha256(issue["quote"].encode("utf-8")).hexdigest()
+        declared_quote_hash = item.get("quote_sha256")
+        if declared_quote_hash is not None and declared_quote_hash != computed_quote_hash:
+            raise ValueError(f"issues[{index}].quote_sha256 does not match quote")
+        issue["quote_sha256"] = computed_quote_hash
+        validated.append(issue)
     return validated
 
 
@@ -182,6 +251,19 @@ def _read_hard_role(path: Path, role: str) -> RoleResult:
             "conclusion",
         }
         _require_exact_keys(payload, expected, "payload")
+        if payload["schema_version"] == LEGACY_ROLE_SCHEMA_VERSION:
+            return RoleResult(
+                role=role,
+                status="LEGACY_UNVERIFIED",
+                verdict=payload.get("verdict") if isinstance(payload.get("verdict"), str) else None,
+                fatal_flaws=payload.get("fatal_flaws") if isinstance(payload.get("fatal_flaws"), int) else None,
+                score=None,
+                dimensions=None,
+                evidence_count=len(payload.get("evidence", [])) if isinstance(payload.get("evidence"), list) else 0,
+                source=str(path),
+                text=text,
+                error=f"legacy hard-role schema {LEGACY_ROLE_SCHEMA_VERSION} is diagnostic-only",
+            )
         if payload["schema_version"] != ROLE_SCHEMA_VERSION:
             raise ValueError("unsupported schema_version")
         if payload["role"] != role:
@@ -261,7 +343,7 @@ def _read_paper_role(path: Path) -> RoleResult:
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     try:
         header_verdict, payload, text = _load_envelope(path, role)
-        expected = {
+        legacy_expected = {
             "schema_version",
             "role",
             "verdict",
@@ -271,8 +353,31 @@ def _read_paper_role(path: Path) -> RoleResult:
             "recommendations",
             "conclusion",
         }
-        _require_exact_keys(payload, expected, "payload")
-        if payload["schema_version"] != ROLE_SCHEMA_VERSION:
+        expected = legacy_expected | {"issues"}
+        schema_version = payload.get("schema_version")
+        if schema_version in {LEGACY_ROLE_SCHEMA_VERSION, LEGACY_PAPER_SCHEMA_VERSION}:
+            _require_exact_keys(
+                payload,
+                expected if schema_version == LEGACY_PAPER_SCHEMA_VERSION else legacy_expected,
+                "payload",
+            )
+            score_value = payload.get("overall_score")
+            score = round(float(score_value), 2) if _is_number(score_value) else None
+            return RoleResult(
+                role=role,
+                status="LEGACY_UNVERIFIED",
+                verdict=payload.get("verdict") if isinstance(payload.get("verdict"), str) else None,
+                fatal_flaws=None,
+                score=score,
+                dimensions=None,
+                evidence_count=0,
+                source=str(path),
+                text=text,
+                error=f"legacy paper schema {schema_version} is diagnostic-only",
+            )
+        elif schema_version == PAPER_ROLE_SCHEMA_VERSION:
+            _require_exact_keys(payload, expected, "payload")
+        else:
             raise ValueError("unsupported schema_version")
         if payload["role"] != role:
             raise ValueError("role must be paper")
@@ -284,12 +389,17 @@ def _read_paper_role(path: Path) -> RoleResult:
         limitations = _validate_string_list(payload["limitations"], "limitations")
         recommendations = _validate_string_list(payload["recommendations"], "recommendations")
         _require_string(payload["conclusion"], "conclusion")
+        issues = _validate_paper_issues(payload["issues"])
 
         if verdict == "INDETERMINATE":
             if payload["dimensions"] is not None or payload["overall_score"] is not None:
                 raise ValueError("INDETERMINATE paper review cannot contain scores")
             if not limitations:
                 raise ValueError("INDETERMINATE requires at least one limitation")
+            if issues:
+                raise ValueError("INDETERMINATE paper review cannot assert issues")
+            if recommendations:
+                raise ValueError("INDETERMINATE paper review cannot contain recommendations")
             dimensions = None
             score = None
             status = "INDETERMINATE"
@@ -303,12 +413,11 @@ def _read_paper_role(path: Path) -> RoleResult:
             recomputed = round(sum(item["score"] for item in dimensions.values()), 2)
             if not math.isclose(score, recomputed, abs_tol=0.01):
                 raise ValueError("overall_score must equal the sum of six dimension scores")
-            if len(recommendations) != 3:
-                raise ValueError("paper review requires exactly three recommendations")
-            if verdict == "PASS" and score < 70:
-                raise ValueError("PASS requires overall_score >= 70")
-            if verdict == "REVISE" and score >= 70:
-                raise ValueError("REVISE requires overall_score < 70")
+            blocking_issues = [item for item in issues if item["severity"] == "blocking"]
+            if verdict == "REVISE" and not blocking_issues:
+                raise ValueError("REVISE requires at least one blocking issue")
+            if verdict == "PASS" and blocking_issues:
+                raise ValueError("PASS cannot contain a blocking issue")
             status = verdict
             evidence_count = sum(len(item["evidence"]) for item in dimensions.values())
 
@@ -458,6 +567,51 @@ def _enforce_packet_completeness(
     )
 
 
+def _enforce_evidence_grounding(
+    result: RoleResult, manifest_path: Path | None
+) -> tuple[RoleResult, dict[str, Any]]:
+    if manifest_path is None:
+        return result, {
+            "schema_version": "evidence-grounding-v1",
+            "role": result.role,
+            "enforced": False,
+            "valid": None,
+            "refs": [],
+            "errors": [],
+        }
+    report = validate_grounding(
+        Path(result.source),
+        manifest_path,
+        manifest_path.with_name("context.txt"),
+        role=result.role,
+    )
+    report["enforced"] = True
+    atomic_write_report(
+        Path(result.source).with_name(f"{result.role}.grounding.json"), report
+    )
+    if report.get("valid") is True:
+        return result, report
+    messages = "; ".join(
+        str(item.get("message"))
+        for item in report.get("errors", [])
+        if isinstance(item, dict) and item.get("message")
+    ) or "evidence grounding failed"
+    existing = f"{result.error}; " if result.error else ""
+    return (
+        replace(
+            result,
+            status="INDETERMINATE",
+            verdict="INDETERMINATE",
+            fatal_flaws=None,
+            score=None,
+            dimensions=None,
+            evidence_count=0,
+            error=existing + messages,
+        ),
+        report,
+    )
+
+
 def aggregate_outputs(
     *,
     math_path: Path,
@@ -473,13 +627,22 @@ def aggregate_outputs(
         (_read_role(paper_path, "paper"), paper_manifest),
     )
     enforced = tuple(_enforce_packet_completeness(result, manifest) for result, manifest in parsed)
-    roles = tuple(item[0] for item in enforced)
+    grounded = tuple(
+        _enforce_evidence_grounding(result, manifest)
+        for result, (_, manifest) in zip((item[0] for item in enforced), parsed)
+    )
+    roles = tuple(item[0] for item in grounded)
     packet_completeness = {
         result.role: summary for (result, _), (_, summary) in zip(parsed, enforced)
     }
+    evidence_grounding = {result.role: summary for result, summary in grounded}
     hard_roles = roles[:2]
     vetoes = tuple(item.role for item in hard_roles if item.status == "FAIL")
-    indeterminate = tuple(item.role for item in roles if item.status == "INDETERMINATE")
+    indeterminate = tuple(
+        item.role
+        for item in roles
+        if item.status in {"INDETERMINATE", "LEGACY_UNVERIFIED"}
+    )
     paper = roles[2]
 
     if vetoes:
@@ -487,7 +650,7 @@ def aggregate_outputs(
         verdict = "REOPEN_REVISION_MODEL"
     elif indeterminate:
         status = "INDETERMINATE"
-        verdict = "REOPEN_REVISION_MODEL"
+        verdict = "INDETERMINATE_REVIEW"
     elif paper.status == "REVISE":
         status = "REVISE"
         verdict = "REOPEN_REVISION_TEXT"
@@ -495,18 +658,21 @@ def aggregate_outputs(
         status = "PASS"
         verdict = "PASS"
 
-    comparison_ready = not vetoes and not indeterminate and paper.score is not None
-    overall_score = paper.score if comparison_ready else None
+    score_available = not vetoes and not indeterminate and paper.score is not None
+    overall_score = paper.score if score_available else None
     return AggregateResult(
         verdict=verdict,
         status=status,
         paper_score=paper.score,
         overall_score=overall_score,
-        comparison_ready=comparison_ready,
+        score_available=score_available,
+        score_semantics=SCORE_SEMANTICS,
+        comparison_ready=False,
         vetoes=vetoes,
         indeterminate_roles=indeterminate,
         dimensions=paper.dimensions,
         packet_completeness=packet_completeness,
+        evidence_grounding=evidence_grounding,
         roles=roles,
     )
 
@@ -516,6 +682,8 @@ def _machine_payload(result: AggregateResult) -> dict[str, Any]:
         "schema_version": AGGREGATE_SCHEMA_VERSION,
         "verdict": result.verdict,
         "status": result.status,
+        "score_available": result.score_available,
+        "score_semantics": result.score_semantics,
         "comparison_ready": result.comparison_ready,
         "overall_score": result.overall_score,
         "paper_score": result.paper_score,
@@ -523,7 +691,23 @@ def _machine_payload(result: AggregateResult) -> dict[str, Any]:
         "indeterminate_roles": list(result.indeterminate_roles),
         "dimensions": result.dimensions,
         "role_statuses": {role.role: role.status for role in result.roles},
+        "evidence_grounding": result.evidence_grounding,
     }
+
+
+def _artifact_payload(result: AggregateResult) -> dict[str, Any]:
+    """Return the full JSON artifact used by routing, receipts and diagnostics.
+
+    The Markdown envelope intentionally stays compact because
+    ``parse_judge_score`` validates an exact public schema.  The sidecar JSON
+    additionally carries role records and packet completeness so downstream
+    control code can independently recheck how the verdict was obtained.
+    """
+
+    payload = _machine_payload(result)
+    payload["packet_completeness"] = result.packet_completeness
+    payload["roles"] = [asdict(role) for role in result.roles]
+    return payload
 
 
 def write_aggregate_report(result: AggregateResult, output: Path, base_name: str) -> None:
@@ -531,7 +715,7 @@ def write_aggregate_report(result: AggregateResult, output: Path, base_name: str
     indeterminate_text = (
         ", ".join(result.indeterminate_roles) if result.indeterminate_roles else "none"
     )
-    displayed_score = (
+    diagnostic_score = (
         f"{result.overall_score:g}/100" if result.overall_score is not None else "N/A"
     )
     machine_json = json.dumps(
@@ -546,8 +730,10 @@ def write_aggregate_report(result: AggregateResult, output: Path, base_name: str
         f"# Step 13 Independent Judge Aggregate - `{base_name}`",
         "",
         f"AGGREGATE_STATUS: {result.status}",
+        f"SCORE_AVAILABLE: {'true' if result.score_available else 'false'}",
         f"COMPARISON_READY: {'true' if result.comparison_ready else 'false'}",
-        f"整体得分: {displayed_score}",
+        f"整体诊断得分（未校准）: {diagnostic_score}",
+        f"SCORE_SEMANTICS: {result.score_semantics}",
         f"Paper diagnostic score: {result.paper_score if result.paper_score is not None else 'N/A'}",
         f"Correctness vetoes: {veto_text}",
         f"Indeterminate roles: {indeterminate_text}",
@@ -555,8 +741,9 @@ def write_aggregate_report(result: AggregateResult, output: Path, base_name: str
         "## Aggregation Rule",
         "",
         "Math and execution failures are hard vetoes.",
-        "A comparable overall score exists only when both hard auditors pass and the paper review is schema-valid.",
-        "Missing, malformed, or evidence-incomplete role output is INDETERMINATE and cannot pass.",
+        "A schema-valid score may be available after both hard auditors pass, but it remains an uncalibrated diagnostic.",
+        "Raw in-loop aggregates are never comparison-ready; external calibration enrichment may promote readiness.",
+        "Missing, malformed, legacy, or evidence-incomplete role output is INDETERMINATE and cannot pass.",
         "A role whose packet completeness contract is INCOMPLETE is deterministically INDETERMINATE, regardless of model output.",
     ]
     lines.extend(["", "## Packet Completeness", ""])
@@ -570,6 +757,17 @@ def write_aggregate_report(result: AggregateResult, output: Path, base_name: str
         lines.append(
             f"- {role}: {summary.get('status', 'INCOMPLETE')}; "
             f"unmet={unmet}; disclosed limitations={limitations}"
+        )
+    lines.extend(["", "## Evidence Grounding", ""])
+    for role in ("math", "execution", "paper"):
+        grounding = result.evidence_grounding[role]
+        if grounding.get("enforced") is not True:
+            lines.append(f"- {role}: not enforced by this caller")
+            continue
+        lines.append(
+            f"- {role}: {'VALID' if grounding.get('valid') is True else 'INVALID'}; "
+            f"resolved refs={len(grounding.get('refs') or [])}; "
+            f"errors={len(grounding.get('errors') or [])}"
         )
     if result.dimensions:
         lines.extend(["", "## Paper Quality Dimensions", "", "| Dimension | Score | Maximum |", "|---|---:|---:|"])
@@ -618,7 +816,7 @@ def main() -> int:
     )
     write_aggregate_report(result, Path(args.output), args.base)
     if args.json:
-        data = asdict(result)
+        data = _artifact_payload(result)
         Path(args.json).write_text(
             json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
             encoding="utf-8",

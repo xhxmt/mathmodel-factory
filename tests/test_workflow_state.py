@@ -54,6 +54,10 @@ def test_delivery_artifacts_and_step16_ready(tmp_path):
     write_file(project / "entry_gate.md", "VERDICT: PASS\n")
     write_file(project / "judge_evaluation.md", "VERDICT: PASS\n")
     mark_final_judge_current(project, "demo")
+    write_file(
+        project / "gate2_delivery_override.json",
+        '{"enabled": true, "scope": "continue_to_step16", "reason": "test"}\n',
+    )
     write_file(root / "papers" / "demo_paper.pdf", "pdf\n")
     write_zip(root / "papers" / "demo_submission.zip")
 

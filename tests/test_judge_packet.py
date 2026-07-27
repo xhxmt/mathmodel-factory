@@ -68,12 +68,18 @@ def test_packet_manifest_has_stable_hashes_and_context(tmp_path):
     assert first_manifest["files"][0]["sha256"] == hashlib.sha256(
         b"same paper"
     ).hexdigest()
+    assert first_manifest["files"][0]["included_sha256"] == hashlib.sha256(
+        b"same paper"
+    ).hexdigest()
+    assert first_manifest["files"][0]["source_line_start"] == 1
+    assert first_manifest["files"][0]["source_line_end"] == 1
+    assert len(first_manifest["files"][0]["chunk_id"]) == 64
 
     manifest_path = project / "judge_packets/paper/manifest.json"
     context_path = project / "judge_packets/paper/context.txt"
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == first_manifest
     assert "same paper" in context_path.read_text(encoding="utf-8")
-    assert first_manifest["version"] == 2
+    assert first_manifest["version"] == 3
     assert first_manifest["files"][0]["status"] == "included"
     assert first_manifest["status_counts"] == {
         "included": 1,
@@ -106,6 +112,37 @@ def test_packet_omits_symlink_targets_outside_project_root(tmp_path):
             "reason": "outside_project_root",
         }
         assert "OUTSIDE_PROJECT_SECRET" not in context
+
+
+def test_chunk_ids_bind_role_path_and_exact_included_text(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    content = "line one\nline two\n"
+    _write(project, "demo_paper.tex", content)
+    _write(project, "problem/problem_brief.md", "problem\n")
+
+    first = build_packets(project, base_name="demo")
+    second = build_packets(project, base_name="demo")
+    paper_item = next(
+        item for item in first["paper"]["files"] if item["path"] == "demo_paper.tex"
+    )
+    math_item = next(
+        item for item in first["math"]["files"] if item["path"] == "demo_paper.tex"
+    )
+    repeated = next(
+        item for item in second["paper"]["files"] if item["path"] == "demo_paper.tex"
+    )
+
+    included_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    expected_chunk = hashlib.sha256(
+        f"paper\0demo_paper.tex\0{included_sha}".encode("utf-8")
+    ).hexdigest()
+    assert paper_item["included_sha256"] == included_sha
+    assert paper_item["chunk_id"] == expected_chunk
+    assert repeated["chunk_id"] == expected_chunk
+    assert math_item["chunk_id"] != paper_item["chunk_id"]
+    assert paper_item["source_line_start"] == 1
+    assert paper_item["source_line_end"] == 2
 
 
 def test_packet_allows_symlink_targets_that_remain_inside_project_root(tmp_path):
@@ -320,6 +357,17 @@ def test_manifest_marks_files_omitted_by_total_context_limit(tmp_path):
     assert "truncated" in statuses
     assert "omitted" in statuses
     assert manifest["status_counts"]["omitted"] > 0
+    for item in manifest["files"]:
+        chunk_keys = {
+            "chunk_id",
+            "included_sha256",
+            "source_line_start",
+            "source_line_end",
+        }
+        if item["status"] == "omitted":
+            assert chunk_keys.isdisjoint(item)
+        else:
+            assert chunk_keys <= item.keys()
 
 
 def test_role_completeness_contracts_require_full_primary_evidence(tmp_path):

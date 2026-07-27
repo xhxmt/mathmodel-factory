@@ -8,6 +8,21 @@ import hashlib
 import json
 from pathlib import Path
 
+try:
+    from scripts.claim_graph import (
+        artifact_paths_for_role,
+        build_claim_registry,
+        coverage_requirements,
+        evaluate_claim_coverage,
+    )
+except ModuleNotFoundError:  # direct ``python scripts/judge_packet.py`` execution
+    from claim_graph import (  # type: ignore[no-redef]
+        artifact_paths_for_role,
+        build_claim_registry,
+        coverage_requirements,
+        evaluate_claim_coverage,
+    )
+
 
 SELF_AUTHORED_STATUS = {
     "code_review.md",
@@ -41,7 +56,7 @@ TEXT_SUFFIXES = {
 }
 MAX_CONTEXT_BYTES = 180_000
 MAX_FILE_BYTES = 55_000
-PACKET_VERSION = 2
+PACKET_VERSION = 3
 COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v1"
 
 
@@ -173,7 +188,9 @@ def _math_priority(project: Path, path: Path, base_name: str) -> tuple[int, str]
     return priority, relative
 
 
-def _selected_paths(project: Path, base_name: str) -> dict[str, list[Path]]:
+def _selected_paths(
+    project: Path, base_name: str, registry: dict[str, object]
+) -> dict[str, list[Path]]:
     files = _project_files(project)
     root_paper = f"{base_name}_paper.tex"
     paper_names = {root_paper} if (project / root_paper).is_file() else {"paper/paper.tex"}
@@ -210,8 +227,24 @@ def _selected_paths(project: Path, base_name: str) -> dict[str, list[Path]]:
             or path.relative_to(project).as_posix() in paper_names
         )
     ]
-    execution.sort(key=lambda path: _execution_priority(project, path))
-    return {"paper": paper, "math": math, "execution": execution}
+    selected = {"paper": paper, "math": math, "execution": execution}
+    priorities = {
+        "paper": lambda path: _paper_priority(project, path, base_name),
+        "math": lambda path: _math_priority(project, path, base_name),
+        "execution": lambda path: _execution_priority(project, path),
+    }
+    for role, paths in selected.items():
+        known = {path.relative_to(project).as_posix() for path in paths}
+        for relative in artifact_paths_for_role(registry, role):
+            candidate = project / relative
+            # Missing registered artifacts remain in the coverage requirements;
+            # existing candidates are selected and later subjected to the same
+            # symlink/root checks as every other packet file.
+            if relative not in known and candidate.exists():
+                paths.append(candidate)
+                known.add(relative)
+        paths.sort(key=priorities[role])
+    return selected
 
 
 def _relative(project: Path, path: Path) -> str:
@@ -229,7 +262,11 @@ def _first_path(
 
 
 def _role_requirements(
-    project: Path, role: str, paths: list[Path], base_name: str
+    project: Path,
+    role: str,
+    paths: list[Path],
+    base_name: str,
+    registry: dict[str, object],
 ) -> list[dict[str, object]]:
     """Declare the minimum *complete* evidence needed to judge ``role``.
 
@@ -255,15 +292,17 @@ def _role_requirements(
         }
 
     if role == "paper":
-        return [
+        requirements = [
             requirement("final_paper", "final paper text", final_paper),
             requirement("problem_statement", "primary problem statement", problem),
         ]
+        requirements.extend(coverage_requirements(registry, role))
+        return requirements
 
     if role == "math":
         exposition = _first_path(project, paths, lambda relative: relative == "model.md")
         exposition = exposition or final_paper
-        return [
+        requirements = [
             requirement("problem_statement", "primary problem statement", problem),
             requirement("final_paper", "final paper text containing mathematical claims", final_paper),
             requirement(
@@ -272,6 +311,8 @@ def _role_requirements(
                 exposition,
             ),
         ]
+        requirements.extend(coverage_requirements(registry, role))
+        return requirements
 
     primary_result = _first_path(
         project,
@@ -358,6 +399,7 @@ def _role_requirements(
         report = _first_path(project, paths, lambda relative, name=filename: relative == name)
         if report:
             requirements.append(requirement(identifier, description, report))
+    requirements.extend(coverage_requirements(registry, role))
     return requirements
 
 
@@ -375,7 +417,10 @@ def _truncate_text(text: str, byte_limit: int) -> str:
 
 
 def _render_context(
-    project: Path, paths: list[Path], requirements: list[dict[str, object]]
+    project: Path,
+    role: str,
+    paths: list[Path],
+    requirements: list[dict[str, object]],
 ) -> tuple[str, list[dict]]:
     chunks: list[str] = []
     files: list[dict] = []
@@ -441,10 +486,18 @@ def _render_context(
         chunks.extend((header, text, "\n"))
         used += encoded_size
         included_size = len(text.encode("utf-8"))
+        included_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        chunk_id = hashlib.sha256(
+            f"{role}\0{relative}\0{included_sha256}".encode("utf-8")
+        ).hexdigest()
         was_truncated = relative not in critical_for and included_size < original_size
         item.update({
             "status": "truncated" if was_truncated else "included",
             "included_bytes": included_size,
+            "included_sha256": included_sha256,
+            "chunk_id": chunk_id,
+            "source_line_start": 1,
+            "source_line_end": max(1, len(text.splitlines())),
         })
         if was_truncated:
             item["reason"] = (
@@ -502,12 +555,52 @@ def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> d
     }
 
 
+def _objective_record(project: Path, objective_evidence: Path | None) -> dict | None:
+    """Return a hash-bound objective-evidence record for packet consumers.
+
+    The bundle is deliberately metadata, not a role verdict.  It is copied
+    into the project packet directory by the external evaluator and every role
+    manifest records the same bytes so a judge cannot receive a bundle from a
+    different source snapshot.
+    """
+
+    if objective_evidence is None:
+        return None
+    resolved = objective_evidence.resolve(strict=True)
+    try:
+        relative = resolved.relative_to(project).as_posix()
+    except ValueError as exc:
+        raise ValueError("objective evidence must be inside the project") from exc
+    if not resolved.is_file():
+        raise ValueError("objective evidence must be a regular file")
+    payload = json.loads(resolved.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != "objective-evidence-v1":
+        raise ValueError("objective evidence has an unsupported schema")
+    for field in ("bundle_sha256", "input_fingerprint"):
+        value = payload.get(field)
+        if not isinstance(value, str) or len(value) != 64 or any(
+            char not in "0123456789abcdef" for char in value
+        ):
+            raise ValueError(f"objective evidence {field} is not a lowercase SHA-256")
+    return {
+        "path": relative,
+        "bytes": resolved.stat().st_size,
+        "sha256": _sha256(resolved),
+        "schema_version": payload.get("schema_version"),
+        "bundle_sha256": payload.get("bundle_sha256"),
+        "input_fingerprint": payload.get("input_fingerprint"),
+        "summary": payload.get("summary"),
+    }
+
+
 def _manifest(
     project: Path,
     role: str,
     files: list[dict],
     context: str,
     requirements: list[dict[str, object]],
+    registry: dict[str, object],
+    objective_evidence: Path | None = None,
 ) -> dict:
     status_counts = {
         status: sum(item["status"] == status for item in files)
@@ -527,9 +620,13 @@ def _manifest(
             "sha256": hashlib.sha256(context.encode("utf-8")).hexdigest(),
             "size": len(context.encode("utf-8")),
         },
+        "claim_coverage": evaluate_claim_coverage(registry, role, files),
         "completeness": _completeness(files, requirements),
         "files": files,
     }
+    objective_record = _objective_record(project, objective_evidence)
+    if objective_record is not None:
+        manifest["objective_evidence"] = objective_record
     canonical = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     manifest["packet_fingerprint"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return manifest
@@ -541,7 +638,11 @@ def _atomic_write(path: Path, data: str) -> None:
     temporary.replace(path)
 
 
-def packet_payloads(project: Path, base_name: str | None = None) -> dict[str, dict]:
+def packet_payloads(
+    project: Path,
+    base_name: str | None = None,
+    objective_evidence: Path | None = None,
+) -> dict[str, dict]:
     """Return the exact role packet payloads without mutating the project.
 
     Keeping packet construction pure lets workflow freshness checks recompute
@@ -554,30 +655,61 @@ def packet_payloads(project: Path, base_name: str | None = None) -> dict[str, di
     if not project.is_dir():
         raise FileNotFoundError(f"project directory not found: {project}")
     base_name = base_name or project.name
-    selected = _selected_paths(project, base_name)
+    registry = build_claim_registry(project, base_name)
+    selected = _selected_paths(project, base_name, registry)
     result: dict[str, dict] = {}
     for role, paths in selected.items():
-        requirements = _role_requirements(project, role, paths, base_name)
-        context, files = _render_context(project, paths, requirements)
+        requirements = _role_requirements(project, role, paths, base_name, registry)
+        context, files = _render_context(project, role, paths, requirements)
         result[role] = {
             "context": context,
-            "manifest": _manifest(project, role, files, context, requirements),
+            "manifest": _manifest(
+                project,
+                role,
+                files,
+                context,
+                requirements,
+                registry,
+                objective_evidence=objective_evidence,
+            ),
         }
     return result
 
 
-def packet_fingerprints(project: Path, base_name: str | None = None) -> dict[str, str]:
+def packet_fingerprints(
+    project: Path,
+    base_name: str | None = None,
+    objective_evidence: Path | None = None,
+) -> dict[str, str]:
     """Compute current role packet fingerprints directly from source files."""
-
+    project = project.resolve()
+    if objective_evidence is None:
+        # Step 13 persists the bundle at this canonical location.  Including
+        # it here is essential: manifests created with a hash-bound objective
+        # bundle must not compare equal to a packet reconstructed without that
+        # bundle (the old behavior made final-judge freshness fail closed only
+        # after the judge had already run).
+        candidate = project / "judge_packets" / "objective_evidence.json"
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(project)
+            if resolved.is_file():
+                objective_evidence = resolved
+        except (OSError, ValueError):
+            objective_evidence = None
     return {
         role: str(payload["manifest"]["packet_fingerprint"])
-        for role, payload in packet_payloads(project, base_name).items()
+        for role, payload in packet_payloads(project, base_name, objective_evidence).items()
     }
 
 
-def build_packets(project: Path, base_name: str | None = None) -> dict[str, dict]:
+def build_packets(
+    project: Path,
+    base_name: str | None = None,
+    objective_evidence: Path | None = None,
+) -> dict[str, dict]:
     project = project.resolve()
-    payloads = packet_payloads(project, base_name)
+    payloads = packet_payloads(project, base_name, objective_evidence)
     result: dict[str, dict] = {}
     for role, payload in payloads.items():
         packet_dir = project / "judge_packets" / role
@@ -597,10 +729,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project")
     parser.add_argument("--base")
+    parser.add_argument("--objective-evidence", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     try:
-        manifests = build_packets(Path(args.project), args.base)
+        manifests = build_packets(
+            Path(args.project),
+            args.base,
+            args.objective_evidence,
+        )
     except (OSError, ValueError) as exc:
         print(f"ERROR: {exc}")
         return 2

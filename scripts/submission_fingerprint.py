@@ -16,8 +16,8 @@ from scripts.judge_packet import packet_fingerprints
 from scripts.model_dispatch_config import get_model_entry, get_step_model_ids
 
 
-FINGERPRINT_VERSION = 3
-EVALUATOR_CONTRACT_VERSION = 1
+FINGERPRINT_VERSION = 4
+EVALUATOR_CONTRACT_VERSION = 3
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -112,10 +112,21 @@ def evaluator_contract_payload(base: str, factory_root: Path | None = None) -> d
     }
     implementation_files = (
         "run_paper.sh",
+        "scripts/claim_graph.py",
         "scripts/judge_packet.py",
+        "scripts/objective_evidence.py",
+        "scripts/build_objective_evidence.py",
+        "scripts/judge_reliability.py",
+        "scripts/evidence_grounding.py",
         "scripts/aggregate_judges.py",
+        "scripts/judge_decision_router.py",
+        "scripts/judgment_receipt.py",
+        "scripts/pdf_visual_gate.py",
+        "scripts/capability_harness.py",
+        "scripts/shadow_cutover.py",
         "scripts/llm_judge_call.py",
         "scripts/api_agent_run.py",
+        "scripts/run_codex_tui_judge.py",
         "scripts/model_dispatch_config.py",
     )
     prompt_files = (
@@ -125,8 +136,16 @@ def evaluator_contract_payload(base: str, factory_root: Path | None = None) -> d
     )
     return {
         "version": EVALUATOR_CONTRACT_VERSION,
-        "role_schema": "judge-role-v1",
-        "aggregate_schema": "judge-aggregate-v1",
+        "role_schemas": {
+            "math": "judge-hard-role-v2",
+            "execution": "judge-hard-role-v2",
+            "paper": "judge-paper-role-v3",
+        },
+        # Keep the evaluator identity aligned with aggregate_judges and the
+        # parser.  A stale v2 marker would let a cache look current while the
+        # runtime actually emits the grounding-bound v3 envelope.
+        "aggregate_schema": "judge-aggregate-v3",
+        "score_semantics": "UNCALIBRATED_DIAGNOSTIC",
         "implementation": {
             relative: _versioned_file_record(root, relative)
             for relative in implementation_files
@@ -156,6 +175,32 @@ def _pdf_record(project: Path, base: str) -> dict[str, object]:
     }
 
 
+def _objective_evidence_record(project: Path) -> dict[str, object] | None:
+    """Describe the canonical objective bundle when it is safely in-project."""
+
+    candidate = project / "judge_packets" / "objective_evidence.json"
+    if not candidate.is_file():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+        relative = resolved.relative_to(project).as_posix()
+    except (OSError, ValueError):
+        return {"path": "judge_packets/objective_evidence.json", "exists": False}
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    return {
+        "path": relative,
+        "exists": True,
+        "bytes": resolved.stat().st_size,
+        "sha256": _sha256(resolved),
+        "bundle_sha256": payload.get("bundle_sha256") if isinstance(payload, dict) else None,
+        "input_fingerprint": payload.get("input_fingerprint") if isinstance(payload, dict) else None,
+        "schema_version": payload.get("schema_version") if isinstance(payload, dict) else None,
+    }
+
+
 def submission_fingerprint_payload(project: Path, base: str | None = None) -> dict[str, object]:
     """Build the current, side-effect-free final-review identity payload."""
 
@@ -165,6 +210,7 @@ def submission_fingerprint_payload(project: Path, base: str | None = None) -> di
         "version": FINGERPRINT_VERSION,
         "base": resolved_base,
         "judge_packet_fingerprints": packet_fingerprints(project, resolved_base),
+        "objective_evidence": _objective_evidence_record(project),
         "evaluator_contract": evaluator_contract_payload(resolved_base),
         "submission_assets": [
             _file_record(project, path) for path in submission_files(project, resolved_base)
@@ -187,7 +233,40 @@ def final_judge_is_current(project: Path, base: str | None = None) -> bool:
     if not hash_file.is_file() or not _contained_file(project, pdf) or pdf.stat().st_size <= 0:
         return False
     expected = hash_file.read_text(encoding="utf-8", errors="replace").strip()
-    return bool(expected) and expected == submission_fingerprint(project, resolved_base)
+    current = submission_fingerprint(project, resolved_base)
+    if not expected or expected != current:
+        return False
+
+    # Explicit governance paths (the no-judge ablation and a user-authored
+    # Gate-2 delivery override) intentionally bypass the quality receipt. They
+    # remain visible in delivery state and are never presented as a quality
+    # PASS; keeping this exception here preserves the experiment/override
+    # contract while normal deliveries stay receipt-bound.
+    ablation = project / "judge_outputs" / "final_submission.ablation.json"
+    if ablation.is_file():
+        try:
+            value = json.loads(ablation.read_text(encoding="utf-8"))
+            if value.get("judge_executed") is False:
+                return True
+        except (OSError, json.JSONDecodeError):
+            pass
+    override = project / "gate2_delivery_override.json"
+    if override.is_file():
+        try:
+            value = json.loads(override.read_text(encoding="utf-8"))
+            if value.get("enabled") is True and value.get("scope") == "continue_to_step16":
+                return True
+        except (OSError, json.JSONDecodeError):
+            pass
+    from scripts.judgment_receipt import verify_receipt
+
+    receipt_valid, _ = verify_receipt(
+        project,
+        resolved_base,
+        expected_input_fingerprint=current,
+        require_pass=True,
+    )
+    return receipt_valid
 
 
 def main() -> int:

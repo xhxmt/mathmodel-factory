@@ -40,17 +40,23 @@ def test_delivery_manifest_records_contract_and_artifact_hashes(tmp_path, monkey
     monkeypatch.setattr(evaluator, "infer_step", lambda root, project: (16, "16"))
     monkeypatch.setattr(evaluator, "run_python_check", lambda root, args, timeout=60: (True, "ok"))
     monkeypatch.setattr(evaluator, "symbol_check_ok", lambda root, project, base: (True, "ok"))
+    monkeypatch.setattr(
+        evaluator.workflow_state,
+        "final_judge_is_current",
+        lambda project, base=None: True,
+    )
 
     ev = evaluator.evaluate(project, tmp_path)
     manifest = delivery_contract.build_delivery_manifest(project, tmp_path, ev)
 
     assert manifest["contract_version"] == delivery_contract.CURRENT_CONTRACT_VERSION
-    assert manifest["contract_version"].endswith(".final_judge_v3")
+    assert manifest["contract_version"].endswith(".evidence_judge_v4")
     assert manifest["status"] == "CURRENT_PASS"
     assert manifest["project"]["base"] == "demo"
     assert manifest["evaluation"]["passed"] is True
     assert manifest["artifacts"]["papers_pdf"]["sha256"]
     assert manifest["artifacts"]["submission_zip"]["sha256"]
+    assert manifest["evaluation"]["award_prediction"] == "UNAVAILABLE_WITHOUT_HUMAN_CALIBRATION"
 
 
 def test_delivery_manifest_does_not_mark_gate2_override_as_current_pass(tmp_path, monkeypatch):
@@ -102,6 +108,11 @@ def test_audit_complete_projects_classifies_current_legacy_and_invalid(tmp_path,
     monkeypatch.setattr(evaluator, "infer_step", fake_infer)
     monkeypatch.setattr(evaluator, "run_python_check", lambda root, args, timeout=60: (True, "ok"))
     monkeypatch.setattr(evaluator, "symbol_check_ok", lambda root, project, base: (True, "ok"))
+    monkeypatch.setattr(
+        evaluator.workflow_state,
+        "final_judge_is_current",
+        lambda project, base=None: project.name == "current",
+    )
 
     result = audit_complete_projects.audit_complete_projects(tmp_path / "complete", tmp_path, write_manifests=True)
     statuses = {entry["base"]: entry["status"] for entry in result["projects"]}
