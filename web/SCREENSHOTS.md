@@ -1,5 +1,7 @@
 # Web Dashboard 截图
 
+> **历史快照（非现役合同）**：本文记录此前的实现或验证状态，仅供追溯。当前使用请看 [Web README](README.md)；生产部署请看 [现役 runbook](docs/deployment/DEPLOYMENT.md)。
+
 ## 主界面
 
 ### 项目列表视图

@@ -50,7 +50,7 @@ echo
 # 5. 检查关键文件
 echo "✓ 检查关键配置文件..."
 files=(
-    "/home/tfisher/paper_factory/web/backend/app.py"
+    "/home/tfisher/paper_factory/web/backend/main.py"
     "/home/tfisher/paper_factory/web/frontend/src/components/NewProjectModal.vue"
     "/home/tfisher/paper_factory/.gitignore"
 )
@@ -85,10 +85,8 @@ echo "=========================================="
 echo "访问信息："
 echo "=========================================="
 echo "Web 界面: https://tfisher.de (或 http://服务器IP)"
-echo "API 文档: http://localhost:8000/docs"
-echo "登录信息:"
-echo "  • 用户名: admin"
-echo "  • 密码: admin123"
+echo "API 健康入口: http://localhost:8000/"
+echo "登录信息: 使用已审批账号；管理员密码来自 Secret Manager"
 echo
 
 # 8. 测试建议

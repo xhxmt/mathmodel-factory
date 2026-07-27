@@ -1,5 +1,7 @@
 # 压缩包上传功能 - 快速开始
 
+> **历史快照（非现役合同）**：本文记录此前的实现或验证状态，仅供追溯。当前使用请看 [Web README](../../README.md)；生产部署请看 [现役 runbook](../deployment/DEPLOYMENT.md)。
+
 ## 功能概述
 
 前端现在支持上传包含题目文件和数据的完整压缩包，系统会自动：
@@ -144,10 +146,9 @@ cd /home/tfisher/paper_factory/web
 或手动测试：
 ```bash
 # 1. 登录获取 token
-TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' \
-  | jq -r '.access_token')
+# 登录测试请使用当前已审批账号和受保护的凭据输入；不要把密码写进
+# 命令、脚本、日志或历史文档。
+TOKEN=<access-token-from-protected-login>
 
 # 2. 上传压缩包
 curl -X POST http://localhost:8000/api/upload/problem \

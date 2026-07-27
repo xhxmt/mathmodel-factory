@@ -53,24 +53,24 @@ echo ""
 
 # 4. 测试加载 secrets
 echo "4. 测试加载 secrets..."
-if source scripts/load_secrets.sh 2>&1 | grep -q "successfully"; then
+if source scripts/load_secrets.sh >/dev/null 2>&1; then
     echo "✓ Secrets 加载成功"
 
     # 验证关键变量
     if [[ -n "${MINERU_TOKEN:-}" ]]; then
-        echo "  ✓ MINERU_TOKEN: ${MINERU_TOKEN:0:20}..."
+        echo "  ✓ MINERU_TOKEN 已加载"
     else
         echo "  ⚠️  MINERU_TOKEN 未加载"
     fi
 
     if [[ -n "${GEMINI_API_KEY:-}" ]]; then
-        echo "  ✓ GEMINI_API_KEY: ${GEMINI_API_KEY:0:20}..."
+        echo "  ✓ GEMINI_API_KEY 已加载"
     else
         echo "  ⚠️  GEMINI_API_KEY 未加载"
     fi
 
     if [[ -n "${JWT_SECRET:-}" ]]; then
-        echo "  ✓ JWT_SECRET: ${JWT_SECRET:0:20}..."
+        echo "  ✓ JWT_SECRET 已加载"
     else
         echo "  ⚠️  JWT_SECRET 未加载"
     fi
@@ -111,11 +111,19 @@ if curl -s http://127.0.0.1:8000/ >/dev/null 2>&1; then
     echo "✓ Web Dashboard 正在运行 (http://127.0.0.1:8000)"
 
     # 测试认证
-    LOGIN_RESPONSE=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+    if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
+        echo "⚠️  ADMIN_PASSWORD 未由 Secret Manager 注入，跳过登录请求"
+        LOGIN_RESPONSE="{}"
+    else
+        LOGIN_RESPONSE=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
         -H "Content-Type: application/json" \
-        -d '{"username":"admin","password":"'"${ADMIN_PASSWORD:-admin123}"'"}' 2>/dev/null || echo "{}")
+        --data-binary @- 2>/dev/null <<EOF
+{"username":"admin","password":"$ADMIN_PASSWORD"}
+EOF
+        )
+    fi
 
-    if echo "$LOGIN_RESPONSE" | jq -e '.token' >/dev/null 2>&1; then
+    if echo "$LOGIN_RESPONSE" | jq -e '.access_token' >/dev/null 2>&1; then
         echo "✓ 认证测试通过（JWT Secret 工作正常）"
     else
         echo "⚠️  认证测试失败，检查 JWT_SECRET 和 ADMIN_PASSWORD"

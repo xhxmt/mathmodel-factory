@@ -6,9 +6,9 @@
 
 完整文档导航请查看 [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md)。
 
-## 本地 Web Dashboard（新增）
+## Web Dashboard
 
-本项目现已提供本地 Web Dashboard，用于实时监控项目进度并进行人工介入：
+本项目提供 Web Dashboard，用于公开展示完成论文、管理用户与项目、实时监控进度并进行人工介入：
 
 ```bash
 cd web
@@ -17,12 +17,16 @@ cd web
 
 然后在浏览器中访问 **http://localhost:5173**
 
+启动前需在 `web/.env` 配置非敏感的 `GCP_PROJECT_ID`，并确保当前账号可从 GCP Secret Manager 加载必需 secret。系统没有默认管理员密码。
+
 **主要功能：**
-- **实时监控**：WebSocket 自动推送项目状态更新，无需刷新页面
-- **项目管理**：暂停/恢复/终止正在运行的项目
-- **日志查看**：实时查看最新的执行日志
-- **人工咨询**：当项目进入 `awaiting_consultation` 状态时，通过 Web 界面提交 GPT Pro / Gemini Deep Think 的分析结果
-- **上游方案选择**：交互式项目可启用 Step 3 方法主线选择门，在已验证候选流中选择 `PRIMARY/AUXILIARY`；无人值守项目默认不启用
+
+- **公开论文展厅**：未登录访客只能阅读 `SHOWCASE_PROJECTS` 白名单中的完成论文。
+- **注册与审批**：用户注册后处于 pending，管理员审批用户和项目申请；普通用户只能看到自己的 ACL 项目。
+- **题目归档**：按项目内题目内容的规范化 SHA-256 标识聚合同题多次运行，同时保留 `ongoing/` / `complete/` 的真实目录状态。
+- **实时监控**：WebSocket 自动推送项目状态、诊断、日志与阻塞原因。
+- **项目控制**：在权限范围内暂停、恢复或终止运行。
+- **人工咨询与选择**：处理咨询请求；交互式项目可启用 Step 3 `PRIMARY/AUXILIARY` 选择门，CLI 路径仍然保留。
 
 详细使用说明请参阅 [`web/README.md`](web/README.md)。
 
@@ -50,10 +54,10 @@ cd web
 - Python 3 环境，使用本仓库目录下 `.venv` 虚拟环境中的依赖项。
 - LaTeX 工具链：`xelatex`、`pdflatex` 和 `bibtex`。
 - 至少一套用于项目代码的实用求解器技术栈，通常为带有 `numpy`、`scipy`、`pandas` 和 `matplotlib` 的 Python 环境。
-- 可选：通过 MinerU 解析 PDF 赛题，需在 `.env` 中配置 `MINERU_TOKEN`。
+- 当前生产部署通过 GCP Secret Manager 和 `scripts/load_secrets.sh` 注入 MinerU、模型 API、JWT 与管理员凭据；本地 `.env` 只应保留非敏感配置。
 - 可选：如果项目需要，可安装 Julia、MATLAB/Octave、R、Gurobi 或其他求解器。
 
-敏感信息和本地配置请存放在 `.env` 文件中，该文件已被 git 忽略。
+不要在文档、命令历史或仓库文件中保存 secret 值。Secret Manager 操作见 [`docs/SECRET_MANAGER_GUIDE.md`](docs/SECRET_MANAGER_GUIDE.md)。
 
 ## 快速开始
 
@@ -75,18 +79,16 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 这些运行输出会被 Git 自动忽略。
 
-## 最新更新 (2026-06-24)
+## 最新更新（2026-07-27）
 
-### 🎯 优秀论文可视化与写作框架系统性改进
+当前未发布变更集中在 Web 控制面与仓库治理：
 
-本次更新系统性地将优秀论文的可视化和写作模式固化到工作流中：
+- 重复运行按题目内容标识聚合成“题目归档”，历史完成运行保持只读。
+- SQLite 用户库、bcrypt 密码、注册/审批、项目申请与项目 ACL 已成为现役权限模型。
+- Secret Manager 是生产敏感值来源，弱默认管理员密码或缺失 JWT Secret 会阻止后端启动。
+- 当前 Web 使用、部署和历史报告的所有权已重新收敛，避免旧文档继续充当现役 runbook。
 
-- **可视化架构改进**: 引入四类叙事角色（explain_model/report_result/validate_result/show_limitation），强制每个子问题配置视觉锚点
-- **写作框架重构**: 摘要改为"开头总述 + 逐问交付"结构，问题分析写成阅卷索引，模型求解先报采信口径
-- **工程痕迹清理**: 系统性清理内部过程词（m1/m2/RELAXED/fallback/workflow）
-- **全流程闭环**: Step 8-15 全流程按优秀论文基准执行
-
-详见 [CHANGELOG.md](CHANGELOG.md) 和 `docs/guides/` 下的基准文档。
+详见 [CHANGELOG.md](CHANGELOG.md)。优秀论文写作与可视化基准仍位于 `docs/guides/`。
 
 ## 创建建模项目
 

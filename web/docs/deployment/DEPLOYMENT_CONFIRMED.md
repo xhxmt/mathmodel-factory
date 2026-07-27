@@ -1,5 +1,7 @@
 # ✅ 部署完成确认 - tfisher.de
 
+> **历史快照（非现役合同）**：本文记录此前的实现或验证状态，仅供追溯。当前使用请看 [Web README](../../README.md)；生产部署请看 [现役 runbook](../deployment/DEPLOYMENT.md)。
+
 **部署时间**: 2026-06-23 09:00 UTC  
 **分支**: modeling-factory  
 **服务器**: tfisher.de (本地服务器)

@@ -216,10 +216,40 @@ Follow `modeling_guide.md`:
 - LaTeX: CUMCM/MCM-style sections, with abstract filled only at Step 14.
 - Compilation: use `compile_paper.sh`; it selects `xelatex` for `ctex`, `cumcmthesis`, `mcmthesis`, or `xeCJK`.
 
+## Web Control Plane Contract
+
+The current FastAPI application is `web/backend/main.py`.
+`web/backend/app.py` is only a compatibility launcher/re-export and must not be
+documented as the architecture owner.
+
+Authentication and approvals are persisted in SQLite at `web/auth.db` through
+`web/backend/auth_store.py`. Passwords are bcrypt hashes. Registration creates
+a pending user; administrators approve users and project requests. A non-admin
+user sees and manages only projects granted through `project_acl`, while an
+administrator can manage all projects. Unauthenticated visitors can only use
+the read-only showcase configured by `SHOWCASE_PROJECTS`.
+
+The Web project list exposes `problem_key`, `problem_title`, `storage_scope`,
+and `archived`. Equivalent contained problem statements share a canonical
+SHA-256 identity so the frontend can group multiple runs into one problem
+archive. This grouping does not move or rename project directories:
+`ongoing/` and `complete/` remain authoritative storage.
+
+Production secrets are loaded from GCP Secret Manager by
+`scripts/load_secrets.sh`. `JWT_SECRET` (at least 32 characters) and a strong
+`ADMIN_PASSWORD` are mandatory; startup rejects missing or weak values. Never
+document a default password, automatic JWT generation, secret value, or secret
+prefix. `web/README.md` owns current usage and
+`web/docs/deployment/DEPLOYMENT.md` owns current production operations.
+
 ## Editing Notes
 
 - Runtime directories (`ongoing/`, `complete/`, `papers/`, `logs/`, `run_state/`) are gitignored.
 - Do not commit `.env`, credentials, generated logs, PDFs, or benchmark downloads.
+- Inspect every worktree before cleanup. Do not remove a worktree, branch,
+  backup, gitlink, log, or local credential file until its exact contents and
+  recovery value have been reported and the user has explicitly approved the
+  destructive action.
 - Editing `run_paper.sh` is safe while runners are active because active jobs use snapshots.
 - Do not change `STEPS.md`, `modeling_guide.md`, or active prompts casually; they are agent contracts.
 - Keep legacy prompt files unless deliberately removing legacy mode. Many old social-science prompt files are no longer called by the modeling dispatcher but remain useful reference material.

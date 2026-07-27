@@ -1,5 +1,7 @@
 # 部署到域名 - 总结
 
+> **历史快照（非现役合同）**：本文记录此前的实现或验证状态，仅供追溯。当前使用请看 [Web README](../../README.md)；生产部署请看 [现役 runbook](../deployment/DEPLOYMENT.md)。
+
 ## ✅ 部署完成
 
 Paper Factory Web Dashboard 已成功部署到：**https://tfisher.de**
@@ -8,7 +10,7 @@ Paper Factory Web Dashboard 已成功部署到：**https://tfisher.de**
 
 - **URL**: https://tfisher.de
 - **用户名**: admin
-- **密码**: admin123
+- **密码**: 不记录；当前值由 Secret Manager 提供
 
 ## 部署架构
 
@@ -92,7 +94,7 @@ sudo chown -R www-data:www-data /var/www/tfisher.de/
 ```bash
 cd /home/tfisher/paper_factory/web
 nano .env
-# 修改 ADMIN_PASSWORD=your_password
+# 修改 Secret Manager 中的管理员密码；不要把值写入此文件或命令历史
 sudo systemctl restart paper-factory-api
 ```
 

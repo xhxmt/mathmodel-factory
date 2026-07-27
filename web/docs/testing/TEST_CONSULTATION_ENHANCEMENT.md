@@ -1,5 +1,7 @@
 # 人工咨询信息增强 - 测试指南
 
+> **历史快照（非现役合同）**：本文记录此前的实现或验证状态，仅供追溯。当前使用请看 [Web README](../../README.md)；生产部署请看 [现役 runbook](../deployment/DEPLOYMENT.md)。
+
 ## 改进内容
 
 ### 1. 后端增强 (`run_paper.sh`)
@@ -128,7 +130,7 @@ npm run dev
 
 ### 5. 在 Web 界面中查看咨询请求
 
-1. 登录（默认 admin/admin123）
+1. 使用当前已审批账号登录（管理员密码由 Secret Manager 提供）
 2. 点击项目卡片，打开详情 Modal
 3. 切换到"人工咨询"标签
 

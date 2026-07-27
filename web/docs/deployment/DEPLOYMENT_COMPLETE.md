@@ -1,5 +1,7 @@
 # 🎉 Web Dashboard 部署完成报告
 
+> **历史快照（非现役合同）**：本文记录此前的实现或验证状态，仅供追溯。当前使用请看 [Web README](../../README.md)；生产部署请看 [现役 runbook](../deployment/DEPLOYMENT.md)。
+
 ## 部署概况
 
 **部署日期**: 2026-06-16
@@ -64,7 +66,7 @@ Internet
 
 **登录凭据**:
 - 用户名: `admin`
-- 密码: `T-fisher2005`
+- 密码: **已移除；历史凭据视为已暴露，当前值由 Secret Manager 提供**
 
 ## 管理命令
 

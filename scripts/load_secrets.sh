@@ -75,8 +75,7 @@ load_secret_required() {
     local var_name="$1"
     local secret_name="$2"
     local loaded
-    if ! loaded="$("$GCLOUD_BIN_RESOLVED" secrets versions access latest --secret="$secret_name" --project="$GCP_PROJECT_ID" 2>&1)"; then
-        echo "$loaded" >&2
+    if ! loaded="$("$GCLOUD_BIN_RESOLVED" secrets versions access latest --secret="$secret_name" --project="$GCP_PROJECT_ID" 2>/dev/null)"; then
         fail "failed to load $var_name from Secret Manager secret '$secret_name' in project '$GCP_PROJECT_ID'"
     fi
     [[ -n "$loaded" ]] || fail "Secret Manager secret '$secret_name' returned an empty value for $var_name"

@@ -1,5 +1,7 @@
 # Web 文件上传功能测试报告
 
+> **历史快照（非现役合同）**：本文记录此前的实现或验证状态，仅供追溯。当前使用请看 [Web README](../../README.md)；生产部署请看 [现役 runbook](../deployment/DEPLOYMENT.md)。
+
 ## 测试概述
 
 **测试日期**: 2026-06-16
@@ -20,7 +22,7 @@
 - **状态**: 通过
 - **测试**: `POST /api/auth/login`
 - **用户名**: admin
-- **密码**: T-fisher2005 (从 .env 加载)
+- **密码**: 已从历史报告移除；当时的值视为已暴露，当前值由 Secret Manager 提供
 - **返回**: JWT access_token
 
 ### ✅ 3. Markdown 文件上传

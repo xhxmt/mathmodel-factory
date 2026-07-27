@@ -36,6 +36,7 @@
 
 # Local agent / brainstorming workspace (not part of the factory)
 .superpowers/
+/artifacts/superpowers/
 
 /.worktrees/
 

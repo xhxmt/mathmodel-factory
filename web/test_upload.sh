@@ -19,7 +19,7 @@ echo "   或使用无痕模式: Ctrl+Shift+N"
 echo
 echo "2️⃣ 访问 Web 界面"
 echo "   URL: https://tfisher.de"
-echo "   登录: admin / admin123"
+echo "   登录: 使用已审批账号（管理员密码来自 Secret Manager）"
 echo
 echo "3️⃣ 测试拖拽上传"
 echo "   a. 点击右上角 '➕ 新建项目'"

@@ -1,222 +1,139 @@
-# Web 文件上传功能使用指南
+# Web Dashboard 使用指南
 
-## 快速开始
+本文描述当前用户流程。安装与架构见 [`README.md`](README.md)，最短启动路径见 [`QUICKSTART.md`](QUICKSTART.md)，生产操作见 [`docs/deployment/DEPLOYMENT.md`](docs/deployment/DEPLOYMENT.md)。
 
-### 1. 启动服务
+## 访问角色
 
-```bash
-# 在 web 目录下
+### 未登录访客
 
-# 启动后端 (端口 8000)
-cd /home/tfisher/paper_factory/web
-source venv/bin/activate
-cd backend
-python app.py &
+访客进入只读论文展厅，只能查看 `SHOWCASE_PROJECTS` 白名单中的完成论文。访客不能访问内部项目状态、日志、文件、用户管理或控制动作。
 
-# 启动前端 (端口 5173)
-cd /home/tfisher/paper_factory/web/frontend
-npm run dev &
-```
+### 普通用户
 
-### 2. 访问界面
+1. 在登录页注册用户名、密码和可选显示名。
+2. 等待管理员审批；只有 `active` 用户可以登录。
+3. 登录后上传题目并提交项目申请。
+4. 管理员审批申请后，系统创建项目并把申请人写入项目 ACL。
+5. 用户只看到获授权项目，可查看状态和执行允许的项目操作。
 
-打开浏览器访问: **http://localhost:5173**
+### 管理员
 
-### 3. 登录
+管理员可查看全部项目，直接创建项目，审批/拒绝用户和项目申请，查看审计日志与 Secret Manager 元数据健康状态。
 
-- **用户名**: `admin`
-- **密码**: `T-fisher2005` (在 `.env` 文件中配置)
+系统没有默认管理员密码。不要从历史报告、测试脚本或命令历史获取登录值。
 
-## 使用流程
+## 上传题目
 
-### 方式一：上传文件（推荐）
+“新建项目”支持上传或服务器路径两种方式。
 
-1. 点击右上角 **"➕ 新建项目"** 按钮
-2. 输入项目名称（例如：`cumcm2024_a`）
-3. 确保选择 **"📤 上传文件"** 标签
-4. 上传文件（两种方式任选其一）：
-   - **点击上传**: 点击上传区域，选择文件
-   - **拖拽上传**: 将文件拖拽到上传区域
-5. 等待上传完成（显示进度条）
-6. 可选：勾选选项
-   - ☐ 仅创建项目，不自动开始执行
-   - ☐ 启用人工咨询模式
-7. 点击 **"创建项目"** 按钮
+### 支持格式
 
-### 方式二：指定路径
+- 单文件：PDF、Markdown
+- 压缩包：ZIP、TAR、TGZ、TAR.GZ、TAR.BZ2、TAR.XZ
+- 默认大小上限：100 MB
 
-1. 点击 **"➕ 新建项目"**
-2. 输入项目名称
-3. 选择 **"📁 指定路径"** 标签
-4. 输入服务器文件路径（例如：`/home/user/problems/2024_A.pdf`）
-5. 点击 **"创建项目"**
+压缩包会解压到 `uploads/` 下的独立目录，并自动寻找题目 PDF/Markdown。归档中的其他数据文件会保留给后续建模步骤使用；目录穿越归档会被拒绝。
 
-## 支持的文件格式
+### 项目名
 
-- ✅ **PDF**: `.pdf`, `.PDF`
-- ✅ **Markdown**: `.md`, `.MD`
-- ❌ 其他格式会被拒绝
+项目名只能使用字母、数字、下划线和连字符。名称不能与 `ongoing/`、`complete/` 或待处理/已批准申请中的项目冲突。
 
-## 文件大小限制
+### 创建选项
 
-- 最大支持 **100 MB**
+- “仅创建，不自动开始”对应 `--no-start`。
+- “启用人工咨询”对应 `--consult`。
 
-## 上传的文件存储位置
+管理员提交后直接调用根目录 `launch_agents.sh`。普通用户提交后进入申请队列，等待管理员决定。
 
-文件保存在: `/home/tfisher/paper_factory/uploads/`
+## 题目归档与运行
 
-文件命名格式: `YYYYMMDD_HHMMSS_原始文件名`
+Dashboard 不再把每个运行都当作一张独立题目卡。后端根据项目内题目源文件计算 canonical SHA-256 身份，前端据此聚合同题的多次运行。
 
-示例:
-```
-20260616_162144_cumcm_2024_A.pdf
-20260616_162145_problem_description.md
-```
+归档卡会显示：
 
-## 创建的项目位置
+- 题目标题；
+- 运行总数、完成数和运行中数量；
+- 最新运行；
+- 可展开的历史运行。
 
-项目目录: `/home/tfisher/paper_factory/ongoing/<project_name>/`
+如果题目源文件不可用，系统退回以项目名区分运行。归档只影响展示：
 
-项目结构:
-```
-ongoing/cumcm2024_a/
-├── checkpoint.md          # 进度检查点
-├── problem/              # 题目解析
-├── data/                 # 数据文件
-├── models/               # 模型代码
-├── figures/              # 图表
-├── tables/               # 表格
-└── logs/                 # 日志
-```
+- `ongoing/<base_name>/` 仍是进行中项目的运行态真相；
+- `complete/<base_name>/` 仍是已交付项目的存储真相；
+- UI 不会移动、合并或重命名目录。
 
-## 常见问题
+同名目录同时出现在 `ongoing/` 和 `complete/` 时，列表优先使用 `ongoing/`，避免产生歧义。
 
-### Q1: 上传后找不到文件？
+## 查看和控制项目
 
-**A**: 文件保存在 `uploads/` 目录，文件名带有时间戳前缀。检查:
-```bash
-ls -lh /home/tfisher/paper_factory/uploads/
-```
+项目工作台提供：
 
-### Q2: 项目创建失败？
+- 当前步骤、状态和诊断摘要；
+- checkpoint、日志、文件和渲染预览；
+- 人工咨询请求与回答；
+- Step 3 方案选择；
+- 按权限开放的暂停、恢复和终止动作。
 
-**A**: 检查:
-1. 文件路径是否正确
-2. 文件是否存在
-3. 是否有权限访问
-
-查看后端日志:
-```bash
-tail -f /home/tfisher/paper_factory/web/backend/backend.log
-```
-
-### Q3: 登录失败？
-
-**A**: 确认密码正确。密码在 `.env` 文件中配置:
-```bash
-cat /home/tfisher/paper_factory/web/.env | grep ADMIN_PASSWORD
-```
-
-### Q4: 前端无法连接后端？
-
-**A**: 确认后端正在运行:
-```bash
-curl http://localhost:8000/
-```
-
-应该返回:
-```json
-{"status":"Paper Factory Dashboard API","version":"1.0.0"}
-```
-
-### Q5: 如何修改密码？
-
-**A**: 编辑 `.env` 文件:
-```bash
-nano /home/tfisher/paper_factory/web/.env
-```
-
-修改 `ADMIN_PASSWORD=your-new-password`，然后重启后端。
-
-## API 测试
-
-### 测试脚本
-
-完整的 API 测试脚本位于: `/tmp/final_complete_test.sh`
-
-运行测试:
-```bash
-bash /tmp/final_complete_test.sh
-```
-
-### 手动测试
+`checkpoint.md` 仅用于显示，不是工作流权威状态。需要判断真实步骤时，在仓库根目录运行：
 
 ```bash
-# 1. 登录
-TOKEN=$(curl -s -X POST "http://localhost:8000/api/auth/login" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"T-fisher2005"}' | \
-  python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
-
-# 2. 上传文件
-curl -X POST "http://localhost:8000/api/upload/problem" \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@/path/to/your/file.pdf"
-
-# 3. 创建项目
-curl -X POST "http://localhost:8000/api/projects/new" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "base_name": "test_project",
-    "problem_path": "/home/tfisher/paper_factory/uploads/xxx.pdf",
-    "no_start": false,
-    "consult": false
-  }'
-
-# 4. 查询项目
-curl -X GET "http://localhost:8000/api/projects" \
-  -H "Authorization: Bearer $TOKEN"
+./run_paper.sh --infer-step ongoing/<base_name>
 ```
 
-## 安全注意事项
+完成归档保持只读；不要把 `complete/` 目录存在本身当作当前质量契约 PASS。
 
-1. **修改默认密码**: 生产环境请修改 `.env` 中的密码
-2. **HTTPS**: 生产环境建议使用 HTTPS
-3. **防火墙**: 限制 8000 和 5173 端口的访问
-4. **文件清理**: 定期清理 `uploads/` 目录中的旧文件
+## 人工咨询
 
-## 技术栈
+启用咨询的项目可能在 preflight、Step 4 或动态请求处暂停。Web 会展示请求内容，提交回答后写入 `human_review.md` 并恢复运行。
 
-- **后端**: FastAPI + Uvicorn + Python 3.13
-- **前端**: Vue 3 + Vite + Axios
-- **认证**: JWT Bearer Token
-- **文件处理**: Python-Multipart
-- **环境变量**: Python-Dotenv
+咨询 gate 采用退出并等待恢复的方式，不在后台持锁阻塞。回答前应核对项目、gate 和当前状态，避免把旧请求提交到新运行。
 
-## 开发
+## Step 3 方案选择
 
-### 后端开发
+启用 `selection/config.json` 后，项目会在 Step 3 前等待 PRIMARY/AUXILIARY 选择。Web 与 CLI 是并行入口。
+
+CLI 示例：
 
 ```bash
-cd /home/tfisher/paper_factory/web/backend
-source ../venv/bin/activate
-python app.py  # 启动开发服务器
+cd /home/tfisher/paper_factory
+python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
+  --primary m2 --aux m1 --reason "Prefer the verified stream"
 ```
 
-### 前端开发
+默认会写入 `selection/step3_decision.json`、同步 `human_review.md` 并恢复项目；调试时可加 `--no-resume`。
 
-```bash
-cd /home/tfisher/paper_factory/web/frontend
-npm run dev    # 启动开发服务器
-```
+## 用户和项目审批
 
-## 生产部署
+管理员面板中的操作会写入 `web/auth.db` 和审计日志：
 
-参见: `DEPLOYMENT.md`
+- 用户：approve、reject、disable、delete；管理员账号不能删除。
+- 项目申请：approve 或 reject。
+- 项目批准成功后：调用 launcher、记录启动结果、授予申请人 owner ACL。
 
----
+如果 launcher 失败，申请会标记为 `failed`，不会伪装成已创建项目。
 
-**最后更新**: 2026-06-16
-**版本**: 1.0.0
-**状态**: ✅ 功能完整并通过测试
+## Secret 与审计可见性
+
+管理员只能看到 Secret Manager 的元数据、绑定状态和访问状态，不应看到 secret 值或片段。审计日志记录 actor、action、target 和时间等治理信息。
+
+任何凭据轮换、旧版本禁用或 secret 删除都是运维变更，按 [`docs/deployment/DEPLOYMENT.md`](docs/deployment/DEPLOYMENT.md) 执行并单独确认。
+
+## 故障排查
+
+### 上传失败
+
+- 检查格式和 100 MB 默认限制。
+- 压缩包必须含 PDF 或 Markdown 题目文件。
+- 检查后端日志是否报告归档目录穿越或无可识别题目。
+
+### 普通用户看不到项目
+
+检查用户是否为 `active`、项目申请是否获批，以及 `project_acl` 是否已授予该用户。
+
+### 状态看起来过期
+
+刷新页面并检查 WebSocket；必要时用 `run_paper.sh --infer-step` 对照真实文件状态。
+
+### 生产问题
+
+不要采用本目录旧完成报告中的命令。只使用 [`docs/deployment/DEPLOYMENT.md`](docs/deployment/DEPLOYMENT.md) 的服务名、路径、预检、回滚和 live smoke。

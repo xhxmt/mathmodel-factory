@@ -1,12 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Paper Factory Web Dashboard - 快速部署脚本
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WEB_ROOT="/var/www/tfisher.de"
 SERVICE_USER="${SERVICE_USER:-tfisher}"
+MODE="${1:-full}"
 
 echo "════════════════════════════════════════"
 echo "Paper Factory Web Dashboard 部署脚本"
@@ -20,7 +21,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # 检查权限
-if [ "$EUID" -ne 0 ] && [ "$1" != "backend-only" ]; then
+if [ "$EUID" -ne 0 ] && [ "$MODE" != "backend-only" ]; then
     echo -e "${YELLOW}警告：前端部署需要 sudo 权限${NC}"
     echo "使用方法："
     echo "  sudo $0           # 完整部署（前端+后端）"
@@ -45,7 +46,7 @@ run_secret_loader_preflight() {
 
 check_env_file() {
     local file="$1"
-    local sensitive_regex='^(MINERU_TOKEN|GEMINI_API_KEY|DEEPSEEK_API_KEY|JWT_SECRET|JWT_SECRET_KEY|ADMIN_PASSWORD)='
+    local sensitive_regex='^(MINERU_TOKEN|GEMINI_API_KEY|DEEPSEEK_API_KEY|DASHSCOPE_API_KEY|JWT_SECRET|JWT_SECRET_KEY|ADMIN_PASSWORD|TELEGRAM_BOT_TOKEN)='
     if [ ! -f "$file" ]; then
         return 0
     fi
@@ -88,12 +89,21 @@ preflight() {
 
 deploy_frontend() {
     echo -e "${GREEN}► 步骤 1/4: 构建前端${NC}"
-    cd "$PROJECT_ROOT/web/frontend"
-    npm run build
+    if [ "$EUID" -eq 0 ]; then
+        sudo -u "$SERVICE_USER" -H bash -lc \
+            "cd '$PROJECT_ROOT/web/frontend' && npm run build"
+    else
+        cd "$PROJECT_ROOT/web/frontend"
+        npm run build
+    fi
+    if [ ! -f "$PROJECT_ROOT/web/frontend/dist/index.html" ]; then
+        echo -e "${RED}✗ 前端构建未生成 dist/index.html${NC}"
+        exit 1
+    fi
 
     echo -e "${GREEN}► 步骤 2/4: 部署前端到 $WEB_ROOT${NC}"
     rm -rf "$WEB_ROOT"/*
-    cp -r dist/* "$WEB_ROOT/"
+    cp -r "$PROJECT_ROOT/web/frontend/dist"/* "$WEB_ROOT/"
     chown -R www-data:www-data "$WEB_ROOT"
     chmod -R 755 "$WEB_ROOT"
 
@@ -170,7 +180,7 @@ show_summary() {
 }
 
 # 主流程
-if [ "$1" = "backend-only" ]; then
+if [ "$MODE" = "backend-only" ]; then
     echo "仅更新后端服务..."
     preflight
     sudo systemctl restart paper-factory-api

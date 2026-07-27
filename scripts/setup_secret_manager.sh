@@ -3,6 +3,7 @@
 # 一键迁移敏感配置到 Secret Manager
 
 set -euo pipefail
+umask 077
 
 FACTORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$FACTORY_ROOT"
@@ -19,6 +20,10 @@ if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/nu
 fi
 
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
+if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
+    echo "❌ 错误: 当前 gcloud 项目未设置"
+    exit 1
+fi
 echo "当前 GCP 项目: $PROJECT_ID"
 echo ""
 
@@ -81,7 +86,7 @@ echo ""
 
 # 测试访问
 echo "测试 Secret 访问..."
-if source scripts/load_secrets.sh 2>&1 | grep -q "successfully"; then
+if bash -c 'source scripts/load_secrets.sh >/dev/null 2>&1'; then
     echo "✓ Secret 访问测试通过"
 else
     echo "⚠️  Secret 访问测试失败，请检查权限"
@@ -90,14 +95,14 @@ echo ""
 
 # 备份原始 .env
 echo "备份原始配置文件..."
-cp .env .env.backup
-cp web/.env web/.env.backup
+install -m 600 .env .env.backup
+install -m 600 web/.env web/.env.backup
 echo "✓ 备份已保存: .env.backup, web/.env.backup"
 echo ""
 
 # 生成清理后的 .env（移除敏感信息）
 echo "生成清理后的配置文件..."
-cat > .env.safe <<'EOF'
+cat > .env.safe <<EOF
 # Paper Factory Configuration (Secrets moved to GCP Secret Manager)
 # 敏感信息已迁移到 GCP Secret Manager
 # 使用方法: source scripts/load_secrets.sh
@@ -116,10 +121,10 @@ USE_CLOUD_SOLVER=false
 CLOUD_THRESHOLD_TIME=300
 CLOUD_SOLVER_TYPES=python,julia,matlab,R
 
-GCP_PROJECT_ID=level-night-476302-k0
+GCP_PROJECT_ID=$PROJECT_ID
 GCP_REGION=europe-west4
 GCP_SOLVER_SERVICE=solver-api
-GCP_SOLVER_BUCKET=level-night-476302-k0-solver-jobs
+GCP_SOLVER_BUCKET=${PROJECT_ID}-solver-jobs
 
 # ==========================================
 # Cloud Logging
@@ -127,7 +132,7 @@ GCP_SOLVER_BUCKET=level-night-476302-k0-solver-jobs
 USE_CLOUD_LOGGING=false
 EOF
 
-cat > web/.env.safe <<'EOF'
+cat > web/.env.safe <<EOF
 # Web Dashboard Configuration (Secrets moved to GCP Secret Manager)
 
 # ==========================================
@@ -139,6 +144,7 @@ cat > web/.env.safe <<'EOF'
 # ==========================================
 # Server Configuration
 # ==========================================
+GCP_PROJECT_ID=$PROJECT_ID
 API_HOST=0.0.0.0
 API_PORT=8000
 CORS_ORIGINS=http://localhost:5173,http://localhost:3000
@@ -150,6 +156,7 @@ LOG_LEVEL=INFO
 LOG_FILE=api.log
 ERROR_LOG_FILE=api.error.log
 EOF
+chmod 600 .env.safe web/.env.safe
 
 echo "✓ 清理后的配置: .env.safe, web/.env.safe"
 echo ""
@@ -158,36 +165,14 @@ echo "=========================================="
 echo "  下一步操作"
 echo "=========================================="
 echo ""
-echo "1. 修改 launch_agents.sh 在启动时加载 Secrets:"
-echo "   在文件开头添加: source \"\$FACTORY/scripts/load_secrets.sh\""
+echo "1. 确认运行路径已加载 scripts/load_secrets.sh（当前 runner/backend/deploy 已集成）"
 echo ""
-echo "2. 修改 web/backend/start.sh 在启动前加载 Secrets:"
-echo "   在启动 uvicorn 前添加: source ../../scripts/load_secrets.sh"
+echo "2. 审核 .env.safe 与 web/.env.safe 后，再按组织流程替换原配置"
 echo ""
-echo "3. (可选) 删除原始 .env 中的敏感信息:"
+echo "3. (可选) 在验证回滚路径后移除原配置中的敏感信息:"
 echo "   mv .env.safe .env"
 echo "   mv web/.env.safe web/.env"
 echo ""
-echo "4. 测试 Secret 加载:"
+echo "4. 测试 Secret 加载（只检查退出状态，不打印变量）:"
 echo "   source scripts/load_secrets.sh"
-echo "   echo \$MINERU_TOKEN  # 应显示 token 值"
-echo ""
-
-# 生成集成补丁
-cat > /tmp/secret_manager_integration.patch <<'EOF'
---- launch_agents.sh.orig
-+++ launch_agents.sh
-@@ -5,6 +5,9 @@
-
- FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-+# Load secrets from GCP Secret Manager
-+source "$FACTORY/scripts/load_secrets.sh"
-+
- # Runtime directories
- ONGOING="$FACTORY/ongoing"
- COMPLETE="$FACTORY/complete"
-EOF
-
-echo "如需自动集成，参考补丁: /tmp/secret_manager_integration.patch"
 echo ""

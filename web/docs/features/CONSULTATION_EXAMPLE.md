@@ -1,5 +1,7 @@
 # 咨询请求示例对比
 
+> **历史快照（非现役合同）**：本文记录此前的实现或验证状态，仅供追溯。当前使用请看 [Web README](../../README.md)；生产部署请看 [现役 runbook](../deployment/DEPLOYMENT.md)。
+
 ## 改进前的咨询请求（旧版）
 
 ```markdown
