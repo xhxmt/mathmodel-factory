@@ -1,6 +1,11 @@
 /**
  * @typedef {Object} ProjectStatus
  * @property {string} base_name
+ * @property {string} run_id
+ * @property {string} problem_key
+ * @property {string} problem_title
+ * @property {string} storage_scope
+ * @property {boolean} archived
  * @property {string} status
  * @property {number} current_step
  * @property {number} progress_percent
@@ -61,6 +66,11 @@ function normalizeSolverTypes(value) {
 export function normalizeProjectStatus(raw = {}) {
   return {
     base_name: String(raw.base_name || ''),
+    run_id: String(raw.run_id || raw.base_name || ''),
+    problem_key: String(raw.problem_key || `project:${raw.base_name || ''}`),
+    problem_title: String(raw.problem_title || raw.base_name || ''),
+    storage_scope: String(raw.storage_scope || ''),
+    archived: Boolean(raw.archived),
     status: String(raw.status || 'unknown'),
     current_step: numberOr(raw.current_step, -1),
     progress_percent: numberOr(raw.progress_percent, 0),

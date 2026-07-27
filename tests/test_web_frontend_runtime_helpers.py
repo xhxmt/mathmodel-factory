@@ -146,6 +146,11 @@ import {
 
 assert.deepEqual(normalizeProjectStatus({ base_name: 'demo', is_running: 1 }), {
   base_name: 'demo',
+  run_id: 'demo',
+  problem_key: 'project:demo',
+  problem_title: 'demo',
+  storage_scope: '',
+  archived: false,
   status: 'unknown',
   current_step: -1,
   progress_percent: 0,
@@ -358,6 +363,40 @@ assert.equal(storeA.counts.value.needs, 1)
 assert.equal(storeA.selectedBase.value, 'a')
 assert.equal(storeB.selectedBase.value, 'b')
 assert.notEqual(storeA.selectedBase, storeB.selectedBase)
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_frontend_groups_same_problem_runs_into_archives():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+import { buildProblemArchives, filterProblemArchives } from './web/frontend/src/lib/problemArchives.js'
+import { createProjectStore } from './web/frontend/src/composables/useProjects.js'
+
+const runs = [
+  { base_name: 'a_old', problem_key: 'sha256:a', problem_title: 'A 题', status: 'completed', current_step: 16, last_updated: '2026-07-01 10:00:00', archived: true },
+  { base_name: 'a_new', problem_key: 'sha256:a', problem_title: 'A 题', status: 'running', current_step: 6, last_updated: '2026-07-02 10:00:00', is_running: true },
+  { base_name: 'b_only', problem_key: 'sha256:b', problem_title: 'B 题', status: 'completed', current_step: 16, last_updated: '2026-06-30 10:00:00', archived: true },
+]
+
+const archives = buildProblemArchives(runs)
+assert.equal(archives.length, 2)
+assert.equal(archives[0].title, 'A 题')
+assert.equal(archives[0].run_count, 2)
+assert.equal(archives[0].latest.base_name, 'a_new')
+assert.equal(archives[0].completed_count, 1)
+assert.equal(archives[0].running_count, 1)
+assert.deepEqual(filterProblemArchives(archives, { query: 'a_old' }).map((item) => item.key), ['sha256:a'])
+assert.deepEqual(filterProblemArchives(archives, { statusFilter: 'running' }).map((item) => item.key), ['sha256:a'])
+
+const store = createProjectStore({ projectsApi: { list: async () => runs } })
+await store.fetchProjects()
+assert.equal(store.archives.value.length, 2)
+assert.equal(store.filteredArchives.value[0].run_count, 2)
+assert.equal(store.counts.value.problems, 2)
 """
     )
 

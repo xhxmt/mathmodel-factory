@@ -157,6 +157,11 @@ class ProjectRequestResponse(BaseModel):
 
 class ProjectStatus(BaseModel):
     base_name: str
+    run_id: str = ""
+    problem_key: str = ""
+    problem_title: str = ""
+    storage_scope: str = ""
+    archived: bool = False
     status: str
     display_status: str = ""
     current_step: int

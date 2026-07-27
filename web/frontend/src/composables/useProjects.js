@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { Projects } from '../lib/api.js'
+import { buildProblemArchives, filterProblemArchives } from '../lib/problemArchives.js'
 
 const filterChips = [
   { key: 'all', label: '全部' },
@@ -9,7 +10,7 @@ const filterChips = [
 ]
 
 function fp(p) {
-  return `${p.status}|${p.current_step}|${p.progress_percent}|${p.pid}|${p.consultation_pending}|${p.consultation_gate}|${p.last_updated}`
+  return `${p.problem_key}|${p.problem_title}|${p.storage_scope}|${p.archived}|${p.status}|${p.current_step}|${p.progress_percent}|${p.pid}|${p.consultation_pending}|${p.consultation_gate}|${p.last_updated}`
 }
 
 function notifyNewlyAwaiting(list, awaitingSeen, notify) {
@@ -31,6 +32,7 @@ export function createProjectStore({ projectsApi = Projects } = {}) {
 
   const needsYou = computed(() => projects.value.filter((p) => p.consultation_pending))
   const others = computed(() => projects.value.filter((p) => !p.consultation_pending))
+  const archives = computed(() => buildProblemArchives(others.value))
   const filteredOthers = computed(() => {
     const q = query.value.trim().toLowerCase()
     return others.value.filter((p) => {
@@ -40,11 +42,16 @@ export function createProjectStore({ projectsApi = Projects } = {}) {
       return p.status === statusFilter.value
     })
   })
+  const filteredArchives = computed(() => filterProblemArchives(archives.value, {
+    query: query.value,
+    statusFilter: statusFilter.value,
+  }))
   const counts = computed(() => ({
     needs: needsYou.value.length,
     running: projects.value.filter((p) => p.is_running || p.status === 'running').length,
     completed: projects.value.filter((p) => p.status === 'completed').length,
     total: projects.value.length,
+    problems: buildProblemArchives(projects.value).length,
   }))
   const selectedProject = computed(() => projects.value.find((p) => p.base_name === selectedBase.value) || null)
 
@@ -129,7 +136,9 @@ export function createProjectStore({ projectsApi = Projects } = {}) {
     filterChips,
     needsYou,
     others,
+    archives,
     filteredOthers,
+    filteredArchives,
     counts,
     selectedProject,
     fetchProjects,

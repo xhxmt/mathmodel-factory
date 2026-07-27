@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -318,6 +320,108 @@ def _fmt_beijing(epoch: int | float | str | None) -> str:
     return datetime.fromtimestamp(int(epoch), tz=BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
+_PROBLEM_ID_FILES = (
+    "problem/source.md",
+    "problem/problem.md",
+    "problem/problem_brief.md",
+    "problem/problem.pdf",
+)
+_GENERIC_PROBLEM_HEADINGS = {
+    "题目原文",
+    "原题",
+    "problem statement",
+    "original problem",
+}
+_GENERIC_PROBLEM_HEADINGS_LOWER = {value.lower() for value in _GENERIC_PROBLEM_HEADINGS}
+
+
+def _canonical_problem_bytes(path: Path) -> bytes:
+    """Return stable problem content bytes for cross-run identity matching.
+
+    Uploaded/rehydrated projects occasionally prepend a wrapper heading such as
+    ``# 题目原文``.  Removing only those known wrappers lets equivalent runs
+    share an identity without aggressively normalising meaningful statement
+    content.
+    """
+    if path.suffix.lower() == ".pdf":
+        return path.read_bytes()
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines:
+        first = re.sub(r"^\s*#+\s*", "", lines[0]).strip().lower()
+        if first in _GENERIC_PROBLEM_HEADINGS_LOWER:
+            lines.pop(0)
+            while lines and not lines[0].strip():
+                lines.pop(0)
+    canonical = "\n".join(line.rstrip() for line in lines).strip()
+    return (canonical + "\n").encode("utf-8") if canonical else b""
+
+
+@lru_cache(maxsize=512)
+def _cached_problem_digest(path_value: str, mtime_ns: int, size: int) -> str:
+    del mtime_ns, size
+    content = _canonical_problem_bytes(Path(path_value))
+    return hashlib.sha256(content).hexdigest() if content else ""
+
+
+def _contained_problem_file(project: Path, relative: str) -> Path | None:
+    try:
+        root = project.resolve(strict=True)
+        candidate = (project / relative).resolve(strict=True)
+        candidate.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    return candidate if candidate.is_file() else None
+
+
+@lru_cache(maxsize=512)
+def _cached_problem_title(path_value: str, mtime_ns: int, size: int) -> str:
+    del mtime_ns, size
+    text = Path(path_value).read_text(encoding="utf-8", errors="replace")
+    for line in text.splitlines()[:80]:
+        match = re.match(r"^\s*#{1,6}\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        title = re.sub(r"[`*_]", "", match.group(1)).strip()
+        if title and title.lower() not in _GENERIC_PROBLEM_HEADINGS_LOWER:
+            return title[:160]
+    return ""
+
+
+def _problem_title(project: Path, fallback: str) -> str:
+    for relative in ("problem/source.md", "problem/problem_brief.md"):
+        candidate = _contained_problem_file(project, relative)
+        if candidate is None:
+            continue
+        try:
+            stat = candidate.stat()
+            title = _cached_problem_title(str(candidate), stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            continue
+        if title:
+            return title
+    return fallback.replace("_", " ").strip() or "未命名题目"
+
+
+def _problem_identity(project: Path | None, base_name: str) -> tuple[str, str]:
+    """Return a stable problem key and human-readable title for a run."""
+    if project is not None:
+        for relative in _PROBLEM_ID_FILES:
+            candidate = _contained_problem_file(project, relative)
+            if candidate is None:
+                continue
+            try:
+                stat = candidate.stat()
+                digest = _cached_problem_digest(str(candidate.resolve()), stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                continue
+            if digest:
+                return f"sha256:{digest}", _problem_title(project, base_name)
+    return f"project:{base_name}", _problem_title(project, base_name) if project else base_name
+
+
 def _resolve_project(settings: Settings, base_name: str) -> Path:
     if not BASE_NAME_RE.fullmatch(base_name):
         raise HTTPException(status_code=400, detail="Invalid base_name")
@@ -328,10 +432,17 @@ def _resolve_project(settings: Settings, base_name: str) -> Path:
     raise HTTPException(status_code=404, detail=f"Project {base_name} not found")
 
 
-def _runtime_to_project_status(runtime: dict[str, Any]) -> ProjectStatus:
+def _runtime_to_project_status(runtime: dict[str, Any], project: Path | None = None) -> ProjectStatus:
     diag_summary = summarize_project_diagnostics({"status": runtime})
+    problem_key, problem_title = _problem_identity(project, runtime["base_name"])
+    storage_scope = project.parent.name if project is not None and project.parent.name in {"ongoing", "complete"} else ""
     return ProjectStatus(
         base_name=runtime["base_name"],
+        run_id=runtime["base_name"],
+        problem_key=problem_key,
+        problem_title=problem_title,
+        storage_scope=storage_scope,
+        archived=storage_scope == "complete",
         status=runtime["status"],
         display_status=runtime.get("display_status", ""),
         current_step=runtime["current_step"],
@@ -357,16 +468,21 @@ def _runtime_to_project_status(runtime: dict[str, Any]) -> ProjectStatus:
 
 def list_all_projects(settings: Settings) -> list[ProjectStatus]:
     projects: list[ProjectStatus] = []
+    seen_names: set[str] = set()
     for root in (settings.ongoing_dir, settings.complete_dir):
         if not root.is_dir():
             continue
         for project_path in sorted(root.iterdir()):
+            if project_path.name in seen_names:
+                continue
             if project_path.is_dir() and (project_path / "checkpoint.md").is_file():
                 projects.append(
                     _runtime_to_project_status(
-                        read_runtime_status(project_path, project_path.name)
+                        read_runtime_status(project_path, project_path.name),
+                        project_path,
                     )
                 )
+                seen_names.add(project_path.name)
     projects.sort(key=lambda project: project.last_updated, reverse=True)
     return projects
 
@@ -878,7 +994,8 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
         require_project_access(settings, current_user, base_name)
-        return _runtime_to_project_status(read_runtime_status(_resolve_project(settings, base_name), base_name))
+        project = _resolve_project(settings, base_name)
+        return _runtime_to_project_status(read_runtime_status(project, base_name), project)
 
     @router.get("/api/projects/{base_name}/diagnostics")
     async def get_project_diagnostics(

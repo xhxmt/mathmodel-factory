@@ -71,11 +71,11 @@
 
         <section class="fleet">
           <div class="fleet-h">
-            <span class="label">项目 · PROJECTS <b class="mono">{{ others.length }}</b></span>
+            <span class="label">题目归档 · PROBLEMS <b class="mono">{{ archives.length }}</b><small class="run-total mono">{{ others.length }} RUNS</small></span>
             <div class="filters">
               <div class="search">
                 <Icon name="search" :size="13" />
-                <input v-model="query" class="search-in mono" placeholder="搜索项目…" spellcheck="false" />
+                <input v-model="query" class="search-in mono" placeholder="搜索题目或运行…" spellcheck="false" />
                 <button v-if="query" class="clr" @click="query = ''"><Icon name="x" :size="11" /></button>
               </div>
               <div class="chips">
@@ -87,8 +87,11 @@
           <div v-if="loading" class="grid">
             <div v-for="i in 4" :key="i" class="skel panel"></div>
           </div>
-          <div v-else-if="filteredOthers.length" class="grid">
-            <ProjectCard v-for="p in filteredOthers" :key="p.base_name" :project="p" @open="openProject" @action="onAction" />
+          <div v-else-if="filteredArchives.length" class="grid">
+            <template v-for="archive in filteredArchives" :key="archive.key">
+              <ProblemArchiveCard v-if="archive.run_count > 1" :archive="archive" @open="openProject" @action="onAction" />
+              <ProjectCard v-else :project="archive.latest" @open="openProject" @action="onAction" />
+            </template>
           </div>
           <div v-else class="empty panel">
             <Icon name="inbox" :size="34" />
@@ -149,6 +152,7 @@ import Icon from './components/Icon.vue'
 import Toasts from './components/Toasts.vue'
 import LoginForm from './components/LoginForm.vue'
 import ProjectCard from './components/ProjectCard.vue'
+import ProblemArchiveCard from './components/ProblemArchiveCard.vue'
 import ShowcasePaperCard from './components/ShowcasePaperCard.vue'
 import ShowcasePaperViewer from './components/ShowcasePaperViewer.vue'
 import NewProjectModal from './components/NewProjectModal.vue'
@@ -183,7 +187,7 @@ const AsyncProjectRequestsPanel = defineAsyncComponent({ loader: () => import('.
 
 export default {
   name: 'App',
-  components: { Icon, Toasts, LoginForm, ProjectCard, ShowcasePaperCard, ShowcasePaperViewer, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager, AdminPanel: AsyncAdminPanel, ProjectRequestsPanel: AsyncProjectRequestsPanel },
+  components: { Icon, Toasts, LoginForm, ProjectCard, ProblemArchiveCard, ShowcasePaperCard, ShowcasePaperViewer, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager, AdminPanel: AsyncAdminPanel, ProjectRequestsPanel: AsyncProjectRequestsPanel },
   setup() {
     const { theme, toggle: toggleTheme } = useTheme()
     const route = useRoute()
@@ -201,7 +205,9 @@ export default {
       filterChips,
       needsYou,
       others,
+      archives,
       filteredOthers,
+      filteredArchives,
       counts,
       fetchProjects,
       applyProjects,
@@ -421,7 +427,7 @@ export default {
       theme, toggleTheme,
       authReady, isAuthenticated, username, role, status, isAdmin, projects, loading, wsConnected,
       selectedBase, selectedProject, showNew, showPalette, showModels, showAdmin, showRequests, query, statusFilter, filterChips,
-      needsYou, others, filteredOthers, counts,
+      needsYou, others, archives, filteredOthers, filteredArchives, counts,
       showLogin, showcasePapers, showcaseLoading, showcaseError, showcaseQuery, filteredShowcasePapers, selectedShowcasePaper,
       onLogin, logout, onAction, onCreated, onRequested, onAdminChanged,
       openProject: openProjectFromCard,
@@ -491,6 +497,7 @@ export default {
 
 .fleet-h { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
 .fleet-h .label b { color: var(--ink); margin-left: 4px; }
+.run-total { margin-left: 8px; color: var(--ink-3); font-size: 9px; letter-spacing: 0.08em; }
 .filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .search { display: flex; align-items: center; gap: 7px; padding: 7px 11px; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r); color: var(--ink-3); }
 .search-in { background: none; border: none; outline: none; color: var(--ink); font-size: 12.5px; width: 150px; }
@@ -522,7 +529,7 @@ export default {
   .rail { flex-wrap: wrap; gap: 14px; }
   .kpis { order: 3; width: 100%; justify-content: space-between; }
   .kpi { flex: 1; }
-  .rr { margin-left: 0; }
+  .rr { margin-left: 0; width: 100%; flex-wrap: wrap; }
   .hide-sm { display: none; }
   .grid { grid-template-columns: 1fr; }
   .guest-console .rail { gap: 10px; padding: 9px 12px; }

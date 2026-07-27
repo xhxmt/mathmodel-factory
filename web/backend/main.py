@@ -324,8 +324,10 @@ async def get_single_project_status(
 
     require_project_access(settings, current_user, base_name)
     state_store = __import__("web.backend.state_store", fromlist=["read_runtime_status"])
+    project = _resolve_project(settings, base_name)
     return _runtime_to_project_status(
-        state_store.read_runtime_status(_resolve_project(settings, base_name), base_name)
+        state_store.read_runtime_status(project, base_name),
+        project,
     )
 
 

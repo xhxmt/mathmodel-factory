@@ -256,6 +256,80 @@ def test_get_projects_formats_runtime_status_for_frontend(tmp_path, monkeypatch)
     assert isinstance(last_updated, str)
 
 
+def test_get_projects_groups_equivalent_problem_sources_across_runs(tmp_path, monkeypatch):
+    mod = load_main_module()
+    user = mod.UserInfo(username="admin", role="admin")
+
+    source = "# A 题 示例建模题\n\n请建立数学模型并给出结果。\n"
+    for base_name, wrapped in (("demo_first", False), ("demo_rerun", True)):
+        project = tmp_path / "complete" / base_name
+        project.mkdir(parents=True)
+        (project / "checkpoint.md").write_text("- **Last completed step**: 16\n", encoding="utf-8")
+        problem = project / "problem" / "source.md"
+        problem.parent.mkdir(parents=True)
+        problem.write_text(("# 题目原文\n\n" if wrapped else "") + source, encoding="utf-8")
+
+    monkeypatch.setattr(
+        mod,
+        "settings",
+        mod.settings.__class__(
+            jwt_secret="0123456789abcdef0123456789abcdef",
+            admin_password="strong-password",
+            factory_root=tmp_path,
+            jwt_hours=24,
+        ),
+    )
+
+    payload = asyncio.run(mod.get_projects(current_user=user))
+    assert len(payload) == 2
+    keys = {item.problem_key for item in payload}
+    assert len(keys) == 1
+    assert next(iter(keys)).startswith("sha256:")
+    assert {item.problem_title for item in payload} == {"A 题 示例建模题"}
+    assert {item.run_id for item in payload} == {"demo_first", "demo_rerun"}
+    assert {item.storage_scope for item in payload} == {"complete"}
+    assert all(item.archived is True for item in payload)
+
+
+def test_problem_identity_does_not_follow_external_symlink(tmp_path):
+    mod = load_main_module()
+    project = tmp_path / "complete" / "demo"
+    (project / "problem").mkdir(parents=True)
+    outside = tmp_path / "outside.md"
+    outside.write_text("# External secret title\n\nsecret\n", encoding="utf-8")
+    (project / "problem" / "source.md").symlink_to(outside)
+
+    key, title = mod.project_api._problem_identity(project, "demo")
+
+    assert key == "project:demo"
+    assert title == "demo"
+
+
+def test_project_listing_avoids_ambiguous_duplicate_base_names(tmp_path, monkeypatch):
+    mod = load_main_module()
+    user = mod.UserInfo(username="admin", role="admin")
+    for scope in ("ongoing", "complete"):
+        project = tmp_path / scope / "demo"
+        project.mkdir(parents=True)
+        (project / "checkpoint.md").write_text("- **Last completed step**: 4\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        mod,
+        "settings",
+        mod.settings.__class__(
+            jwt_secret="0123456789abcdef0123456789abcdef",
+            admin_password="strong-password",
+            factory_root=tmp_path,
+            jwt_hours=24,
+        ),
+    )
+
+    payload = asyncio.run(mod.get_projects(current_user=user))
+    assert len(payload) == 1
+    assert payload[0].base_name == "demo"
+    assert payload[0].storage_scope == "ongoing"
+
+
 def test_project_cloud_config_reflects_enable_disable_state(tmp_path):
     mod = load_main_module()
     from web.backend import cloud_api
