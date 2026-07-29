@@ -11,3 +11,6 @@ matplotlib==3.8.2
 psutil==5.9.8
 aiofiles==23.2.1
 python-multipart==0.0.6
+pyscipopt==6.2.1
+cylp==0.94.0
+mip==1.17.6

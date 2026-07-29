@@ -13,18 +13,23 @@ class FakeBlob:
             data = fh.read()
         self.content = data.decode("utf-8", errors="replace")
 
-    def upload_from_string(self, data, content_type=None):
+    def upload_from_file(self, handle, rewind=False, **_kwargs):
+        if rewind:
+            handle.seek(0)
+        self.content = handle.read().decode("utf-8", errors="replace")
+
+    def upload_from_string(self, data, content_type=None, **_kwargs):
         self.content = data
 
-    def download_as_text(self):
+    def download_as_text(self, **_kwargs):
         if self.content is None:
             raise FileNotFoundError(self.name)
         return self.content
 
-    def exists(self):
+    def exists(self, **_kwargs):
         return self.content is not None and not self.deleted
 
-    def delete(self):
+    def delete(self, **_kwargs):
         self.deleted = True
 
 
@@ -118,38 +123,6 @@ def test_status_recovers_job_from_persisted_manifest(monkeypatch):
     assert status.result_files == ["gs://bucket/jobs/job-2/result.json"]
 
 
-def test_solver_api_rejects_missing_solver_token_when_configured(monkeypatch):
-    monkeypatch.setenv("SOLVER_API_TOKEN", "expected-token")
-    module = import_solver_api()
-
-    try:
-        module.verify_solver_auth(x_solver_token=None)
-    except module.HTTPException as exc:
-        assert exc.status_code == 401
-    else:
-        raise AssertionError("missing solver token should be rejected")
-
-
-def test_solver_api_fails_closed_when_solver_token_is_not_configured(monkeypatch):
-    monkeypatch.delenv("SOLVER_API_TOKEN", raising=False)
-    module = import_solver_api()
-
-    try:
-        module.verify_solver_auth(x_solver_token=None)
-    except module.HTTPException as exc:
-        assert exc.status_code == 503
-        assert "unavailable" in exc.detail.lower()
-    else:
-        raise AssertionError("protected endpoints must fail closed without an application token")
-
-
-def test_solver_api_accepts_configured_solver_token(monkeypatch):
-    monkeypatch.setenv("SOLVER_API_TOKEN", "expected-token")
-    module = import_solver_api()
-
-    assert module.verify_solver_auth(x_solver_token="expected-token") is None
-
-
 def test_solver_execution_is_quarantined_by_default(monkeypatch):
     monkeypatch.delenv("SOLVER_EXECUTION_ENABLED", raising=False)
     module = import_solver_api()
@@ -158,7 +131,7 @@ def test_solver_execution_is_quarantined_by_default(monkeypatch):
         module.require_solver_execution_enabled()
     except module.HTTPException as exc:
         assert exc.status_code == 503
-        assert "quarantined" in exc.detail.lower()
+        assert exc.detail["code"] == "EXECUTION_QUARANTINED"
     else:
         raise AssertionError("cloud execution must be quarantined by default")
 
@@ -171,7 +144,6 @@ def test_solver_execution_requires_explicit_enable(monkeypatch):
 
 
 def test_health_reports_quarantine_without_exposing_auth_material(monkeypatch):
-    monkeypatch.delenv("SOLVER_API_TOKEN", raising=False)
     monkeypatch.delenv("SOLVER_EXECUTION_ENABLED", raising=False)
     module = import_solver_api()
 
@@ -179,11 +151,11 @@ def test_health_reports_quarantine_without_exposing_auth_material(monkeypatch):
 
     assert payload["status"] == "healthy"
     assert payload["execution_enabled"] is False
-    assert payload["protected_endpoints_available"] is False
+    assert payload["authentication_strategy"] == "cloud_run_iam"
     assert "token" not in json.dumps(payload).lower()
 
 
-def test_protected_routes_wire_fail_closed_dependencies(monkeypatch):
+def test_submit_route_wires_execution_quarantine_dependency(monkeypatch):
     module = import_solver_api()
 
     dependencies_by_route = {
@@ -193,19 +165,20 @@ def test_protected_routes_wire_fail_closed_dependencies(monkeypatch):
         for method in route.methods
     }
 
-    protected_routes = (
-        ("/solve/{solver_type}", "POST"),
-        ("/jobs/{job_id}/status", "GET"),
-        ("/jobs/{job_id}/output", "GET"),
-        ("/jobs/{job_id}", "DELETE"),
-        ("/jobs", "GET"),
-    )
-
-    for route_key in protected_routes:
-        assert module.verify_solver_auth in dependencies_by_route[route_key]
     assert module.require_solver_execution_enabled in dependencies_by_route[
         ("/solve/{solver_type}", "POST")
     ]
+
+
+def test_capabilities_only_enable_verified_python_runtime():
+    module = import_solver_api()
+
+    payload = module.capabilities()
+
+    assert payload["available_solvers"] == ["python"]
+    assert payload["runtimes"]["python"]["installed"] is True
+    for runtime in ("julia", "R", "matlab", "gurobi"):
+        assert payload["runtimes"][runtime]["enabled"] is False
 
 
 def test_cloudbuild_does_not_deploy_public_solver():
@@ -214,3 +187,7 @@ def test_cloudbuild_does_not_deploy_public_solver():
     assert "--allow-unauthenticated" not in text
     assert "--no-allow-unauthenticated" in text
     assert "SOLVER_EXECUTION_ENABLED=false" in text
+    assert "solver-api:${BUILD_ID}" in text
+    deploy_section = text.split("# Step 3: Deploy", 1)[1].split("# Step 4: Record", 1)[0]
+    assert "solver-api:latest" not in deploy_section
+    assert "${SHORT_SHA}" not in text.split("images:", 1)[1]

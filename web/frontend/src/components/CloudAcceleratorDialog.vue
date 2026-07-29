@@ -66,7 +66,7 @@
               </div>
               <div class="status-item">
                 <span class="status-label">支持求解器</span>
-                <span class="status-value mono">{{ cloudStatus.solvers?.join(', ') || 'python, julia' }}</span>
+                <span class="status-value mono">{{ cloudStatus.solvers?.join(', ') || '未报告' }}</span>
               </div>
             </div>
             <div v-else class="status-loading">

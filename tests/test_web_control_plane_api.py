@@ -365,6 +365,12 @@ def test_project_cloud_config_reports_quarantine_and_rejects_enable(tmp_path, mo
     assert enabled["enabled"] is True
     assert enabled["quarantined"] is False
     assert "USE_CLOUD_SOLVER=true" in (project / ".env.cloud").read_text(encoding="utf-8")
+    assert enabled["solver_types"] == ["python"]
+    assert enabled["invoker_service_account"].startswith("solver-invoker@")
+    assert "GCP_PROJECT_ID=" not in (project / ".env.cloud").read_text(encoding="utf-8")
+    assert "CLOUD_SOLVER_IMPERSONATE_SERVICE_ACCOUNT=" not in (
+        project / ".env.cloud"
+    ).read_text(encoding="utf-8")
 
     cloud_api.set_project_cloud_enabled(settings, "demo", False)
     disabled = cloud_api.project_cloud_config(settings, "demo")

@@ -6,12 +6,17 @@
 
 ### 新增
 
+- Cloud Solver 新增共享 Cloud Run IAM ID Token 获取模块、Python-only 能力清单、镜像构建冒烟测试、Cloud Build 配置预检和按 digest 回滚脚本。
+- Cloud Solver 新增恶意路径、环境覆盖、请求/输出上限、低权限 UID 和不可变部署回归测试。
 - Web 项目状态增加稳定的题目身份、题目标题、存储域与归档标记；前端按题目内容标识聚合同题多次运行，并可展开历史运行。
 - 新增 `AGENTS.md`，作为 Codex 和通用 coding agent 的精简仓库入口。
 - 新增聚焦的仓库卫生检查，保护现役文档不再出现默认凭据、旧内存用户库说明或 secret 值展示指令。
 
 ### 变更
 
+- Cloud Solver 鉴权统一为私有 Cloud Run IAM；CLI、监控和 Web 使用同一 ID Token 策略及无密钥专用 Invoker impersonation。
+- 云端能力收敛为经过镜像冒烟验证的 Python；API、Web 和 Shell 路由从同一能力清单读取，未安装运行时在提交阶段拒绝。
+- Cloud Build 改用 `${BUILD_ID}` 不可变镜像部署并记录 revision/commit/image；`latest` 不再用于生产部署。
 - Web 现役文档对齐 SQLite 用户库、bcrypt、注册/管理员审批、项目申请与 ACL 权限模型。
 - `web/backend/main.py` 明确为 FastAPI 主入口；`web/backend/app.py` 仅作为兼容启动器。
 - 生产敏感值以 GCP Secret Manager 为权威来源；文档和诊断只显示元数据、绑定状态与权限状态。
@@ -20,7 +25,9 @@
 
 ### 安全
 
-- Cloud Run Solver 进入 P-1 安全隔离：移除匿名 Invoker，受保护端点在缺少应用 Token 时 fail-closed，脚本执行默认关闭。
+- Cloud Solver P0 执行层增加严格任务/路径校验、12 MiB 请求上限、输入只读/输出独立、环境允许列表、隔离启动的资源限制包装器、UID/GID 10001 降权及 CPU/内存/磁盘近似量、文件描述符、子进程、输出文件/目录和日志硬限制。
+- Cloud Solver 仍保持全局 quarantine：同实例任意代码访问 metadata 和运行服务账号的风险需要独立 Cloud Run Job 或等价 sandbox 才能解除。
+- Cloud Run Solver 进入 P-1 安全隔离：移除匿名 Invoker并默认关闭脚本执行；P0 随后将临时双重认证收敛为单一 Cloud Run IAM。
 - Cloud Solver 监控改用 ID Token，并将 401/403 与普通服务故障分开处理，认证配置错误不再静默触发普通本地回退。
 - `solver_submit.sh`、手动路由和 Web 控制面默认拒绝启用云端执行；本地求解器保持为唯一受支持路径，直到完整 P0 输入隔离验收完成。
 - `solver-runner` 的对象管理权限从项目级收缩到专用 Solver Bucket。

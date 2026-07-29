@@ -16,6 +16,15 @@ def run_node(script: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_cloud_accelerator_does_not_invent_runtime_fallbacks():
+    component = (
+        REPO_ROOT / "web" / "frontend" / "src" / "components" / "CloudAcceleratorDialog.vue"
+    ).read_text(encoding="utf-8")
+
+    assert "cloudStatus.solvers?.join(', ') || '未报告'" in component
+    assert "python, julia" not in component
+
+
 def test_authenticated_startup_survives_model_load_failure():
     result = run_node(
         """

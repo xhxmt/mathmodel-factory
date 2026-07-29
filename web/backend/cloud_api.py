@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,9 +14,20 @@ from .access_control import require_admin, require_project_access
 from .auth import get_current_user
 from .config import Settings
 from .schemas import UserInfo
+from cloud.runtime_capabilities import enabled_solver_types
+from scripts.cloud_solver_auth import IdentityTokenError, get_identity_token
 
 
 CLOUD_ENV_NAME = ".env.cloud"
+
+
+def available_cloud_solver_types() -> list[str]:
+    return list(enabled_solver_types())
+
+
+def cloud_invoker_service_account(settings: Settings) -> str:
+    project_id = settings.gcp_project_id or "level-night-476302-k0"
+    return f"solver-invoker@{project_id}.iam.gserviceaccount.com"
 
 
 def cloud_solver_quarantined() -> bool:
@@ -48,7 +61,8 @@ def project_cloud_config(settings: Settings, base_name: str) -> dict:
         "quarantined": quarantined,
         "env_file": str(env_file),
         "threshold_time": 300,
-        "solver_types": ["python", "julia", "matlab", "R"],
+        "solver_types": available_cloud_solver_types(),
+        "invoker_service_account": cloud_invoker_service_account(settings),
         "project_id": settings.gcp_project_id or "level-night-476302-k0",
         "region": settings.gcp_region,
         "service_name": settings.gcp_solver_service,
@@ -69,10 +83,7 @@ def set_project_cloud_enabled(settings: Settings, base_name: str, enabled: bool)
                     "# Cloud Run solver configuration",
                     "USE_CLOUD_SOLVER=true",
                     "CLOUD_THRESHOLD_TIME=300",
-                    "CLOUD_SOLVER_TYPES=python,julia,matlab,R",
-                    f"GCP_PROJECT_ID={settings.gcp_project_id or 'level-night-476302-k0'}",
-                    f"GCP_REGION={settings.gcp_region}",
-                    f"GCP_SOLVER_SERVICE={settings.gcp_solver_service}",
+                    f"CLOUD_SOLVER_TYPES={','.join(available_cloud_solver_types())}",
                     "",
                 ]
             ),
@@ -158,6 +169,36 @@ def create_cloud_router(settings: Settings) -> APIRouter:
                 }
 
             service_info = json.loads(result.stdout)
+            service_url = service_info.get("status", {}).get("url")
+            if not service_url:
+                return {"available": False, "error": "Cloud Run service URL is unavailable"}
+            try:
+                token = get_identity_token(service_url)
+                request = urllib.request.Request(
+                    f"{service_url.rstrip('/')}/capabilities",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                del token
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    capability_payload = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if exc.code in {401, 403}:
+                    return {
+                        "available": False,
+                        "error_category": "authentication",
+                        "error": f"Cloud Run authentication failed (HTTP {exc.code})",
+                    }
+                return {
+                    "available": False,
+                    "error_category": "service",
+                    "error": f"Capability check failed (HTTP {exc.code})",
+                }
+            except IdentityTokenError as exc:
+                return {
+                    "available": False,
+                    "error_category": "authentication_config",
+                    "error": str(exc),
+                }
             annotations = (
                 service_info.get("spec", {})
                 .get("template", {})
@@ -171,7 +212,8 @@ def create_cloud_router(settings: Settings) -> APIRouter:
                 "project_id": project_id,
                 "service_name": service_name,
                 "max_instances": max_instances,
-                "solvers": ["python", "julia", "matlab", "R"],
+                "solvers": capability_payload.get("available_solvers", []),
+                "capabilities": capability_payload,
             }
         except subprocess.TimeoutExpired:
             return {"available": False, "error": "gcloud command timeout"}
@@ -185,7 +227,11 @@ def create_cloud_router(settings: Settings) -> APIRouter:
             "use_cloud": "false" if cloud_solver_quarantined() else os.getenv("USE_CLOUD_SOLVER", "false"),
             "quarantined": cloud_solver_quarantined(),
             "threshold_time": int(os.getenv("CLOUD_THRESHOLD_TIME", "300")),
-            "solver_types": os.getenv("CLOUD_SOLVER_TYPES", "python,julia,matlab,R").split(","),
+            "solver_types": [
+                solver_type
+                for solver_type in os.getenv("CLOUD_SOLVER_TYPES", "python").split(",")
+                if solver_type in available_cloud_solver_types()
+            ],
             "project_id": settings.gcp_project_id,
             "region": settings.gcp_region,
             "service_name": settings.gcp_solver_service,

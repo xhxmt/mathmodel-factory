@@ -69,10 +69,53 @@ load_project_cloud_env() {
     local env_file
     env_file="$(find_project_cloud_env "$workdir" 2>/dev/null || true)"
     if [[ -n "$env_file" ]]; then
-        set -a
-        # shellcheck source=/dev/null
-        source "$env_file"
-        set +a
+        local env_size
+        env_size="$(stat -c '%s' "$env_file" 2>/dev/null || echo 0)"
+        if [[ ! "$env_size" =~ ^[0-9]+$ ]] || (( env_size > 4096 )); then
+            echo "[solver_submit] Cloud config exceeds 4 KiB; forcing local solver" >&2
+            USE_CLOUD_SOLVER=false
+            export USE_CLOUD_SOLVER
+            return 0
+        fi
+        local line key value invalid=false
+        declare -A parsed_cloud_env=()
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%$'\r'}"
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            if [[ "$line" != *=* ]]; then
+                invalid=true
+                continue
+            fi
+            key="${line%%=*}"
+            value="${line#*=}"
+            case "$key" in
+                USE_CLOUD_SOLVER)
+                    [[ "$value" == "true" || "$value" == "false" ]] || invalid=true
+                    ;;
+                CLOUD_THRESHOLD_TIME)
+                    [[ "$value" =~ ^[1-9][0-9]{0,3}$ ]] && (( value <= 3600 )) || invalid=true
+                    ;;
+                CLOUD_SOLVER_TYPES)
+                    [[ "$value" == "python" ]] || invalid=true
+                    ;;
+                *)
+                    echo "[solver_submit] Ignoring unsupported cloud config key" >&2
+                    continue
+                    ;;
+            esac
+            parsed_cloud_env["$key"]="$value"
+        done < "$env_file"
+
+        if [[ "$invalid" == "true" ]]; then
+            echo "[solver_submit] Invalid cloud config; forcing local solver: $env_file" >&2
+            USE_CLOUD_SOLVER=false
+            export USE_CLOUD_SOLVER
+            return 0
+        fi
+        for key in "${!parsed_cloud_env[@]}"; do
+            printf -v "$key" '%s' "${parsed_cloud_env[$key]}"
+            export "$key"
+        done
         echo "[solver_submit] Loaded cloud config: $env_file" >&2
     fi
 }
@@ -82,13 +125,18 @@ should_use_cloud() {
     local use_cloud="${USE_CLOUD_SOLVER:-false}"
     local quarantined="$GLOBAL_CLOUD_QUARANTINE"
     local threshold="${CLOUD_THRESHOLD_TIME:-300}"
-    local solver_types="${CLOUD_SOLVER_TYPES:-python,julia,matlab,R}"
+    local solver_types="${CLOUD_SOLVER_TYPES:-python}"
+    local capability_manifest="${CLOUD_SOLVER_CAPABILITIES_FILE:-$FACTORY/cloud/runtime_capabilities.json}"
     local fallback_marker="${CLOUD_SOLVER_FALLBACK_MARKER:-$FACTORY/run_state/cloud_solver_fallback.marker}"
 
     [[ "$quarantined" != "true" ]] || return 1
     [[ "$use_cloud" == "true" ]] || return 1
     [[ ! -f "$fallback_marker" ]] || return 1
     [[ ",$solver_types," == *",$type,"* ]] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    [[ -f "$capability_manifest" ]] || return 1
+    jq -e --arg solver_type "$type" \
+        '.runtimes[$solver_type].enabled == true' "$capability_manifest" >/dev/null 2>&1 || return 1
     [[ "$max_time" =~ ^[0-9]+$ ]] || return 1
     (( max_time >= threshold ))
 }

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "image_family": "solver-python",
+  "runtimes": {
+    "python": {
+      "enabled": true,
+      "executable": "python3",
+      "version_args": ["--version"]
+    },
+    "julia": {
+      "enabled": false,
+      "reason": "No Julia runtime is installed in solver-python"
+    },
+    "R": {
+      "enabled": false,
+      "reason": "No R runtime is installed in solver-python"
+    },
+    "matlab": {
+      "enabled": false,
+      "reason": "MATLAB Runtime and license terms require a dedicated image review"
+    },
+    "gurobi": {
+      "enabled": false,
+      "reason": "Gurobi runtime and licensing require a dedicated image review"
+    }
+  },
+  "python_packages": [
+    "numpy",
+    "scipy",
+    "pandas",
+    "sympy",
+    "matplotlib",
+    "pyscipopt",
+    "cylp",
+    "mip"
+  ]
+}

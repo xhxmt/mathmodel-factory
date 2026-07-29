@@ -11,7 +11,16 @@ FACTORY="$(cd "$SCRIPT_DIR/.." && pwd)"
 USE_CLOUD="${USE_CLOUD_SOLVER:-false}"
 CLOUD_QUARANTINED="${CLOUD_SOLVER_QUARANTINED:-true}"
 CLOUD_THRESHOLD_TIME="${CLOUD_THRESHOLD_TIME:-300}"  # Use cloud for jobs > 5 min
-CLOUD_SOLVER_TYPES="${CLOUD_SOLVER_TYPES:-python,julia,matlab,R}"
+CLOUD_SOLVER_TYPES="${CLOUD_SOLVER_TYPES:-python}"
+CAPABILITY_MANIFEST="${CLOUD_SOLVER_CAPABILITIES_FILE:-$FACTORY/cloud/runtime_capabilities.json}"
+
+cloud_runtime_available() {
+    local solver_type="$1"
+    command -v jq >/dev/null 2>&1 || return 1
+    [[ -f "$CAPABILITY_MANIFEST" ]] || return 1
+    jq -e --arg solver_type "$solver_type" \
+        '.runtimes[$solver_type].enabled == true' "$CAPABILITY_MANIFEST" >/dev/null 2>&1
+}
 
 # Parse arguments to extract max-time
 MAX_TIME=1800
@@ -42,7 +51,7 @@ elif [[ "$USE_CLOUD" == "true" ]]; then
         use_cloud=false
     else
         # Check if this solver type is supported on cloud
-        if [[ ",$CLOUD_SOLVER_TYPES," == *",$SOLVER_TYPE,"* ]]; then
+        if [[ ",$CLOUD_SOLVER_TYPES," == *",$SOLVER_TYPE,"* ]] && cloud_runtime_available "$SOLVER_TYPE"; then
             # Check if job is long enough to warrant cloud execution
             if (( MAX_TIME >= CLOUD_THRESHOLD_TIME )); then
                 use_cloud=true

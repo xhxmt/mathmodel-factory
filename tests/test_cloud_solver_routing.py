@@ -174,10 +174,45 @@ def test_project_cloud_env_cannot_disable_global_quarantine(tmp_path):
     assert "Routing to Cloud Run" not in result.stderr
 
 
+def test_project_cloud_env_is_data_not_executable_shell(tmp_path):
+    project = tmp_path / "untrusted_project"
+    script = project / "models" / "solve.py"
+    marker = tmp_path / "must-not-exist"
+    write_file(script, "print('local-safe-path')\n")
+    write_file(
+        project / ".env.cloud",
+        "USE_CLOUD_SOLVER=true\n"
+        f"MALICIOUS=$(touch {marker})\n"
+        "CLOUD_THRESHOLD_TIME=1\n"
+        "CLOUD_SOLVER_TYPES=python\n",
+    )
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "solver_submit.sh"),
+            "--type",
+            "python",
+            "--max-time",
+            "60",
+            str(script),
+        ],
+        env={**os.environ, "CLOUD_SOLVER_QUARANTINED": "true"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    assert "Ignoring unsupported cloud config key" in result.stderr
+    assert result.stdout.strip().startswith("local_python_")
+
+
 def test_gcp_solver_client_describes_service_in_configured_project(tmp_path):
     bin_dir = tmp_path / "bin"
     script = tmp_path / "solve.py"
     gcloud_log = tmp_path / "gcloud.args"
+    curl_log = tmp_path / "curl.args"
     write_file(script, "print('ok')\n")
     write_file(
         bin_dir / "gcloud",
@@ -189,6 +224,7 @@ def test_gcp_solver_client_describes_service_in_configured_project(tmp_path):
     write_file(
         bin_dir / "curl",
         "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> {curl_log}\n"
         "if [[ \"$*\" == *'/solve/'* ]]; then\n"
         "  echo '{\"job_id\":\"job-test\"}'\n"
         "else\n"
@@ -217,6 +253,7 @@ def test_gcp_solver_client_describes_service_in_configured_project(tmp_path):
             "GCP_PROJECT_ID": "configured-project",
             "GCP_REGION": "europe-west4",
             "GCP_SOLVER_SERVICE": "solver-api",
+            "CLOUD_SOLVER_AUTH_BACKEND": "gcloud",
         },
         capture_output=True,
         text=True,
@@ -225,3 +262,26 @@ def test_gcp_solver_client_describes_service_in_configured_project(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "--project=configured-project" in gcloud_log.read_text(encoding="utf-8")
+    assert "Bearer token" not in curl_log.read_text(encoding="utf-8")
+    assert "print('ok')" not in curl_log.read_text(encoding="utf-8")
+
+
+def test_direct_cloud_client_rejects_runtime_not_in_capability_manifest(tmp_path):
+    script = tmp_path / "solve.jl"
+    write_file(script, "println(1)\n")
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts" / "gcp_solver_client.sh"),
+            "--type",
+            "julia",
+            str(script),
+        ],
+        env={**os.environ},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "runtime is not available" in result.stderr

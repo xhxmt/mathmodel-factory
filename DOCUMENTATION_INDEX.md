@@ -57,7 +57,7 @@
 - [web/INTERFACE_GUIDE.md](web/INTERFACE_GUIDE.md)：历史界面快照；当前行为以 `web/README.md` 为准。
 - [docs/GCP_SERVICES_INTEGRATION.md](docs/GCP_SERVICES_INTEGRATION.md)：历史 GCP 服务集成设计；当前状态以 Cloud Solver 隔离合同为准。
 - [docs/SECRET_MANAGER_GUIDE.md](docs/SECRET_MANAGER_GUIDE.md)：Secret Manager 配置。
-- [CLOUD_SOLVER_ENABLED.md](CLOUD_SOLVER_ENABLED.md)：Cloud Solver 当前安全隔离状态与本地求解合同。
+- [CLOUD_SOLVER_ENABLED.md](CLOUD_SOLVER_ENABLED.md)：Cloud Solver 当前 P0 代码合同、线上隔离状态、硬限制与解除隔离阻断项。
 - [docs/deployment/](docs/deployment/)：历史 Cloud Solver 部署指南与验证记录；不得用于解除当前隔离。
 - [web/docs/](web/docs/)：Web 专题记录；除 `deployment/DEPLOYMENT.md` 外，部署/测试完成报告默认按历史快照阅读。
 

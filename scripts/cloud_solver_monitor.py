@@ -23,11 +23,14 @@ import time
 import argparse
 import os
 import requests
-import shutil
-import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional
+
+try:
+    from .cloud_solver_auth import IdentityTokenError, get_identity_token
+except ImportError:  # Direct script execution.
+    from cloud_solver_auth import IdentityTokenError, get_identity_token
 
 FACTORY_ROOT = Path(__file__).parent.parent
 HEALTH_CHECK_FILE = FACTORY_ROOT / "run_state" / "cloud_solver_health.json"
@@ -40,10 +43,6 @@ FALLBACK_COOLDOWN = 3600  # 回退后恢复检查的冷却时间(秒)
 AUTH_ERROR_CATEGORIES = {"authentication", "authentication_config"}
 
 
-class IdentityTokenError(RuntimeError):
-    """Raised when a Cloud Run identity token cannot be acquired safely."""
-
-
 def empty_health_history() -> Dict:
     return {
         "version": "2.0",
@@ -51,6 +50,7 @@ def empty_health_history() -> Dict:
         "consecutive_failures": 0,
         "last_success": None,
         "last_auth_error": None,
+        "last_quarantine": None,
         "fallback_active": False,
         "fallback_since": None,
     }
@@ -73,6 +73,21 @@ def get_cloud_solver_url() -> Optional[str]:
 
     return None
 
+
+def load_nonsecret_auth_config() -> None:
+    """Load only the keyless invoker identity from the trusted root .env."""
+    if os.getenv("CLOUD_SOLVER_IMPERSONATE_SERVICE_ACCOUNT"):
+        return
+    env_file = FACTORY_ROOT / ".env"
+    if not env_file.is_file():
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        if line.startswith("CLOUD_SOLVER_IMPERSONATE_SERVICE_ACCOUNT="):
+            value = line.split("=", 1)[1].strip().strip('"').strip("'")
+            if value:
+                os.environ["CLOUD_SOLVER_IMPERSONATE_SERVICE_ACCOUNT"] = value
+            return
+
 def load_health_history() -> Dict:
     """加载健康检查历史"""
     if not HEALTH_CHECK_FILE.exists():
@@ -89,48 +104,6 @@ def load_health_history() -> Dict:
         print(f"⚠️  无法加载健康历史: {e}", file=sys.stderr)
         return empty_health_history()
 
-
-def resolve_gcloud_binary() -> str:
-    configured = (os.getenv("GCLOUD_BIN") or "").strip()
-    if configured:
-        if os.access(configured, os.X_OK):
-            return configured
-        raise IdentityTokenError("GCLOUD_BIN is not executable")
-
-    found = shutil.which("gcloud")
-    if found:
-        return found
-
-    home_sdk = Path.home() / "google-cloud-sdk" / "bin" / "gcloud"
-    if home_sdk.is_file() and os.access(home_sdk, os.X_OK):
-        return str(home_sdk)
-
-    raise IdentityTokenError("gcloud CLI is not available")
-
-
-def get_identity_token() -> str:
-    """Acquire an ID token without logging or persisting the credential."""
-    try:
-        completed = subprocess.run(
-            [resolve_gcloud_binary(), "auth", "print-identity-token"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise IdentityTokenError("identity token command timed out") from exc
-    except OSError as exc:
-        raise IdentityTokenError("identity token command could not start") from exc
-
-    if completed.returncode != 0:
-        raise IdentityTokenError(
-            f"identity token command failed with exit code {completed.returncode}"
-        )
-    token = completed.stdout.strip()
-    if not token:
-        raise IdentityTokenError("identity token command returned no credential")
-    return token
 
 def save_health_history(history: Dict):
     """保存健康检查历史"""
@@ -150,12 +123,13 @@ def check_health(url: str) -> Dict:
         "healthy": False,
         "response_time_ms": None,
         "status_code": None,
+        "execution_available": None,
         "error": None,
         "error_category": None,
     }
 
     try:
-        token = get_identity_token()
+        token = get_identity_token(url)
         start = time.time()
         response = requests.get(
             f"{url.rstrip('/')}/health",
@@ -171,8 +145,8 @@ def check_health(url: str) -> Dict:
         if response.status_code == 200:
             data = response.json()
             result["healthy"] = data.get("status") == "healthy"
+            result["execution_available"] = data.get("execution_enabled")
             if result["healthy"] and data.get("execution_enabled") is False:
-                result["healthy"] = False
                 result["error_category"] = "quarantine"
                 result["error"] = "Cloud solver execution is quarantined"
             elif not result["healthy"]:
@@ -212,6 +186,8 @@ def apply_health_result(history: Dict, result: Dict) -> None:
     if result["healthy"]:
         history["consecutive_failures"] = 0
         history["last_success"] = result["timestamp"]
+        if result.get("error_category") == "quarantine":
+            history["last_quarantine"] = result["timestamp"]
         return
 
     if result.get("error_category") in AUTH_ERROR_CATEGORIES:
@@ -325,6 +301,7 @@ def watch_health(url: str, interval: int = 30):
         print("\n\n监控已停止")
 
 def main():
+    load_nonsecret_auth_config()
     parser = argparse.ArgumentParser(description="Cloud Solver 监控工具")
     parser.add_argument("--check", action="store_true", help="单次健康检查")
     parser.add_argument("--watch", action="store_true", help="持续监控")
@@ -369,6 +346,8 @@ def main():
         if result["healthy"]:
             print(f"\n✅ 健康检查通过")
             print(f"   响应时间: {result['response_time_ms']}ms")
+            if result.get("execution_available") is False:
+                print("   服务处于安全隔离状态，健康检查不会触发故障回退")
         else:
             print(f"\n❌ 健康检查失败")
             print(f"   错误: {result['error']}")
