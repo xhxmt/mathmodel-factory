@@ -55,10 +55,10 @@
 - [web/USAGE_GUIDE.md](web/USAGE_GUIDE.md)：上传、题目归档与权限使用说明。
 - [web/docs/deployment/DEPLOYMENT.md](web/docs/deployment/DEPLOYMENT.md)：唯一现役生产部署与回滚 runbook。
 - [web/INTERFACE_GUIDE.md](web/INTERFACE_GUIDE.md)：历史界面快照；当前行为以 `web/README.md` 为准。
-- [docs/GCP_SERVICES_INTEGRATION.md](docs/GCP_SERVICES_INTEGRATION.md)：GCP 服务集成方案。
+- [docs/GCP_SERVICES_INTEGRATION.md](docs/GCP_SERVICES_INTEGRATION.md)：历史 GCP 服务集成设计；当前状态以 Cloud Solver 隔离合同为准。
 - [docs/SECRET_MANAGER_GUIDE.md](docs/SECRET_MANAGER_GUIDE.md)：Secret Manager 配置。
-- [CLOUD_SOLVER_ENABLED.md](CLOUD_SOLVER_ENABLED.md)：Cloud Solver 使用说明。
-- [docs/deployment/](docs/deployment/)：部署指南与历史验证记录。
+- [CLOUD_SOLVER_ENABLED.md](CLOUD_SOLVER_ENABLED.md)：Cloud Solver 当前安全隔离状态与本地求解合同。
+- [docs/deployment/](docs/deployment/)：历史 Cloud Solver 部署指南与验证记录；不得用于解除当前隔离。
 - [web/docs/](web/docs/)：Web 专题记录；除 `deployment/DEPLOYMENT.md` 外，部署/测试完成报告默认按历史快照阅读。
 
 ## 专题报告与修复记录

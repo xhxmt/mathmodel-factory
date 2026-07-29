@@ -101,6 +101,7 @@ def load_main_module(factory_root=None, auth_db_file=None):
         HTTP_404_NOT_FOUND=404,
         HTTP_409_CONFLICT=409,
         HTTP_500_INTERNAL_SERVER_ERROR=500,
+        HTTP_503_SERVICE_UNAVAILABLE=503,
     )
     sys.modules["fastapi"] = fastapi
 
@@ -330,7 +331,7 @@ def test_project_listing_avoids_ambiguous_duplicate_base_names(tmp_path, monkeyp
     assert payload[0].storage_scope == "ongoing"
 
 
-def test_project_cloud_config_reflects_enable_disable_state(tmp_path):
+def test_project_cloud_config_reports_quarantine_and_rejects_enable(tmp_path, monkeypatch):
     mod = load_main_module()
     from web.backend import cloud_api
 
@@ -348,11 +349,21 @@ def test_project_cloud_config_reflects_enable_disable_state(tmp_path):
 
     initial = cloud_api.project_cloud_config(settings, "demo")
     assert initial["enabled"] is False
+    assert initial["quarantined"] is True
     assert initial["env_file"] == str(project / ".env.cloud")
 
+    try:
+        cloud_api.set_project_cloud_enabled(settings, "demo", True)
+    except cloud_api.HTTPException as exc:
+        assert exc.status_code == 503
+    else:
+        raise AssertionError("quarantined cloud solver must reject enable requests")
+
+    monkeypatch.setenv("CLOUD_SOLVER_QUARANTINED", "false")
     cloud_api.set_project_cloud_enabled(settings, "demo", True)
     enabled = cloud_api.project_cloud_config(settings, "demo")
     assert enabled["enabled"] is True
+    assert enabled["quarantined"] is False
     assert "USE_CLOUD_SOLVER=true" in (project / ".env.cloud").read_text(encoding="utf-8")
 
     cloud_api.set_project_cloud_enabled(settings, "demo", False)

@@ -9,6 +9,7 @@ FACTORY="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration
 USE_CLOUD="${USE_CLOUD_SOLVER:-false}"
+CLOUD_QUARANTINED="${CLOUD_SOLVER_QUARANTINED:-true}"
 CLOUD_THRESHOLD_TIME="${CLOUD_THRESHOLD_TIME:-300}"  # Use cloud for jobs > 5 min
 CLOUD_SOLVER_TYPES="${CLOUD_SOLVER_TYPES:-python,julia,matlab,R}"
 
@@ -31,9 +32,11 @@ done
 use_cloud=false
 
 # Check if cloud solver is globally enabled
-if [[ "$USE_CLOUD" == "true" ]]; then
+if [[ "$CLOUD_QUARANTINED" == "true" ]]; then
+    echo "[solver_router] Cloud Solver quarantined - routing to local" >&2
+elif [[ "$USE_CLOUD" == "true" ]]; then
     # Check for fallback marker (set by cloud_solver_monitor.py when health checks fail)
-    FALLBACK_MARKER="$FACTORY/run_state/cloud_solver_fallback.marker"
+    FALLBACK_MARKER="${CLOUD_SOLVER_FALLBACK_MARKER:-$FACTORY/run_state/cloud_solver_fallback.marker}"
     if [[ -f "$FALLBACK_MARKER" ]]; then
         echo "[solver_router] Cloud Solver fallback active - routing to local" >&2
         use_cloud=false

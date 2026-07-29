@@ -47,7 +47,7 @@ steps:
       - '--service-account'
       - 'solver-runner@${PROJECT_ID}.iam.gserviceaccount.com'
       - '--set-env-vars'
-      - 'GCP_PROJECT_ID=${PROJECT_ID},SOLVER_BUCKET=${PROJECT_ID}-solver-jobs'
+      - 'GCP_PROJECT_ID=${PROJECT_ID},SOLVER_BUCKET=${PROJECT_ID}-solver-jobs,SOLVER_EXECUTION_ENABLED=false'
 
 # Substitutions
 substitutions:

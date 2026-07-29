@@ -1,4 +1,10 @@
-# GCP Cloud Run 加速计算配置指南
+# GCP Cloud Run 加速计算配置指南（历史设计快照）
+
+> [!WARNING]
+> 本指南不是当前可执行 runbook。2026-07-29 起 Cloud Solver 已进入安全
+> 隔离，禁止匿名调用且云端脚本执行默认关闭。当前合同见
+> [`CLOUD_SOLVER_ENABLED.md`](../../CLOUD_SOLVER_ENABLED.md)；完整 P0 安全
+> 验收前不要执行本文的部署、开放权限或启用命令。
 
 ## 概述
 

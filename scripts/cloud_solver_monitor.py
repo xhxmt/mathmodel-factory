@@ -21,7 +21,9 @@ import sys
 import json
 import time
 import argparse
+import os
 import requests
+import shutil
 import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -35,9 +37,30 @@ FALLBACK_MARKER = FACTORY_ROOT / "run_state" / "cloud_solver_fallback.marker"
 HEALTH_CHECK_TIMEOUT = 10  # 秒
 CONSECUTIVE_FAILURES_THRESHOLD = 3  # 连续失败次数触发回退
 FALLBACK_COOLDOWN = 3600  # 回退后恢复检查的冷却时间(秒)
+AUTH_ERROR_CATEGORIES = {"authentication", "authentication_config"}
+
+
+class IdentityTokenError(RuntimeError):
+    """Raised when a Cloud Run identity token cannot be acquired safely."""
+
+
+def empty_health_history() -> Dict:
+    return {
+        "version": "2.0",
+        "checks": [],
+        "consecutive_failures": 0,
+        "last_success": None,
+        "last_auth_error": None,
+        "fallback_active": False,
+        "fallback_since": None,
+    }
 
 def get_cloud_solver_url() -> Optional[str]:
     """从环境变量或 .env 获取 Cloud Run URL"""
+    configured = (os.getenv("CLOUD_RUN_URL") or "").strip()
+    if configured:
+        return configured.rstrip("/")
+
     env_file = FACTORY_ROOT / ".env"
     if not env_file.exists():
         return None
@@ -46,35 +69,68 @@ def get_cloud_solver_url() -> Optional[str]:
         for line in f:
             if line.startswith('CLOUD_RUN_URL='):
                 url = line.split('=', 1)[1].strip().strip('"').strip("'")
-                return url
+                return url.rstrip("/")
 
     return None
 
 def load_health_history() -> Dict:
     """加载健康检查历史"""
     if not HEALTH_CHECK_FILE.exists():
-        return {
-            "version": "1.0",
-            "checks": [],
-            "consecutive_failures": 0,
-            "last_success": None,
-            "fallback_active": False,
-            "fallback_since": None
-        }
+        return empty_health_history()
 
     try:
         with open(HEALTH_CHECK_FILE, 'r') as f:
-            return json.load(f)
+            loaded = json.load(f)
+            history = empty_health_history()
+            history.update(loaded)
+            history["version"] = "2.0"
+            return history
     except Exception as e:
         print(f"⚠️  无法加载健康历史: {e}", file=sys.stderr)
-        return {
-            "version": "1.0",
-            "checks": [],
-            "consecutive_failures": 0,
-            "last_success": None,
-            "fallback_active": False,
-            "fallback_since": None
-        }
+        return empty_health_history()
+
+
+def resolve_gcloud_binary() -> str:
+    configured = (os.getenv("GCLOUD_BIN") or "").strip()
+    if configured:
+        if os.access(configured, os.X_OK):
+            return configured
+        raise IdentityTokenError("GCLOUD_BIN is not executable")
+
+    found = shutil.which("gcloud")
+    if found:
+        return found
+
+    home_sdk = Path.home() / "google-cloud-sdk" / "bin" / "gcloud"
+    if home_sdk.is_file() and os.access(home_sdk, os.X_OK):
+        return str(home_sdk)
+
+    raise IdentityTokenError("gcloud CLI is not available")
+
+
+def get_identity_token() -> str:
+    """Acquire an ID token without logging or persisting the credential."""
+    try:
+        completed = subprocess.run(
+            [resolve_gcloud_binary(), "auth", "print-identity-token"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise IdentityTokenError("identity token command timed out") from exc
+    except OSError as exc:
+        raise IdentityTokenError("identity token command could not start") from exc
+
+    if completed.returncode != 0:
+        raise IdentityTokenError(
+            f"identity token command failed with exit code {completed.returncode}"
+        )
+    token = completed.stdout.strip()
+    if not token:
+        raise IdentityTokenError("identity token command returned no credential")
+    return token
 
 def save_health_history(history: Dict):
     """保存健康检查历史"""
@@ -94,12 +150,19 @@ def check_health(url: str) -> Dict:
         "healthy": False,
         "response_time_ms": None,
         "status_code": None,
-        "error": None
+        "error": None,
+        "error_category": None,
     }
 
     try:
+        token = get_identity_token()
         start = time.time()
-        response = requests.get(f"{url}/health", timeout=HEALTH_CHECK_TIMEOUT)
+        response = requests.get(
+            f"{url.rstrip('/')}/health",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=HEALTH_CHECK_TIMEOUT,
+        )
+        del token
         response_time = (time.time() - start) * 1000
 
         result["response_time_ms"] = round(response_time, 2)
@@ -108,19 +171,54 @@ def check_health(url: str) -> Dict:
         if response.status_code == 200:
             data = response.json()
             result["healthy"] = data.get("status") == "healthy"
-            if not result["healthy"]:
+            if result["healthy"] and data.get("execution_enabled") is False:
+                result["healthy"] = False
+                result["error_category"] = "quarantine"
+                result["error"] = "Cloud solver execution is quarantined"
+            elif not result["healthy"]:
+                result["error_category"] = "service"
                 result["error"] = f"Service reports unhealthy: {data}"
+        elif response.status_code in (401, 403):
+            result["error_category"] = "authentication"
+            result["error"] = f"Cloud Run authentication failed (HTTP {response.status_code})"
+        elif response.status_code == 429:
+            result["error_category"] = "rate_limit"
+            result["error"] = "Cloud Run rate limit exceeded (HTTP 429)"
+        elif response.status_code >= 500:
+            result["error_category"] = "service"
+            result["error"] = f"Cloud Run service error (HTTP {response.status_code})"
         else:
+            result["error_category"] = "http"
             result["error"] = f"HTTP {response.status_code}"
 
+    except IdentityTokenError as exc:
+        result["error_category"] = "authentication_config"
+        result["error"] = str(exc)
     except requests.Timeout:
+        result["error_category"] = "timeout"
         result["error"] = f"Timeout after {HEALTH_CHECK_TIMEOUT}s"
     except requests.ConnectionError:
+        result["error_category"] = "network"
         result["error"] = "Connection failed"
     except Exception as e:
+        result["error_category"] = "unexpected"
         result["error"] = str(e)
 
     return result
+
+
+def apply_health_result(history: Dict, result: Dict) -> None:
+    """Update counters without hiding authentication/configuration failures."""
+    if result["healthy"]:
+        history["consecutive_failures"] = 0
+        history["last_success"] = result["timestamp"]
+        return
+
+    if result.get("error_category") in AUTH_ERROR_CATEGORIES:
+        history["last_auth_error"] = result["timestamp"]
+        return
+
+    history["consecutive_failures"] += 1
 
 def update_fallback_state(history: Dict):
     """根据健康检查历史更新回退状态"""
@@ -207,13 +305,8 @@ def watch_health(url: str, interval: int = 30):
             # 更新历史
             history["checks"].append(result)
 
-            if result["healthy"]:
-                history["consecutive_failures"] = 0
-                history["last_success"] = result["timestamp"]
-                status_icon = "✅"
-            else:
-                history["consecutive_failures"] += 1
-                status_icon = "❌"
+            apply_health_result(history, result)
+            status_icon = "✅" if result["healthy"] else "❌"
 
             # 更新回退状态
             update_fallback_state(history)
@@ -271,16 +364,18 @@ def main():
         history = load_health_history()
         history["checks"].append(result)
 
+        apply_health_result(history, result)
+
         if result["healthy"]:
-            history["consecutive_failures"] = 0
-            history["last_success"] = result["timestamp"]
             print(f"\n✅ 健康检查通过")
             print(f"   响应时间: {result['response_time_ms']}ms")
         else:
-            history["consecutive_failures"] += 1
             print(f"\n❌ 健康检查失败")
             print(f"   错误: {result['error']}")
-            print(f"   连续失败: {history['consecutive_failures']} 次")
+            if result.get("error_category") in AUTH_ERROR_CATEGORIES:
+                print("   认证配置错误不会自动触发本地回退，请先修复调用身份")
+            else:
+                print(f"   连续失败: {history['consecutive_failures']} 次")
 
         update_fallback_state(history)
         save_health_history(history)

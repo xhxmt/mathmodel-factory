@@ -41,8 +41,10 @@ def test_solver_router_routes_enabled_long_python_job_to_cloud_client(tmp_path):
         env={
             **os.environ,
             "USE_CLOUD_SOLVER": "true",
+            "CLOUD_SOLVER_QUARANTINED": "false",
             "CLOUD_SOLVER_TYPES": "python",
             "CLOUD_THRESHOLD_TIME": "300",
+            "CLOUD_SOLVER_FALLBACK_MARKER": str(tmp_path / "no-fallback.marker"),
             "CLOUD_SOLVER_CLIENT": str(fake_cloud_client(tmp_path)),
         },
         capture_output=True,
@@ -77,7 +79,9 @@ def test_solver_submit_sources_project_cloud_env_for_long_jobs(tmp_path):
         ],
         env={
             **os.environ,
+            "CLOUD_SOLVER_QUARANTINED": "false",
             "CLOUD_SOLVER_CLIENT": str(fake_cloud_client(tmp_path)),
+            "CLOUD_SOLVER_FALLBACK_MARKER": str(tmp_path / "no-fallback.marker"),
         },
         capture_output=True,
         text=True,
@@ -101,6 +105,73 @@ def test_solver_submit_sources_project_cloud_env_for_long_jobs(tmp_path):
     assert wait.returncode == 0, wait.stderr
     assert "COMPLETED" in wait.stdout
     assert "CLOUD_CLIENT --type python --max-time 400" in (script.with_suffix(".log")).read_text(encoding="utf-8")
+
+
+def test_solver_router_quarantines_cloud_by_default(tmp_path):
+    script = tmp_path / "project" / "models" / "solve.py"
+    write_file(script, "print('local-safe-path')\n")
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts" / "solver_router.sh"),
+            "--type",
+            "python",
+            "--max-time",
+            "400",
+            str(script),
+        ],
+        env={
+            **os.environ,
+            "USE_CLOUD_SOLVER": "true",
+            "CLOUD_SOLVER_TYPES": "python",
+            "CLOUD_THRESHOLD_TIME": "300",
+            "CLOUD_SOLVER_CLIENT": str(fake_cloud_client(tmp_path)),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Cloud Solver quarantined" in result.stderr
+    assert "Routing to local solver" in result.stderr
+    assert result.stdout.strip().startswith("local_python_")
+
+
+def test_project_cloud_env_cannot_disable_global_quarantine(tmp_path):
+    project = tmp_path / "quarantined_project"
+    script = project / "models" / "solve.py"
+    write_file(script, "print('local-safe-path')\n")
+    write_file(
+        project / ".env.cloud",
+        "USE_CLOUD_SOLVER=true\n"
+        "CLOUD_SOLVER_QUARANTINED=false\n"
+        "CLOUD_THRESHOLD_TIME=0\n"
+        "CLOUD_SOLVER_TYPES=python\n",
+    )
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "solver_submit.sh"),
+            "--type",
+            "python",
+            "--max-time",
+            "60",
+            str(script),
+        ],
+        env={
+            key: value
+            for key, value in os.environ.items()
+            if key != "CLOUD_SOLVER_QUARANTINED"
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().startswith("local_python_")
+    assert "Routing to Cloud Run" not in result.stderr
 
 
 def test_gcp_solver_client_describes_service_in_configured_project(tmp_path):

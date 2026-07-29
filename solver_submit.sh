@@ -44,6 +44,9 @@ set -euo pipefail
 
 FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JOB_DIR="$FACTORY/run_state/solver_jobs"
+# Capture the operator-level quarantine before loading any project-owned
+# `.env.cloud`; a project must never be able to disable a global safety stop.
+GLOBAL_CLOUD_QUARANTINE="${CLOUD_SOLVER_QUARANTINED:-true}"
 mkdir -p "$JOB_DIR"
 
 find_project_cloud_env() {
@@ -77,10 +80,12 @@ load_project_cloud_env() {
 should_use_cloud() {
     local type="$1" max_time="$2"
     local use_cloud="${USE_CLOUD_SOLVER:-false}"
+    local quarantined="$GLOBAL_CLOUD_QUARANTINE"
     local threshold="${CLOUD_THRESHOLD_TIME:-300}"
     local solver_types="${CLOUD_SOLVER_TYPES:-python,julia,matlab,R}"
-    local fallback_marker="$FACTORY/run_state/cloud_solver_fallback.marker"
+    local fallback_marker="${CLOUD_SOLVER_FALLBACK_MARKER:-$FACTORY/run_state/cloud_solver_fallback.marker}"
 
+    [[ "$quarantined" != "true" ]] || return 1
     [[ "$use_cloud" == "true" ]] || return 1
     [[ ! -f "$fallback_marker" ]] || return 1
     [[ ",$solver_types," == *",$type,"* ]] || return 1

@@ -17,6 +17,10 @@ from .schemas import UserInfo
 CLOUD_ENV_NAME = ".env.cloud"
 
 
+def cloud_solver_quarantined() -> bool:
+    return os.getenv("CLOUD_SOLVER_QUARANTINED", "true").strip().lower() == "true"
+
+
 def _project_cloud_env_file(settings: Settings, base_name: str) -> Path:
     for root in (settings.ongoing_dir, settings.complete_dir):
         candidate = root / base_name
@@ -36,8 +40,12 @@ def _env_flag_enabled(path: Path, key: str) -> bool:
 
 def project_cloud_config(settings: Settings, base_name: str) -> dict:
     env_file = _project_cloud_env_file(settings, base_name)
+    requested_enabled = _env_flag_enabled(env_file, "USE_CLOUD_SOLVER")
+    quarantined = cloud_solver_quarantined()
     return {
-        "enabled": _env_flag_enabled(env_file, "USE_CLOUD_SOLVER"),
+        "enabled": requested_enabled and not quarantined,
+        "requested_enabled": requested_enabled,
+        "quarantined": quarantined,
         "env_file": str(env_file),
         "threshold_time": 300,
         "solver_types": ["python", "julia", "matlab", "R"],
@@ -50,6 +58,11 @@ def project_cloud_config(settings: Settings, base_name: str) -> dict:
 def set_project_cloud_enabled(settings: Settings, base_name: str, enabled: bool) -> dict:
     env_file = _project_cloud_env_file(settings, base_name)
     if enabled:
+        if cloud_solver_quarantined():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Cloud solver execution is quarantined; use the local solver",
+            )
         env_file.write_text(
             "\n".join(
                 [
@@ -96,6 +109,12 @@ def create_cloud_router(settings: Settings) -> APIRouter:
     @router.get("/api/cloud/status")
     async def cloud_status(current_user: UserInfo = Depends(get_current_user(settings))):
         require_admin(current_user)
+        if cloud_solver_quarantined():
+            return {
+                "available": False,
+                "quarantined": True,
+                "error": "Cloud solver execution is quarantined; use the local solver",
+            }
         try:
             gcloud_bin = _resolve_gcloud_binary()
             if not gcloud_bin:
@@ -163,7 +182,8 @@ def create_cloud_router(settings: Settings) -> APIRouter:
     async def cloud_config(current_user: UserInfo = Depends(get_current_user(settings))):
         require_admin(current_user)
         return {
-            "use_cloud": os.getenv("USE_CLOUD_SOLVER", "false"),
+            "use_cloud": "false" if cloud_solver_quarantined() else os.getenv("USE_CLOUD_SOLVER", "false"),
+            "quarantined": cloud_solver_quarantined(),
             "threshold_time": int(os.getenv("CLOUD_THRESHOLD_TIME", "300")),
             "solver_types": os.getenv("CLOUD_SOLVER_TYPES", "python,julia,matlab,R").split(","),
             "project_id": settings.gcp_project_id,

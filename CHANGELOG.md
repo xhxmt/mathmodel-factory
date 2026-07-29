@@ -20,6 +20,10 @@
 
 ### 安全
 
+- Cloud Run Solver 进入 P-1 安全隔离：移除匿名 Invoker，受保护端点在缺少应用 Token 时 fail-closed，脚本执行默认关闭。
+- Cloud Solver 监控改用 ID Token，并将 401/403 与普通服务故障分开处理，认证配置错误不再静默触发普通本地回退。
+- `solver_submit.sh`、手动路由和 Web 控制面默认拒绝启用云端执行；本地求解器保持为唯一受支持路径，直到完整 P0 输入隔离验收完成。
+- `solver-runner` 的对象管理权限从项目级收缩到专用 Solver Bucket。
 - 移除现役及历史 Web 文档中的可用/弱默认登录凭据示例。
 - Secret Manager 迁移备份强制使用私有权限，验证流程不再输出 secret 全值或片段。
 

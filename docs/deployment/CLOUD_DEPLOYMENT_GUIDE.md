@@ -1,4 +1,10 @@
-# Cloud Solver Deployment Summary
+# Cloud Solver Deployment Summary（历史快照）
+
+> [!WARNING]
+> 本文档记录旧部署流程。2026-07-29 起 Cloud Solver 已进入安全隔离：
+> 匿名调用已关闭，云端执行默认禁用，当前求解路径为本地
+> `solver_submit.sh`。不要按本文重新启用服务；当前合同见
+> [`CLOUD_SOLVER_ENABLED.md`](../../CLOUD_SOLVER_ENABLED.md)。
 
 ## 已完成的工作
 

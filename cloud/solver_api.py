@@ -73,11 +73,29 @@ class JobStatus(BaseModel):
 def verify_solver_auth(x_solver_token: Optional[str] = Header(default=None, alias="X-Solver-Token")) -> None:
     expected = os.environ.get("SOLVER_API_TOKEN", "").strip()
     if not expected:
-        return None
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Solver API protected endpoints are unavailable",
+        )
     if not x_solver_token or not hmac.compare_digest(x_solver_token, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid solver API token",
+        )
+    return None
+
+
+def solver_execution_enabled() -> bool:
+    """Return whether arbitrary solver execution has been explicitly enabled."""
+    return os.environ.get("SOLVER_EXECUTION_ENABLED", "false").strip().lower() == "true"
+
+
+def require_solver_execution_enabled() -> None:
+    """Keep cloud execution quarantined until the full input-isolation work lands."""
+    if not solver_execution_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cloud solver execution is quarantined",
         )
     return None
 
@@ -308,6 +326,8 @@ def health_check():
     return {
         "status": "healthy",
         "timestamp": time.time(),
+        "execution_enabled": solver_execution_enabled(),
+        "protected_endpoints_available": bool(os.environ.get("SOLVER_API_TOKEN", "").strip()),
         "active_jobs": sum(1 for j in job_registry.values() if j["status"] in ["queued", "running"]),
         "total_jobs": len(job_registry),
         "system": {
@@ -324,6 +344,7 @@ def submit_solver_job(
     request: SolverRequest,
     background_tasks: BackgroundTasks,
     _auth: None = Depends(verify_solver_auth),
+    _execution_enabled: None = Depends(require_solver_execution_enabled),
 ):
     """Submit a solver job for execution"""
 
