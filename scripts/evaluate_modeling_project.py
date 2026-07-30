@@ -18,9 +18,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts import workflow_state
+
 
 METHOD_PATH_RE = re.compile(r"method_library/[A-Za-z0-9_./-]+\.md")
-VERDICT_RE = re.compile(r"^VERDICT:\s*(\S+)", re.M)
 INCOMPLETE_RESULT_STATUSES = {"RUNNING", "PARTIAL", "PENDING", "INCOMPLETE", "FAILED", "ERROR"}
 
 
@@ -136,13 +140,6 @@ def nonempty_files(path: Path, patterns: tuple[str, ...]) -> list[Path]:
     for pattern in patterns:
         found.extend(p for p in path.rglob(pattern) if p.is_file() and p.stat().st_size > 0)
     return sorted(set(found))
-
-
-def first_verdict(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    match = VERDICT_RE.search(read_text(path))
-    return match.group(1) if match else None
 
 
 def method_paths_in(project: Path) -> set[str]:
@@ -304,15 +301,14 @@ def evaluate(project: Path, root: Path) -> Evaluation:
     symbols_ok, symbols_detail = symbol_check_ok(root, project, base)
     ev.add("gate1_symbol_audit", symbols_ok, symbols_detail)
 
-    entry_gate = project / "entry_gate.md"
-    gate_text = read_text(entry_gate) if entry_gate.is_file() else ""
+    step8_5_state = workflow_state.collect_step8_5_state(project)
     ev.add(
         "entry_gate_verdict",
-        "VERDICT: PASS" in gate_text,
-        "entry_gate PASS" if "VERDICT: PASS" in gate_text else "entry_gate missing or not PASS",
+        bool(step8_5_state.get("ready")),
+        "entry_gate PASS" if step8_5_state.get("ready") else f"step8_5 status={step8_5_state.get('status')}",
     )
 
-    verdict = first_verdict(project / "judge_evaluation.md")
+    verdict = workflow_state.gate2_verdict(project)
     ev.add("gate2_verdict", verdict == "PASS", f"VERDICT: {verdict or 'missing'}")
 
     methods = method_paths_in(project)

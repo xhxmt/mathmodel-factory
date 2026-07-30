@@ -86,7 +86,9 @@ echo ">>> Evaluating $BASE  (project: $PROJECT, samples: $SAMPLES)"
 
 # ---- 1. structural precheck gate (cheap; don't burn judge tokens on junk) ----
 echo ">>> [1/5] precheck: evaluate_modeling_project.py"
-if python3 "$SCRIPTS/evaluate_modeling_project.py" "$PROJECT" --json >/dev/null 2>&1; then
+PRECHECK_JSON="$RESULTS_DIR/${BASE}_precheck.json"
+PRECHECK_STDERR="$RESULTS_DIR/${BASE}_precheck.stderr.log"
+if python3 "$SCRIPTS/evaluate_modeling_project.py" "$PROJECT" --json >"$PRECHECK_JSON" 2>"$PRECHECK_STDERR"; then
   PRECHECK_PASSED=true;  echo "    precheck PASS"
 else
   PRECHECK_PASSED=false; echo "    precheck FAIL:"
@@ -177,24 +179,26 @@ INLOOP="$(python3 "$SCRIPTS/parse_judge_score.py" "$PROJECT/judge_evaluation.md"
           | python3 -c 'import json,sys; print(json.load(sys.stdin).get("total"))' 2>/dev/null)" || true
 [ -n "$INLOOP" ] || INLOOP="NA"
 
+python3 "$SCRIPTS/enrich_evaluation_result.py" "$AGG_JSON" \
+  --precheck "$PRECHECK_JSON" \
+  --unmatched "$UNMATCHED" \
+  --inloop "$INLOOP" >/dev/null
+
 SUMMARY="$(AGG_JSON="$AGG_JSON" PRECHECK_PASSED="$PRECHECK_PASSED" UNMATCHED="$UNMATCHED" \
            INLOOP="$INLOOP" BASE="$BASE" python3 - <<'PY'
 import json, os
 p = os.environ["AGG_JSON"]
 d = json.load(open(p))
-d["precheck_passed"]   = os.environ["PRECHECK_PASSED"] == "true"
-d["unmatched_numbers"] = os.environ["UNMATCHED"]
-d["inloop_total"]      = os.environ["INLOOP"]
-json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
 pc = "PASS" if d["precheck_passed"] else "FAIL"
 # Report the recomputed median (dimension-sum, robust to total-score anchoring)
 # as the headline external score; show the judge's anchored total in parens.
-ext = d.get("median_recomputed")
-ext = ext if ext is not None else d.get("median_total")
-lo, hi = d.get("min_recomputed"), d.get("max_recomputed")
+llm = d.get("llm_score", {})
+ext = llm.get("median_recomputed")
+ext = ext if ext is not None else llm.get("median_total")
+lo, hi = llm.get("min_recomputed"), llm.get("max_recomputed")
 clamp = " [clamped]" if d.get("any_clamped") else ""
 print(f'{os.environ["BASE"]}: external={ext}/100 '
-      f'(spread {lo}-{hi}, anchored-total={d.get("median_total")}){clamp}, '
+      f'(spread {lo}-{hi}, anchored-total={llm.get("median_total")}){clamp}, '
       f'in-loop={os.environ["INLOOP"]}, unmatched={os.environ["UNMATCHED"]}, precheck={pc}')
 PY
 )"
