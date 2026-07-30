@@ -111,46 +111,54 @@ fi
 SERVICE_URL=$(get_service_url)
 echo "Using Cloud Run service: $SERVICE_URL" >&2
 
-# Read script content
 SCRIPT_NAME=$(basename "$SCRIPT_PATH")
-SCRIPT_CONTENT=$(cat "$SCRIPT_PATH" | jq -Rs .)
+REQUEST_TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$REQUEST_TMP_DIR"' EXIT
+WORKING_FILES_PATH="$REQUEST_TMP_DIR/working_files.json"
+ENV_VARS_PATH="$REQUEST_TMP_DIR/env_vars.json"
+REQUEST_JSON_PATH="$REQUEST_TMP_DIR/request.json"
+printf '{}\n' > "$WORKING_FILES_PATH"
+printf '{}\n' > "$ENV_VARS_PATH"
 
-# Build working files JSON
-WORKING_FILES_JSON="{}"
+# Build working files JSON through files, avoiding ARG_MAX for large payloads.
 for file in "${WORKING_FILES[@]}"; do
     if [[ -f "$file" ]]; then
         filename=$(basename "$file")
-        content=$(cat "$file" | jq -Rs .)
-        WORKING_FILES_JSON=$(echo "$WORKING_FILES_JSON" | jq --arg k "$filename" --argjson v "$content" '. + {($k): $v}')
+        next_path="$REQUEST_TMP_DIR/working_files.next.json"
+        jq --arg k "$filename" --rawfile v "$file" '. + {($k): $v}' \
+            "$WORKING_FILES_PATH" > "$next_path"
+        mv "$next_path" "$WORKING_FILES_PATH"
     fi
 done
 
-# Build env vars JSON
-ENV_VARS_JSON="{}"
+# Build env vars JSON without carrying the document in argv.
 for env_pair in "${ENV_VARS[@]}"; do
     key="${env_pair%%=*}"
     value="${env_pair#*=}"
-    ENV_VARS_JSON=$(echo "$ENV_VARS_JSON" | jq --arg k "$key" --arg v "$value" '. + {($k): $v}')
+    next_path="$REQUEST_TMP_DIR/env_vars.next.json"
+    jq --arg k "$key" --arg v "$value" '. + {($k): $v}' \
+        "$ENV_VARS_PATH" > "$next_path"
+    mv "$next_path" "$ENV_VARS_PATH"
 done
 
-# Build request payload
-REQUEST_JSON=$(jq -n \
+# Build request payload on disk so neither jq nor curl receives it as argv.
+jq -n \
     --arg job_id "$JOB_ID" \
     --arg solver_type "$SOLVER_TYPE" \
-    --argjson script_content "$SCRIPT_CONTENT" \
+    --rawfile script_content "$SCRIPT_PATH" \
     --arg script_name "$SCRIPT_NAME" \
     --argjson max_time "$MAX_TIME" \
-    --argjson working_files "$WORKING_FILES_JSON" \
-    --argjson env_vars "$ENV_VARS_JSON" \
+    --slurpfile working_files "$WORKING_FILES_PATH" \
+    --slurpfile env_vars "$ENV_VARS_PATH" \
     '{
         job_id: $job_id,
         solver_type: $solver_type,
         script_content: $script_content,
         script_name: $script_name,
         max_time: $max_time,
-        working_files: $working_files,
-        env_vars: $env_vars
-    }')
+        working_files: $working_files[0],
+        env_vars: $env_vars[0]
+    }' > "$REQUEST_JSON_PATH"
 
 # Submit job
 echo "Submitting job $JOB_ID to Cloud Run..." >&2
@@ -163,7 +171,7 @@ if [[ -n "${SOLVER_API_TOKEN:-}" ]]; then
 fi
 SUBMIT_RESPONSE=$(curl -s -X POST \
     "${SUBMIT_HEADERS[@]}" \
-    -d "$REQUEST_JSON" \
+    --data-binary "@$REQUEST_JSON_PATH" \
     "${SERVICE_URL}/solve/${SOLVER_TYPE}")
 
 # Check if submission succeeded

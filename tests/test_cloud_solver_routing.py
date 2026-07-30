@@ -154,3 +154,53 @@ def test_gcp_solver_client_describes_service_in_configured_project(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "--project=configured-project" in gcloud_log.read_text(encoding="utf-8")
+
+
+def test_gcp_solver_client_handles_large_working_files_without_argv_overflow(tmp_path):
+    bin_dir = tmp_path / "bin"
+    script = tmp_path / "solve.py"
+    working_file = tmp_path / "large_payload.txt"
+    request_capture = tmp_path / "request.json"
+    write_file(script, "print('ok')\n")
+    write_file(working_file, "x" * 300_000)
+    write_file(
+        bin_dir / "gcloud",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *'print-identity-token'* ]]; then echo token; else echo https://solver.example; fi\n",
+        executable=True,
+    )
+    write_file(
+        bin_dir / "curl",
+        "#!/usr/bin/env bash\n"
+        f"capture={request_capture}\n"
+        "for arg in \"$@\"; do\n"
+        "  if [[ \"$arg\" == @* ]]; then cp \"${arg#@}\" \"$capture\"; fi\n"
+        "done\n"
+        "if [[ \"$*\" == *'/solve/'* ]]; then\n"
+        "  echo '{\"job_id\":\"job-test\"}'\n"
+        "else\n"
+        "  echo '{\"status\":\"completed\",\"exit_code\":0,\"stdout_url\":null,\"stderr_url\":null,\"result_files\":[]}'\n"
+        "fi\n",
+        executable=True,
+    )
+    write_file(bin_dir / "gsutil", "#!/usr/bin/env bash\nexit 0\n", executable=True)
+
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts" / "gcp_solver_client.sh"),
+            "--type",
+            "python",
+            "--max-time",
+            "60",
+            "--working-file",
+            str(working_file),
+            str(script),
+        ],
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert request_capture.stat().st_size > 300_000
