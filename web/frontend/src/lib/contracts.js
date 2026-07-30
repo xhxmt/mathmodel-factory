@@ -8,6 +8,9 @@
  * @property {boolean} archived
  * @property {string} status
  * @property {number} current_step
+ * @property {number|null} revision
+ * @property {number|null} last_completed_step
+ * @property {Object|null} pending_action
  * @property {number} progress_percent
  * @property {boolean} is_running
  * @property {number|null} pid
@@ -32,6 +35,7 @@
 /**
  * @typedef {Object} CloudConfig
  * @property {boolean} enabled
+ * @property {number|null} revision
  * @property {string} env_file
  * @property {number} threshold_time
  * @property {string[]} solver_types
@@ -73,6 +77,9 @@ export function normalizeProjectStatus(raw = {}) {
     archived: Boolean(raw.archived),
     status: String(raw.status || 'unknown'),
     current_step: numberOr(raw.current_step, -1),
+    revision: raw.revision == null ? null : numberOr(raw.revision, null),
+    last_completed_step: raw.last_completed_step == null ? null : numberOr(raw.last_completed_step, null),
+    pending_action: raw.pending_action && typeof raw.pending_action === 'object' ? raw.pending_action : null,
     progress_percent: numberOr(raw.progress_percent, 0),
     is_running: Boolean(raw.is_running),
     pid: raw.pid === undefined || raw.pid === null || raw.pid === '' ? null : numberOr(raw.pid, null),
@@ -137,6 +144,7 @@ export function normalizeStepsPayload(raw = {}) {
 export function normalizeCloudConfig(raw = {}) {
   return {
     enabled: Boolean(raw.enabled),
+    revision: raw.revision == null ? null : numberOr(raw.revision, null),
     env_file: String(raw.env_file || ''),
     threshold_time: numberOr(raw.threshold_time, 300),
     solver_types: normalizeSolverTypes(raw.solver_types),

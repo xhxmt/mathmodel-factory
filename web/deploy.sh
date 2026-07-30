@@ -69,10 +69,26 @@ preflight() {
         "$PROJECT_ROOT/scripts/load_secrets.sh" \
         "$PROJECT_ROOT/launch_agents.sh" \
         "$PROJECT_ROOT/run_paper.sh" \
+        "$PROJECT_ROOT/factory_core/adapters/legacy_runner.sh" \
         "$PROJECT_ROOT/web/backend/start.sh" \
         "$PROJECT_ROOT/web/deploy.sh"; do
         bash -n "$script"
     done
+
+    for lock in \
+        "$PROJECT_ROOT/pyproject.toml" \
+        "$PROJECT_ROOT/uv.lock" \
+        "$PROJECT_ROOT/web/backend/requirements.lock" \
+        "$PROJECT_ROOT/cloud/requirements.lock" \
+        "$PROJECT_ROOT/web/frontend/package-lock.json"; do
+        [[ -s "$lock" ]] || { echo -e "${RED}✗ missing reproducible-build input: $lock${NC}"; exit 1; }
+    done
+    "$PROJECT_ROOT/.venv/bin/python" - <<'PY'
+from factory_core.steps import build_native_registry
+
+steps = list(build_native_registry("."))
+assert [step.id for step in steps] == list(range(17)), "native registry is incomplete"
+PY
 
     check_env_file "$PROJECT_ROOT/.env"
     check_env_file "$PROJECT_ROOT/web/.env"
@@ -83,6 +99,14 @@ preflight() {
             echo -e "${RED}✗ paper-factory-api.service 未加载 Secret Manager loader${NC}"
             exit 1
         fi
+        if ! systemctl cat paper-factory-api | grep -Fq "WorkingDirectory=$PROJECT_ROOT"; then
+            echo -e "${RED}✗ paper-factory-api.service 工作目录不是 $PROJECT_ROOT${NC}"
+            exit 1
+        fi
+        if ! systemctl cat paper-factory-api | grep -Fq "$PROJECT_ROOT/.venv/bin/uvicorn apps.web.backend.main:app"; then
+            echo -e "${RED}✗ paper-factory-api.service 未使用锁定环境或稳定 ASGI 入口${NC}"
+            exit 1
+        fi
     fi
     echo -e "${GREEN}✓ 部署预检通过${NC}"
 }
@@ -91,9 +115,10 @@ deploy_frontend() {
     echo -e "${GREEN}► 步骤 1/4: 构建前端${NC}"
     if [ "$EUID" -eq 0 ]; then
         sudo -u "$SERVICE_USER" -H bash -lc \
-            "cd '$PROJECT_ROOT/web/frontend' && npm run build"
+            "cd '$PROJECT_ROOT/web/frontend' && npm ci && npm run build"
     else
         cd "$PROJECT_ROOT/web/frontend"
+        npm ci
         npm run build
     fi
     if [ ! -f "$PROJECT_ROOT/web/frontend/dist/index.html" ]; then

@@ -147,7 +147,7 @@ def test_project_action_raises_on_failed_control_command(monkeypatch):
         stdout = ""
         stderr = "cannot kill"
 
-    monkeypatch.setattr(mod.project_actions, "run_action", lambda *a, **k: DummyResult())
+    monkeypatch.setattr(mod.project_api, "run_action", lambda *a, **k: DummyResult())
     payload = mod.ProjectAction(action="kill")
     user = mod.UserInfo(username="admin", role="admin")
 
@@ -466,12 +466,22 @@ def test_selection_decision_writes_human_review(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    class DummyResult:
-        ok = True
-        stdout = "resumed"
-        stderr = ""
+    calls = []
 
-    monkeypatch.setattr(mod.project_api, "run_action", lambda *a, **k: DummyResult())
+    class Service:
+        def __init__(self, root):
+            calls.append(("init", root))
+
+        def resolve_and_start(
+            self, project, resolution, *, evidence_writer, expected_revision=None
+        ):
+            calls.append(
+                ("resolve", project, resolution, expected_revision)
+            )
+            evidence_writer()
+            return types.SimpleNamespace(revision=5), types.SimpleNamespace(pid=4242)
+
+    monkeypatch.setattr(mod.project_api, "FactoryService", Service)
     response = asyncio.run(
         mod.submit_selection_decision(
             "demo",
@@ -480,6 +490,7 @@ def test_selection_decision_writes_human_review(tmp_path, monkeypatch):
                 selected_option_id="m1",
                 selected_aux_id="NONE",
                 reason="ok",
+                expected_revision=3,
             ),
             current_user=user,
         )
@@ -487,6 +498,150 @@ def test_selection_decision_writes_human_review(tmp_path, monkeypatch):
 
     assert response["status"] == "ok"
     assert "## Step 3 decision:" in (project / "human_review.md").read_text(encoding="utf-8")
+    assert calls == [
+        ("init", tmp_path),
+        (
+            "resolve",
+            project,
+            {
+                "source": "web",
+                "gate": "step3",
+                "selected_option_id": "m1",
+                "selected_aux_id": "NONE",
+                "reason": "ok",
+            },
+            3,
+        ),
+    ]
+
+
+def test_consultation_answer_resumes_project(tmp_path, monkeypatch):
+    mod = load_main_module(
+        factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db"
+    )
+    user = mod.UserInfo(username="admin", role="admin")
+    project = tmp_path / "ongoing" / "demo"
+    consultation = project / "consultation"
+    consultation.mkdir(parents=True)
+    (consultation / "preflight_request.md").write_text(
+        "# 咨询请求：Preflight\n- step: 0\n- created: now\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    class Service:
+        def __init__(self, root):
+            calls.append(("init", root))
+
+        def resolve_and_start(
+            self, project, resolution, *, evidence_writer, expected_revision=None
+        ):
+            calls.append(
+                ("resolve", project, resolution, expected_revision)
+            )
+            evidence_writer()
+            return types.SimpleNamespace(revision=5), types.SimpleNamespace(pid=4242)
+
+    monkeypatch.setattr(mod.project_api, "FactoryService", Service)
+
+    response = asyncio.run(
+        mod.submit_consultation_answer(
+            "demo",
+            mod.project_api.ConsultationAnswer(
+                answer="Proceed", expected_revision=3
+            ),
+            current_user=user,
+        )
+    )
+
+    assert response["status"] == "ok"
+    assert "project resumed" in response["message"]
+    assert "STATUS: READY" in (project / "human_review.md").read_text(
+        encoding="utf-8"
+    )
+    assert calls == [
+        ("init", tmp_path),
+        (
+            "resolve",
+            project,
+            {"source": "web", "gate": "preflight"},
+            3,
+        ),
+    ]
+
+
+def test_consultation_answer_reports_resume_failure(tmp_path, monkeypatch):
+    mod = load_main_module(
+        factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db"
+    )
+    user = mod.UserInfo(username="admin", role="admin")
+    consultation = tmp_path / "ongoing" / "demo" / "consultation"
+    consultation.mkdir(parents=True)
+    (consultation / "preflight_request.md").write_text(
+        "# 咨询请求：Preflight\n- step: 0\n- created: now\n",
+        encoding="utf-8",
+    )
+
+    class Service:
+        def __init__(self, _root):
+            pass
+
+        def resolve_and_start(self, *_args, **_kwargs):
+            raise mod.project_api.FactoryCoreError(
+                "expected revision 2, found 3"
+            )
+
+    monkeypatch.setattr(mod.project_api, "FactoryService", Service)
+
+    with pytest.raises(mod.HTTPException) as excinfo:
+        asyncio.run(
+            mod.submit_consultation_answer(
+                "demo",
+                mod.project_api.ConsultationAnswer(
+                    answer="Proceed", expected_revision=3
+                ),
+                current_user=user,
+            )
+        )
+
+    assert excinfo.value.status_code == 409
+    assert "expected revision" in excinfo.value.detail
+
+
+def test_selection_decision_rejects_stale_revision_before_writing(tmp_path, monkeypatch):
+    mod = load_main_module(
+        factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db"
+    )
+    user = mod.UserInfo(username="admin", role="admin")
+    project = tmp_path / "ongoing" / "demo"
+    (project / "selection").mkdir(parents=True)
+    class Service:
+        def __init__(self, _root):
+            pass
+
+        def resolve_and_start(self, *_args, **_kwargs):
+            raise mod.project_api.FactoryCoreError(
+                "expected revision 3, found 4"
+            )
+
+    monkeypatch.setattr(mod.project_api, "FactoryService", Service)
+
+    with pytest.raises(mod.HTTPException) as excinfo:
+        asyncio.run(
+            mod.submit_selection_decision(
+                "demo",
+                mod.SelectionDecisionRequest(
+                    gate="step3",
+                    selected_option_id="m1",
+                    expected_revision=3,
+                ),
+                current_user=user,
+            )
+        )
+
+    assert excinfo.value.status_code == 409
+    assert "expected revision 3, found 4" in excinfo.value.detail
+    assert not (project / "selection/step3_decision.json").exists()
 
 
 def _make_project(root, name):
@@ -769,6 +924,74 @@ def test_failed_project_request_launch_marks_failed(tmp_path, monkeypatch):
     failed = mod.auth_store.require_project_request(created.id)
     assert failed.status == "failed"
     assert "launcher failed" in failed.failure_reason
+
+
+def test_web_project_creation_calls_factory_service_directly(tmp_path, monkeypatch):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web/auth.db")
+    problem = tmp_path / "problem.pdf"
+    problem.write_bytes(b"problem")
+    captured = {}
+
+    class Status:
+        value = "ready"
+
+    class State:
+        project_id = "demo"
+        status = Status()
+        revision = 1
+
+    class Service:
+        def __init__(self, root):
+            captured["root"] = root
+
+        def create_project(self, base_name, question, *, consult, start):
+            captured["call"] = (base_name, question, consult, start)
+            return State(), None
+
+    monkeypatch.setattr(mod.project_api, "FactoryService", Service)
+    result = mod.project_api.run_project_launcher(
+        mod.settings,
+        mod.NewProjectRequest(
+            base_name="demo",
+            problem_path=str(problem),
+            no_start=True,
+            consult=True,
+        ),
+    )
+
+    assert result.ok is True
+    assert captured == {
+        "root": tmp_path,
+        "call": ("demo", str(problem.resolve()), True, False),
+    }
+    assert json.loads(result.stdout)["revision"] == 1
+
+
+def test_web_cloud_policy_rejects_stale_engine_revision(tmp_path):
+    from factory_core.service import FactoryService
+
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web/auth.db")
+    cloud_api = importlib.import_module("web.backend.cloud_api")
+    service = FactoryService(tmp_path)
+    service.create_project("demo", "question", start=False)
+    before = service.inspect("demo")
+    current = service.configure_solver_policy(
+        "demo",
+        mode="local",
+        expected_revision=before.revision,
+    )
+
+    with pytest.raises(mod.HTTPException) as excinfo:
+        cloud_api.set_project_cloud_enabled(
+            mod.settings,
+            "demo",
+            False,
+            expected_revision=before.revision,
+        )
+
+    assert excinfo.value.status_code == 409
+    assert "expected revision" in excinfo.value.detail
+    assert service.inspect("demo").revision == current["revision"]
 
 
 def test_cloud_global_config_is_admin_only_and_project_config_requires_owner(tmp_path):

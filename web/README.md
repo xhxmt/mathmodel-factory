@@ -1,6 +1,6 @@
 # Paper Factory Web Dashboard
 
-本目录提供 Modeling Factory 的 Web 控制面。它负责公开论文展厅、用户与项目审批、项目运行监控、日志/文件查看、人工咨询和 Step 3 方案选择；建模流程本身仍由仓库根目录的 `launch_agents.sh` 与 `run_paper.sh` 执行。
+本目录提供 Modeling Factory 的 Web 控制面。它负责公开论文展厅、用户与项目审批、项目运行监控、日志/文件查看、人工咨询和 Step 3 方案选择。对 engine 项目，创建、控制与云策略直接调用 `FactoryService`；未迁移项目才进入显式兼容路径。
 
 当前文档分工：
 
@@ -26,9 +26,10 @@
 
 ### 前置条件
 
-- Python 3、Node.js/npm、`gcloud` CLI。
+- Python 3、Node.js `^20.19.0` 或 `>=22.12.0`、npm、`gcloud` CLI。
 - 当前 GCP 项目中已配置 `scripts/load_secrets.sh` 使用的 Secret Manager 条目。
 - 当前账号有对应 Secret 的访问权限。
+- 已在仓库根目录运行 `uv sync --extra web --extra models --locked`，并在 `web/frontend/` 运行 `npm ci`。
 
 生产敏感值以 GCP Secret Manager 为权威来源。不要把 `JWT_SECRET`、`ADMIN_PASSWORD` 或 API key 写入 `.env`、文档、测试输出或命令日志。
 
@@ -63,7 +64,7 @@ cd /home/tfisher/paper_factory/web
 1. 在登录界面注册账号。
 2. 等待管理员审批；`pending`、`rejected` 或 `disabled` 用户不能登录。
 3. 上传 PDF、Markdown 或压缩包，并提交项目申请。
-4. 管理员审批后，项目由 `launch_agents.sh` 创建，申请人获得该项目的 owner ACL。
+4. 管理员审批后，项目由 `FactoryService` 创建，申请人获得该项目的 owner ACL。
 5. 用户只能查看和控制自己获授权的项目。
 
 ### 管理员
@@ -84,11 +85,14 @@ cd /home/tfisher/paper_factory/web
 
 默认大小上限为 100 MB，可通过 `MAX_UPLOAD_SIZE` 调整。压缩包会在 `uploads/` 下安全解压并查找题目 PDF/Markdown；目录穿越归档会被拒绝。
 
-管理员创建项目会直接调用：
+管理员创建项目等价于 CLI 命令：
 
 ```bash
-./launch_agents.sh new [--no-start] [--consult] <base_name> "/abs/path/to/problem.pdf"
+python3 -m factory_core.cli create <base_name> "/abs/path/to/problem.pdf" [--consult] [--start]
 ```
+
+稳定的生产 ASGI 入口是 `apps.web.backend.main:app`；
+`web/backend/main.py` 在迁移期保留 FastAPI 实现，`web/backend/app.py` 仅兼容重导出。
 
 普通用户走项目申请/审批流程，不会绕过管理员批准。
 
@@ -102,7 +106,7 @@ cd /home/tfisher/paper_factory/web
 - `storage_scope`：`ongoing` 或 `complete`。
 - `archived`：是否位于 `complete/`。
 
-前端按 `problem_key` 分组并显示每道题的最新运行和历史运行。`ongoing/` 与 `complete/` 始终是存储和运行态真相；归档 UI 不是数据迁移。
+前端按 `problem_key` 分组并显示每道题的最新运行和历史运行。`ongoing/` 与 `complete/` 是存储位置真相；新项目和已迁移项目的运行状态来自项目内 `.factory/state.db`，响应携带 `revision`。归档 UI 本身不是数据迁移。
 
 ## 人工选择：Web 与 CLI 并行
 
@@ -113,7 +117,10 @@ python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
   --primary m2 --aux m1 --reason "Prefer the verified primary stream"
 ```
 
-调试时可加 `--no-resume`。CLI 路径是现役合同，不能被 Web 替代。
+调试时可加 `--no-resume`。Web 提交选择或咨询回答时携带当前 project
+revision；过期页面会收到 `409`，不会写入旧决策或启动 worker。成功提交
+会解析 gate 并启动统一 Python worker。CLI 路径是现役合同，不能被 Web
+替代。
 
 ## API 概览
 

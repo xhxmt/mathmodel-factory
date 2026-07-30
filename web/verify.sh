@@ -26,27 +26,25 @@ info() { echo -e "${YELLOW}ℹ${NC} $1"; }
 echo "1. Checking directory structure..."
 [[ -d "backend" ]] || fail "backend/ directory missing"
 [[ -d "frontend" ]] || fail "frontend/ directory missing"
-[[ -f "backend/app.py" ]] || fail "backend/app.py missing"
+[[ -f "../apps/web/backend/main.py" ]] || fail "canonical ASGI entry missing"
 [[ -f "frontend/src/App.vue" ]] || fail "frontend/src/App.vue missing"
 pass "Directory structure OK"
 
 # 2. Check backend
 echo ""
 echo "2. Checking backend..."
-[[ -d "backend/venv" ]] || fail "Backend venv not created (run: cd backend && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt)"
-[[ -f "backend/venv/bin/python3" ]] || fail "Python venv broken"
+[[ -x "$SCRIPT_DIR/../.venv/bin/python" ]] || fail "Locked root environment missing (run: uv sync --extra web --extra models --locked)"
 
 # Test import
-cd backend
-source venv/bin/activate
-python3 -c "import app" 2>/dev/null || fail "Backend import failed"
+cd "$SCRIPT_DIR/.."
+.venv/bin/python -c "import apps.web.backend.main" 2>/dev/null || fail "Backend import failed"
 pass "Backend imports OK"
-cd ..
+cd "$SCRIPT_DIR"
 
 # 3. Check frontend
 echo ""
 echo "3. Checking frontend..."
-[[ -d "frontend/node_modules" ]] || fail "Frontend node_modules missing (run: cd frontend && npm install)"
+[[ -d "frontend/node_modules" ]] || fail "Frontend node_modules missing (run: cd frontend && npm ci)"
 [[ -f "frontend/node_modules/.bin/vite" ]] || fail "Vite not installed"
 pass "Frontend dependencies OK"
 
@@ -54,9 +52,9 @@ pass "Frontend dependencies OK"
 echo ""
 echo "4. Checking documentation..."
 [[ -f "README.md" ]] || fail "README.md missing"
-[[ -f "INTERFACE_GUIDE.md" ]] || fail "INTERFACE_GUIDE.md missing"
-[[ -f "QUICKSTART.txt" ]] || fail "QUICKSTART.txt missing"
-[[ -f "PROJECT_SUMMARY.md" ]] || fail "PROJECT_SUMMARY.md missing"
+[[ -f "QUICKSTART.md" ]] || fail "QUICKSTART.md missing"
+[[ -f "USAGE_GUIDE.md" ]] || fail "USAGE_GUIDE.md missing"
+[[ -f "docs/deployment/DEPLOYMENT.md" ]] || fail "deployment runbook missing"
 pass "Documentation complete"
 
 # 5. Check scripts
@@ -71,9 +69,8 @@ pass "All scripts executable"
 # 6. Test backend startup
 echo ""
 echo "6. Testing backend startup..."
-cd backend
-source venv/bin/activate
-timeout 5 python3 app.py >/dev/null 2>&1 &
+cd "$SCRIPT_DIR/.."
+timeout 5 "$SCRIPT_DIR/backend/start.sh" >/dev/null 2>&1 &
 BACKEND_PID=$!
 sleep 2
 
@@ -84,7 +81,7 @@ else
     fail "Backend not responding"
 fi
 
-if curl -s http://127.0.0.1:8000/api/projects | grep -q "\["; then
+if curl -s http://127.0.0.1:8000/api/showcase/papers | grep -q "\["; then
     pass "API endpoint OK"
 else
     kill $BACKEND_PID 2>/dev/null || true
@@ -93,7 +90,7 @@ fi
 
 kill $BACKEND_PID 2>/dev/null || true
 wait $BACKEND_PID 2>/dev/null || true
-cd ..
+cd "$SCRIPT_DIR"
 
 # 7. Check demo projects
 echo ""
@@ -117,7 +114,7 @@ echo "📚 Quick Start:"
 echo "   ./start_dashboard.sh"
 echo ""
 echo "📖 Documentation:"
-echo "   cat QUICKSTART.txt"
+echo "   cat QUICKSTART.md"
 echo "   cat README.md"
 echo ""
 echo "🧪 Create demo projects (for testing):"

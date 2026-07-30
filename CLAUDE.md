@@ -4,18 +4,18 @@ This file gives coding-agent guidance for this repository.
 
 ## What This Is
 
-This checkout is a local Modeling Factory: a bash/Python orchestrator that
+This checkout is a local Modeling Factory: a Python orchestrator with a frozen Bash step adapter that
 takes a math-modeling competition problem and drives a multi-agent 16-step
 workflow to produce a finished paper PDF and supporting artifacts.
 
 The active domain is CUMCM / MCM / ICM style applied mathematical modeling, not
 the original economics/sociology Paper Factory. Legacy social-science prompts
-and Stata helpers remain in the tree for compatibility, but new modeling work
+and Stata helpers remain as historical reference, but their execution path is retired. New modeling work
 must follow `STEPS.md` and `modeling_guide.md`.
 
 There are three relevant audiences for code in this repo:
 
-1. The shell that launches and supervises agents: `launch_agents.sh`, `run_paper.sh`.
+1. The control plane: `factory_core/`, `launch_agents.sh`, the `run_paper.sh` compatibility launcher, CLI, and Web.
 2. The prompts each agent reads: `prompts/step*.txt`, `STEPS.md`, `modeling_guide.md`, `method_library/`.
 3. The launched agents, which write markdown, Python/solver code, LaTeX, figures, tables, and result files inside project directories under `ongoing/`.
 
@@ -64,26 +64,40 @@ nontrivial jobs.
 
 ## Architecture
 
-### Two-Layer Launcher
+### Engine And Compatibility Launcher
 
-`launch_agents.sh` creates projects, manages pids/locks, and shells out to
-`run_paper.sh`. It writes:
+`launch_agents.sh` is a compatibility CLI that forwards new engine projects to
+`FactoryService` and uses the thin `run_paper.sh` compatibility launcher for
+foreground execution. New projects initialize `.factory/state.db` and run
+through the native Step 0-16 registry. Existing projects remain on the frozen
+Legacy Runner until an explicit, conflict-free migration report is applied.
 
-- `run_state/process_registry`
-- `ongoing/<base>/.runner.pid`
-- `ongoing/<base>/.paused`
-- `ongoing/<base>/.killed`
+`factory_core/` owns revisioned state transitions, append-only events, retry
+budgets, recovery decisions, pending actions, Step/backend registration,
+application commands, and solver jobs. Native Steps implement
+`prepare/execute/validate/recover` and do not invoke the frozen Bash runner.
+The historical implementation lives at `factory_core/adapters/legacy_runner.sh`
+for unmigrated and explicitly rolled-back projects only.
 
-`run_paper.sh` is the per-project workflow driver. On startup it executes a
-snapshot of itself under `logs/runner_snapshots/` via `RUN_PAPER_SNAPSHOT=1`;
-edits to `run_paper.sh` affect newly launched runners, not already-running
-snapshot copies.
+The Legacy Adapter still snapshots itself under `logs/runner_snapshots/` so an
+active Step is insulated from edits. Do not add new scheduling, retry, recovery,
+or state logic to the adapter.
 
-### File-State Is Authoritative
+### State And Artifact Authority
 
-`infer_step()` in `run_paper.sh` determines progress from actual files, not
-from `checkpoint.md`. Editing `checkpoint.md` alone does not redo or skip work;
-delete or regenerate the output artifacts that define the step.
+For new and migrated projects, `.factory/state.db` is the workflow-state source
+of truth. A transaction appends an event and updates the snapshot with a
+monotonic `revision`. `checkpoint.md`, heartbeat, marker, PID, and diagnostics
+files are compatibility projections and must not be used to overwrite SQLite.
+
+Artifacts defined by `STEPS.md` remain validation evidence. Recovery calls the
+registered Step validator: valid artifacts promote the interrupted Step;
+invalid artifacts retry it. File modification times do not determine the
+authoritative state.
+
+For unmigrated modeling projects only, `infer_step()` in the frozen Legacy
+Adapter continues to infer progress from artifacts. `run_paper.sh --infer-step`
+routes to SQLite or Legacy inference without changing its public output.
 
 Modeling-mode is detected by the `problem/` directory after setup. The runner
 then uses the modeling branch of `infer_step()` and the modeling Step 1-16
@@ -97,7 +111,7 @@ autonomous pipeline. **Off by default** — enable per project with
 off, prompts and behavior are byte-identical, so unattended benchmark/ablation
 runs are unaffected.
 
-`maybe_consult <gate> <step> <title>` in `run_paper.sh` is the gate primitive.
+`maybe_consult <gate> <step> <title>` in the Legacy Adapter is the gate primitive.
 Three gates: **preflight** (after Step 0 parsing, before Step 1), **step4**
 (before full model construction), and **dynamic** (an agent writes
 `consultation/REQUEST.md` and stops when it hits a hard call). A gate that is
@@ -218,9 +232,9 @@ Follow `modeling_guide.md`:
 
 ## Web Control Plane Contract
 
-The current FastAPI application is `web/backend/main.py`.
-`web/backend/app.py` is only a compatibility launcher/re-export and must not be
-documented as the architecture owner.
+The stable ASGI entry is `apps.web.backend.main:app`. During the repository
+boundary transition, `web/backend/main.py` contains the FastAPI implementation;
+`web/backend/app.py` is only a compatibility launcher/re-export.
 
 Authentication and approvals are persisted in SQLite at `web/auth.db` through
 `web/backend/auth_store.py`. Passwords are bcrypt hashes. Registration creates
@@ -229,8 +243,12 @@ user sees and manages only projects granted through `project_acl`, while an
 administrator can manage all projects. Unauthenticated visitors can only use
 the read-only showcase configured by `SHOWCASE_PROJECTS`.
 
+Engine project creation, lifecycle controls, and solver policy call
+`FactoryService` directly. FastAPI owns authentication, ACL checks, and HTTP
+error mapping; it does not route these commands through shell subprocesses.
+
 The Web project list exposes `problem_key`, `problem_title`, `storage_scope`,
-and `archived`. Equivalent contained problem statements share a canonical
+`archived`, and the workflow `revision`. Equivalent contained problem statements share a canonical
 SHA-256 identity so the frontend can group multiple runs into one problem
 archive. This grouping does not move or rename project directories:
 `ongoing/` and `complete/` remain authoritative storage.
@@ -244,12 +262,13 @@ prefix. `web/README.md` owns current usage and
 
 ## Editing Notes
 
-- Runtime directories (`ongoing/`, `complete/`, `papers/`, `logs/`, `run_state/`) are gitignored.
+- Runtime directories (`ongoing/`, `complete/`, `papers/`, `logs/`, `run_state/`) and project `.factory/` databases are gitignored.
 - Do not commit `.env`, credentials, generated logs, PDFs, or benchmark downloads.
 - Inspect every worktree before cleanup. Do not remove a worktree, branch,
   backup, gitlink, log, or local credential file until its exact contents and
   recovery value have been reported and the user has explicitly approved the
   destructive action.
-- Editing `run_paper.sh` is safe while runners are active because active jobs use snapshots.
+- `run_paper.sh` must remain a thin compatibility launcher. Existing Step shell changes belong in the frozen adapter; new scheduling behavior belongs in `factory_core/`.
+- Root `pyproject.toml`/`uv.lock`, hash-locked Web/Cloud exports, and frontend `package-lock.json` own dependency resolution. Runtime start scripts must not install packages.
 - Do not change `STEPS.md`, `modeling_guide.md`, or active prompts casually; they are agent contracts.
-- Keep legacy prompt files unless deliberately removing legacy mode. Many old social-science prompt files are no longer called by the modeling dispatcher but remain useful reference material.
+- Keep historical prompt/data files unless deletion is explicitly approved. They are not an executable compatibility promise.

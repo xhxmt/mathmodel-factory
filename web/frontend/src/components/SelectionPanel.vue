@@ -60,7 +60,10 @@ import { useToasts } from '../composables/useToasts.js'
 export default {
   name: 'SelectionPanel',
   components: { Icon },
-  props: { base: { type: String, required: true } },
+  props: {
+    base: { type: String, required: true },
+    revision: { type: Number, default: null },
+  },
   emits: ['changed'],
   setup(props, { emit }) {
     const toasts = useToasts()
@@ -102,6 +105,7 @@ export default {
           selected_option_id: option.id,
           selected_aux_id: option.recommended_aux || 'NONE',
           reason: `Selected ${option.id} from Web selection panel`,
+          expected_revision: props.revision,
         })
         selectedOptionId.value = option.id
         toasts.success(`${option.title} 已写入 Step 3 决策`, '方案选择')

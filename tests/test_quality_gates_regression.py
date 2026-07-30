@@ -9,6 +9,9 @@ from pathlib import Path
 from conftest import REPO_ROOT
 
 
+LEGACY_RUNNER = Path(REPO_ROOT) / "factory_core" / "adapters" / "legacy_runner.sh"
+
+
 def write_file(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -51,7 +54,7 @@ def test_infer_step_does_not_report_16_when_gate2_is_not_pass(tmp_path):
 
 
 def test_step16_writes_delivery_manifest_after_quality_gate():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
 
     assert "scripts/delivery_contract.py" in text
@@ -60,7 +63,7 @@ def test_step16_writes_delivery_manifest_after_quality_gate():
 
 
 def test_step16_rejudges_the_post_polish_submission_before_delivery():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
     step16 = text[text.index("run_step_16() {") : text.index("# ── Main step loop")]
 
     assert "run_final_submission_judge" in step16
@@ -85,7 +88,7 @@ def test_step16_rejudges_the_post_polish_submission_before_delivery():
 
 
 def test_runner_recovers_a_persisted_gate2_reopen_before_step14():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
 
     recovery_call = "if ! recover_pending_gate2_reopen; then"
     assert recovery_call in text
@@ -95,7 +98,7 @@ def test_runner_recovers_a_persisted_gate2_reopen_before_step14():
 
 
 def test_final_judge_reopen_state_is_durable_before_main_loop_routing():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
     final_judge = text[
         text.index("run_final_submission_judge() {") : text.index("run_step_14() {")
     ]
@@ -115,7 +118,7 @@ def test_final_judge_reopen_state_is_durable_before_main_loop_routing():
 
 
 def test_final_judge_crash_recovery_precedes_ordinary_gate2_budget():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
     recovery = text[
         text.index("recover_pending_gate2_reopen() {") :
         text.index("final_judge_reopened_once_file() {")
@@ -145,7 +148,7 @@ def test_paper_reviewer_scope_excludes_unseen_pdf_visual_quality():
 
 
 def test_gate2_model_reopen_routes_to_the_earliest_responsible_step():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
     helper = text[text.index("gate2_resume_step() {") : text.index("recover_pending_gate2_reopen()")]
 
     assert "Correctness vetoes:.*math" in helper
@@ -157,7 +160,7 @@ def test_gate2_model_reopen_routes_to_the_earliest_responsible_step():
 
 
 def test_gate2_indeterminate_roles_route_by_responsible_stage():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
     helper = text[text.index("gate2_resume_step() {") : text.index("recover_pending_gate2_reopen()")]
 
     math_check = helper.index("Indeterminate roles:.*math")
@@ -295,7 +298,7 @@ def test_evaluator_rejects_failed_project_quality_contract(tmp_path, monkeypatch
 
 
 def test_runner_requires_quality_contract_at_gate1_and_delivery():
-    runner = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    runner = LEGACY_RUNNER.read_text(encoding="utf-8")
 
     assert "quality_contract_gate_passed()" in runner
     verifier = runner[runner.index("verify_step_output()") :]
@@ -493,7 +496,7 @@ def test_verify_symbols_ignores_norm_delimiters_and_equation_labels(tmp_path):
 
 
 def test_runner_invokes_step3_selection_before_step3_dispatch():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
 
     assert "maybe_select_option step3 3" in text
@@ -501,7 +504,7 @@ def test_runner_invokes_step3_selection_before_step3_dispatch():
 
 
 def test_runner_retry_branch_uses_global_variables_not_local_declarations():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
 
     retry_branch = text[text.index("RETRIES=$((RETRIES + 1))") : text.index("if (( RETRIES >= STEP_MAX_RETRIES ))")]
@@ -511,7 +514,7 @@ def test_runner_retry_branch_uses_global_variables_not_local_declarations():
 
 
 def test_dispatch_step_validates_artifacts_after_successful_configured_backend():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     dispatch = text[text.index("dispatch_step() {") : text.index("# Wrapper so single-Claude-worker steps")]
 
@@ -523,7 +526,7 @@ def test_dispatch_step_validates_artifacts_after_successful_configured_backend()
 
 
 def test_codex_only_mode_blocks_claude_backend_and_default_fallbacks():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     backend = text[text.index("run_backend() {") : text.index("# Generic per-step dispatch")]
     dispatch = text[text.index("dispatch_step() {") : text.index("# Wrapper so single-Claude-worker steps")]
@@ -539,7 +542,7 @@ def test_codex_only_mode_blocks_claude_backend_and_default_fallbacks():
 
 
 def test_codex_only_mode_uses_isolated_codex_judge_calls():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     backend = text[text.index("run_backend() {") : text.index("# Generic per-step dispatch")]
     role_runner = text[
@@ -553,7 +556,7 @@ def test_codex_only_mode_uses_isolated_codex_judge_calls():
 
 
 def test_step13_treats_unavailable_judge_role_as_retryable_error():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     step13 = text[text.index("run_step_13() {") : text.index("run_final_submission_judge() {")]
 
@@ -563,7 +566,7 @@ def test_step13_treats_unavailable_judge_role_as_retryable_error():
 
 
 def test_step13_binds_effective_prompts_and_configuration_group_before_aggregation():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
     api_runner = text[text.index("run_api_model() {") : text.index("run_backend() {")]
     role_runner = text[
         text.index("run_independent_judge_role() {") : text.index("run_step_13() {")
@@ -582,7 +585,7 @@ def test_step13_binds_effective_prompts_and_configuration_group_before_aggregati
 
 
 def test_codex_judge_receipt_distinguishes_exec_from_tui_transport():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
     codex_role = text[
         text.index("run_codex_isolated_judge_role() {") :
         text.index("run_independent_judge_role() {")
@@ -599,7 +602,7 @@ def test_codex_judge_receipt_distinguishes_exec_from_tui_transport():
 
 
 def test_codex_judge_has_isolated_tui_fallback_for_exec_channel_outages():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     role = text[
         text.index("run_codex_isolated_judge_role() {") : text.index("run_independent_judge_role() {")
@@ -613,7 +616,7 @@ def test_codex_judge_has_isolated_tui_fallback_for_exec_channel_outages():
 
 
 def test_step16_cleans_before_final_judge_fingerprint_is_built():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     step16 = text[text.index("run_step_16() {") : text.index("# ── Main step loop")]
 
@@ -627,7 +630,7 @@ def test_step16_cleans_before_final_judge_fingerprint_is_built():
 
 
 def test_step16_post_judge_verification_does_not_rewrite_fingerprinted_reports():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     verify_output = text[text.index("verify_step_output() {") : text.index("# ── Error classification")]
 
@@ -635,7 +638,7 @@ def test_step16_post_judge_verification_does_not_rewrite_fingerprinted_reports()
 
 
 def test_claude_worker_has_stale_activity_kill_path():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     worker = text[text.index("run_claude_worker() {") : text.index("# Fallback: Codex failed")]
 
@@ -649,7 +652,7 @@ def test_claude_worker_has_stale_activity_kill_path():
 
 
 def test_claude_backend_passes_dispatch_hang_timeout_to_worker():
-    runner = Path(REPO_ROOT) / "run_paper.sh"
+    runner = LEGACY_RUNNER
     text = runner.read_text(encoding="utf-8")
     backend = text[text.index("run_backend() {") : text.index("# Generic per-step dispatch")]
     wrapper = text[text.index("_default_claude_worker()") : text.index("run_step_1()")]
@@ -659,7 +662,7 @@ def test_claude_backend_passes_dispatch_hang_timeout_to_worker():
 
 
 def test_step13_claude_is_routed_through_the_non_agentic_isolated_caller():
-    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+    text = LEGACY_RUNNER.read_text(encoding="utf-8")
     role_runner = text[
         text.index("run_independent_judge_role() {") : text.index("run_step_13() {")
     ]
@@ -667,6 +670,14 @@ def test_step13_claude_is_routed_through_the_non_agentic_isolated_caller():
     assert "openai|deepseek|gemini|claude" in role_runner
     assert '[[ "$backend" == "claude" ]]' in role_runner
     assert 'run_api_model "$prompt_file" 3600 "$_model" "claude"' in role_runner
+
+
+def test_public_runner_is_a_python_compatibility_launcher():
+    text = (Path(REPO_ROOT) / "run_paper.sh").read_text(encoding="utf-8")
+
+    assert "python3 -m factory_core.cli compat" in text
+    assert "run_step_1()" not in text
+    assert len(text.splitlines()) < 40
 
 
 def test_step6_precheck_parses_markdown_assumption_table(tmp_path):

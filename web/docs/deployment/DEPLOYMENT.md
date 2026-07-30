@@ -12,7 +12,7 @@ https://tfisher.de
         └── /ws   → 127.0.0.1:8000/ws
 
 paper-factory-api.service
-        └── /home/tfisher/paper_factory/web/backend/venv/bin/uvicorn app:app
+        └── /home/tfisher/paper_factory/.venv/bin/uvicorn apps.web.backend.main:app
             └── scripts/load_secrets.sh → GCP Secret Manager
 ```
 
@@ -25,6 +25,8 @@ paper-factory-api.service
 - 必需 secret（MinerU、Gemini、DeepSeek、JWT、管理员密码）已存在；只验证元数据/访问状态，不打印值或片段。
 - `web/.env` 只含非敏感运行配置，例如 `GCP_PROJECT_ID`、`CORS_ORIGINS` 和 `SHOWCASE_PROJECTS`。敏感键会使部署预检失败。
 - 前端构建由服务用户执行，避免 root-owned `dist/` 阻塞下一次构建。
+- 根 `.venv` 已由 `uv sync --extra web --extra models --locked` 准备；部署时不会安装 Python 依赖。
+- `pyproject.toml`、`uv.lock`、两个 requirements lock export 和前端 `package-lock.json` 完整且已审查。
 
 ## 标准部署
 
@@ -32,19 +34,25 @@ paper-factory-api.service
 
 ```bash
 cd /home/tfisher/paper_factory
-sudo -u tfisher -H gcloud auth list
+sudo -u tfisher -H /home/tfisher/google-cloud-sdk/bin/gcloud auth list
+sudo -u tfisher -H /home/tfisher/.local/bin/uv sync --extra web --extra models --locked
+sudo install -m 0644 deploy/systemd/paper-factory-api.service \
+  /etc/systemd/system/paper-factory-api.service
+sudo systemctl daemon-reload
 sudo ./web/deploy.sh
 ```
 
 `deploy.sh` 会依次：
 
 1. 对 shell 脚本执行 `bash -n`；
-2. 检查 `.env` 没有敏感键且权限不过宽；
-3. 以服务用户预检 Secret Manager loader；
-4. 以服务用户运行 `npm run build`；
-5. 将 `dist/` 同步到 `/var/www/tfisher.de/` 并设置静态文件权限；
-6. 重启 `paper-factory-api.service`；
-7. 重试本地 API 和 canonical HTTPS 首页，后端无法就绪时以非零状态失败。
+2. 检查 Python/Web/Cloud/frontend 锁文件和原生 Step 0-16 registry；
+3. 检查 `.env` 没有敏感键且权限不过宽；
+4. 以服务用户预检 Secret Manager loader；
+5. 检查 live systemd unit 使用仓库根目录、根 `.venv` 和稳定 ASGI 入口；
+6. 以服务用户运行 `npm ci` 和 `npm run build`；
+7. 将 `dist/` 同步到 `/var/www/tfisher.de/` 并设置静态文件权限；
+8. 重启 `paper-factory-api.service`；
+9. 重试本地 API 和 canonical HTTPS 首页，后端无法就绪时以非零状态失败。
 
 只更新后端：
 

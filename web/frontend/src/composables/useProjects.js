@@ -10,7 +10,7 @@ const filterChips = [
 ]
 
 function fp(p) {
-  return `${p.problem_key}|${p.problem_title}|${p.storage_scope}|${p.archived}|${p.status}|${p.current_step}|${p.progress_percent}|${p.pid}|${p.consultation_pending}|${p.consultation_gate}|${p.last_updated}`
+  return `${p.problem_key}|${p.problem_title}|${p.storage_scope}|${p.archived}|${p.status}|${p.current_step}|${p.progress_percent}|${p.pid}|${p.consultation_pending}|${p.consultation_gate}|${p.revision}|${p.last_updated}`
 }
 
 function notifyNewlyAwaiting(list, awaitingSeen, notify) {

@@ -155,9 +155,6 @@ import ProjectCard from './components/ProjectCard.vue'
 import ProblemArchiveCard from './components/ProblemArchiveCard.vue'
 import ShowcasePaperCard from './components/ShowcasePaperCard.vue'
 import ShowcasePaperViewer from './components/ShowcasePaperViewer.vue'
-import NewProjectModal from './components/NewProjectModal.vue'
-import CommandPalette from './components/CommandPalette.vue'
-import ModelManager from './components/ModelManager.vue'
 import { Projects, Showcase, setUnauthorizedHandler, setServerErrorHandler } from './lib/api.js'
 import { useTheme } from './composables/useTheme.js'
 import { useToasts, notifyDesktop } from './composables/useToasts.js'
@@ -361,7 +358,7 @@ export default {
     // ---- actions ----
     async function onAction(project, action) {
       try {
-        await Projects.action(project.base_name, action)
+        await Projects.action(project.base_name, action, project.revision)
         const labels = { pause: '已暂停', resume: '已恢复', kill: '已终止' }
         toasts.success(`${project.base_name} ${labels[action] || action}`)
         if (action === 'kill') selectedBase.value = null

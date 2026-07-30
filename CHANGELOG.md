@@ -6,6 +6,11 @@
 
 ### 新增
 
+- 新增 `factory_core/` Python 编排核心：项目内 SQLite 快照、追加式事件、乐观 revision、注册式 Step/执行后端、重试与验证驱动恢复。
+- 新增旧建模项目的两阶段显式迁移和可审计 rollback 命令；活动进程、状态冲突和已退役社会科学项目会拒绝导入。
+- 新增原生 Step 0-16 lifecycle/catalog、模型 backend registry、统一 `FactoryService`、SQLite solver policy/job 记录，以及本地与可替换 Cloud Run solver adapter。
+- 新增 `apps/`、`benchmarks/`、`legacy/` 和仓库边界/兼容移除文档；运行数据继续保留原位置并可通过 `FACTORY` 指定数据根。
+- 新增根 `pyproject.toml`/`uv.lock`、hash-locked Web/Cloud requirements export，并沿用前端 `package-lock.json`。
 - Cloud Solver 新增共享 Cloud Run IAM ID Token 获取模块、Python-only 能力清单、镜像构建冒烟测试、Cloud Build 配置预检和按 digest 回滚脚本。
 - Cloud Solver 新增恶意路径、环境覆盖、请求/输出上限、低权限 UID 和不可变部署回归测试。
 - Web 项目状态增加稳定的题目身份、题目标题、存储域与归档标记；前端按题目内容标识聚合同题多次运行，并可展开历史运行。
@@ -14,6 +19,15 @@
 
 ### 变更
 
+- `run_paper.sh` 降级为兼容启动器；新项目默认 `native_v2` 并原生运行 Step 0-16，冻结 Bash 只供未迁移或显式回滚项目使用。
+- CLI、Web 状态和项目控制对已迁移项目统一读写 `.factory/state.db`；checkpoint、heartbeat、marker 和 diagnostics 成为兼容投影。
+- Web 项目创建/控制直接调用 `FactoryService`，后台执行统一由 Python worker launcher 启动；根 shell 命令保留为兼容入口。
+- Web 云策略更新携带 project revision；`.env.cloud` 对 engine 项目降级为投影，不能覆盖 SQLite 或全局 quarantine。
+- Web/Cloud 构建改用锁文件，backend/frontend 运行时启动脚本不再创建环境或安装依赖。
+- `agy` 模型 SDK 作为 `models` extra 与生产 Web 环境一起锁定；Cloud Solver 依赖集保持隔离。
+- 生产 systemd unit 改用仓库根工作目录、根 `.venv` 和稳定 ASGI 入口；部署预检会拒绝旧 unit。
+- 前端构建升级到 Vite 8 / Vue plugin 6，并更新 Axios；全新 `npm ci` 审计不再报告已知依赖漏洞。
+- 社会科学执行路径正式退役，历史 prompt、Stata 脚本和项目产物继续保留但不再承诺恢复运行。
 - Cloud Solver 鉴权统一为私有 Cloud Run IAM；CLI、监控和 Web 使用同一 ID Token 策略及无密钥专用 Invoker impersonation。
 - 云端能力收敛为经过镜像冒烟验证的 Python；API、Web 和 Shell 路由从同一能力清单读取，未安装运行时在提交阶段拒绝。
 - Cloud Build 改用 `${BUILD_ID}` 不可变镜像部署并记录 revision/commit/image；`latest` 不再用于生产部署。
@@ -22,6 +36,14 @@
 - 生产敏感值以 GCP Secret Manager 为权威来源；文档和诊断只显示元数据、绑定状态与权限状态。
 - Web 部署构建改由服务用户执行，避免 root-owned `dist/` 阻止普通用户后续构建。
 - 重复部署、测试和上传报告标记为历史快照，并指向当前 runbook。
+
+### 修复
+
+- Web 普通恢复、Step 3 选择和人工咨询回答现在统一调用
+  `FactoryService.resume_and_start`，成功后提交 `WORKER_LAUNCHED` 并实际
+  启动 worker；此前 Web 只把状态切到 `ready`。
+- Web 人机 gate 请求携带 project revision；stale 请求在写决策和启动
+  worker 前返回冲突。终止、完成和归档中的项目不能被重新启动。
 
 ### 安全
 

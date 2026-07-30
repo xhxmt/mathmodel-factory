@@ -6,6 +6,9 @@ import os
 import re
 from pathlib import Path
 
+from factory_core.projections import runtime_payload
+from factory_core.storage import SQLiteStateStore
+
 from .consultation_service import gate_ready
 
 TOTAL_STEPS = 16
@@ -216,6 +219,26 @@ def _fallback_status(project_path: Path, base_name: str) -> dict:
 
 def read_runtime_status(project_path: str | Path, base_name: str) -> dict:
     project = Path(project_path)
+    workflow_store = SQLiteStateStore(project)
+    if workflow_store.exists and workflow_store.load().control_mode == "engine":
+        state = workflow_store.load()
+        snapshot = runtime_payload(state)
+        payload = _from_snapshot(project, base_name, snapshot)
+        action = state.pending_action or {}
+        payload["status"] = state.status.value
+        payload["consultation_pending"] = state.status.value == "awaiting_consultation"
+        payload["consultation_gate"] = (
+            action.get("gate") if payload["consultation_pending"] else None
+        )
+        payload["selection_pending"] = state.status.value == "awaiting_selection"
+        payload["selection_gate"] = action.get("gate") if payload["selection_pending"] else None
+        payload["selection_deadline"] = (
+            action.get("deadline_epoch") if payload["selection_pending"] else None
+        )
+        payload["revision"] = state.revision
+        payload["last_completed_step"] = state.last_completed_step
+        payload["pending_action"] = state.pending_action
+        return payload
     snapshot = _load_status(project)
     if snapshot:
         return _from_snapshot(project, base_name, snapshot)

@@ -100,6 +100,7 @@
           class="rise"
           :base="project.base_name"
           :gate="project.consultation_gate || ''"
+          :revision="project.revision"
           @open-file="requestFile"
           @answered="onAnswered"
         />
@@ -107,6 +108,7 @@
           v-if="project.selection_pending"
           class="rise"
           :base="project.base_name"
+          :revision="project.revision"
           @changed="onSelectionChanged"
         />
         <ModelingDirectionPanel
@@ -165,6 +167,7 @@
         class="rise"
         :base="project.base_name"
         :gate="project.consultation_gate || ''"
+        :revision="project.revision"
         @open-file="requestFile"
         @answered="onAnswered"
       />
@@ -173,6 +176,7 @@
         v-else-if="activeTab === 'selection'"
         class="rise"
         :base="project.base_name"
+        :revision="project.revision"
         @changed="onSelectionChanged"
       />
 

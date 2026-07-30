@@ -5,7 +5,7 @@ instead of looking like a crash:
 
 1. `launch_agents.sh status` must show `AWAIT_8.5` (not `EXITED`) for a
    project whose runner stopped at the Step 8.5 editorial gate.
-2. The stale-lock heartbeat parser in `run_paper.sh` must not throw a bash
+2. The stale-lock heartbeat parser in the Legacy Adapter must not throw a bash
    arithmetic syntax error on the `AWAITING_STEP8_5:8` heartbeat prefix.
 """
 
@@ -20,7 +20,7 @@ LAUNCH = os.path.join(REPO_ROOT, "launch_agents.sh")
 RUN_PAPER = os.path.join(REPO_ROOT, "run_paper.sh")
 
 # A heartbeat the runner writes when Step 8.5 blocks paper drafting
-# (run_paper.sh, `if (( NEXT == 9 )) && (( STEP_RC == 42 ))` branch).
+# (`legacy_runner.sh`, `if (( NEXT == 9 )) && (( STEP_RC == 42 ))` branch).
 AWAIT_HEARTBEAT = "AWAITING_STEP8_5:8 1700000000\n"
 
 
@@ -82,7 +82,7 @@ def test_status_shows_await_8_5_for_blocked_project():
 def test_heartbeat_parser_handles_awaiting_prefix():
     """The stale-lock parser must not crash on `AWAITING_STEP8_5:8`.
 
-    Verbatim copy of the strip + numeric-guard logic in run_paper.sh
+    Verbatim copy of the strip + numeric-guard logic in the Legacy Adapter
     (heartbeat parse block near `HB_FILE="$PROJECT/.heartbeat"`). If you
     change the parser there, keep this block in sync. Before the guard,
     `$(( AWAITING_STEP8_5:8 + 1 ))` threw `syntax error in expression`.

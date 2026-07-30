@@ -183,6 +183,7 @@ export default {
   props: {
     base: { type: String, required: true },
     gate: { type: String, default: '' },
+    revision: { type: Number, default: null },
   },
   emits: ['open-file', 'answered'],
   setup() { return { toasts: useToasts() } },
@@ -255,7 +256,7 @@ export default {
       if (!this.workflow.ready || this.submitting) return
       this.submitting = true
       try {
-        await Projects.answer(this.base, this.answer)
+        await Projects.answer(this.base, this.answer, this.revision)
         localStorage.removeItem(this.draftKey)
         this.toasts.success('结论已提交，项目将恢复运行', this.base)
         this.$emit('answered')

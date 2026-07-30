@@ -2,7 +2,7 @@
 
 本项目是一个用于数学建模竞赛（如高教社杯 CUMCM、美赛 MCM/ICM 及类似应用建模竞赛）的本地多智能体工作流。它改编自原始的本地 Paper Factory，但当前活跃的工作流专注于：竞赛赛题解析、方法选择、数学建模、求解器执行、鲁棒性检验、论文草拟、模拟评委打分以及最终的打包提交。
 
-原始的社会科学资产保留以供参考和兼容，但标准建模流程遵循 `STEPS.md` 和 `modeling_guide.md`。
+原始的社会科学资产仅保留为历史参考，执行路径已经退役。现役建模流程遵循 `STEPS.md` 和 `modeling_guide.md`。
 
 完整文档导航请查看 [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md)。
 
@@ -33,7 +33,8 @@ cd web
 ## 包含内容
 
 - `launch_agents.sh`：本地启动器，包含 `new`、`resume`、`pause`、`run`、`attach`、`trace` 和 `status` 等命令。
-- `run_paper.sh`：16步建模工厂运行程序，支持基于文件状态的断点续传（以及消融实验开关）。
+- `run_paper.sh`：兼容启动器；新项目和已迁移项目进入 `factory_core/` Python 引擎，未迁移建模项目进入冻结的 Legacy Adapter。
+- `factory_core/`：版本化 SQLite 状态、追加式事件、恢复、重试、Step 注册和执行适配器。
 - `STEPS.md`：标准的数学建模工作流契约。
 - `modeling_guide.md`：项目结构、求解器、LaTeX、图表生成及可复现性规范。
 - `prompts/step*.txt`：工作流每个步骤的智能体提示词模板。
@@ -45,13 +46,14 @@ cd web
 - `experiments/`：消融实验测试工具，用于测试不同流程机制对结果的影响。
 - **`docs/guides/`**：优秀论文基准文档（可视化与写作规范）
 
-诸如 `analysis_guide.md`、`stata_submit.sh` 和 `stata_wrapper.sh` 等旧文件仅为保持跨模式兼容性而保留。新建模项目请遵循 `modeling_guide.md` 规范并使用 `solver_submit.sh`。
+诸如 `analysis_guide.md`、`stata_submit.sh` 和 `stata_wrapper.sh` 等旧文件仅为历史参考而保留，不再构成可执行社会科学工作流。新建模项目请遵循 `modeling_guide.md` 并使用 `solver_submit.sh`。
 
 ## 前置要求
 
 - 安装并认证 `codex` CLI。
 - 安装并认证 `claude` CLI（如果使用 Claude 备用路由）。
 - Python 3 环境，使用本仓库目录下 `.venv` 虚拟环境中的依赖项。
+- `uv` 用于按 `uv.lock` 创建 Python 环境；Node.js/npm 用于按 `web/frontend/package-lock.json` 创建 Web 前端环境。
 - LaTeX 工具链：`xelatex`、`pdflatex` 和 `bibtex`。
 - 至少一套用于项目代码的实用求解器技术栈，通常为带有 `numpy`、`scipy`、`pandas` 和 `matplotlib` 的 Python 环境。
 - 当前生产部署通过 GCP Secret Manager 和 `scripts/load_secrets.sh` 注入 MinerU、模型 API、JWT 与管理员凭据；本地 `.env` 只应保留非敏感配置。
@@ -61,11 +63,13 @@ cd web
 
 ## 快速开始
 
-克隆仓库，进入目录并检查启动器：
+克隆仓库，进入目录，按锁文件准备环境并检查启动器：
 
 ```bash
 git clone <repo-url> mathmodel-factory
 cd mathmodel-factory
+uv sync --extra web --extra models --locked
+(cd web/frontend && npm ci)
 chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_wrapper.sh
 ./launch_agents.sh status
 ```
@@ -79,10 +83,14 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 这些运行输出会被 Git 自动忽略。
 
-## 最新更新（2026-07-27）
+## 最新更新（2026-07-30）
 
-当前未发布变更集中在 Web 控制面与仓库治理：
+当前未发布变更集中在核心编排、Web 控制面与仓库治理：
 
+- 新项目使用 `factory_core.FactoryEngine`，状态与事件保存在项目内 `.factory/state.db`。
+- `run_paper.sh` 已降级为兼容启动器；原生 Step 0-16 不再调用冻结 Bash，冻结实现只服务未迁移或显式回滚的项目。
+- CLI、Web 和本地/Cloud Run 求解器通过同一 `FactoryService`、revision 与事件合同运行；云执行仍受全局 quarantine 限制。
+- Python、Web backend、Cloud 镜像和前端构建均有锁文件，运行时启动脚本不再动态安装依赖。
 - 重复运行按题目内容标识聚合成“题目归档”，历史完成运行保持只读。
 - SQLite 用户库、bcrypt 密码、注册/审批、项目申请与项目 ACL 已成为现役权限模型。
 - Secret Manager 是生产敏感值来源，弱默认管理员密码或缺失 JWT Secret 会阻止后端启动。
@@ -173,15 +181,35 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 - Step 15：引用、图表及排版润色；任何修改都会使 Step 13 的预提交结果失效。
 - Step 16：缓存未命中时先编译最终 PDF，再对 Step 15 后的三角色文本 packet 重新执行 Gate 2，并把通过结果绑定到该 PDF 的精确字节；自动评委不读取 PDF 画面，视觉质量另行检查。之后打包、清理并移至 `complete/`。
 
-完整的详细步骤要求，请参阅 `STEPS.md`，这也是 `run_paper.sh --infer-step` 所遵循的文件状态契约。
+完整的详细步骤要求请参阅 `STEPS.md`。这些文件仍是产物与验证契约；项目的运行状态权威见下节。
 
 ## 注意事项
 
-- 文件状态具有最高权威。`run_paper.sh --infer-step <project_dir>` 会检查实际产出的文件，并且修复并对齐检查点文本。
+- 新项目和已迁移项目以 `.factory/state.db` 的版本化快照与追加式事件为工作流状态权威；产物文件是 Step 校验依据。`run_paper.sh --infer-step <project_dir>` 对这些项目读取 SQLite。
+- 未迁移建模项目继续由冻结的 Legacy Adapter 根据产物文件推断。不要手工创建 `.factory/state.db`；使用下述显式迁移命令。
 - 当 `modeling_guide.md` 和遗留的 `analysis_guide.md` 同时存在时，以 `modeling_guide.md` 为准。
 - 已完成的项目将从 `ongoing/` 移至 `complete/`。
 - Step 16 在缓存未命中时先成功编译新 PDF，再以当前数学 / 执行 / 论文三角色文本 packet 执行最终 Gate 2；`judge_outputs/final_submission.sha256` 同时绑定 packet、角色 prompts、聚合 / 调用实现、Step 13 模型路由与该 PDF 的精确字节，证明交付物和评审契约版本一致。它不表示自动评委观察过 PDF 渲染或图片像素。编译失败会立即停止，不会复制旧 PDF。之后才复制到 `papers/`、生成 `papers/<base>_submission.zip` 并按 `final_judge_v3` 契约写入 `delivery_manifest.json`。
 - `complete/` 是历史交付目录，不等价于“符合当前最新契约”。使用 `python3 scripts/audit_complete_projects.py --write-manifests` 生成 `complete/_validation_index.json`，将项目分为 `CURRENT_PASS`、`LEGACY_DELIVERED` 和 `INVALID_OR_INCOMPLETE`。
+
+## 迁移旧项目
+
+`ongoing/` 迁移只允许已停止、无锁且 checkpoint 与 Legacy 推断一致的建模项目。历史 `complete/` 差异会作为 warning 保留，并以真实推断 Step 导入只读完成态，不会伪装成当前契约 Step 16。先检查并审阅报告，再用报告摘要导入：
+
+```bash
+python3 -m factory_core.cli migrate inspect ongoing/<base> \
+  --report /tmp/<base>-migration.json
+python3 -m factory_core.cli migrate apply ongoing/<base> \
+  --report /tmp/<base>-migration.json --digest <report-digest>
+```
+
+迁移后 CLI、Web 和 `run_paper.sh --infer-step` 都读取 SQLite。需要回滚到冻结 Legacy Runner 时，项目必须已停止：
+
+```bash
+python3 -m factory_core.cli migrate rollback ongoing/<base>
+```
+
+迁移不会删除 checkpoint、marker、诊断、日志或论文产物。详细状态和恢复契约见 [`docs/architecture/ORCHESTRATION_ENGINE.md`](docs/architecture/ORCHESTRATION_ENGINE.md)。
 
 ## 评测与消融实验
 

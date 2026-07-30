@@ -36,7 +36,10 @@ export function createProjectCloudConfigController({ cloudApi = Cloud } = {}) {
     if (!baseName || cloudSaving.value || cloudConfigLoading.value) return cloudConfig.value
     cloudSaving.value = true
     try {
-      const response = enabled ? await cloudApi.enable(baseName) : await cloudApi.disable(baseName)
+      const revision = cloudConfig.value?.revision ?? null
+      const response = enabled
+        ? await cloudApi.enable(baseName, revision)
+        : await cloudApi.disable(baseName, revision)
       cloudConfig.value = normalizeCloudConfig(response?.config || await cloudApi.projectConfig(baseName))
       return cloudConfig.value
     } finally {

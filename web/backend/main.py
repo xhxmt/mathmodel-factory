@@ -50,7 +50,6 @@ auth_store.bootstrap_admin(settings.admin_password)
 ticket_store = WsTicketStore(ttl_seconds=60)
 manager = ConnectionManager()
 monitor_projects_task = create_monitor_task(settings, manager)
-project_actions = __import__("web.backend.project_actions", fromlist=["run_action"])
 
 
 @asynccontextmanager
@@ -277,27 +276,6 @@ app.include_router(cloud_router)
 app.include_router(ws_router)
 app.include_router(showcase_router)
 
-
-@app.post("/api/projects/{base_name}/action")
-async def project_action(
-    base_name: str,
-    action: ProjectAction,
-    current_user: UserInfo = Depends(get_current_user(settings)),
-):
-    from .access_control import require_project_access
-
-    require_project_access(settings, current_user, base_name)
-    result = project_actions.run_action(settings.factory_root, action.action, base_name)
-    if not result.ok:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=result.stderr or result.stdout or "project action failed",
-        )
-    await manager.broadcast({"type": "project_action", "project": base_name, "action": action.action})
-    return {"status": "ok", "action": action.action, "output": result.stdout}
-
-
-
 def _router_endpoint(router, path: str, method: str | None = None):
     for route in getattr(router, "routes", []):
         if getattr(route, "path", None) != path:
@@ -361,6 +339,7 @@ list_project_requests = _router_endpoint(project_router, "/api/project-requests"
 create_project_request = _router_endpoint(project_router, "/api/project-requests", "POST")
 approve_project_request = _router_endpoint(project_router, "/api/admin/project-requests/{request_id}/approve")
 reject_project_request = _router_endpoint(project_router, "/api/admin/project-requests/{request_id}/reject")
+project_action = _router_endpoint(project_router, "/api/projects/{base_name}/action")
 put_model_registry = _router_endpoint(project_router, "/api/models/registry")
 put_model_config = _router_endpoint(project_router, "/api/models/config")
 cloud_status = _router_endpoint(cloud_router, "/api/cloud/status")

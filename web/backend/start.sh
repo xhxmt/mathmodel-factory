@@ -13,20 +13,12 @@ else
     exit 1
 fi
 
-# Check if virtual environment exists
-if [[ ! -d "venv" ]]; then
-    echo "Creating virtual environment..."
-    python3 -m venv venv
+PYTHON_BIN="$SCRIPT_DIR/../../.venv/bin/python"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+    echo "ERROR: locked environment missing. Run: uv sync --extra web --extra models --locked" >&2
+    exit 1
 fi
-
-# Activate virtual environment
-source venv/bin/activate
-
-# Install/update dependencies
-echo "Installing dependencies..."
-pip install -q --upgrade pip
-pip install -q -r requirements.txt
 
 # Start server
 echo "Starting Paper Factory Dashboard backend on http://127.0.0.1:8000"
-python3 -m web.backend.main
+exec "$PYTHON_BIN" -m web.backend.main

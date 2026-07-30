@@ -43,7 +43,7 @@
 - “仅创建，不自动开始”对应 `--no-start`。
 - “启用人工咨询”对应 `--consult`。
 
-管理员提交后直接调用根目录 `launch_agents.sh`。普通用户提交后进入申请队列，等待管理员决定。
+管理员提交后直接调用 `FactoryService`。普通用户提交后进入申请队列，管理员批准时调用同一服务并授予项目 ACL。
 
 ## 题目归档与运行
 
@@ -58,8 +58,9 @@ Dashboard 不再把每个运行都当作一张独立题目卡。后端根据项�
 
 如果题目源文件不可用，系统退回以项目名区分运行。归档只影响展示：
 
-- `ongoing/<base_name>/` 仍是进行中项目的运行态真相；
+- `ongoing/<base_name>/` 仍是进行中项目的存储位置真相；
 - `complete/<base_name>/` 仍是已交付项目的存储真相；
+- engine 项目的运行状态以 `.factory/state.db` 为权威；
 - UI 不会移动、合并或重命名目录。
 
 同名目录同时出现在 `ongoing/` 和 `complete/` 时，列表优先使用 `ongoing/`，避免产生歧义。
@@ -80,11 +81,13 @@ Dashboard 不再把每个运行都当作一张独立题目卡。后端根据项�
 ./run_paper.sh --infer-step ongoing/<base_name>
 ```
 
+该命令对新建/已迁移项目读取 `.factory/state.db`，对未迁移项目调用冻结的 Legacy 产物推断。
+
 完成归档保持只读；不要把 `complete/` 目录存在本身当作当前质量契约 PASS。
 
 ## 人工咨询
 
-启用咨询的项目可能在 preflight、Step 4 或动态请求处暂停。Web 会展示请求内容，提交回答后写入 `human_review.md` 并恢复运行。
+启用咨询的项目可能在 preflight、Step 4 或动态请求处暂停。Web 会展示请求内容，提交回答后写入 `human_review.md`，解析对应 gate，并启动统一 worker 恢复运行。提交携带当前 revision；过期页面会收到冲突响应，不会覆盖较新的状态。
 
 咨询 gate 采用退出并等待恢复的方式，不在后台持锁阻塞。回答前应核对项目、gate 和当前状态，避免把旧请求提交到新运行。
 
@@ -100,7 +103,7 @@ python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
   --primary m2 --aux m1 --reason "Prefer the verified stream"
 ```
 
-默认会写入 `selection/step3_decision.json`、同步 `human_review.md` 并恢复项目；调试时可加 `--no-resume`。
+默认会写入 `selection/step3_decision.json`、同步 `human_review.md` 并启动 worker 恢复项目；调试时可加 `--no-resume`。Web 选择请求使用 project revision 防止旧页面覆盖较新的控制操作。
 
 ## 用户和项目审批
 
@@ -132,7 +135,7 @@ python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
 
 ### 状态看起来过期
 
-刷新页面并检查 WebSocket；必要时用 `run_paper.sh --infer-step` 对照真实文件状态。
+刷新页面并检查 WebSocket；必要时用 `run_paper.sh --infer-step` 对照权威运行状态。
 
 ### 生产问题
 

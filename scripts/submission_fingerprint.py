@@ -112,6 +112,12 @@ def evaluator_contract_payload(base: str, factory_root: Path | None = None) -> d
     }
     implementation_files = (
         "run_paper.sh",
+        "factory_core/cli.py",
+        "factory_core/domain.py",
+        "factory_core/engine.py",
+        "factory_core/registry.py",
+        "factory_core/adapters/legacy.py",
+        "factory_core/adapters/legacy_runner.sh",
         "scripts/claim_graph.py",
         "scripts/judge_packet.py",
         "scripts/objective_evidence.py",

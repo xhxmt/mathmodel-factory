@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # experiments/test_ablations.sh — switch-effectiveness tests for the four
 # ablation toggles. Fast (seconds), invokes NO agent, writes only to a mktemp
-# dir. run_paper.sh has no main() guard and runs top-level logic on source, so
-# we extract individual function bodies by name and eval them in isolation.
+# dir. The Legacy Adapter has no main() guard and runs top-level logic on source,
+# so we extract individual function bodies by name and eval them in isolation.
 #
 # Usage: ./experiments/test_ablations.sh
 # Exit 0 iff all checks pass.
 set -uo pipefail
 
 FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNNER="$FACTORY/run_paper.sh"
+RUNNER="$FACTORY/factory_core/adapters/legacy_runner.sh"
 PROMPTS="$FACTORY/prompts"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -19,10 +19,10 @@ ok()   { printf '  \033[32mPASS\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
 note() { printf '\n== %s ==\n' "$1"; }
 
-# Truthy helper (mirrors run_paper.sh); needed by every extracted function.
+# Truthy helper (mirrors the Legacy Adapter); needed by every extracted function.
 _ablate_on() { case "${1,,}" in 1|true|yes|on) return 0;; *) return 1;; esac; }
 
-# Mirror run_paper.sh startup: all four toggles are always bound (default 0), so
+# Mirror Legacy Adapter startup: all four toggles are always bound (default 0), so
 # extracted functions referencing them don't trip `set -u` when a test sets only
 # one via a command-prefix. Per-invocation prefixes still override these.
 export ABLATE_NO_CONSULTATION=0 ABLATE_NO_METHOD_LIB=0 \
@@ -51,7 +51,7 @@ eval_fn() {
 
 # ── (a) syntax ───────────────────────────────────────────────────────────────
 note "(a) syntax"
-if bash -n "$RUNNER"; then ok "run_paper.sh bash -n"; else bad "run_paper.sh bash -n"; fi
+if bash -n "$RUNNER"; then ok "legacy_runner.sh bash -n"; else bad "legacy_runner.sh bash -n"; fi
 syntax_all=1
 for s in "$FACTORY"/experiments/*.sh; do
     bash -n "$s" || { bad "bash -n $(basename "$s")"; syntax_all=0; }
@@ -107,8 +107,14 @@ fi
 # ── (d) no-judge stub satisfies Step-13 contract ─────────────────────────────
 note "(d) ABLATE_NO_JUDGE writes a PASS stub instead of judging"
 log() { :; }                                   # stub runner logger
-run_codex_then_claude() { echo "REAL_JUDGE_RAN"; return 9; }   # must NOT be called when ablated
-PROJECT="$TMP/p13"; mkdir -p "$PROJECT"; BASE="t13"
+run_independent_judge_role() { echo "REAL_JUDGE_RAN"; return 9; } # must NOT be called when ablated
+python3() {
+    case "${1:-}" in
+        *submission_fingerprint.py) printf '%064d\n' 0 ;;
+        *) return 0 ;;
+    esac
+}
+PROJECT="$TMP/p13"; mkdir -p "$PROJECT/logs"; BASE="t13"
 if eval_fn _write_judge_stub && eval_fn run_step_13; then
     out="$(ABLATE_NO_JUDGE=1 run_step_13 2>/dev/null)"; rc=$?
     [ "$rc" -eq 0 ] && ok "ON: run_step_13 returns 0" || bad "ON: rc=$rc (expected 0)"
@@ -130,19 +136,22 @@ if eval_fn _write_judge_stub && eval_fn run_step_13; then
         || bad "OFF: real judge NOT invoked"
 fi
 
-# ── (e) compare_ablations.py smoke (read-only, real eval JSONs if present) ───
+# ── (e) compare_ablations.py smoke ──────────────────────────────────────────
 note "(e) compare_ablations.py smoke"
-RES="$FACTORY/evaluation/results"
-if [ -f "$RES/test_cumcm2024a_eval.json" ] && [ -f "$RES/test_cumcm2024b_eval.json" ]; then
-    if python3 "$FACTORY/experiments/compare_ablations.py" \
-        --baseline test_cumcm2024b --variant test_cumcm2024a >"$TMP/cmp.out" 2>/dev/null; then
-        grep -qi 'baseline' "$TMP/cmp.out" && ok "compare prints a delta table" \
-            || bad "compare ran but output missing baseline row"
-    else
-        bad "compare_ablations.py exited non-zero"
-    fi
+unset -f python3
+cat > "$TMP/baseline_eval.json" <<'EOF'
+{"comparison_ready_proxy":true,"median_recomputed":80,"min_recomputed":79,"max_recomputed":81,"runs":[],"verdicts":["PASS"]}
+EOF
+cat > "$TMP/variant_eval.json" <<'EOF'
+{"comparison_ready_proxy":true,"median_recomputed":75,"min_recomputed":74,"max_recomputed":76,"runs":[],"verdicts":["PASS"]}
+EOF
+if python3 "$FACTORY/experiments/compare_ablations.py" \
+    --baseline "$TMP/baseline_eval.json" --variant "$TMP/variant_eval.json" \
+    >"$TMP/cmp.out" 2>/dev/null; then
+    grep -qi 'baseline' "$TMP/cmp.out" && ok "compare prints a delta table" \
+        || bad "compare ran but output missing baseline row"
 else
-    note "(e) skipped — no real eval JSONs in evaluation/results/"
+    bad "compare_ablations.py exited non-zero"
 fi
 
 # ── summary ──────────────────────────────────────────────────────────────────

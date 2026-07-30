@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -24,7 +23,9 @@ from .modeling_direction_service import (
     build_modeling_directions,
     write_modeling_direction_selection,
 )
-from .project_actions import run_action
+from .project_actions import ActionResult, run_action
+from factory_core.domain import FactoryCoreError
+from factory_core.service import FactoryService
 from .selection_service import SelectionError, read_selection_request, write_selection_decision
 from .schemas import (
     ConsultationAnswer,
@@ -456,6 +457,9 @@ def _runtime_to_project_status(runtime: dict[str, Any], project: Path | None = N
         selection_pending=runtime.get("selection_pending", False),
         selection_gate=runtime.get("selection_gate"),
         selection_deadline=runtime.get("selection_deadline"),
+        revision=runtime.get("revision"),
+        last_completed_step=runtime.get("last_completed_step"),
+        pending_action=runtime.get("pending_action"),
         reason_code=runtime.get("reason_code", ""),
         reason_summary=runtime.get("reason_summary", ""),
         suggested_actions=list(runtime.get("suggested_actions", [])),
@@ -775,22 +779,22 @@ def existing_project_names(settings: Settings) -> set[str]:
 
 
 def run_project_launcher(settings: Settings, request: ProjectRequestCreate | NewProjectRequest):
-    problem_path = Path(request.problem_path)
-    cmd = ["/usr/bin/bash", str(settings.launch_script), "new"]
-    if request.no_start:
-        cmd.append("--no-start")
-    if request.consult:
-        cmd.append("--consult")
-    cmd.extend([request.base_name, str(problem_path.resolve())])
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        cwd=settings.factory_root,
-        env={**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-        check=False,
-    )
+    try:
+        state, worker = FactoryService(settings.factory_root).create_project(
+            request.base_name,
+            str(Path(request.problem_path).resolve()),
+            consult=request.consult,
+            start=not request.no_start,
+        )
+        output = {
+            "project": state.project_id,
+            "status": state.status.value,
+            "revision": state.revision,
+            "worker_pid": worker.pid if worker else None,
+        }
+        return ActionResult(True, json.dumps(output, sort_keys=True), "")
+    except Exception as exc:
+        return ActionResult(False, "", str(exc))
 
 
 def create_project_router(settings: Settings, ticket_store, manager) -> APIRouter:
@@ -1046,14 +1050,8 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
             return {"logs": []}
 
         recent_log = all_logs[0]
-        result = subprocess.run(
-            ["tail", "-n", str(lines), str(recent_log)],
-            capture_output=True,
-            text=True,
-            env={**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-            check=False,
-        )
-        return {"logs": result.stdout.split("\n"), "file": recent_log.name}
+        content = recent_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        return {"logs": content[-max(1, lines):], "file": recent_log.name}
 
     @router.get("/api/projects/{base_name}/steps")
     async def get_project_steps(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
@@ -1123,16 +1121,36 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         if not request:
             raise HTTPException(status_code=404, detail="No pending consultation request")
 
-        write_consultation_answer(
-            project_path=project,
-            gate=request.gate,
-            step=request.step,
-            title=request.title,
-            answer=answer.answer,
-            timestamp=datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-        )
+        def write_evidence() -> None:
+            write_consultation_answer(
+                project_path=project,
+                gate=request.gate,
+                step=request.step,
+                title=request.title,
+                answer=answer.answer,
+                timestamp=datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            )
+
+        try:
+            FactoryService(settings.factory_root).resolve_and_start(
+                project,
+                {
+                    "source": "web",
+                    "gate": request.gate,
+                },
+                evidence_writer=write_evidence,
+                expected_revision=answer.expected_revision,
+            )
+        except (FactoryCoreError, OSError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc) or "project resume failed",
+            ) from exc
         await manager.broadcast({"type": "consultation_answered", "project": base_name, "gate": request.gate})
-        return {"status": "ok", "message": "Consultation answer submitted"}
+        return {
+            "status": "ok",
+            "message": "Consultation answer submitted and project resumed",
+        }
 
     @router.get("/api/projects/{base_name}/modeling-directions")
     async def get_modeling_directions(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
@@ -1182,8 +1200,10 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
     ):
         require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
-        try:
-            saved = write_selection_decision(
+        saved: dict[str, Any] = {}
+
+        def write_evidence() -> None:
+            saved["decision"] = write_selection_decision(
                 project,
                 gate=decision.gate,
                 selected_option_id=decision.selected_option_id.strip(),
@@ -1191,16 +1211,29 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                 source="human",
                 reason=decision.reason.strip() or f"Selected by {current_user.username}",
             )
+
+        try:
+            FactoryService(settings.factory_root).resolve_and_start(
+                project,
+                {
+                    "source": "web",
+                    "gate": decision.gate,
+                    "selected_option_id": decision.selected_option_id.strip(),
+                    "selected_aux_id": decision.selected_aux_id.strip(),
+                    "reason": decision.reason.strip(),
+                },
+                evidence_writer=write_evidence,
+                expected_revision=decision.expected_revision,
+            )
         except SelectionError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await manager.broadcast({"type": "project_action", "project": base_name, "action": "select_option"})
-        result = run_action(settings.factory_root, "resume", base_name)
-        if not result.ok:
+        except (FactoryCoreError, OSError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=result.stderr or result.stdout or "project resume failed",
-            )
-        return {"status": "ok", "decision": saved}
+                detail=str(exc) or "project resume failed",
+            ) from exc
+        await manager.broadcast({"type": "project_action", "project": base_name, "action": "select_option"})
+        return {"status": "ok", "decision": saved["decision"]}
 
     @router.post("/api/projects/{base_name}/action")
     async def project_action(
@@ -1209,7 +1242,12 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
         require_project_access(settings, current_user, base_name)
-        result = run_action(settings.factory_root, action.action, base_name)
+        result = run_action(
+            settings.factory_root,
+            action.action,
+            base_name,
+            expected_revision=action.expected_revision,
+        )
         if not result.ok:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

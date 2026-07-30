@@ -64,10 +64,6 @@ class Settings:
         return self.factory_root / "logs"
 
     @property
-    def launch_script(self) -> Path:
-        return self.factory_root / "launch_agents.sh"
-
-    @property
     def model_registry_file(self) -> Path:
         return self.factory_root / "web" / "model_registry.json"
 

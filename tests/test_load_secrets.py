@@ -83,7 +83,12 @@ def test_load_secrets_fails_when_gcloud_is_unavailable():
             "-lc",
             f'source "{REPO_ROOT}/scripts/load_secrets.sh"',
         ],
-        env={**os.environ, "PATH": "/usr/bin:/bin", "GCP_PROJECT_ID": "configured-project"},
+        env={
+            **os.environ,
+            "PATH": "/usr/bin:/bin",
+            "GCLOUD_BIN": "/nonexistent/gcloud",
+            "GCP_PROJECT_ID": "configured-project",
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -94,6 +99,8 @@ def test_load_secrets_fails_when_gcloud_is_unavailable():
 
 
 def test_run_paper_loads_secret_manager_for_direct_runs():
-    head = "\n".join((REPO_ROOT / "run_paper.sh").read_text(encoding="utf-8").splitlines()[:70])
+    legacy_runner = REPO_ROOT / "factory_core" / "adapters" / "legacy_runner.sh"
+    head = "\n".join(legacy_runner.read_text(encoding="utf-8").splitlines()[:80])
 
     assert "scripts/load_secrets.sh" in head
+    assert "scripts/load_secrets.sh" not in (REPO_ROOT / "run_paper.sh").read_text(encoding="utf-8")

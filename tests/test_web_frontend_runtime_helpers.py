@@ -162,6 +162,9 @@ assert.deepEqual(normalizeProjectStatus({ base_name: 'demo', is_running: 1 }), {
   archived: false,
   status: 'unknown',
   current_step: -1,
+  revision: null,
+  last_completed_step: null,
+  pending_action: null,
   progress_percent: 0,
   is_running: true,
   pid: null,
@@ -197,7 +200,43 @@ assert.deepEqual(normalizedSteps.open_issue_items[0], {
   issue: 'Fix appendix',
   required_action: '',
 })
-assert.deepEqual(normalizeCloudConfig({ enabled: 1, solver_types: 'python,julia' }).solver_types, ['python', 'julia'])
+assert.deepEqual(normalizeCloudConfig({ enabled: 1, revision: '7', solver_types: 'python,julia' }), {
+  enabled: true,
+  revision: 7,
+  env_file: '',
+  threshold_time: 300,
+  solver_types: ['python', 'julia'],
+  project_id: '',
+  region: '',
+  service_name: '',
+})
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_cloud_controller_forwards_policy_revision():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+import { createProjectCloudConfigController } from './web/frontend/src/composables/useProjectCloudConfig.js'
+
+const calls = []
+const controller = createProjectCloudConfigController({
+  cloudApi: {
+    projectConfig: async () => ({ enabled: false, revision: 12, solver_types: ['python'] }),
+    enable: async (baseName, revision) => {
+      calls.push([baseName, revision])
+      return { config: { enabled: true, revision: 13, solver_types: ['python'] } }
+    },
+  },
+})
+await controller.fetchCloudConfig('demo')
+await controller.setCloudAcceleration('demo', true)
+
+assert.deepEqual(calls, [['demo', 12]])
+assert.equal(controller.cloudConfig.value.revision, 13)
 """
     )
 

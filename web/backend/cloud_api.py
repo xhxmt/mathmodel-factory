@@ -13,9 +13,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from .access_control import require_admin, require_project_access
 from .auth import get_current_user
 from .config import Settings
-from .schemas import UserInfo
+from .schemas import SolverPolicyAction, UserInfo
 from cloud.runtime_capabilities import enabled_solver_types
 from scripts.cloud_solver_auth import IdentityTokenError, get_identity_token
+from factory_core.service import FactoryService
+from factory_core.storage import SQLiteStateStore
 
 
 CLOUD_ENV_NAME = ".env.cloud"
@@ -53,15 +55,28 @@ def _env_flag_enabled(path: Path, key: str) -> bool:
 
 def project_cloud_config(settings: Settings, base_name: str) -> dict:
     env_file = _project_cloud_env_file(settings, base_name)
-    requested_enabled = _env_flag_enabled(env_file, "USE_CLOUD_SOLVER")
-    quarantined = cloud_solver_quarantined()
+    if SQLiteStateStore(env_file.parent).exists:
+        policy = FactoryService(settings.factory_root).solver_policy(base_name)
+    else:
+        requested = _env_flag_enabled(env_file, "USE_CLOUD_SOLVER")
+        policy = {
+            "mode": "auto" if requested else "local",
+            "threshold_seconds": 300,
+            "allowed_runtimes": available_cloud_solver_types() or ["python"],
+            "updated_revision": 0,
+            "quarantined": cloud_solver_quarantined(),
+            "enabled": requested and not cloud_solver_quarantined(),
+        }
+    requested_enabled = policy["mode"] in {"cloud", "auto"}
+    quarantined = policy["quarantined"]
     return {
-        "enabled": requested_enabled and not quarantined,
+        "enabled": policy["enabled"],
         "requested_enabled": requested_enabled,
         "quarantined": quarantined,
         "env_file": str(env_file),
-        "threshold_time": 300,
-        "solver_types": available_cloud_solver_types(),
+        "threshold_time": policy["threshold_seconds"],
+        "solver_types": policy["allowed_runtimes"],
+        "revision": policy["updated_revision"],
         "invoker_service_account": cloud_invoker_service_account(settings),
         "project_id": settings.gcp_project_id or "level-night-476302-k0",
         "region": settings.gcp_region,
@@ -69,24 +84,36 @@ def project_cloud_config(settings: Settings, base_name: str) -> dict:
     }
 
 
-def set_project_cloud_enabled(settings: Settings, base_name: str, enabled: bool) -> dict:
+def set_project_cloud_enabled(
+    settings: Settings,
+    base_name: str,
+    enabled: bool,
+    *,
+    expected_revision: int | None = None,
+) -> dict:
     env_file = _project_cloud_env_file(settings, base_name)
-    if enabled:
-        if cloud_solver_quarantined():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Cloud solver execution is quarantined; use the local solver",
+    if enabled and cloud_solver_quarantined():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cloud solver execution is quarantined; use the local solver",
+        )
+    if SQLiteStateStore(env_file.parent).exists:
+        try:
+            FactoryService(settings.factory_root).configure_solver_policy(
+                base_name,
+                mode="auto" if enabled else "local",
+                threshold_seconds=300,
+                allowed_runtimes=available_cloud_solver_types() or ["python"],
+                expected_revision=expected_revision,
             )
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    elif enabled:
         env_file.write_text(
-            "\n".join(
-                [
-                    "# Cloud Run solver configuration",
-                    "USE_CLOUD_SOLVER=true",
-                    "CLOUD_THRESHOLD_TIME=300",
-                    f"CLOUD_SOLVER_TYPES={','.join(available_cloud_solver_types())}",
-                    "",
-                ]
-            ),
+            "# Legacy compatibility configuration; migrate project for SQLite authority.\n"
+            "USE_CLOUD_SOLVER=true\n"
+            "CLOUD_THRESHOLD_TIME=300\n"
+            f"CLOUD_SOLVER_TYPES={','.join(available_cloud_solver_types() or ['python'])}\n",
             encoding="utf-8",
         )
     else:
@@ -248,19 +275,31 @@ def create_cloud_router(settings: Settings) -> APIRouter:
     @router.post("/api/projects/{base_name}/cloud/enable")
     async def enable_cloud_solver(
         base_name: str,
+        action: SolverPolicyAction | None = None,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
         require_project_access(settings, current_user, base_name)
-        config = set_project_cloud_enabled(settings, base_name, True)
+        config = set_project_cloud_enabled(
+            settings,
+            base_name,
+            True,
+            expected_revision=action.expected_revision if action else None,
+        )
         return {"status": "enabled", "base_name": base_name, "config": config}
 
     @router.post("/api/projects/{base_name}/cloud/disable")
     async def disable_cloud_solver(
         base_name: str,
+        action: SolverPolicyAction | None = None,
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
         require_project_access(settings, current_user, base_name)
-        config = set_project_cloud_enabled(settings, base_name, False)
+        config = set_project_cloud_enabled(
+            settings,
+            base_name,
+            False,
+            expected_revision=action.expected_revision if action else None,
+        )
         return {"status": "disabled", "base_name": base_name, "config": config}
 
     return router

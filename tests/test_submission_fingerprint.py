@@ -159,6 +159,12 @@ def test_external_submission_asset_symlinks_are_not_hashed(tmp_path: Path) -> No
 def make_evaluator_factory(root: Path) -> None:
     for relative in (
         "run_paper.sh",
+        "factory_core/cli.py",
+        "factory_core/domain.py",
+        "factory_core/engine.py",
+        "factory_core/registry.py",
+        "factory_core/adapters/legacy.py",
+        "factory_core/adapters/legacy_runner.sh",
         "scripts/judge_packet.py",
         "scripts/aggregate_judges.py",
         "scripts/llm_judge_call.py",
@@ -196,6 +202,8 @@ def test_evaluator_contract_records_prompt_implementation_and_registry_selection
 
     assert contract["prompts"]["prompts/judges/paper_reviewer.txt"]["sha256"]
     assert contract["implementation"]["scripts/aggregate_judges.py"]["sha256"]
+    assert contract["implementation"]["factory_core/engine.py"]["sha256"]
+    assert contract["implementation"]["factory_core/adapters/legacy_runner.sh"]["sha256"]
     dispatch = contract["model_dispatch"]
     assert dispatch["selection_source"] == "model_config"
     assert dispatch["selection"]["primary_id"] == "judge-a"
@@ -211,6 +219,8 @@ def test_evaluator_contract_records_prompt_implementation_and_registry_selection
         "scripts/aggregate_judges.py",
         "scripts/judge_packet.py",
         "scripts/llm_judge_call.py",
+        "factory_core/engine.py",
+        "factory_core/adapters/legacy.py",
         "web/model_config.json",
         "web/model_registry.json",
     ],

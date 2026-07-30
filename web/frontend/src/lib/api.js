@@ -105,12 +105,18 @@ export const Projects = {
   })),
   file: (b, path) => api.get(`/api/projects/${b}/file`, { params: { path } }).then((r) => r.data),
   consultation: (b) => api.get(`/api/projects/${b}/consultation`).then((r) => r.data),
-  answer: (b, answer) => api.post(`/api/projects/${b}/consultation/answer`, { answer }).then((r) => r.data),
+  answer: (b, answer, expectedRevision = null) => api.post(`/api/projects/${b}/consultation/answer`, {
+    answer,
+    expected_revision: expectedRevision,
+  }).then((r) => r.data),
   modelingDirections: (b) => api.get(`/api/projects/${b}/modeling-directions`).then((r) => r.data),
   selectModelingDirection: (b, directionId) => api.post(`/api/projects/${b}/modeling-directions/selection`, { direction_id: directionId }).then((r) => r.data),
   selection: (b) => api.get(`/api/projects/${b}/selection`).then((r) => r.data),
   selectOption: (b, payload) => api.post(`/api/projects/${b}/selection/decision`, payload).then((r) => r.data),
-  action: (b, action) => api.post(`/api/projects/${b}/action`, { action }).then((r) => r.data),
+  action: (b, action, expectedRevision = null) => api.post(`/api/projects/${b}/action`, {
+    action,
+    expected_revision: expectedRevision,
+  }).then((r) => r.data),
   create: (payload) => api.post('/api/projects/new', payload).then((r) => r.data),
   rawUrl: (b, path) => `/api/projects/${b}/raw?path=${encodeURIComponent(path)}`,
   paperUrl: (b, download = false) => `/api/projects/${b}/paper${download ? '?download=1' : ''}`,
@@ -143,8 +149,12 @@ export const Models = {
 export const Cloud = {
   status: () => api.get('/api/cloud/status').then((r) => r.data),
   projectConfig: (b) => api.get(`/api/projects/${b}/cloud/config`).then((r) => normalizeCloudConfig(r.data)),
-  enable: (b) => api.post(`/api/projects/${b}/cloud/enable`).then((r) => r.data),
-  disable: (b) => api.post(`/api/projects/${b}/cloud/disable`).then((r) => r.data),
+  enable: (b, expectedRevision = null) => api.post(`/api/projects/${b}/cloud/enable`, {
+    expected_revision: expectedRevision,
+  }).then((r) => r.data),
+  disable: (b, expectedRevision = null) => api.post(`/api/projects/${b}/cloud/disable`, {
+    expected_revision: expectedRevision,
+  }).then((r) => r.data),
   config: () => api.get('/api/cloud/config').then((r) => r.data),
 }
 

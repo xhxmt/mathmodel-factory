@@ -6,19 +6,19 @@
 
 ## 四个消融开关
 
-每个开关是一个 `run_paper.sh` 读取的环境变量，默认 OFF（未设或非真值）。真值为
+每个开关是 Legacy Adapter 读取的环境变量，默认 OFF（未设或非真值）。真值为
 `1` / `true` / `yes` / `on`。prompt 类消融在 **render 时**生效（`render_prompt()`），
 **不改 prompt 源文件**（它们是 agent 契约，见 `CLAUDE.md`）。
 
 | 环境变量 | 关闭的机制 | 实现位置 |
 |---|---|---|
 | `ABLATE_NO_CONSULTATION` | Step 1 的 web 文献检索 | `render_prompt()` 删掉 `step1_research_viability.txt:133` 的 web 子句 |
-| `ABLATE_NO_METHOD_LIB` | HMML-lite 方法库引用硬门 | `check_method_citations()`（`run_paper.sh:116`）提前 `return 0` |
-| `ABLATE_NO_JUDGE` | Step 13 Gate-2 评委 + reopen | `run_step_13()`（`run_paper.sh`）写 `VERDICT: PASS` stub，跳过真实评委 |
+| `ABLATE_NO_METHOD_LIB` | HMML-lite 方法库引用硬门 | Legacy Adapter 的 `check_method_citations()` 提前 `return 0` |
+| `ABLATE_NO_JUDGE` | Step 13 Gate-2 评委 + reopen | Legacy Adapter 的 `run_step_13()` 写 `VERDICT: PASS` stub，跳过真实评委 |
 | `ABLATE_NO_INNOVATION_PROTECT` | PROTECTED 不可降级规则 | `render_prompt()` 删掉 Steps 4/6/7/10/11/12/13/14 的 PROTECTED 强制行 |
 
 开关生效时，runner 启动日志会打印 `ABLATIONS ACTIVE: ...`（写入项目 `runner.log`），
-便于事后核对每个项目跑的是哪个条件。开关经 `export` 传入，能穿过 run_paper.sh 的
+便于事后核对每个项目跑的是哪个条件。开关经 `export` 传入，能穿过根兼容启动器的
 snapshot re-exec（`env` 不带 `-i`，环境保留）。
 
 ## 用法

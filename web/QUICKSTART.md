@@ -4,11 +4,13 @@
 
 ## 1. 准备依赖和 Secret Manager
 
-需要 Python 3、Node.js/npm、`gcloud` CLI，以及当前 GCP 项目的 Secret Manager 访问权限。
+需要 Python 3、Node.js `^20.19.0` 或 `>=22.12.0`、npm、`gcloud` CLI，以及当前 GCP 项目的 Secret Manager 访问权限。
 
 ```bash
 gcloud auth login
 gcloud config set project <GCP_PROJECT_ID>
+uv sync --extra web --extra models --locked
+(cd web/frontend && npm ci)
 ```
 
 不要在终端输出或复制 secret 值。只验证账号、项目、secret 元数据和访问是否成功。
@@ -34,6 +36,8 @@ cd /home/tfisher/paper_factory/web
 1. 通过 `web/backend/start.sh` 加载 Secret Manager 配置并启动 FastAPI；
 2. 等待 <http://127.0.0.1:8000/> 就绪；
 3. 启动 Vite 开发服务器。
+
+启动器只使用已准备的根 `.venv` 和 `node_modules`，不会在运行时创建虚拟环境或安装依赖。
 
 浏览器打开 <http://localhost:5173>。
 

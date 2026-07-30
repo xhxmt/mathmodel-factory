@@ -95,6 +95,11 @@ class AuditLogResponse(BaseModel):
 
 class ProjectAction(BaseModel):
     action: str
+    expected_revision: int | None = None
+
+
+class SolverPolicyAction(BaseModel):
+    expected_revision: int | None = None
 
 
 class WsTicketResponse(BaseModel):
@@ -175,6 +180,9 @@ class ProjectStatus(BaseModel):
     selection_pending: bool = False
     selection_gate: str | None = None
     selection_deadline: int | None = None
+    revision: int | None = None
+    last_completed_step: int | None = None
+    pending_action: dict | None = None
     reason_code: str = ""
     reason_summary: str = ""
     suggested_actions: list[str] = []
@@ -208,6 +216,7 @@ class ConsultationRequest(BaseModel):
 
 class ConsultationAnswer(BaseModel):
     answer: str
+    expected_revision: int | None = None
 
 
 class ModelingDirectionSelection(BaseModel):
@@ -219,6 +228,7 @@ class SelectionDecisionRequest(BaseModel):
     selected_option_id: str
     selected_aux_id: str = ""
     reason: str = ""
+    expected_revision: int | None = None
 
 
 class ModelEntry(BaseModel):

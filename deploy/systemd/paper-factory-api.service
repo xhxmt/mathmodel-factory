@@ -6,10 +6,10 @@ After=network.target
 Type=simple
 User=tfisher
 Group=tfisher
-WorkingDirectory=/home/tfisher/paper_factory/web/backend
-Environment="PATH=/home/tfisher/paper_factory/web/backend/venv/bin:/home/tfisher/google-cloud-sdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+WorkingDirectory=/home/tfisher/paper_factory
+Environment="PATH=/home/tfisher/paper_factory/.venv/bin:/home/tfisher/google-cloud-sdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EnvironmentFile=/home/tfisher/paper_factory/web/.env
-ExecStart=/bin/bash -lc 'source /home/tfisher/paper_factory/scripts/load_secrets.sh; exec /home/tfisher/paper_factory/web/backend/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000'
+ExecStart=/bin/bash -lc 'source /home/tfisher/paper_factory/scripts/load_secrets.sh; exec /home/tfisher/paper_factory/.venv/bin/uvicorn apps.web.backend.main:app --host 0.0.0.0 --port 8000'
 Restart=always
 RestartSec=10
 StandardOutput=append:/home/tfisher/paper_factory/logs/api.log

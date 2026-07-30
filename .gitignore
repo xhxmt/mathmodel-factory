@@ -5,6 +5,7 @@
 /papers/
 /run_state/
 /uploads/
+**/.factory/
 
 # Web dashboard runtime config (edited via the UI, seeded by the backend).
 # No secrets here — only model names + key_env VARIABLE names (keys live in .env).
@@ -21,10 +22,8 @@
 # Only scripts and metadata are committed
 /reference_papers/
 
-# Project-local Python virtualenv (created by `python3 -m venv .venv`).
-# Holds the google-antigravity SDK + transitive deps; run_paper.sh calls
-# .venv/bin/python3 explicitly for scripts/agy_run.py.  Recreate via:
-#   python3 -m venv .venv && .venv/bin/pip install google-antigravity
+# Root locked Python environment. Recreate with:
+#   uv sync --extra web --extra models --locked
 /.venv/
 
 # Benchmark problems — fetched via scripts/fetch_benchmark.sh, not committed
@@ -42,6 +41,7 @@
 
 # Python artifacts
 __pycache__/
+*.egg-info/
 *.py[cod]
 *$py.class
 

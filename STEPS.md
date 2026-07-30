@@ -6,6 +6,7 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 
 - Factory root: this repository
 - Project directories: `ongoing/{base}/` while running, `complete/{base}/` after delivery
+- Workflow state: new and explicitly migrated `native_v2` projects use schema-v3 `.factory/state.db` as the authoritative versioned state/event store. Step artifacts remain authoritative validation evidence. Unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
 - Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi — set `--type` and `--max-time`)
 - MinerU PDF → Markdown converter: `../../scripts/mineru_parse.py` (requires `MINERU_TOKEN` in repo `.env`)
 - Method library: `../../method_library/` with `index.json` as the
@@ -13,7 +14,7 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
   human-readable source of truth. Agents MAY only cite methods registered here.
 - Local compile helper: `../../compile_paper.sh "$(pwd)" {base}`
 - Prompt templates: `prompts/step*.txt`
-- Stata wrapper (`../../stata_submit.sh`) is retained for cross-mode compatibility but is **not** used in this workflow.
+- Stata wrapper (`../../stata_submit.sh`) is retained as historical reference but is **not** part of an executable workflow.
 
 ## General Rules
 
