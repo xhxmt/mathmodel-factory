@@ -25,7 +25,7 @@ from .engine import FactoryEngine
 from .migration import LegacyInspector, MigrationReport, apply_migration
 from .projections import runtime_payload, write_compatibility_projections
 from .steps import build_native_registry
-from .adapters.solvers import LocalSolverBackend, SolverRequest
+from .adapters.solvers import SolverRequest, build_solver_backends
 from .registry import SolverBackendRegistry
 from .storage import SQLiteStateStore
 
@@ -126,9 +126,7 @@ class FactoryService:
         self.legacy_runner = self.code_root / "factory_core" / "adapters" / "legacy_runner.sh"
         self.worker_launcher = worker_launcher or WorkerLauncher(self.root, self.code_root)
         self._native_registry_factory = native_registry_factory
-        self.solver_backends = solver_backends or SolverBackendRegistry()
-        if solver_backends is None:
-            self.solver_backends.register("local", LocalSolverBackend(self.code_root))
+        self.solver_backends = solver_backends or build_solver_backends(self.code_root)
 
     def resolve_project(self, project: str | Path) -> Path:
         value = Path(project)
@@ -148,7 +146,11 @@ class FactoryService:
     def engine(self, project: str | Path) -> FactoryEngine:
         resolved = self.resolve_project(project)
         state = SQLiteStateStore(resolved).load()
-        if state.runtime_generation == "native_v2":
+        if state.control_mode == "legacy":
+            registry = build_legacy_registry(self.root, self.legacy_runner)
+        elif state.control_mode != "engine":
+            raise FactoryCoreError(f"unsupported control mode: {state.control_mode}")
+        elif state.runtime_generation == "native_v2":
             registry = self._native_registry_factory(self.code_root)
         elif state.runtime_generation == "legacy_adapter":
             registry = build_legacy_registry(self.root, self.legacy_runner)
@@ -232,10 +234,30 @@ class FactoryService:
         resolved = self.resolve_project(project)
         state = SQLiteStateStore(resolved).load()
         self._assert_expected_revision(state, expected_revision)
-        if state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}:
-            if state.runner_pid and self._pid_is_live(state.runner_pid):
-                raise InvalidTransition(f"project already has live worker {state.runner_pid}")
-        elif state.status in {
+        if state.runner_pid and self._pid_is_live(state.runner_pid):
+            raise InvalidTransition(f"project already has live worker {state.runner_pid}")
+        if (
+            state.runner_pid is not None
+            or state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
+        ):
+            store = SQLiteStateStore(resolved)
+            state = store.transition(
+                expected_revision=state.revision,
+                event_type="RUNNER_INTERRUPTED",
+                changes={
+                    "status": (
+                        WorkflowStatus.INTERRUPTED
+                        if state.active_step is not None
+                        else WorkflowStatus.READY
+                    ),
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={"reason": "recorded runner is no longer live"},
+            )
+            write_compatibility_projections(resolved, state)
+        if state.status in {
             WorkflowStatus.KILLED,
             WorkflowStatus.COMPLETED,
             WorkflowStatus.ARCHIVING,
@@ -246,10 +268,12 @@ class FactoryService:
         if state.status in {
             WorkflowStatus.PAUSED,
             WorkflowStatus.FAILED,
-            WorkflowStatus.INTERRUPTED,
             WorkflowStatus.AWAITING_SELECTION,
             WorkflowStatus.AWAITING_CONSULTATION,
-        }:
+        } or (
+            state.status is WorkflowStatus.INTERRUPTED
+            and state.active_step is None
+        ):
             state = self.resume(resolved, expected_revision=state.revision)
         return self.worker_launcher.spawn(
             resolved, expected_revision=state.revision
@@ -455,7 +479,7 @@ class FactoryService:
         state = store.load()
         revision = state.revision if expected_revision is None else expected_revision
         job_id = f"{backend_name}_{runtime}_{time.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
-        state = store.create_solver_job(
+        store.create_solver_job(
             expected_revision=revision,
             record={
                 "job_id": job_id,
@@ -465,7 +489,7 @@ class FactoryService:
                 "workdir": str(script_path.parent),
                 "argv": list(args),
                 "max_time_seconds": max_time_seconds,
-                "status": "submitted",
+                "status": "submitting",
             },
         )
         request = SolverRequest(
@@ -479,24 +503,18 @@ class FactoryService:
         try:
             submission = backend.submit(request)
         except Exception as exc:
-            store.update_solver_job(
+            self._record_solver_submission_failure(
+                store,
                 job_id,
-                expected_revision=state.revision,
-                status="failed",
-                failure={
+                {
                     "type": type(exc).__name__,
                     "message": "solver backend submission failed",
                 },
             )
             raise
-        store.update_solver_job(
-            job_id,
-            expected_revision=state.revision,
-            status=submission.status,
-            external_id=submission.external_id,
-            result_refs=submission.result_refs,
+        return self._record_solver_submission(
+            store, backend, job_id, submission
         )
-        return store.solver_job(job_id)
 
     def solver_status(self, project: str | Path, job_id: str) -> dict[str, Any]:
         resolved = self.resolve_project(project)
@@ -504,15 +522,19 @@ class FactoryService:
         job = store.solver_job(job_id)
         if job["status"] in {"completed", "failed", "timeout", "cancelled"}:
             return job
+        if job["status"] == "submitting":
+            return job
         backend = self.solver_backends.get(job["backend"])
         observed = backend.status(job)
         if observed != job["status"]:
-            state = store.load()
-            store.update_solver_job(
-                job_id,
-                expected_revision=state.revision,
-                status=observed,
-            )
+            try:
+                store.update_solver_job(
+                    job_id,
+                    expected_job_revision=int(job["job_revision"]),
+                    status=observed,
+                )
+            except RevisionConflict:
+                return store.solver_job(job_id)
         return store.solver_job(job_id)
 
     def wait_solver(
@@ -533,12 +555,14 @@ class FactoryService:
         store = SQLiteStateStore(resolved)
         job = store.solver_job(job_id)
         self.solver_backends.get(job["backend"]).cancel(job)
-        state = store.load()
-        store.update_solver_job(
-            job_id,
-            expected_revision=state.revision,
-            status="cancelled",
-        )
+        try:
+            store.update_solver_job(
+                job_id,
+                expected_job_revision=int(job["job_revision"]),
+                status="cancelled",
+            )
+        except RevisionConflict:
+            return store.solver_job(job_id)
         return store.solver_job(job_id)
 
     def state_json(self, project: str | Path) -> str:
@@ -600,6 +624,59 @@ class FactoryService:
                 raise InvalidTransition("cloud solver policy cannot run this job")
             return "cloud_run"
         return "cloud_run" if cloud_eligible else "local"
+
+    @staticmethod
+    def _record_solver_submission(
+        store: SQLiteStateStore,
+        backend: object,
+        job_id: str,
+        submission,
+    ) -> dict[str, Any]:
+        """Persist an external ID even if a concurrent job control won the CAS."""
+        while True:
+            job = store.solver_job(job_id)
+            if job["external_id"]:
+                return job
+            status = (
+                submission.status
+                if job["status"] == "submitting"
+                else job["status"]
+            )
+            try:
+                store.update_solver_job(
+                    job_id,
+                    expected_job_revision=int(job["job_revision"]),
+                    status=status,
+                    external_id=submission.external_id,
+                    result_refs=submission.result_refs,
+                )
+            except RevisionConflict:
+                continue
+            updated = store.solver_job(job_id)
+            if updated["status"] == "cancelled":
+                backend.cancel(updated)
+            return updated
+
+    @staticmethod
+    def _record_solver_submission_failure(
+        store: SQLiteStateStore,
+        job_id: str,
+        failure: dict[str, Any],
+    ) -> dict[str, Any]:
+        while True:
+            job = store.solver_job(job_id)
+            if job["status"] != "submitting":
+                return job
+            try:
+                store.update_solver_job(
+                    job_id,
+                    expected_job_revision=int(job["job_revision"]),
+                    status="failed",
+                    failure=failure,
+                )
+            except RevisionConflict:
+                continue
+            return store.solver_job(job_id)
 
     @staticmethod
     def _cloud_quarantined() -> bool:

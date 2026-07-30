@@ -6,7 +6,7 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 
 - Factory root: this repository
 - Project directories: `ongoing/{base}/` while running, `complete/{base}/` after delivery
-- Workflow state: new and explicitly migrated `native_v2` projects use schema-v3 `.factory/state.db` as the authoritative versioned state/event store. Step artifacts remain authoritative validation evidence. Unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
+- Workflow state: new and explicitly migrated `native_v2` projects use schema-v4 `.factory/state.db` as the authoritative versioned state/event store. Step artifacts remain authoritative validation evidence. Unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
 - Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi — set `--type` and `--max-time`)
 - MinerU PDF → Markdown converter: `../../scripts/mineru_parse.py` (requires `MINERU_TOKEN` in repo `.env`)
 - Method library: `../../method_library/` with `index.json` as the

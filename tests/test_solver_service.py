@@ -3,8 +3,14 @@ import time
 
 import pytest
 
-from factory_core.adapters.solvers import CloudRunSolverBackend, SolverSubmission
-from factory_core.domain import InvalidTransition
+from factory_core.adapters.solvers import (
+    CloudRunHttpTransport,
+    CloudRunSolverBackend,
+    SolverRequest,
+    SolverSubmission,
+    build_solver_backends,
+)
+from factory_core.domain import InvalidTransition, RevisionConflict, WorkflowStatus
 from factory_core.registry import SolverBackendRegistry
 from factory_core.service import FactoryService
 from factory_core.storage import SQLiteStateStore
@@ -123,3 +129,150 @@ def test_v1_upgrade_keeps_legacy_runtime_while_adding_solver_tables(tmp_path):
     policy = SQLiteStateStore(project).solver_policy()
     assert policy["mode"] == "local"
     assert SQLiteStateStore(project).solver_jobs() == []
+
+
+class RevisionRacingBackend:
+    def __init__(self, store):
+        self.store = store
+        self.external_jobs = []
+
+    def submit(self, request):
+        self.external_jobs.append(request.job_id)
+        current = self.store.load()
+        self.store.transition(
+            expected_revision=current.revision,
+            event_type="CONCURRENT_PAUSE",
+            changes={"status": WorkflowStatus.PAUSED},
+        )
+        return SolverSubmission("external-race-job")
+
+    def status(self, _job):
+        return "running"
+
+    def cancel(self, _job):
+        return None
+
+
+def test_solver_confirmation_uses_job_revision_not_project_revision(tmp_path):
+    _service, project, script = make_project(tmp_path)
+    store = SQLiteStateStore(project)
+    backend = RevisionRacingBackend(store)
+    backends = SolverBackendRegistry()
+    backends.register("local", backend)
+    service = FactoryService(tmp_path, solver_backends=backends)
+
+    job = service.submit_solver(project, runtime="python", script=script)
+
+    assert backend.external_jobs == [job["job_id"]]
+    assert job["status"] == "running"
+    assert job["external_id"] == "external-race-job"
+    assert job["job_revision"] == 2
+    assert store.load().status is WorkflowStatus.PAUSED
+
+
+def test_solver_job_revision_rejects_only_stale_job_writers(tmp_path):
+    _service, project, script = make_project(tmp_path)
+    store = SQLiteStateStore(project)
+    state = store.load()
+    store.create_solver_job(
+        expected_revision=state.revision,
+        record={
+            "job_id": "job-revision-test",
+            "backend": "local",
+            "runtime": "python",
+            "script": str(script.relative_to(project)),
+            "workdir": str(script.parent),
+            "argv": [],
+            "max_time_seconds": 10,
+            "status": "submitting",
+        },
+    )
+    paused = store.transition(
+        expected_revision=store.load().revision,
+        event_type="CONCURRENT_PAUSE",
+        changes={"status": WorkflowStatus.PAUSED},
+    )
+
+    store.update_solver_job(
+        "job-revision-test",
+        expected_job_revision=1,
+        status="running",
+        external_id="123",
+    )
+
+    with pytest.raises(RevisionConflict, match="expected solver job revision 1"):
+        store.update_solver_job(
+            "job-revision-test",
+            expected_job_revision=1,
+            status="failed",
+        )
+    assert store.load().status is WorkflowStatus.PAUSED
+    assert paused.status is WorkflowStatus.PAUSED
+
+
+def test_default_solver_builder_registers_both_backends(tmp_path):
+    transport = FakeCloudTransport()
+    backends = build_solver_backends(
+        tmp_path, cloud_transport=transport, quarantined=False
+    )
+
+    assert backends.get("local").name == "local"
+    assert backends.get("cloud_run").name == "cloud_run"
+
+
+class CancelDuringSubmissionBackend:
+    def __init__(self, store):
+        self.store = store
+        self.cancelled = []
+
+    def submit(self, _request):
+        job = self.store.solver_jobs()[0]
+        self.store.update_solver_job(
+            job["job_id"],
+            expected_job_revision=job["job_revision"],
+            status="cancelled",
+        )
+        return SolverSubmission("external-after-cancel")
+
+    def status(self, _job):
+        return "running"
+
+    def cancel(self, job):
+        self.cancelled.append(job["external_id"])
+
+
+def test_cancel_during_submission_still_records_and_stops_external_job(tmp_path):
+    _service, project, script = make_project(tmp_path)
+    store = SQLiteStateStore(project)
+    backend = CancelDuringSubmissionBackend(store)
+    backends = SolverBackendRegistry()
+    backends.register("local", backend)
+    service = FactoryService(tmp_path, solver_backends=backends)
+
+    job = service.submit_solver(project, runtime="python", script=script)
+
+    assert job["status"] == "cancelled"
+    assert job["external_id"] == "external-after-cancel"
+    assert backend.cancelled == ["external-after-cancel"]
+
+
+def test_cloud_transport_rejects_missing_https_url_before_auth(tmp_path):
+    script = tmp_path / "solve.py"
+    script.write_text("print('done')\n", encoding="utf-8")
+    token_calls = []
+    transport = CloudRunHttpTransport(
+        "http://solver.example",
+        token_provider=lambda audience: token_calls.append(audience) or "unused",
+    )
+
+    with pytest.raises(RuntimeError, match="must be an https URL"):
+        transport.submit(
+            SolverRequest(
+                job_id="cloud-job",
+                project_dir=tmp_path,
+                runtime="python",
+                script=script,
+            )
+        )
+
+    assert token_calls == []

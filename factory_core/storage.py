@@ -11,12 +11,15 @@ from typing import Any, Callable
 from .domain import (
     SCHEMA_VERSION,
     RevisionConflict,
+    RunnerLeaseLost,
     StateNotInitialized,
     WorkflowEvent,
     WorkflowState,
     WorkflowStatus,
 )
 
+
+_UNSET = object()
 
 _SENSITIVE_KEY = re.compile(
     r"(?:password|secret|token|api[_-]?key|credential|authorization|cookie|private[_-]?key)",
@@ -124,6 +127,7 @@ class SQLiteStateStore:
             );
             CREATE TABLE IF NOT EXISTS solver_jobs (
                 job_id TEXT PRIMARY KEY,
+                job_revision INTEGER NOT NULL,
                 backend TEXT NOT NULL,
                 runtime TEXT NOT NULL,
                 script TEXT NOT NULL,
@@ -173,7 +177,7 @@ class SQLiteStateStore:
         current = int(row[0])
         if current == SCHEMA_VERSION:
             return
-        if current not in {1, 2}:
+        if current not in {1, 2, 3}:
             raise RuntimeError(
                 f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}"
             )
@@ -202,6 +206,7 @@ class SQLiteStateStore:
             """
             CREATE TABLE IF NOT EXISTS solver_jobs (
                 job_id TEXT PRIMARY KEY,
+                job_revision INTEGER NOT NULL,
                 backend TEXT NOT NULL,
                 runtime TEXT NOT NULL,
                 script TEXT NOT NULL,
@@ -218,6 +223,14 @@ class SQLiteStateStore:
             )
             """
         )
+        solver_columns = {
+            column[1]
+            for column in connection.execute("PRAGMA table_info(solver_jobs)").fetchall()
+        }
+        if "job_revision" not in solver_columns:
+            connection.execute(
+                "ALTER TABLE solver_jobs ADD COLUMN job_revision INTEGER NOT NULL DEFAULT 1"
+            )
         connection.execute(
             "UPDATE project_state SET schema_version = ? WHERE singleton = 1",
             (SCHEMA_VERSION,),
@@ -323,6 +336,8 @@ class SQLiteStateStore:
         event_type: str,
         changes: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
+        expected_runner_pid: int | None | object = _UNSET,
+        expected_runner_lease_id: str | None | object = _UNSET,
     ) -> WorkflowState:
         changes = dict(changes or {})
         unknown = set(changes) - _MUTABLE_COLUMNS
@@ -336,6 +351,16 @@ class SQLiteStateStore:
             row = connection.execute("SELECT * FROM project_state WHERE singleton = 1").fetchone()
             if row is None:
                 raise StateNotInitialized(f"workflow state is not initialized: {self.path}")
+            if (
+                expected_runner_pid is not _UNSET
+                and row["runner_pid"] != expected_runner_pid
+            ) or (
+                expected_runner_lease_id is not _UNSET
+                and row["runner_lease_id"] != expected_runner_lease_id
+            ):
+                raise RunnerLeaseLost(
+                    f"runner lease lost at revision {row['revision']}"
+                )
             if row["revision"] != expected_revision:
                 raise RevisionConflict(
                     f"expected revision {expected_revision}, found {row['revision']}"
@@ -501,10 +526,10 @@ class SQLiteStateStore:
             connection.execute(
                 """
                 INSERT INTO solver_jobs(
-                    job_id, backend, runtime, script, workdir, argv_json,
+                    job_id, job_revision, backend, runtime, script, workdir, argv_json,
                     max_time_seconds, external_id, status, requested_at,
                     started_at, finished_at, result_refs_json, failure_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["job_id"], record["backend"], record["runtime"],
@@ -547,7 +572,7 @@ class SQLiteStateStore:
         self,
         job_id: str,
         *,
-        expected_revision: int,
+        expected_job_revision: int,
         status: str,
         external_id: str | None = None,
         result_refs: dict[str, Any] | None = None,
@@ -557,31 +582,33 @@ class SQLiteStateStore:
         with self._session() as connection:
             self._upgrade_schema(connection)
             connection.execute("BEGIN IMMEDIATE")
-            state = connection.execute(
-                "SELECT * FROM project_state WHERE singleton=1"
-            ).fetchone()
-            if state["revision"] != expected_revision:
-                raise RevisionConflict(
-                    f"expected revision {expected_revision}, found {state['revision']}"
-                )
             job = connection.execute(
                 "SELECT * FROM solver_jobs WHERE job_id=?", (job_id,)
             ).fetchone()
             if job is None:
                 raise KeyError(f"solver job not found: {job_id}")
-            revision = expected_revision + 1
+            if job["job_revision"] != expected_job_revision:
+                raise RevisionConflict(
+                    f"expected solver job revision {expected_job_revision}, "
+                    f"found {job['job_revision']}"
+                )
+            state = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            revision = int(state["revision"]) + 1
+            job_revision = expected_job_revision + 1
             started = job["started_at"] or (now if status == "running" else None)
             finished = now if status in {"completed", "failed", "timeout", "cancelled"} else None
             connection.execute(
                 """
-                UPDATE solver_jobs SET status=?, external_id=COALESCE(?, external_id),
+                UPDATE solver_jobs SET job_revision=?, status=?, external_id=COALESCE(?, external_id),
                     started_at=COALESCE(?, started_at), finished_at=COALESCE(?, finished_at),
                     result_refs_json=COALESCE(?, result_refs_json),
                     failure_json=COALESCE(?, failure_json)
                 WHERE job_id=?
                 """,
                 (
-                    status, external_id, started, finished,
+                    job_revision, status, external_id, started, finished,
                     json.dumps(_redact(result_refs), sort_keys=True) if result_refs is not None else None,
                     json.dumps(_redact(failure), sort_keys=True) if failure is not None else None,
                     job_id,
@@ -600,6 +627,7 @@ class SQLiteStateStore:
                     json.dumps(
                         {
                             "job_id": job_id,
+                            "job_revision": job_revision,
                             "external_id": external_id,
                             "failure": _redact(failure),
                         },
@@ -634,6 +662,7 @@ class SQLiteStateStore:
     def _solver_job_from_row(row: sqlite3.Row) -> dict[str, Any]:
         return {
             "job_id": row["job_id"],
+            "job_revision": row["job_revision"],
             "backend": row["backend"],
             "runtime": row["runtime"],
             "script": row["script"],

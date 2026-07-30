@@ -51,13 +51,16 @@ class ParallelProposalStep:
     max_rounds: int = 4
 
     def prepare(self, context) -> PrepareResult:
-        streams = self._stream_ids(context.project_dir)
-        if len(streams) < 2:
-            return PrepareResult(ready=False, reason="fewer than two active streams")
         return PrepareResult.prepared("viable_streams.md")
 
     def execute(self, context) -> ExecutionResult:
         streams = self._stream_ids(context.project_dir)
+        if len(streams) < 2:
+            return ExecutionResult.failed(
+                "TRANSIENT_INSUFFICIENT_STREAMS",
+                reason="fewer than two active streams",
+                streams=streams,
+            )
         with ThreadPoolExecutor(max_workers=min(6, len(streams))) as executor:
             futures = {
                 executor.submit(self._run_stream, context, stream, index == len(streams) - 1): stream

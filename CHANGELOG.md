@@ -39,6 +39,18 @@
 
 ### 修复
 
+- Worker lease 现在在 SQLite transition 内同时核对 PID 与 lease；连续 Step
+  执行期间保持 `RUNNING`，任何存活 Worker 都会阻止重复 start，失去 lease
+  的旧 Worker 以 `RunnerLeaseLost` 退出且不能提交后续事件。
+- 中断恢复不再无条件覆盖人工等待或永久失败状态；recovery reopen 与正常
+  reopen 统一写 `STEP_REOPENED` 并共享同一配额。
+- migration rollback 同时切换 `control_mode` 和 `runtime_generation`，CLI、Web
+  与 `FactoryService` 在回滚后统一使用 Legacy adapter。
+- Step 2 候选流不足现在进入标准 `RETRY_SCHEDULED`/`STEP_FAILED` 预算，不再
+  从 prepare 抛出非法转换并遗留 Worker 元数据。
+- Solver job 使用独立 `job_revision` 完成后端确认；工作流控制事件不再造成
+  已启动任务的 external ID 丢失。CLI Worker 与 Web 默认使用同一个
+  `build_solver_backends()` 注册表，Cloud Run adapter 仍受全局 quarantine。
 - Cloud Solver client 通过权限受限的临时文件组装和提交 JSON，请求正文与大型 working file 不再进入进程参数，避免触发 `ARG_MAX`。
 - Web 普通恢复、Step 3 选择和人工咨询回答现在统一调用
   `FactoryService.resume_and_start`，成功后提交 `WORKER_LAUNCHED` 并实际

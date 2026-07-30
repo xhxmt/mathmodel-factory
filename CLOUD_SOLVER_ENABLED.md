@@ -31,6 +31,10 @@ export CLOUD_SOLVER_IMPERSONATE_SERVICE_ACCOUNT="solver-invoker@${GCP_PROJECT_ID
 scripts/cloud_solver_monitor.py --check
 ```
 
+Python CLI Worker 和 Web 使用同一个 `build_solver_backends()` 装配本地与
+Cloud Run backend。解除客户端 quarantine 前还必须显式配置非敏感的
+`CLOUD_SOLVER_URL=https://...`；缺失或非 HTTPS URL 会在外部提交前失败。
+
 认证失败、权限不足、限流、服务错误、超时和网络错误分别报告。401/403
 不会被误判成普通服务故障；主动 quarantine 也不会累计故障或触发回退。
 

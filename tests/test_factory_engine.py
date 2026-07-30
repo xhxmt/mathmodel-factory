@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import os
 import subprocess
 import sys
 
@@ -12,6 +13,7 @@ from factory_core.domain import (
     RecoveryDecision,
     RecoveryDisposition,
     RunnerBusy,
+    RunnerLeaseLost,
     StepContext,
     ValidationResult,
     WorkflowStatus,
@@ -451,3 +453,228 @@ def test_engine_dispatches_native_step_lifecycle_without_legacy_handler(tmp_path
     assert state.status is WorkflowStatus.COMPLETED
     assert state.runtime_generation == "native_v2"
     assert native.calls == ["prepare", "execute", "validate"]
+
+
+class LeaseReplacementStep:
+    def __init__(self, store):
+        self.store = store
+
+    def prepare(self, _context):
+        return PrepareResult.prepared()
+
+    def execute(self, _context):
+        current = self.store.load()
+        paused = self.store.transition(
+            expected_revision=current.revision,
+            event_type="PAUSED_BY_TEST",
+            changes={
+                "status": WorkflowStatus.PAUSED,
+                "runner_pid": None,
+                "runner_lease_id": None,
+                "heartbeat_at": None,
+            },
+        )
+        resumed = self.store.transition(
+            expected_revision=paused.revision,
+            event_type="RESUMED_BY_TEST",
+            changes={
+                "status": WorkflowStatus.READY,
+                "active_step": None,
+                "attempt": 0,
+            },
+        )
+        launched = self.store.transition(
+            expected_revision=resumed.revision,
+            event_type="WORKER_B_LAUNCHED",
+            changes={
+                "status": WorkflowStatus.RUNNING,
+                "runner_pid": os.getpid(),
+                "runner_lease_id": "worker-b-lease",
+            },
+        )
+        self.store.transition(
+            expected_revision=launched.revision,
+            event_type="WORKER_B_STEP_STARTED",
+            changes={"active_step": 1, "attempt": 1},
+        )
+        return ExecutionResult.succeeded()
+
+    def validate(self, _context):
+        raise AssertionError("worker A must lose its lease before validation")
+
+    def recover(self, _context, _error):
+        return RecoveryDecision(RecoveryDisposition.RETRY)
+
+
+def test_old_worker_cannot_commit_after_pause_resume_replaces_lease(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo", project_type="modeling", last_completed_step=0
+    )
+    registry = StepRegistry()
+    registry.register(
+        StepDefinition(
+            id=1,
+            name="lease-race",
+            timeout_seconds=30,
+            max_attempts=1,
+            max_reopens=0,
+            step=LeaseReplacementStep(store),
+        )
+    )
+
+    with pytest.raises(RunnerLeaseLost):
+        FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert store.events()[-1].type == "WORKER_B_STEP_STARTED"
+    assert "STEP_SUCCEEDED" not in [event.type for event in store.events()]
+
+
+class RecoveryOnlyStep:
+    def __init__(self, decision):
+        self.decision = decision
+
+    def prepare(self, _context):
+        raise AssertionError("recovery stop state must not dispatch")
+
+    def execute(self, _context):
+        raise AssertionError("recovery stop state must not execute")
+
+    def validate(self, _context):
+        return ValidationResult.invalid("unused")
+
+    def recover(self, _context, _error):
+        return self.decision
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_status"),
+    [
+        (
+            RecoveryDecision(
+                RecoveryDisposition.AWAIT,
+                pending_action=PendingAction(type="step3_selection", gate="step3"),
+            ),
+            WorkflowStatus.AWAITING_SELECTION,
+        ),
+        (RecoveryDecision(RecoveryDisposition.FAIL), WorkflowStatus.FAILED),
+    ],
+)
+def test_run_does_not_overwrite_recovery_stop_states(
+    tmp_path, decision, expected_status
+):
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(
+        project_id="demo", project_type="modeling", last_completed_step=0
+    )
+    store.transition(
+        expected_revision=state.revision,
+        event_type="STEP_STARTED",
+        changes={
+            "status": WorkflowStatus.RUNNING,
+            "active_step": 1,
+            "attempt": 1,
+            "runner_pid": os.getpid(),
+            "runner_lease_id": "launch-lease",
+        },
+    )
+    registry = StepRegistry()
+    registry.register(
+        StepDefinition(1, "recover", 30, 1, step=RecoveryOnlyStep(decision))
+    )
+
+    recovered = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert recovered.status is expected_status
+    assert store.events()[-1].type == "RECOVERY_DECIDED"
+    assert store.events()[-1].payload["decision"] in {
+        "await_pending_action",
+        "fail_recovery",
+    }
+
+
+def test_recovery_reopen_consumes_the_same_budget_as_normal_reopen(tmp_path):
+    decision = RecoveryDecision(RecoveryDisposition.REOPEN, resume_after_step=0)
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(
+        project_id="demo", project_type="modeling", last_completed_step=0
+    )
+    registry = StepRegistry()
+    registry.register(
+        StepDefinition(
+            1,
+            "recover-reopen",
+            30,
+            1,
+            max_reopens=1,
+            step=RecoveryOnlyStep(decision),
+        )
+    )
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+
+    store.transition(
+        expected_revision=state.revision,
+        event_type="FIRST_CRASH",
+        changes={"status": WorkflowStatus.INTERRUPTED, "active_step": 1, "attempt": 1},
+    )
+    first = engine.recover()
+    assert first.status is WorkflowStatus.READY
+    assert store.events()[-1].type == "STEP_REOPENED"
+
+    store.transition(
+        expected_revision=first.revision,
+        event_type="SECOND_CRASH",
+        changes={"status": WorkflowStatus.INTERRUPTED, "active_step": 1, "attempt": 1},
+    )
+    second = engine.recover()
+
+    assert second.status is WorkflowStatus.FAILED
+    assert store.events()[-1].type == "STEP_FAILED"
+    assert [event.type for event in store.events()].count("STEP_REOPENED") == 1
+
+
+def test_parallel_prepare_shortage_uses_standard_retry_budget(tmp_path):
+    from factory_core.steps.catalog import contract_for
+    from factory_core.steps.specialized import ParallelProposalStep
+
+    validator = FakeValidator(
+        [
+            ValidationResult.invalid("missing streams"),
+            ValidationResult.invalid("missing streams"),
+        ]
+    )
+    step = ParallelProposalStep(
+        contract_for(2),
+        renderer=None,
+        dispatcher=None,
+        validator=validator,
+    )
+    registry = StepRegistry()
+    registry.register(
+        StepDefinition(
+            id=2,
+            name="parallel",
+            timeout_seconds=30,
+            max_attempts=2,
+            max_reopens=0,
+            step=step,
+        )
+    )
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo", project_type="modeling", last_completed_step=1
+    )
+
+    state = FactoryEngine(
+        tmp_path, store=store, registry=registry, sleeper=lambda _delay: None
+    ).run()
+
+    assert state.status is WorkflowStatus.FAILED
+    assert [event.type for event in store.events()][-3:] == [
+        "RETRY_SCHEDULED",
+        "STEP_STARTED",
+        "STEP_FAILED",
+    ]
+    assert store.events()[-1].payload["error_class"] == (
+        "TRANSIENT_INSUFFICIENT_STREAMS"
+    )

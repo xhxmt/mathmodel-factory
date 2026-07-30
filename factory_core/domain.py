@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class FactoryCoreError(RuntimeError):
@@ -27,6 +27,10 @@ class InvalidTransition(FactoryCoreError):
 
 class RunnerBusy(FactoryCoreError):
     pass
+
+
+class RunnerLeaseLost(FactoryCoreError):
+    """Raised when a worker no longer owns the project's runner lease."""
 
 
 class MigrationConflict(FactoryCoreError):

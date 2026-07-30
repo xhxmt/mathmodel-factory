@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -6,6 +8,7 @@ from factory_core.domain import InvalidTransition, RevisionConflict, WorkflowSta
 from factory_core.projections import write_compatibility_projections
 from factory_core.service import FactoryService, WorkerHandle
 from factory_core.storage import SQLiteStateStore
+from factory_core.registry import StepRegistry
 from web.backend import project_actions
 
 
@@ -182,6 +185,102 @@ def test_start_rejects_terminal_and_archiving_states(tmp_path, status):
         service.start("demo")
 
     assert launcher.calls == []
+
+
+def test_start_rejects_live_runner_even_when_snapshot_is_ready(tmp_path):
+    launcher = RecordingWorkerLauncher()
+    service = FactoryService(tmp_path, worker_launcher=launcher)
+    state, _ = service.create_project("demo", "question", start=False)
+    store = SQLiteStateStore(tmp_path / "ongoing/demo")
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        store.transition(
+            expected_revision=state.revision,
+            event_type="SIMULATED_STEP_BOUNDARY",
+            changes={
+                "status": WorkflowStatus.READY,
+                "runner_pid": sleeper.pid,
+                "runner_lease_id": "still-running",
+            },
+        )
+
+        with pytest.raises(InvalidTransition, match="already has live worker"):
+            service.start("demo")
+    finally:
+        sleeper.terminate()
+        sleeper.wait(timeout=5)
+
+    assert launcher.calls == []
+
+
+def test_web_resume_rejects_ready_snapshot_with_live_runner(tmp_path, monkeypatch):
+    launcher = RecordingWorkerLauncher()
+    service = FactoryService(tmp_path, worker_launcher=launcher)
+    state, _ = service.create_project("demo", "question", start=False)
+    store = SQLiteStateStore(tmp_path / "ongoing/demo")
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        ready_with_owner = store.transition(
+            expected_revision=state.revision,
+            event_type="SIMULATED_STEP_BOUNDARY",
+            changes={
+                "status": WorkflowStatus.READY,
+                "runner_pid": sleeper.pid,
+                "runner_lease_id": "still-running",
+            },
+        )
+
+        monkeypatch.setattr(project_actions, "FactoryService", lambda _root: service)
+        result = project_actions.run_action(
+            tmp_path,
+            "resume",
+            "demo",
+            expected_revision=ready_with_owner.revision,
+        )
+    finally:
+        sleeper.terminate()
+        sleeper.wait(timeout=5)
+
+    assert result.ok is False
+    assert "already has live worker" in result.stderr
+    assert launcher.calls == []
+
+
+def test_web_resume_after_rollback_uses_legacy_registry(tmp_path, monkeypatch):
+    launcher = RecordingWorkerLauncher()
+    native_calls = []
+
+    def native_registry(_root):
+        native_calls.append(True)
+        return StepRegistry()
+
+    service = FactoryService(
+        tmp_path,
+        worker_launcher=launcher,
+        native_registry_factory=native_registry,
+    )
+    service.create_project("demo", "question", start=False)
+
+    rolled_back = service.rollback_migration("demo")
+
+    assert rolled_back.control_mode == "legacy"
+    assert rolled_back.runtime_generation == "legacy_adapter"
+    assert native_calls == [True]
+
+    monkeypatch.setattr(project_actions, "FactoryService", lambda _root: service)
+    result = project_actions.run_action(
+        tmp_path, "resume", "demo", expected_revision=rolled_back.revision
+    )
+
+    assert result.ok is True
+    assert native_calls == [True]
+    assert launcher.calls
+    assert all(
+        definition.step is None
+        and definition.handler is not None
+        and "legacy" in type(definition.handler).__module__
+        for definition in service.engine("demo").registry
+    )
 
 
 def test_resume_and_start_resolves_selection_before_worker_launch(tmp_path):

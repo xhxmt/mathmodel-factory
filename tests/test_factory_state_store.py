@@ -3,7 +3,12 @@ import threading
 
 import pytest
 
-from factory_core.domain import SCHEMA_VERSION, RevisionConflict, WorkflowStatus
+from factory_core.domain import (
+    SCHEMA_VERSION,
+    RevisionConflict,
+    RunnerLeaseLost,
+    WorkflowStatus,
+)
 from factory_core.storage import SQLiteStateStore
 from factory_core.projections import write_compatibility_projections
 
@@ -72,6 +77,32 @@ def test_concurrent_transitions_allow_exactly_one_revision_commit(tmp_path):
     assert sorted(outcomes) == [("committed", 2), ("conflict", None)]
     assert store.load().revision == 2
     assert len(store.events()) == 2
+
+
+def test_transition_rejects_foreign_runner_lease_atomically(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="demo", project_type="modeling")
+    running = store.transition(
+        expected_revision=state.revision,
+        event_type="RUN_STARTED",
+        changes={
+            "status": WorkflowStatus.RUNNING,
+            "runner_pid": 123,
+            "runner_lease_id": "lease-a",
+        },
+    )
+
+    with pytest.raises(RunnerLeaseLost):
+        store.transition(
+            expected_revision=running.revision,
+            expected_runner_pid=123,
+            expected_runner_lease_id="lease-b",
+            event_type="STEP_SUCCEEDED",
+            changes={"last_completed_step": 1},
+        )
+
+    assert store.load().revision == running.revision
+    assert store.events()[-1].type == "RUN_STARTED"
 
 
 def test_sensitive_event_payload_values_are_never_persisted(tmp_path):
@@ -213,3 +244,49 @@ def test_v1_database_upgrades_in_place_without_rewriting_events(tmp_path):
     assert state.runtime_generation == "legacy_adapter"
     assert state.last_completed_step == 4
     assert [event.type for event in store.events()] == ["PROJECT_CREATED"]
+
+
+def test_v3_database_adds_independent_solver_job_revision(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="v3", project_type="modeling")
+    connection = sqlite3.connect(store.path)
+    try:
+        connection.executescript(
+            """
+            ALTER TABLE solver_jobs RENAME TO solver_jobs_v4;
+            CREATE TABLE solver_jobs (
+                job_id TEXT PRIMARY KEY,
+                backend TEXT NOT NULL,
+                runtime TEXT NOT NULL,
+                script TEXT NOT NULL,
+                workdir TEXT NOT NULL,
+                argv_json TEXT NOT NULL,
+                max_time_seconds INTEGER NOT NULL,
+                external_id TEXT,
+                status TEXT NOT NULL,
+                requested_at INTEGER NOT NULL,
+                started_at INTEGER,
+                finished_at INTEGER,
+                result_refs_json TEXT NOT NULL,
+                failure_json TEXT
+            );
+            DROP TABLE solver_jobs_v4;
+            UPDATE schema_info SET schema_version = 3 WHERE singleton = 1;
+            UPDATE project_state SET schema_version = 3 WHERE singleton = 1;
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    state = store.load()
+
+    connection = sqlite3.connect(store.path)
+    try:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(solver_jobs)")
+        }
+    finally:
+        connection.close()
+    assert state.schema_version == SCHEMA_VERSION
+    assert "job_revision" in columns

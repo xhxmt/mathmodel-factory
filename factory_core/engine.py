@@ -11,7 +11,9 @@ from typing import Callable
 from .domain import (
     InvalidTransition,
     RecoveryDisposition,
+    RevisionConflict,
     RunnerBusy,
+    RunnerLeaseLost,
     StepError,
     StepContext,
     TERMINAL_STATUSES,
@@ -43,11 +45,10 @@ class FactoryEngine:
 
     def run(self, *, max_steps: int | None = None) -> WorkflowState:
         state = self.store.load()
-        if (
-            state.runner_pid is not None
-            and state.runner_pid != os.getpid()
-            and self._pid_is_live(state.runner_pid)
-        ):
+        runner_is_live = state.runner_pid is not None and self._pid_is_live(
+            state.runner_pid
+        )
+        if runner_is_live and state.runner_pid != os.getpid():
             raise RunnerBusy(
                 f"project {state.project_id} already has live runner {state.runner_pid}"
             )
@@ -57,10 +58,50 @@ class FactoryEngine:
             WorkflowStatus.AWAITING_SELECTION,
             WorkflowStatus.AWAITING_CONSULTATION,
             WorkflowStatus.PAUSED,
+            WorkflowStatus.FAILED,
         }:
             return state
-        if state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING} and state.active_step is not None:
-            state = self.recover()
+
+        if state.runner_pid is not None and not runner_is_live:
+            state = self._transition(
+                expected_revision=state.revision,
+                event_type="RUNNER_INTERRUPTED",
+                changes={
+                    "status": WorkflowStatus.INTERRUPTED,
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={"reason": "recorded runner is no longer live"},
+            )
+        elif (
+            state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
+            and state.runner_pid is None
+        ):
+            state = self._transition(
+                expected_revision=state.revision,
+                event_type="RUNNER_INTERRUPTED",
+                changes={"status": WorkflowStatus.INTERRUPTED},
+                payload={"reason": "active run has no recorded runner"},
+            )
+
+        if state.active_step is not None:
+            enforce_recovery_lease = state.runner_pid == os.getpid()
+            state = self.recover(
+                expected_runner_pid=state.runner_pid,
+                expected_runner_lease_id=state.runner_lease_id,
+                enforce_lease=enforce_recovery_lease,
+            )
+            if state.status in {
+                WorkflowStatus.AWAITING_SELECTION,
+                WorkflowStatus.AWAITING_CONSULTATION,
+                WorkflowStatus.FAILED,
+                WorkflowStatus.PAUSED,
+                WorkflowStatus.KILLED,
+                WorkflowStatus.COMPLETED,
+            }:
+                return state
+
         lease = uuid.uuid4().hex
         state = self._transition(
             expected_revision=state.revision,
@@ -72,13 +113,16 @@ class FactoryEngine:
                 "heartbeat_at": int(time.time()),
             },
             payload={"lease_id": lease},
+            expected_runner_pid=state.runner_pid,
+            expected_runner_lease_id=state.runner_lease_id,
         )
         completed_this_run = 0
         while True:
             definition = self.registry.next_after(state.last_completed_step)
             if definition is None:
-                return self._transition(
-                    expected_revision=state.revision,
+                return self._owned_transition(
+                    state,
+                    lease,
                     event_type="PROJECT_COMPLETED",
                     changes={
                         "status": WorkflowStatus.COMPLETED,
@@ -90,8 +134,9 @@ class FactoryEngine:
                     },
                 )
             if max_steps is not None and completed_this_run >= max_steps:
-                return self._transition(
-                    expected_revision=state.revision,
+                return self._owned_transition(
+                    state,
+                    lease,
                     event_type="RUN_STOPPED",
                     changes={
                         "status": WorkflowStatus.READY,
@@ -118,13 +163,27 @@ class FactoryEngine:
                     reason=prepared.reason,
                     evidence=prepared.evidence,
                     event_type="STEP_PREPARE_AWAITING_ACTION",
+                    lease=lease,
                 )
             if not prepared.ready:
-                raise InvalidTransition(
-                    f"step {definition.id} prepare returned neither ready nor pending action"
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="STEP_FAILED",
+                    changes={
+                        "status": WorkflowStatus.FAILED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "error_class": "PERMANENT_INVALID_PREPARE_RESULT",
+                        "reason": prepared.reason,
+                    },
                 )
-            state = self._transition(
-                expected_revision=state.revision,
+            state = self._owned_transition(
+                state,
+                lease,
                 event_type="STEP_STARTED",
                 changes={
                     "status": WorkflowStatus.RUNNING,
@@ -136,23 +195,11 @@ class FactoryEngine:
             )
             context = self._context(state, definition)
             result = definition.lifecycle.execute(context)
-            current = self.store.load()
-            if current.revision != state.revision:
-                if current.status in {
-                    WorkflowStatus.PAUSED,
-                    WorkflowStatus.KILLED,
-                    WorkflowStatus.AWAITING_SELECTION,
-                    WorkflowStatus.AWAITING_CONSULTATION,
-                }:
-                    return current
-                if current.active_step != definition.id:
-                    raise InvalidTransition(
-                        f"step {definition.id} lost ownership at revision {current.revision}"
-                    )
-                state = current
+            state = self._refresh_owned_state(lease, active_step=definition.id)
             if result.metadata.get("killed"):
-                return self._transition(
-                    expected_revision=state.revision,
+                return self._owned_transition(
+                    state,
+                    lease,
                     event_type="KILLED",
                     changes={
                         "status": WorkflowStatus.KILLED,
@@ -165,8 +212,9 @@ class FactoryEngine:
             resume_after = result.metadata.get("resume_after_step")
             if resume_after is not None:
                 if not self._reopen_allowed(definition):
-                    return self._transition(
-                        expected_revision=state.revision,
+                    return self._owned_transition(
+                        state,
+                        lease,
                         event_type="STEP_FAILED",
                         changes={
                             "status": WorkflowStatus.FAILED,
@@ -181,11 +229,12 @@ class FactoryEngine:
                         },
                     )
                 resume_after = self._validated_resume_target(resume_after, definition.id)
-                state = self._transition(
-                    expected_revision=state.revision,
+                state = self._owned_transition(
+                    state,
+                    lease,
                     event_type="STEP_REOPENED",
                     changes={
-                        "status": WorkflowStatus.READY,
+                        "status": WorkflowStatus.RUNNING,
                         "last_completed_step": resume_after,
                         "active_step": None,
                         "attempt": 0,
@@ -194,12 +243,14 @@ class FactoryEngine:
                 )
                 continue
             validation = definition.lifecycle.validate(context)
+            state = self._refresh_owned_state(lease, active_step=definition.id)
             if validation.pending_action is not None:
                 return self._await_action(
                     state,
                     validation.pending_action.to_dict(),
                     reason=validation.reason,
                     evidence=validation.evidence,
+                    lease=lease,
                 )
             if result.returncode == 0 and validation.is_valid:
                 completed_step = int(
@@ -212,11 +263,12 @@ class FactoryEngine:
                     raise InvalidTransition(
                         f"step {definition.id} cannot complete through earlier step {completed_step}"
                     )
-                state = self._transition(
-                    expected_revision=state.revision,
+                state = self._owned_transition(
+                    state,
+                    lease,
                     event_type="STEP_SUCCEEDED",
                     changes={
-                        "status": WorkflowStatus.READY,
+                        "status": WorkflowStatus.RUNNING,
                         "last_completed_step": completed_step,
                         "active_step": None,
                         "attempt": 0,
@@ -227,8 +279,9 @@ class FactoryEngine:
                 continue
             permanent = result.error_class.startswith("PERMANENT")
             if permanent or attempt >= definition.max_attempts:
-                return self._transition(
-                    expected_revision=state.revision,
+                return self._owned_transition(
+                    state,
+                    lease,
                     event_type="STEP_FAILED",
                     changes={
                         "status": WorkflowStatus.FAILED,
@@ -242,8 +295,9 @@ class FactoryEngine:
                         "returncode": result.returncode,
                     },
                 )
-            state = self._transition(
-                expected_revision=state.revision,
+            state = self._owned_transition(
+                state,
+                lease,
                 event_type="RETRY_SCHEDULED",
                 changes={"status": WorkflowStatus.RETRYING},
                 payload={
@@ -254,7 +308,13 @@ class FactoryEngine:
             )
             self._sleep(self._retry_delay(attempt))
 
-    def recover(self) -> WorkflowState:
+    def recover(
+        self,
+        *,
+        expected_runner_pid: int | None = None,
+        expected_runner_lease_id: str | None = None,
+        enforce_lease: bool = False,
+    ) -> WorkflowState:
         state = self.store.load()
         if state.active_step is None:
             return state
@@ -279,6 +339,11 @@ class FactoryEngine:
                         "error_class": "PERMANENT_REOPEN_BUDGET_EXHAUSTED",
                         "source_step": definition.id,
                     },
+                    **self._lease_expectations(
+                        expected_runner_pid,
+                        expected_runner_lease_id,
+                        enforce_lease,
+                    ),
                 )
             resume_after = self._validated_resume_target(
                 decision.resume_after_step, definition.id
@@ -342,17 +407,28 @@ class FactoryEngine:
                 "heartbeat_at": None,
             }
             decision_name = "fail_recovery"
+        event_type = (
+            "STEP_REOPENED"
+            if decision.disposition is RecoveryDisposition.REOPEN
+            else "RECOVERY_DECIDED"
+        )
         return self._transition(
             expected_revision=state.revision,
-            event_type="RECOVERY_DECIDED",
+            event_type=event_type,
             changes=changes,
             payload={
                 "decision": decision_name,
+                "source": "recovery",
                 "source_step": definition.id,
                 "reason": decision.reason,
                 "evidence": decision.evidence,
                 **decision.metadata,
             },
+            **self._lease_expectations(
+                expected_runner_pid,
+                expected_runner_lease_id,
+                enforce_lease,
+            ),
         )
 
     def _await_action(
@@ -363,14 +439,18 @@ class FactoryEngine:
         reason: str,
         evidence: tuple[str, ...],
         event_type: str = "AWAITING_ACTION",
+        lease: str | None = None,
     ) -> WorkflowState:
         awaiting_status = (
             WorkflowStatus.AWAITING_SELECTION
             if action["type"].endswith("selection")
             else WorkflowStatus.AWAITING_CONSULTATION
         )
-        return self._transition(
-            expected_revision=state.revision,
+        transition = self._transition if lease is None else self._owned_transition
+        args = () if lease is None else (state, lease)
+        kwargs = {"expected_revision": state.revision} if lease is None else {}
+        return transition(
+            *args,
             event_type=event_type,
             changes={
                 "status": awaiting_status,
@@ -380,6 +460,7 @@ class FactoryEngine:
                 "heartbeat_at": None,
             },
             payload={"reason": reason, "evidence": evidence},
+            **kwargs,
         )
 
     def pause(self, *, expected_revision: int) -> WorkflowState:
@@ -387,6 +468,10 @@ class FactoryEngine:
 
     def resume(self, *, expected_revision: int) -> WorkflowState:
         state = self.store.load()
+        if state.runner_pid is not None and self._pid_is_live(state.runner_pid):
+            raise InvalidTransition(
+                f"project already has live worker {state.runner_pid}"
+            )
         if state.status is WorkflowStatus.KILLED:
             raise InvalidTransition("killed projects cannot be resumed")
         if state.status not in {
@@ -400,17 +485,22 @@ class FactoryEngine:
             raise InvalidTransition(f"projects in {state.status.value} state cannot be resumed")
         if state.pending_action is not None:
             raise InvalidTransition("pending action must be resolved before resume")
+        preserve_interrupted_step = (
+            state.status is WorkflowStatus.INTERRUPTED
+            and state.active_step is not None
+        )
+        changes = {
+            "status": WorkflowStatus.READY,
+            "runner_pid": None,
+            "runner_lease_id": None,
+            "heartbeat_at": None,
+        }
+        if not preserve_interrupted_step:
+            changes.update(active_step=None, attempt=0)
         return self._transition(
             expected_revision=expected_revision,
             event_type="RESUMED",
-            changes={
-                "status": WorkflowStatus.READY,
-                "active_step": None,
-                "attempt": 0,
-                "runner_pid": None,
-                "runner_lease_id": None,
-                "heartbeat_at": None,
-            },
+            changes=changes,
         )
 
     def kill(self, *, expected_revision: int) -> WorkflowState:
@@ -450,7 +540,10 @@ class FactoryEngine:
         return self._transition(
             expected_revision=expected_revision,
             event_type="ENGINE_DEACTIVATED",
-            changes={"control_mode": "legacy"},
+            changes={
+                "control_mode": "legacy",
+                "runtime_generation": "legacy_adapter",
+            },
         )
 
     def archive_completed(self, factory_root: str | Path) -> WorkflowState:
@@ -513,6 +606,51 @@ class FactoryEngine:
                     stacklevel=2,
                 )
         return state
+
+    def _owned_transition(
+        self,
+        state: WorkflowState,
+        lease: str,
+        **kwargs,
+    ) -> WorkflowState:
+        """Commit a worker event only while PID and lease still match atomically."""
+        while True:
+            try:
+                return self._transition(
+                    expected_revision=state.revision,
+                    expected_runner_pid=os.getpid(),
+                    expected_runner_lease_id=lease,
+                    **kwargs,
+                )
+            except RevisionConflict:
+                state = self._refresh_owned_state(lease)
+
+    def _refresh_owned_state(
+        self, lease: str, *, active_step: int | None = None
+    ) -> WorkflowState:
+        state = self.store.load()
+        if state.runner_pid != os.getpid() or state.runner_lease_id != lease:
+            raise RunnerLeaseLost(
+                f"runner lease lost at revision {state.revision}"
+            )
+        if active_step is not None and state.active_step != active_step:
+            raise RunnerLeaseLost(
+                f"step {active_step} lost runner ownership at revision {state.revision}"
+            )
+        return state
+
+    @staticmethod
+    def _lease_expectations(
+        runner_pid: int | None,
+        runner_lease_id: str | None,
+        enforce: bool,
+    ) -> dict:
+        if not enforce:
+            return {}
+        return {
+            "expected_runner_pid": runner_pid,
+            "expected_runner_lease_id": runner_lease_id,
+        }
 
     def _context(self, state: WorkflowState, definition: StepDefinition) -> StepContext:
         return StepContext(
