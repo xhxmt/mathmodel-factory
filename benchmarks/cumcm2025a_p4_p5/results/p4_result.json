@@ -1,0 +1,276 @@
+{
+  "status": "EXPERIMENTAL_FEASIBLE",
+  "objective": 11.52,
+  "intervals": [
+    [
+      3.56,
+      8.06
+    ],
+    [
+      13.1,
+      17.0
+    ],
+    [
+      24.42,
+      27.54
+    ]
+  ],
+  "individual_durations": [
+    4.5,
+    3.92,
+    3.12
+  ],
+  "decision": [
+    {
+      "uav_id": "FY1",
+      "missile_id": "M1",
+      "slot": 1,
+      "theta_j": 3.11239461,
+      "theta_deg": 178.3271,
+      "v_j": 89.690882,
+      "t_{d,j,k}": 0.29174,
+      "tau_{jk}": 2.867799,
+      "t_{e,j,k}": 3.159539,
+      "drop_point": [
+        17773.844724,
+        0.7639,
+        1800.0
+      ],
+      "burst_point": [
+        17516.738914,
+        8.27302,
+        1759.701065
+      ]
+    },
+    {
+      "uav_id": "FY2",
+      "missile_id": "M1",
+      "slot": 1,
+      "theta_j": 5.25311417,
+      "theta_deg": 300.9813,
+      "v_j": 139.5383,
+      "t_{d,j,k}": 6.76226,
+      "tau_{jk}": 4.645811,
+      "t_{e,j,k}": 11.408071,
+      "drop_point": [
+        12485.722552,
+        591.023052,
+        1400.0
+      ],
+      "burst_point": [
+        12819.423884,
+        35.239336,
+        1294.240562
+      ]
+    },
+    {
+      "uav_id": "FY3",
+      "missile_id": "M1",
+      "slot": 1,
+      "theta_j": 1.29261013,
+      "theta_deg": 74.0611,
+      "v_j": 135.48512,
+      "t_{d,j,k}": 22.944109,
+      "tau_{jk}": 0.756587,
+      "t_{e,j,k}": 23.700696,
+      "drop_point": [
+        6853.654938,
+        -10.923845,
+        700.0
+      ],
+      "burst_point": [
+        6881.804402,
+        87.641613,
+        697.195122
+      ]
+    }
+  ],
+  "single_smoke_starts": [
+    {
+      "uav_id": "FY1",
+      "fine_objective": 4.5,
+      "decision": {
+        "uav_id": "FY1",
+        "missile_id": "M1",
+        "slot": 1,
+        "theta_j": 3.11239461,
+        "theta_deg": 178.3271,
+        "v_j": 89.690882,
+        "t_{d,j,k}": 0.29174,
+        "tau_{jk}": 2.867799,
+        "t_{e,j,k}": 3.159539,
+        "drop_point": [
+          17773.844724,
+          0.7639,
+          1800.0
+        ],
+        "burst_point": [
+          17516.738914,
+          8.27302,
+          1759.701065
+        ]
+      },
+      "n_eval": 929
+    },
+    {
+      "uav_id": "FY2",
+      "fine_objective": 3.92,
+      "decision": {
+        "uav_id": "FY2",
+        "missile_id": "M1",
+        "slot": 1,
+        "theta_j": 5.25311417,
+        "theta_deg": 300.9813,
+        "v_j": 139.5383,
+        "t_{d,j,k}": 6.76226,
+        "tau_{jk}": 4.645811,
+        "t_{e,j,k}": 11.408071,
+        "drop_point": [
+          12485.722552,
+          591.023052,
+          1400.0
+        ],
+        "burst_point": [
+          12819.423884,
+          35.239336,
+          1294.240562
+        ]
+      },
+      "n_eval": 2517
+    },
+    {
+      "uav_id": "FY3",
+      "fine_objective": 3.12,
+      "decision": {
+        "uav_id": "FY3",
+        "missile_id": "M1",
+        "slot": 1,
+        "theta_j": 1.29261013,
+        "theta_deg": 74.0611,
+        "v_j": 135.48512,
+        "t_{d,j,k}": 22.944109,
+        "tau_{jk}": 0.756587,
+        "t_{e,j,k}": 23.700696,
+        "drop_point": [
+          6853.654938,
+          -10.923845,
+          700.0
+        ],
+        "burst_point": [
+          6881.804402,
+          87.641613,
+          697.195122
+        ]
+      },
+      "n_eval": 2349
+    }
+  ],
+  "candidates": [
+    {
+      "label": "independent_full_horizon",
+      "search_objective": 11.16,
+      "fine_objective": 11.52,
+      "intervals": [
+        [
+          3.56,
+          8.06
+        ],
+        [
+          13.1,
+          17.0
+        ],
+        [
+          24.42,
+          27.54
+        ]
+      ]
+    },
+    {
+      "label": "joint_seed_20260721",
+      "search_objective": 11.16,
+      "fine_objective": 11.52,
+      "intervals": [
+        [
+          3.56,
+          8.06
+        ],
+        [
+          13.1,
+          17.0
+        ],
+        [
+          24.42,
+          27.54
+        ]
+      ]
+    },
+    {
+      "label": "joint_seed_20260722",
+      "search_objective": 11.16,
+      "fine_objective": 11.52,
+      "intervals": [
+        [
+          3.56,
+          8.06
+        ],
+        [
+          13.1,
+          17.0
+        ],
+        [
+          24.42,
+          27.54
+        ]
+      ]
+    },
+    {
+      "label": "joint_seed_20260723",
+      "search_objective": 11.16,
+      "fine_objective": 11.52,
+      "intervals": [
+        [
+          3.56,
+          8.06
+        ],
+        [
+          13.1,
+          17.0
+        ],
+        [
+          24.42,
+          27.54
+        ]
+      ]
+    },
+    {
+      "label": "delivered_canonical",
+      "search_objective": 8.16,
+      "fine_objective": 8.28,
+      "intervals": [
+        [
+          3.627,
+          8.107
+        ],
+        [
+          15.127,
+          18.927
+        ]
+      ]
+    }
+  ],
+  "n_eval": 14579,
+  "runtime_sec": 212.458,
+  "search_contract": {
+    "hard_drop_horizon": 66.99917080747261,
+    "search_dt": 0.12,
+    "fine_dt": 0.02,
+    "single_iters": 45,
+    "joint_iters": 60,
+    "seeds": [
+      20260721,
+      20260722,
+      20260723
+    ],
+    "reference_strategy_used_for_optimization": false
+  }
+}

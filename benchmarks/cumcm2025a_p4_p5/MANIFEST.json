@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "source_worktree": ".worktrees/cumcm2025a-p4-p5-model",
+  "source_branch": "fix/cumcm2025a-p4-p5-model",
+  "source_head": "fb15d7d1d34b75f8d8c1e0fa0ab021e0b5d67120",
+  "imported_at": "2026-07-30",
+  "status": "experimental_recovered",
+  "canonical_delivery_mutated": false,
+  "required_environment": {
+    "python": "3.13.5",
+    "numpy": "2.4.6",
+    "scipy": "1.17.1"
+  },
+  "recorded_results": {
+    "p4_status": "EXPERIMENTAL_FEASIBLE",
+    "p4_objective": 11.52,
+    "p5_status": "EXPERIMENTAL_FEASIBLE",
+    "p5_best_total_objective": 15.2,
+    "p5_best_fairness_objective": 13.6
+  },
+  "source_sha256": {
+    "src/10_repaired_p4_p5.py": "96dba7399e228fc0f42a80f2ca3cb980b11ce38db265842ed81e3f92c461344f",
+    "src/11_repaired_p5_cloud.py": "759a63e551d8349caebdee5e5db601da912c1a2c44ccce0c224f00c403ef838c",
+    "src/12_rescore_p5_cloud.py": "dea80b0f5531967ae7ac2b56cb7bfed39c3cf00d4bdde4124d0e4e8293f42c8b",
+    "tests/test_repaired_p4_p5_solver.py": "7c0ef715cdf6987e4d421ea4dac34be5ab08a11f847c4c9ac71a728f8dab0f2c",
+    "results/comparison.json": "87a676bce68dc42c6d0b4ac8fe802ecfc9ed6ceb3a9e370dcc3290d1ca46ddde",
+    "results/p4_result.json": "95a9cfb673640b9be2697bdbeb2a66338eb5be46827f72728195a598b73ead3e",
+    "results/p5_result.json": "a2a150c141e958f00a44c224d5cb92a8e076da8e831fdcecb1aa2e3beb1b3ea5"
+  }
+}

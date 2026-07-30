@@ -39,6 +39,7 @@
 
 ### 修复
 
+- Cloud Solver client 通过权限受限的临时文件组装和提交 JSON，请求正文与大型 working file 不再进入进程参数，避免触发 `ARG_MAX`。
 - Web 普通恢复、Step 3 选择和人工咨询回答现在统一调用
   `FactoryService.resume_and_start`，成功后提交 `WORKER_LAUNCHED` 并实际
   启动 worker；此前 Web 只把状态切到 `ready`。

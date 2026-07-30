@@ -29,6 +29,7 @@
 - [docs/architecture/ORCHESTRATION_ENGINE.md](docs/architecture/ORCHESTRATION_ENGINE.md)：Python 引擎、SQLite 状态、Legacy 迁移和恢复契约。
 - [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md)：核心、应用、部署、评测、历史资产和运行数据的所有权。
 - [docs/architecture/compatibility-removal.md](docs/architecture/compatibility-removal.md)：兼容入口的可观察移除条件；本轮不删除这些入口。
+- [docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md](docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md)：本轮旧 worktree 的恢复、取舍与合并依据（历史快照）。
 - [STEPS_original.md](STEPS_original.md)：原始社会科学工作流，仅供历史参考。
 - [analysis_guide.md](analysis_guide.md)：兼容旧流程的分析指南；新项目以 `modeling_guide.md` 为准。
 

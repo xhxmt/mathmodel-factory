@@ -1,0 +1,61 @@
+{
+  "status": "EXPERIMENTAL_COMPARISON",
+  "canonical_artifacts_overwritten": false,
+  "problem4": {
+    "delivered_canonical": {
+      "objective_dt_0.02": 8.28,
+      "intervals": [[3.627, 8.107], [15.127, 18.927]]
+    },
+    "independent_reference_regression": {
+      "objective_dt_0.01": 11.09,
+      "used_as_optimization_seed": false
+    },
+    "repaired": {
+      "objective_dt_0.02": 11.52,
+      "intervals": [[3.56, 8.06], [13.1, 17.0], [24.42, 27.54]],
+      "individual_durations": [4.5, 3.92, 3.12]
+    },
+    "improvement_over_delivered_sec": 3.24,
+    "improvement_over_delivered_percent": 39.13,
+    "conclusion": "The corrected LOS-offset geometry and full-horizon search recover and exceed the expected approximately 11-second result."
+  },
+  "problem5": {
+    "delivered_label_filtered": {
+      "objective_dt_0.05": 15.15,
+      "T_i": {"M1": 9.2, "M2": 3.8, "M3": 2.15},
+      "minimum_T_i": 2.15
+    },
+    "delivered_schedule_global_rescore": {
+      "objective_dt_0.05": 15.2,
+      "T_i": {"M1": 9.2, "M2": 3.8, "M3": 2.2}
+    },
+    "repaired_best_total": {
+      "objective_dt_0.05": 15.2,
+      "T_i_dt_0.05": {"M1": 9.2, "M2": 3.8, "M3": 2.2},
+      "objective_dt_0.02": 15.28,
+      "T_i_dt_0.02": {"M1": 9.22, "M2": 3.84, "M3": 2.22},
+      "minimum_T_i_dt_0.05": 2.2
+    },
+    "repaired_best_fairness": {
+      "objective_dt_0.05": 13.6,
+      "T_i_dt_0.05": {"M1": 5.55, "M2": 3.8, "M3": 4.25},
+      "objective_dt_0.02": 13.74,
+      "T_i_dt_0.02": {"M1": 5.56, "M2": 3.84, "M3": 4.34},
+      "minimum_T_i_dt_0.05": 3.8
+    },
+    "fairness_minimum_improvement_over_delivered_percent": 76.74,
+    "cloud_run": {
+      "completed_job_id": "cumcm2025a-p5-repaired-20260712-04",
+      "runtime_sec": 1251.763,
+      "block_iters": 8,
+      "cycles": 1,
+      "seed": 20260731,
+      "assignment_labels": ["canonical", "balanced", "proximity"],
+      "cloud_numpy": "1.26.3",
+      "cloud_scipy": "1.12.0",
+      "local_rescore_numpy": "2.4.6",
+      "local_rescore_scipy": "1.17.1"
+    },
+    "conclusion": "The corrected model reproduces the high-total schedule and finds a substantially fairer feasible schedule, but this bounded run does not improve the total-duration optimum or prove global optimality."
+  }
+}
