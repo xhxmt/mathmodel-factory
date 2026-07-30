@@ -24,3 +24,12 @@ damaged worktree filesystem state from replacing current code.
 No worktree, branch, generated paper, backup, result, or credential is deleted
 as part of this consolidation. Physical worktree removal remains a separate
 operation requiring explicit approval after exact targets are reported.
+
+## Verification
+
+- Current locked repository suite: `636 passed in 50.78s`.
+- Recovered P4/P5 project suite in its pinned numeric environment: `14 passed`.
+- Focused Cloud routing, calibration, delivery, and workflow-state suite:
+  `53 passed`.
+- All three source branch heads are ancestors of `main`; strategy merges retain
+  history while the main tree keeps the curated implementation above.
