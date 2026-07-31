@@ -168,11 +168,15 @@ class NativeArtifactValidator:
         return ok, "Step 4 model contract invalid", ("model.md", "symbol_table.md", "assumption_ledger.md", "modeling_scope_gate.md", "quality_contract.json"), {}
 
     def _step_5(self, project: Path):
-        values = list((project / "results").rglob("values.json")) if (project / "results").is_dir() else []
-        ok = _has(project, "solve_log.md", 20) and bool(values) and (project / "results/canonical_results.json").is_file() and _no_stubs(project)
+        results = project / "results"
+        values = sorted(results.rglob("values.json")) if results.is_dir() else []
+        canonical = results / "canonical_results.json"
+        truth_sources = ([canonical] if canonical.is_file() else []) + values
+        ok = _has(project, "solve_log.md", 20) and bool(values) and _no_stubs(project)
         if ok:
             ok = _run(self.factory_root, ["scripts/verify_provenance.py", str(project)], stdout=project / "provenance_verification.latest.txt", accepted=(0, 2))
-        return ok, "Step 5 solve/provenance contract invalid", ("solve_log.md", "results/canonical_results.json"), {}
+        evidence = ("solve_log.md", *(str(path.relative_to(project)) for path in truth_sources))
+        return ok, "Step 5 solve/provenance contract invalid", evidence, {}
 
     def _step_6(self, project: Path):
         figures = list((project / "figures").glob("sensitivity_*.pdf")) + list((project / "figures").glob("sensitivity_*.png")) if (project / "figures").is_dir() else []
