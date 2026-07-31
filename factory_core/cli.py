@@ -27,6 +27,27 @@ def _engine(project: Path) -> FactoryEngine:
     return FactoryService(ROOT).engine(project)
 
 
+def solver_evidence_payload(project: Path, job: dict) -> dict:
+    """Return the public, metadata-only solver evidence contract."""
+    script = Path(str(job["script"]))
+    if not script.is_absolute():
+        script = project / script
+    workdir = Path(str(job["workdir"]))
+    if not workdir.is_absolute():
+        workdir = project / workdir
+    return {
+        "schema": "solver-job-evidence-v1",
+        "job_id": str(job["job_id"]),
+        "backend": str(job["backend"]),
+        "runtime": str(job["runtime"]),
+        "script": str(script.resolve()),
+        "workdir": str(workdir.resolve()),
+        "status": str(job["status"]).upper(),
+        "max_time_seconds": int(job["max_time_seconds"]),
+        "requested_at": int(job["requested_at"]),
+    }
+
+
 def _legacy_infer(project: Path) -> int:
     return LegacyArtifactValidator(ROOT, LEGACY_RUNNER).infer_step(project)
 
@@ -153,6 +174,12 @@ def build_parser() -> argparse.ArgumentParser:
     solver_status = solver_sub.add_parser("status")
     solver_status.add_argument("project_dir")
     solver_status.add_argument("job_id")
+    solver_status.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Print allowlisted solver-job evidence as JSON.",
+    )
     solver_wait = solver_sub.add_parser("wait")
     solver_wait.add_argument("project_dir")
     solver_wait.add_argument("job_id")
@@ -265,7 +292,16 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.solver_command == "status":
                 job = service.solver_status(project, args.job_id)
-                print(job["status"].upper())
+                if args.json_output:
+                    print(
+                        json.dumps(
+                            solver_evidence_payload(project, job),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                    )
+                else:
+                    print(job["status"].upper())
                 return 0
             if args.solver_command == "wait":
                 job = service.wait_solver(project, args.job_id)

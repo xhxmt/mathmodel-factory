@@ -147,8 +147,13 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 ```bash
 ../../solver_submit.sh --type python --max-time 600 models/m3_milp/03_solve.py
 ../../solver_submit.sh --status <jobid>
+../../solver_submit.sh --status <jobid> --json
 ../../solver_submit.sh --wait <jobid>
 ```
+
+`--status <jobid> --json` 返回字段白名单化的 `solver-job-evidence-v1`，可在不读取
+SQLite 或旧状态文件的前提下核对任务、运行时、脚本、工作目录和状态。原生项目与
+兼容项目使用同一公开格式。
 
 支持的类型包括 `python`、`julia`、`matlab`、`R` 和 `gurobi`，前提是本地已安装相应的环境。
 

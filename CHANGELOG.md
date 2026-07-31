@@ -39,6 +39,9 @@
 
 ### 修复
 
+- Step 2 proposal/critic 改用 `solver_submit.sh --status <jobid> --json` 核对
+  字段白名单化的任务证据，并绑定 jobid、运行时和实际 demo 脚本；根 wrapper
+  现在可从原生项目目录解析 `factory_core`，同时保留 Legacy 状态兼容。
 - Worker lease 现在在 SQLite transition 内同时核对 PID 与 lease；连续 Step
   执行期间保持 `RUNNING`，任何存活 Worker 都会阻止重复 start，失去 lease
   的旧 Worker 以 `RunnerLeaseLost` 退出且不能提交后续事件。
