@@ -148,8 +148,8 @@ JSON 必含字段（示例）：
    - 求解器调用按 method_library 模板
    - **结果序列化到 JSON**（绝对路径写 `__PROJECT_PATH__/__STREAM_PREFIX___demo_result.json`）
 6. 提交：`__FACTORY__/solver_submit.sh --type python --max-time 900 models/__STREAM_PREFIX___<short>/demo.py`，记下 JOBID。如有多个独立 demo（如多个 sub-problem），并行提交。
-   - JOBID 可能以 `local_` 或 `cloud_` 开头；两者都必须能在 `__FACTORY__/run_state/solver_jobs/<jobid>.meta` 查到。
-7. `--wait $JOBID`，看 status：
+   - JOBID 可能来自原生 SQLite 项目或兼容项目。不要通过内部目录结构判断真实性；在 `__PROJECT_PATH__` 下执行 `__FACTORY__/solver_submit.sh --status "$JOBID"`，wrapper 会自动查询对应状态后端。
+7. 执行 `__FACTORY__/solver_submit.sh --wait "$JOBID"`，看 status：
    - COMPLETED：读 `models/__STREAM_PREFIX___<short>/demo.log`，把关键数填回 JSON 的 `objective`、`runtime_sec`、`sanity_checks`
    - FAILED / TIMEOUT：先看是不是公式错（如 LP infeasible 是真问题），改公式或换数据规模重跑；**不要**把 FAILED 状态写进 JSON 就交差
 8. 把 `<demo>.log` 移到 `logs/__STREAM_PREFIX___demo.log`（保持项目根整洁，per modeling_guide.md）
@@ -159,11 +159,12 @@ JSON 必含字段（示例）：
     - `test -s __PROJECT_PATH__/__STREAM_PREFIX___demo_result.json` 且 JSON 合法（`python -m json.tool` 不报错）
     - `test -d __PROJECT_PATH__/models/__STREAM_PREFIX___*` 且其中至少有 `demo.py` + `README.md`
     - `test -f __PROJECT_PATH__/logs/__STREAM_PREFIX___demo.log` 或同等位置（不强制——某些 solver 不写 log）
+    - `__FACTORY__/solver_submit.sh --status "$JOBID"` 返回已知状态
     - JSON 里 `status` 是 OPTIMAL/COMPLETED/CONVERGED 这一类成功值（不是 FAILED）
 11. **不要**更新 `checkpoint.md`（Step 2 是并行多流；runner 等所有流 critic 通过后才更新）
 
 [质量边界]
-- **demo 必须真跑过**，不许只写脚本不提交。Critic 第一件事就是看 JSON 里的 jobid 在不在 `__FACTORY__/run_state/solver_jobs/` 下。
+- **demo 必须真跑过**，不许只写脚本不提交。Critic 第一件事会通过 `__FACTORY__/solver_submit.sh --status <jobid>` 查询统一任务状态。不要直接读取 `.factory/state.db` 或旧 `run_state` 文件。
 - **公式严格自洽**：所有出现在目标和约束里的符号必须在"集合/参数/决策变量"三个表里登记。Spec 里出现的随手符号是 Step 4 最容易爆雷的地方。
 - **不要写完整模型**：Step 4 是全模型构建。本步骤只要"立项级 + 跑通最小例子"。Spec 里写"详细求解算法 / 灵敏度 / 完整子问题"是越界。
 - **不要伪造结果**：JSON 里的数值必须来自实际的 solver log。如果 demo 跑不通，**走 critic-revise 循环**（写出真实状态，让 critic 判 REVISE），不要瞎填数。
