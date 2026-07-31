@@ -181,7 +181,7 @@ usage() {
     cat <<'EOF'
 Usage:
   solver_submit.sh --type <type> <script> [--max-time <sec>] [--args "..."]
-  solver_submit.sh --status <jobid>
+  solver_submit.sh --status <jobid> [--json]
   solver_submit.sh --wait <jobid>
   solver_submit.sh --dry-run --type <type> <script> [...]
 
@@ -196,6 +196,7 @@ Options:
   --max-time <sec>   Wall-clock limit. Job is killed with TERM then KILL.
   --args "..."       Extra argv passed to the script (where supported).
   --dry-run          Print what would run, don't launch.
+  --json             With --status, print allowlisted job evidence as JSON.
 
 Returns:
   On submit: prints a jobid on stdout (local_<TYPE>_<TS>_<PID> or cloud_<TYPE>_<TS>_<PID>).
@@ -245,6 +246,61 @@ job_status() {
     esac
 }
 
+job_evidence_json() {
+    local jobid="$1"
+    local meta
+    meta="$(job_meta "$jobid")"
+    [[ -f "$meta" ]] || { echo "UNKNOWN"; return 1; }
+
+    local status backend runtime script workdir max_time started
+    status="$(job_status "$jobid")"
+    backend="$(job_field "$jobid" backend)"
+    if [[ -z "$backend" ]]; then
+        case "$jobid" in
+            cloud_*) backend="cloud_run" ;;
+            *)       backend="local" ;;
+        esac
+    fi
+    runtime="$(job_field "$jobid" type)"
+    script="$(job_field "$jobid" script)"
+    workdir="$(job_field "$jobid" workdir)"
+    max_time="$(job_field "$jobid" max_time)"
+    started="$(job_field "$jobid" started)"
+
+    python3 - "$jobid" "$backend" "$runtime" "$script" "$workdir" \
+        "$status" "$max_time" "$started" <<'PY'
+import json
+import sys
+
+
+def integer_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+job_id, backend, runtime, script, workdir, status, max_time, started = sys.argv[1:]
+print(
+    json.dumps(
+        {
+            "schema": "solver-job-evidence-v1",
+            "job_id": job_id,
+            "backend": backend,
+            "runtime": runtime,
+            "script": script,
+            "workdir": workdir,
+            "status": status,
+            "max_time_seconds": integer_or_none(max_time),
+            "requested_at": integer_or_none(started),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+)
+PY
+}
+
 build_command() {
     # Print the command argv (one token per line) for the given solver type.
     local type="$1" script="$2"
@@ -286,6 +342,7 @@ EXTRA_ARGS=""
 DRY_RUN=false
 STATUS_JOB=""
 WAIT_JOB=""
+JSON_OUTPUT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -295,6 +352,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)  DRY_RUN=true; shift ;;
         --status)   STATUS_JOB="$2"; shift 2 ;;
         --wait)     WAIT_JOB="$2"; shift 2 ;;
+        --json)     JSON_OUTPUT=true; shift ;;
         -h|--help)  usage; exit 0 ;;
         -*)         echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
         *)          SCRIPT="$1"; shift ;;
@@ -302,7 +360,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$STATUS_JOB" ]]; then
-    job_status "$STATUS_JOB"
+    if $JSON_OUTPUT; then
+        job_evidence_json "$STATUS_JOB"
+    else
+        job_status "$STATUS_JOB"
+    fi
     exit 0
 fi
 

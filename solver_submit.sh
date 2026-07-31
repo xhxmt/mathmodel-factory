@@ -3,6 +3,7 @@ set -euo pipefail
 
 FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEGACY="$FACTORY/legacy/shell/solver_submit_legacy.sh"
+export PYTHONPATH="$FACTORY${PYTHONPATH:+:$PYTHONPATH}"
 
 find_engine_project() {
     local dir="$1"
@@ -52,7 +53,7 @@ fi
 
 case "${1:-}" in
     --status)
-        exec python3 -m factory_core.cli solver status "$project" "${2:?missing job id}"
+        exec python3 -m factory_core.cli solver status "$project" "${2:?missing job id}" "${@:3}"
         ;;
     --wait)
         exec python3 -m factory_core.cli solver wait "$project" "${2:?missing job id}"
