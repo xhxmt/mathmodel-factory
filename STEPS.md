@@ -7,7 +7,7 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 - Factory root: this repository
 - Project directories: `ongoing/{base}/` while running, `complete/{base}/` after delivery
 - Workflow state: new and explicitly migrated `native_v2` projects use schema-v4 `.factory/state.db` as the authoritative versioned state/event store. Step artifacts remain authoritative validation evidence. Unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
-- Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi — set `--type` and `--max-time`)
+- Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi). Submit with `--type`, `--max-time`, repeated `--input` / `--output` / `--seed`; inspect immutable two-stage evidence with `--status <jobid> --json`.
 - MinerU PDF → Markdown converter: `../../scripts/mineru_parse.py` (requires `MINERU_TOKEN` in repo `.env`)
 - Method library: `../../method_library/` with `index.json` as the
   machine-readable HMML-lite registry and README / method `.md` files as the
@@ -85,7 +85,7 @@ Produce:
 
 Produce:
 - `modeling_scope_gate.md` — Step 4 hard gate. First line must be `VERDICT: PASS`; it checks problem-type modeling semantics, objective-function interpretation, geometry/occlusion sampling density, auxiliary-model symbol handling, and the canonical result-source plan before full solving begins.
-- `quality_contract.json` — project-specific claim/evidence contract. New projects use schema v3: every hard mathematical claim must identify its problem-statement source, implementation owner, mathematical `constraint_domain`, and independent executable evidence. A continuous-time hard constraint must additionally declare `constraint_domain: continuous_time` and bind independent event localization, a certified interval/error bound, or structurally validated dual implementation evidence; replaying the same sampled array is diagnostic only. Generic anomaly heuristics remain advisory unless a problem-specific justification promotes them to hard checks.
+- `quality_contract.json` — project-specific claim/evidence contract. New projects use schema v4: every hard mathematical claim identifies its problem-statement source, implementation owner, mathematical `constraint_domain`, and independent executable evidence. Optimization subproblems additionally declare objective direction, a valid relaxation-bound artifact, a direction-aware budget ladder, plateau semantics, and a cross-check artifact with at least two algorithm families. The contract also points to the deterministic-derived-artifact manifest. A continuous-time hard constraint must bind independent event localization, a certified interval/error bound, or structurally validated dual implementation evidence; generic anomaly heuristics remain advisory unless a problem-specific proof promotes them.
 - `model.md` — promoted from `m{primary}_spec.md` and expanded: full math formulation, derivations, edge cases, sub-problem coupling
 - `symbol_table.md` — every variable / parameter / set used anywhere in the model, with type + units + range. Required by `modeling_guide.md` and CUMCM submission rules.
 - `assumption_ledger.md` — assumption clearing-house. Each entry: `id | statement | source (题目/团队) | impact-if-violated | status`. This file becomes the cross-step `audit_issue_ledger.md`-style tracker for the rest of the workflow.
@@ -104,10 +104,12 @@ Produce:
 - `results/canonical_results.json` — required consolidated truth source for current native projects. It must declare the project and selected `primary_method`; every subproblem must name its actual `source` / `source_file`, and the source method and solver provenance must agree with both `chosen_method.md` and the consolidated entry. Paper tables, abstract numbers, and `result*.xlsx` must be generated from this source.
 - `results/invariants.json` — declared mathematical identities, problem-implied weak/strict dominance, conservation laws, and value ranges. `gt_strict`, `nonzero_each`, and `quantized_off` are hard only when the project contract supplies a problem-specific proof; otherwise they are anomaly diagnostics.
 - Global-search runs must record iterations, evaluations, seeds, convergence ladders, and available bounds. `verify_spec_impl.py` reconciles promises against actual execution, while `quality_contract.json` decides which problem-derived thresholds are hard. Generic dimension-based budget floors are warnings rather than optimality certificates.
+- Each v4 optimization check writes a direction-correct `bound.json`, `convergence.json`, and `cross_check.json`. A maximize upper bound may not be below any observed feasible value; a minimize lower bound may not be above one. Increasing budget must not worsen the objective in the declared direction beyond tolerance.
 - Attachment `result*.xlsx` files declared in `problem/deliverables.json` must be script-generated from the canonical results (never hand-filled); `scripts/verify_deliverables.py` cross-checks xlsx cells against the truth source.
+- `results/derived_artifacts.json` pins `canonical_results.json`, the versioned generator, and every generated table/headline/xlsx output. `scripts/verify_derived_artifacts.py` regenerates them in a temporary directory and diffs bytes, canonical JSON, or xlsx cell semantics.
 - `solve_log.md` — per-run table: solver, runtime, MIP-gap or convergence indicator, output files
 
-Every solver invocation MUST go through `../../solver_submit.sh` with explicit `--max-time` (rough target: ≤ 2 hours per single run, with the bulk of the 74-hour budget reserved for ranges-of-parameters and sensitivity in Step 6). Independent sub-problem solves should run in parallel.
+Every solver invocation MUST go through `../../solver_submit.sh` with explicit `--max-time`, repeated declarations for every input/output/seed, and a final `solver-job-evidence-v2` whose `receipt_ready` is true. Native submission/completion receipt hashes are also appended to the SQLite workflow event stream. The solver receives its job identity as `FACTORY_SOLVER_JOB_ID`; it must write that identity into final provenance before the completion hash is recorded. Old mutable metadata cannot satisfy v4. Independent sub-problem solves should run in parallel.
 
 The Step-5 `results` audit rejects incomplete canonical states, missing source
 bindings, auxiliary results presented as primary, solver-provenance failures,
@@ -190,11 +192,12 @@ Produce:
 
 Hard replication / number-consistency gate. It does not clear conceptual or modeling-validity risks merely because the arithmetic matches: Step 13 performs a preliminary math check, and the post-Step-15 `final` profile performs the complete Gate 2 review.
 
-The runner executes the cacheable `paper` audit profile at Step 10. Five checks
+The runner executes the cacheable `paper` audit profile at Step 10. Six checks
 remain hard gates: `verify_numbers.py --verify` (paper ↔ results traceability),
 `verify_deliverables.py` (required attachments + strategy tables + xlsx ↔
-canonical consistency), `verify_invariants.py`, `verify_spec_impl.py`, and
-`verify_quality_contract.py`. `verify_symbols.py` is recorded as a non-blocking
+canonical consistency), `verify_derived_artifacts.py` (pinned canonical →
+generator → paper tables/headline/xlsx regeneration), `verify_invariants.py`,
+`verify_spec_impl.py`, and `verify_quality_contract.py`. `verify_symbols.py` is recorded as a non-blocking
 warning because parser false positives remain possible; the final evaluator
 still requires acceptable coverage or explicit documentation in `code_review.md`.
 Legacy projects without the newer contract artifacts are audited as legacy

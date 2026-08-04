@@ -258,6 +258,45 @@ def test_paper_symbol_findings_are_warning_not_stage_blocker(tmp_path: Path) -> 
     assert has_unresolved_blocking(project / "audit_issue_ledger.md") is False
 
 
+def test_paper_audit_runs_deterministic_derived_artifact_gate(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_model(project)
+    write(project / "demo_paper.tex", lines(30))
+    write(project / "code_review.md", lines(20))
+    runner = FakeRunner()
+
+    outcome = IncrementalAuditService(root, runner=runner).run_project(project, "paper")
+
+    assert outcome.record.status is AuditStatus.PASS
+    assert "audit_paper_derived_artifacts" in runner.calls
+
+
+def test_model_audit_accepts_quality_contract_v4(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_model(project)
+    write(
+        project / "quality_contract.json",
+        json.dumps(
+            {
+                "version": 4,
+                "claims": [],
+                "anomaly_checks": [],
+                "competitiveness_checks": [],
+                "derived_artifacts": {"manifest": "results/derived_artifacts.json"},
+            }
+        )
+        + "\n",
+    )
+
+    outcome = IncrementalAuditService(root, runner=FakeRunner()).run_project(
+        project, "model"
+    )
+
+    assert outcome.record.status is AuditStatus.PASS
+
+
 def test_audit_cli_exposes_all_profiles() -> None:
     args = build_parser().parse_args(
         [

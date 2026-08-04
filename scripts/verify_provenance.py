@@ -38,6 +38,17 @@ import os
 import re
 import sys
 import glob
+from pathlib import Path
+
+if __package__ in {None, ''}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.solver_job_receipt import (
+    ReceiptError,
+    bind_event_stream,
+    build_evidence,
+    receipt_paths,
+)
 
 
 # 需要全局搜索预算下限的求解器族 (名字里出现即触发 B2 检查)。
@@ -90,6 +101,36 @@ def _find_values_files(project_dir):
         out.extend(sorted(glob.glob(os.path.join(results, 'p*', 'values.json'))))
         out.extend(sorted(glob.glob(os.path.join(results, 'problem*', 'values.json'))))
     return sorted(set(out))
+
+
+def _quality_contract_version(project_dir):
+    contract = _load_json(os.path.join(project_dir, 'quality_contract.json'))
+    return contract.get('version') if isinstance(contract, dict) else None
+
+
+def _two_stage_evidence(project_dir, job_id):
+    factory_root = Path(__file__).resolve().parents[1]
+    roots = (
+        Path(project_dir) / '.factory' / 'solver_receipts',
+        Path(project_dir) / 'run_state' / 'solver_jobs',
+        factory_root / 'run_state' / 'solver_jobs',
+    )
+    for root in roots:
+        submitted, completed = receipt_paths(root, str(job_id))
+        if submitted.is_file() or completed.is_file():
+            evidence = build_evidence(
+                project_dir,
+                submitted,
+                completed if completed.is_file() else None,
+            )
+            if (Path(project_dir) / '.factory' / 'state.db').is_file():
+                from factory_core.storage import SQLiteStateStore
+
+                evidence = bind_event_stream(
+                    evidence, SQLiteStateStore(project_dir).events()
+                )
+            return evidence
+    return None
 
 
 def _declared_stream_dirs(project_dir):
@@ -281,6 +322,7 @@ def check_values(project_dir):
     findings = []
     files = _find_values_files(project_dir)
     project_name = os.path.basename(os.path.abspath(project_dir))
+    current_receipt_contract = _quality_contract_version(project_dir) == 4
     if not files:
         return findings, 0
 
@@ -341,12 +383,51 @@ def check_values(project_dir):
                             f'与 provenance.job_id={job_id} 不一致',
                         ))
 
-                meta = os.path.join(project_dir, 'run_state', 'solver_jobs', f'{job_id}.meta')
-                meta_global = os.path.join(os.path.dirname(os.path.dirname(
-                    os.path.abspath(__file__))), 'run_state', 'solver_jobs', f'{job_id}.meta')
-                if not (os.path.exists(meta) or os.path.exists(meta_global)):
-                    findings.append(('REPAIR_FALLBACK', rel,
-                                     f'provenance.job_id={job_id} 无对应 solver_jobs/*.meta'))
+                try:
+                    receipt = _two_stage_evidence(project_dir, job_id)
+                except (OSError, ReceiptError, ValueError) as exc:
+                    findings.append((
+                        'HARD_FAIL',
+                        rel,
+                        f'provenance.job_id={job_id} 两阶段 receipt 无效: {exc}',
+                    ))
+                    receipt = False
+                if isinstance(receipt, dict):
+                    declared_outputs = (receipt.get('submission') or {}).get(
+                        'declared_outputs', []
+                    )
+                    if receipt.get('receipt_ready') is not True:
+                        findings.append((
+                            'HARD_FAIL',
+                            rel,
+                            f'provenance.job_id={job_id} receipt_ready=false '
+                            f'({", ".join(receipt.get("errors") or [])})',
+                        ))
+                    if rel.replace(os.sep, '/') not in declared_outputs:
+                        findings.append((
+                            'HARD_FAIL',
+                            rel,
+                            f'provenance.job_id={job_id} submission 未声明当前 values.json 为输出',
+                        ))
+                elif receipt is None:
+                    meta = os.path.join(project_dir, 'run_state', 'solver_jobs', f'{job_id}.meta')
+                    meta_global = os.path.join(os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__))), 'run_state', 'solver_jobs', f'{job_id}.meta')
+                    if current_receipt_contract:
+                        findings.append((
+                            'HARD_FAIL',
+                            rel,
+                            f'quality contract v4 要求 provenance.job_id={job_id} 具备两阶段 receipt',
+                        ))
+                    elif not (os.path.exists(meta) or os.path.exists(meta_global)):
+                        findings.append(('REPAIR_FALLBACK', rel,
+                                         f'provenance.job_id={job_id} 无对应 solver_jobs/*.meta'))
+            elif current_receipt_contract:
+                findings.append((
+                    'HARD_FAIL',
+                    rel,
+                    'quality contract v4 的 provenance 必须声明 job_id 并绑定两阶段 receipt',
+                ))
 
         # B2: 全局搜索族的预算下限 (A1: iters + 维度感知 evals 都校验)
         if _solver_needs_budget(v):

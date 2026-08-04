@@ -24,6 +24,17 @@ def render_text(result: ContractResult, contract_path: Path) -> str:
             f"level={evidence.evidence_level} ({trust}): "
             f"{' '.join(evidence.argv)}"
         )
+    for check in result.competitiveness_results:
+        state = "PASS" if check.passed else "FAIL"
+        lines.append(
+            f"[{state}] {check.check_id} COMPETITIVENESS "
+            f"sense={check.objective_sense} objective={check.objective} "
+            f"{check.bound_kind}={check.bound_value} "
+            f"absolute_gap={check.absolute_gap} relative_gap={check.relative_gap} "
+            f"ladder_levels={check.ladder_levels} "
+            f"plateau={check.plateau_observed}/{check.plateau_interpretation} "
+            f"families={','.join(check.cross_check_families)}"
+        )
     for warning in result.warnings:
         lines.append(f"[WARN] {warning.item_id} {warning.code}: {warning.message}")
     for failure in result.failures:

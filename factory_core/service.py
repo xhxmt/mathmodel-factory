@@ -28,6 +28,17 @@ from .steps import build_native_registry
 from .adapters.solvers import SolverRequest, build_solver_backends
 from .registry import SolverBackendRegistry
 from .storage import SQLiteStateStore
+from scripts.solver_job_receipt import (
+    ReceiptError,
+    build_completion_receipt,
+    build_submission_receipt,
+    file_sha256,
+    read_receipt,
+    receipt_paths,
+    SUBMISSION_SCHEMA,
+    COMPLETION_SCHEMA,
+    write_receipt,
+)
 
 
 BASE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
@@ -454,6 +465,9 @@ class FactoryService:
         script: str | Path,
         args: tuple[str, ...] = (),
         max_time_seconds: int = 1_800,
+        input_paths: tuple[str | Path, ...] = (),
+        output_paths: tuple[str | Path, ...] = (),
+        seeds: tuple[str | int, ...] = (),
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
         resolved = self.resolve_project(project)
@@ -492,6 +506,43 @@ class FactoryService:
                 "status": "submitting",
             },
         )
+        created_job = store.solver_job(job_id)
+        receipt_dir = resolved / ".factory" / "solver_receipts"
+        submitted_path, _completed_path = receipt_paths(receipt_dir, job_id)
+        try:
+            submission_receipt = build_submission_receipt(
+                project_dir=resolved,
+                job_id=job_id,
+                backend=backend_name,
+                runtime=runtime,
+                script=script_path,
+                workdir=script_path.parent,
+                argv=args,
+                max_time_seconds=max_time_seconds,
+                requested_at=int(created_job["requested_at"]),
+                input_paths=input_paths,
+                output_paths=output_paths,
+                seeds=seeds,
+            )
+            write_receipt(submitted_path, submission_receipt)
+            store.record_solver_receipt(
+                job_id,
+                stage="submitted",
+                receipt_path=submitted_path.relative_to(resolved).as_posix(),
+                receipt_sha256=file_sha256(submitted_path),
+                content_sha256=str(submission_receipt["content_sha256"]),
+                request_sha256=str(submission_receipt["request_sha256"]),
+            )
+        except Exception as exc:
+            self._record_solver_submission_failure(
+                store,
+                job_id,
+                {
+                    "type": type(exc).__name__,
+                    "message": "solver submission receipt creation failed",
+                },
+            )
+            raise
         request = SolverRequest(
             job_id=job_id,
             project_dir=resolved,
@@ -499,6 +550,7 @@ class FactoryService:
             script=script_path,
             args=args,
             max_time_seconds=max_time_seconds,
+            env={"FACTORY_SOLVER_JOB_ID": job_id},
         )
         try:
             submission = backend.submit(request)
@@ -521,6 +573,7 @@ class FactoryService:
         store = SQLiteStateStore(resolved)
         job = store.solver_job(job_id)
         if job["status"] in {"completed", "failed", "timeout", "cancelled"}:
+            self._ensure_solver_completion_receipt(resolved, job)
             return job
         if job["status"] == "submitting":
             return job
@@ -534,8 +587,14 @@ class FactoryService:
                     status=observed,
                 )
             except RevisionConflict:
-                return store.solver_job(job_id)
-        return store.solver_job(job_id)
+                updated = store.solver_job(job_id)
+                if updated["status"] in {"completed", "failed", "timeout", "cancelled"}:
+                    self._ensure_solver_completion_receipt(resolved, updated)
+                return updated
+        updated = store.solver_job(job_id)
+        if updated["status"] in {"completed", "failed", "timeout", "cancelled"}:
+            self._ensure_solver_completion_receipt(resolved, updated)
+        return updated
 
     def wait_solver(
         self,
@@ -562,8 +621,12 @@ class FactoryService:
                 status="cancelled",
             )
         except RevisionConflict:
-            return store.solver_job(job_id)
-        return store.solver_job(job_id)
+            updated = store.solver_job(job_id)
+        else:
+            updated = store.solver_job(job_id)
+        if updated["status"] in {"completed", "failed", "timeout", "cancelled"}:
+            self._ensure_solver_completion_receipt(resolved, updated)
+        return updated
 
     def state_json(self, project: str | Path) -> str:
         payload = asdict(self.inspect(project))
@@ -677,6 +740,38 @@ class FactoryService:
             except RevisionConflict:
                 continue
             return store.solver_job(job_id)
+
+    @staticmethod
+    def _ensure_solver_completion_receipt(project: Path, job: dict[str, Any]) -> None:
+        receipt_dir = project / ".factory" / "solver_receipts"
+        submitted_path, completed_path = receipt_paths(receipt_dir, str(job["job_id"]))
+        if not submitted_path.is_file():
+            return
+        try:
+            if completed_path.is_file():
+                receipt = read_receipt(completed_path, COMPLETION_SCHEMA)
+            else:
+                receipt = build_completion_receipt(
+                    project_dir=project,
+                    submission_path=submitted_path,
+                    status=str(job["status"]),
+                    finished_at=int(job.get("finished_at") or time.time()),
+                    result_refs=(job.get("result_refs") if isinstance(job.get("result_refs"), dict) else {}),
+                )
+                write_receipt(completed_path, receipt)
+            submitted = read_receipt(submitted_path, SUBMISSION_SCHEMA)
+            SQLiteStateStore(project).record_solver_receipt(
+                str(job["job_id"]),
+                stage="completed",
+                receipt_path=completed_path.relative_to(project).as_posix(),
+                receipt_sha256=file_sha256(completed_path),
+                content_sha256=str(receipt["content_sha256"]),
+                request_sha256=str(submitted["request_sha256"]),
+            )
+        except (OSError, ReceiptError, ValueError):
+            # Job state remains queryable. Public evidence will fail closed and
+            # expose the missing/invalid receipt instead of promoting metadata.
+            return
 
     @staticmethod
     def _cloud_quarantined() -> bool:

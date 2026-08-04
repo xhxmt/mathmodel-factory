@@ -493,3 +493,253 @@ def test_cli_writes_machine_and_human_reports(tmp_path):
     assert report["evidence_results"][0]["evidence_level"] == "factory_oracle"
     assert "level=factory_oracle (hard-pass)" in text_out.read_text(encoding="utf-8")
     assert "VERDICT: PASS" in text_out.read_text(encoding="utf-8")
+
+
+def v4_contract() -> dict:
+    return {
+        "version": 4,
+        "claims": [],
+        "anomaly_checks": [],
+        "competitiveness_checks": [],
+        "derived_artifacts": {"manifest": "results/derived_artifacts.json"},
+    }
+
+
+def write_competitiveness_artifacts(
+    project: Path,
+    *,
+    sense: str = "maximize",
+    objective: float = 100.0,
+    bound: float = 105.0,
+    ladder: list[float] | None = None,
+) -> None:
+    result_dir = project / "results" / "p1"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    (project / "model.md").write_text("# Bound proof\n", encoding="utf-8")
+    (result_dir / "values.json").write_text(
+        json.dumps({"objective": objective}), encoding="utf-8"
+    )
+    (result_dir / "bound.json").write_text(
+        json.dumps({"value": bound}), encoding="utf-8"
+    )
+    values = ladder or ([90.0, 99.0, 100.0] if sense == "maximize" else [120.0, 101.0, 100.0])
+    (result_dir / "convergence.json").write_text(
+        json.dumps(
+            {
+                "ladder": [
+                    {"budget": budget, "objective": value}
+                    for budget, value in zip((100, 200, 400), values)
+                ],
+                "plateau_explanation": "last two levels differ only within the declared tolerance",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (result_dir / "cross_check.json").write_text(
+        json.dumps(
+            {
+                "algorithms": [
+                    {"family": "milp", "objective": objective},
+                    {"family": "dynamic_programming", "objective": objective},
+                ],
+                "conclusion": "independent algorithm families agree",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def competitiveness_check(*, sense: str = "maximize") -> dict:
+    return {
+        "id": "P1_COMPETITIVENESS",
+        "question_ids": ["P1"],
+        "objective_sense": sense,
+        "result": {
+            "path": "results/p1/values.json",
+            "value_pointer": "/objective",
+        },
+        "bound": {
+            "kind": "upper_bound" if sense == "maximize" else "lower_bound",
+            "path": "results/p1/bound.json",
+            "value_pointer": "/value",
+            "method": "LP relaxation",
+            "proof": "model.md#bound-proof",
+        },
+        "ladder": {
+            "path": "results/p1/convergence.json",
+            "entries_pointer": "/ladder",
+            "budget_key": "budget",
+            "objective_key": "objective",
+            "minimum_levels": 3,
+            "plateau": {
+                "interpretation": "required_evidence",
+                "window": 2,
+                "tolerance": 1.0,
+                "explanation_pointer": "/plateau_explanation",
+            },
+        },
+        "cross_check": {
+            "path": "results/p1/cross_check.json",
+            "algorithms_pointer": "/algorithms",
+            "family_key": "family",
+            "minimum_families": 2,
+            "conclusion_pointer": "/conclusion",
+        },
+    }
+
+
+def test_v4_requires_explicit_project_evidence_sections(tmp_path):
+    payload = v4_contract()
+    del payload["competitiveness_checks"]
+    with pytest.raises(ValueError, match="competitiveness_checks"):
+        load_contract(write_contract(tmp_path, payload))
+
+    payload = v4_contract()
+    del payload["derived_artifacts"]
+    with pytest.raises(ValueError, match="derived_artifacts"):
+        load_contract(write_contract(tmp_path, payload))
+
+
+def test_v4_hard_claim_and_invariant_require_proof_pointers(tmp_path):
+    payload = v4_contract()
+    payload["claims"] = [
+        {
+            "id": "P1_HARD",
+            "severity": "hard",
+            "constraint_domain": "algebraic",
+            "statement": "hard claim",
+            "source": "problem/source.md#p1",
+            "implementation": [],
+            "evidence": [],
+        }
+    ]
+    with pytest.raises(ValueError, match="implementation"):
+        load_contract(write_contract(tmp_path, payload))
+
+    payload = v4_contract()
+    payload["anomaly_checks"] = [
+        {
+            "id": "STRICT_GAIN",
+            "type": "gt_strict",
+            "hard": True,
+            "justification": "the statement proves strict dominance",
+            "status": "passed",
+        }
+    ]
+    with pytest.raises(ValueError, match="proof"):
+        load_contract(write_contract(tmp_path, payload))
+
+
+def test_v4_hard_claim_source_and_implementation_must_exist(tmp_path):
+    payload = v4_contract()
+    payload["claims"] = [
+        {
+            "id": "P1_HARD",
+            "severity": "hard",
+            "constraint_domain": "algebraic",
+            "statement": "hard claim",
+            "source": "problem/source.md#p1",
+            "implementation": ["models/m1/02_model.py::predicate"],
+            "evidence": [],
+        }
+    ]
+
+    result = evaluate_contract(
+        load_contract(write_contract(tmp_path, payload)), tmp_path
+    )
+
+    codes = {finding.code for finding in result.failures}
+    assert "HARD_CLAIM_SOURCE_MISSING" in codes
+    assert "HARD_CLAIM_IMPLEMENTATION_MISSING" in codes
+
+
+@pytest.mark.parametrize(
+    ("sense", "objective", "bound", "expected_gap"),
+    [
+        ("maximize", 100.0, 105.0, 5.0 / 105.0),
+        ("minimize", 100.0, 95.0, 5.0 / 100.0),
+    ],
+)
+def test_v4_direction_aware_bound_ladder_and_cross_check_pass(
+    tmp_path, sense, objective, bound, expected_gap
+):
+    write_competitiveness_artifacts(
+        tmp_path, sense=sense, objective=objective, bound=bound
+    )
+    payload = v4_contract()
+    payload["competitiveness_checks"] = [competitiveness_check(sense=sense)]
+
+    result = evaluate_contract(load_contract(write_contract(tmp_path, payload)), tmp_path)
+
+    assert result.passed is True
+    item = result.competitiveness_results[0]
+    assert item.passed is True
+    assert item.objective_sense == sense
+    assert item.relative_gap == pytest.approx(expected_gap)
+    assert item.ladder_levels == 3
+    assert item.cross_check_families == ["dynamic_programming", "milp"]
+
+
+def test_v4_cli_text_report_includes_competitiveness_evidence(tmp_path):
+    write_competitiveness_artifacts(tmp_path)
+    payload = v4_contract()
+    payload["competitiveness_checks"] = [competitiveness_check()]
+    write_contract(tmp_path, payload)
+    text_out = tmp_path / "quality.latest.txt"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/verify_quality_contract.py",
+            str(tmp_path),
+            "--text-out",
+            str(text_out),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    text = text_out.read_text(encoding="utf-8")
+    assert "[PASS] P1_COMPETITIVENESS COMPETITIVENESS" in text
+    assert "sense=maximize" in text
+    assert "upper_bound=105.0" in text
+    assert "ladder_levels=3" in text
+
+
+def test_v4_invalid_relaxation_bound_is_blocking(tmp_path):
+    write_competitiveness_artifacts(tmp_path, objective=100.0, bound=99.0)
+    payload = v4_contract()
+    payload["competitiveness_checks"] = [competitiveness_check()]
+
+    result = evaluate_contract(load_contract(write_contract(tmp_path, payload)), tmp_path)
+
+    assert result.passed is False
+    assert "INVALID_RELAXATION_BOUND" in {item.code for item in result.failures}
+
+
+def test_v4_direction_aware_ladder_rejects_regression(tmp_path):
+    write_competitiveness_artifacts(
+        tmp_path, sense="minimize", objective=100.0, bound=95.0, ladder=[120.0, 99.0, 101.0]
+    )
+    payload = v4_contract()
+    payload["competitiveness_checks"] = [competitiveness_check(sense="minimize")]
+
+    result = evaluate_contract(load_contract(write_contract(tmp_path, payload)), tmp_path)
+
+    assert result.passed is False
+    assert "NON_MONOTONE_BUDGET_LADDER" in {item.code for item in result.failures}
+
+
+def test_v4_missing_cross_check_artifact_is_blocking(tmp_path):
+    write_competitiveness_artifacts(tmp_path)
+    (tmp_path / "results/p1/cross_check.json").unlink()
+    payload = v4_contract()
+    payload["competitiveness_checks"] = [competitiveness_check()]
+
+    result = evaluate_contract(load_contract(write_contract(tmp_path, payload)), tmp_path)
+
+    assert result.passed is False
+    assert "CROSS_CHECK_INVALID" in {item.code for item in result.failures}

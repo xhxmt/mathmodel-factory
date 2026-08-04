@@ -181,6 +181,17 @@ Gate 1 与后续审计的边界：Step 10 只查**算术 / 复现 / 数字一致
    - `ATTACHMENTS_MISSING > 0` / `TABLES_MISSING > 0` → 列 BLOCKING issue；附件缺失回 Step 5 生成，策略表缺失直接在本步骤补表（表格数值从 canonical 取，属于"改数字"授权范围）。
    - `XLSX_UNMATCHED ratio > 0.15` 或 `HEADLINE_MISSING > 0` → xlsx 与结果真相源分叉，回 Step 5 用导出脚本重新生成 xlsx，**不允许**手改论文数字去迁就 xlsx。
 
+2.35. **确定性派生物硬门禁**（runner 会独立复跑，FAIL = Step 10 不通过）：
+   ```bash
+   python3 __FACTORY__/scripts/verify_derived_artifacts.py __PROJECT_PATH__ \
+     --json-out __PROJECT_PATH__/derived_artifacts_verification.latest.json
+   ```
+   verifier 会从 hash-pinned `canonical_results.json` 和版本化生成器在临时目录重生成
+   论文表格、headline 数字宏与 `result*.xlsx`，再做 bytes / JSON canonical / xlsx cell
+   语义 diff。canonical 或 generator hash 漂移、当前输出被手改、重生成不一致、缺失或
+   多出未声明输出均记 BLOCKING。修复方式是修改真相源或生成器后整体重生成并更新
+   `results/derived_artifacts.json`，禁止直接改输出或验证报告。
+
 2.4. **数值不变量审计**（runner 会独立复跑，FAIL = Step 10 不通过）：
    ```bash
    python3 __FACTORY__/scripts/verify_invariants.py __PROJECT_PATH__
@@ -213,6 +224,7 @@ Gate 1 与后续审计的边界：Step 10 只查**算术 / 复现 / 数字一致
    - 符号覆盖率 ≥ 0.7（或 ≥ 0.5 但所有泄漏符号已在 code_review.md 中列出补登记方案）
    - 数字通过率 100%（任何凭空数字 / 未修 discrepancy = FAIL）
    - 交付物门禁：`verify_deliverables.py` VERDICT: PASS（附件齐 + 策略表在论文里 + xlsx 与结果同源）
+   - 确定性派生物：`verify_derived_artifacts.py` VERDICT: PASS（canonical → generator → tables/headline/xlsx 可重建且无 diff）
    - 不变量门禁：`verify_invariants.py` VERDICT: PASS（聚合恒等式 / 支配关系全部重算通过）
    - 数字传递链：CHAIN_BREAKS=0，或 §1.5 已对每个断链给出理由 / 补写结论（WARNING 可放行，但不能无视）
    - 编译成功

@@ -16,6 +16,12 @@ from .migration import MigrationReport
 from .projections import runtime_payload, write_compatibility_projections
 from .storage import SQLiteStateStore
 from .service import FactoryService, wait_for_worker_ready
+from scripts.solver_job_receipt import (
+    ReceiptError,
+    bind_event_stream,
+    build_evidence,
+    receipt_paths,
+)
 
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +31,45 @@ LEGACY_RUNNER = CODE_ROOT / "factory_core" / "adapters" / "legacy_runner.sh"
 
 def _engine(project: Path) -> FactoryEngine:
     return FactoryService(ROOT).engine(project)
+
+
+def solver_evidence_payload(project: Path, job: dict) -> dict:
+    """Return the public two-stage solver receipt, failing closed for old jobs."""
+
+    receipt_dir = project / ".factory" / "solver_receipts"
+    submitted, completed = receipt_paths(receipt_dir, str(job["job_id"]))
+    try:
+        return bind_event_stream(
+            build_evidence(
+                project,
+                submitted,
+                completed if completed.is_file() else None,
+            ),
+            SQLiteStateStore(project).events(),
+        )
+    except (OSError, ReceiptError) as exc:
+        script = Path(str(job["script"]))
+        if not script.is_absolute():
+            script = project / script
+        workdir = Path(str(job["workdir"]))
+        if not workdir.is_absolute():
+            workdir = project / workdir
+        return {
+            "schema": "solver-job-evidence-v2",
+            "job_id": str(job["job_id"]),
+            "backend": str(job["backend"]),
+            "runtime": str(job["runtime"]),
+            "script": str(script.resolve()),
+            "workdir": str(workdir.resolve()),
+            "status": str(job["status"]).upper(),
+            "max_time_seconds": int(job["max_time_seconds"]),
+            "requested_at": int(job["requested_at"]),
+            "submission": None,
+            "completion": None,
+            "receipt_ready": False,
+            "errors": [f"MISSING_OR_INVALID_TWO_STAGE_RECEIPT: {exc}"],
+            "claim_limit": "LEGACY_JOB_METADATA_ONLY",
+        }
 
 
 def _legacy_infer(project: Path) -> int:
@@ -174,9 +219,13 @@ def build_parser() -> argparse.ArgumentParser:
     solver_submit.add_argument("script")
     solver_submit.add_argument("--max-time", type=int, default=1_800)
     solver_submit.add_argument("--args", default="")
+    solver_submit.add_argument("--input", action="append", default=[])
+    solver_submit.add_argument("--output", action="append", default=[])
+    solver_submit.add_argument("--seed", action="append", default=[])
     solver_status = solver_sub.add_parser("status")
     solver_status.add_argument("project_dir")
     solver_status.add_argument("job_id")
+    solver_status.add_argument("--json", action="store_true", dest="json_output")
     solver_wait = solver_sub.add_parser("wait")
     solver_wait.add_argument("project_dir")
     solver_wait.add_argument("job_id")
@@ -339,12 +388,24 @@ def main(argv: list[str] | None = None) -> int:
                     script=args.script,
                     args=tuple(shlex.split(args.args)),
                     max_time_seconds=args.max_time,
+                    input_paths=tuple(args.input),
+                    output_paths=tuple(args.output),
+                    seeds=tuple(args.seed),
                 )
                 print(job["job_id"])
                 return 0
             if args.solver_command == "status":
                 job = service.solver_status(project, args.job_id)
-                print(job["status"].upper())
+                if args.json_output:
+                    print(
+                        json.dumps(
+                            solver_evidence_payload(project, job),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                    )
+                else:
+                    print(job["status"].upper())
                 return 0
             if args.solver_command == "wait":
                 job = service.wait_solver(project, args.job_id)

@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 
-CONTRACT_VERSIONS = {1, 2, 3}
+CONTRACT_VERSIONS = {1, 2, 3, 4}
 EVIDENCE_LEVELS = frozenset(
     {"factory_oracle", "dual_impl", "project_test", "self_report"}
 )
@@ -58,12 +59,29 @@ class EvidenceResult:
     stderr: str
 
 
+@dataclass(frozen=True)
+class CompetitivenessResult:
+    check_id: str
+    objective_sense: str
+    objective: float | None
+    bound_kind: str
+    bound_value: float | None
+    absolute_gap: float | None
+    relative_gap: float | None
+    ladder_levels: int
+    plateau_interpretation: str
+    plateau_observed: bool | None
+    cross_check_families: list[str]
+    passed: bool
+
+
 @dataclass
 class ContractResult:
     passed: bool
     failures: list[Finding] = field(default_factory=list)
     warnings: list[Finding] = field(default_factory=list)
     evidence_results: list[EvidenceResult] = field(default_factory=list)
+    competitiveness_results: list[CompetitivenessResult] = field(default_factory=list)
     skipped: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,7 +94,7 @@ def load_contract(path: Path) -> dict[str, Any]:
         raise ValueError("quality contract must be a JSON object")
     version = data.get("version")
     if version not in CONTRACT_VERSIONS:
-        raise ValueError("quality contract version must be 1, 2, or 3")
+        raise ValueError("quality contract version must be 1, 2, 3, or 4")
     if not isinstance(data.get("claims", []), list):
         raise ValueError("quality contract claims must be a list")
     if not isinstance(data.get("anomaly_checks", []), list):
@@ -95,9 +113,9 @@ def load_contract(path: Path) -> dict[str, Any]:
         if severity not in {"hard", "advisory"}:
             raise ValueError(f"quality contract claim {claim_id} has invalid severity")
         constraint_domain = claim.get("constraint_domain")
-        if version == 3 and severity == "hard" and constraint_domain is None:
+        if version in {3, 4} and severity == "hard" and constraint_domain is None:
             raise ValueError(
-                f"quality contract v3 hard claim {claim_id} must declare constraint_domain"
+                f"quality contract v{version} hard claim {claim_id} must declare constraint_domain"
             )
         if constraint_domain is not None and constraint_domain not in {
             "continuous_time",
@@ -122,7 +140,7 @@ def load_contract(path: Path) -> dict[str, Any]:
                     "must be an object"
                 )
             level = item.get("level")
-            if version in {2, 3} and level is None:
+            if version in {2, 3, 4} and level is None:
                 raise ValueError(
                     f"quality contract v{version} claim {claim_id} evidence[{evidence_index}] "
                     "must declare level"
@@ -132,7 +150,160 @@ def load_contract(path: Path) -> dict[str, Any]:
                     f"quality contract claim {claim_id} evidence[{evidence_index}] "
                     f"has invalid level: {level}"
                 )
+        if version == 4 and severity == "hard":
+            source = claim.get("source")
+            implementations = claim.get("implementation")
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError(
+                    f"quality contract v4 hard claim {claim_id} must declare source"
+                )
+            if not isinstance(implementations, list) or not implementations or any(
+                not isinstance(item, str) or not item.strip() for item in implementations
+            ):
+                raise ValueError(
+                    f"quality contract v4 hard claim {claim_id} must declare implementation"
+                )
+    if version == 4:
+        _validate_v4_contract(data)
     return data
+
+
+def _relative_path_text(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{context} must be a nonempty project-relative path")
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts or "\\" in value:
+        raise ValueError(f"{context} must stay inside the project")
+    return value
+
+
+def _json_pointer_text(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise ValueError(f"{context} must be a JSON pointer")
+    return value
+
+
+def _positive_integer(value: Any, context: str, *, minimum: int = 1) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise ValueError(f"{context} must be an integer >= {minimum}")
+    return value
+
+
+def _nonnegative_number(value: Any, context: str) -> float:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+        or float(value) < 0
+    ):
+        raise ValueError(f"{context} must be a finite nonnegative number")
+    return float(value)
+
+
+def _validate_v4_contract(data: dict[str, Any]) -> None:
+    checks = data.get("competitiveness_checks")
+    if not isinstance(checks, list):
+        raise ValueError("quality contract v4 competitiveness_checks must be a list")
+    derived = data.get("derived_artifacts")
+    if not isinstance(derived, dict):
+        raise ValueError("quality contract v4 derived_artifacts must be an object")
+    _relative_path_text(
+        derived.get("manifest"), "quality contract v4 derived_artifacts.manifest"
+    )
+    seen: set[str] = set()
+    for index, check in enumerate(checks):
+        context = f"quality contract v4 competitiveness_checks[{index}]"
+        if not isinstance(check, dict):
+            raise ValueError(f"{context} must be an object")
+        check_id = check.get("id")
+        if not isinstance(check_id, str) or not check_id.strip():
+            raise ValueError(f"{context}.id must be nonempty")
+        if check_id in seen:
+            raise ValueError(f"duplicate competitiveness check id: {check_id}")
+        seen.add(check_id)
+        question_ids = check.get("question_ids")
+        if not isinstance(question_ids, list) or not question_ids or any(
+            not isinstance(item, str) or not item.strip() for item in question_ids
+        ):
+            raise ValueError(f"{context}.question_ids must be a nonempty string list")
+        sense = check.get("objective_sense")
+        if sense not in {"maximize", "minimize"}:
+            raise ValueError(f"{context}.objective_sense must be maximize or minimize")
+        result = check.get("result")
+        bound = check.get("bound")
+        ladder = check.get("ladder")
+        cross_check = check.get("cross_check")
+        for name, value in (
+            ("result", result),
+            ("bound", bound),
+            ("ladder", ladder),
+            ("cross_check", cross_check),
+        ):
+            if not isinstance(value, dict):
+                raise ValueError(f"{context}.{name} must be an object")
+        _relative_path_text(result.get("path"), f"{context}.result.path")
+        _json_pointer_text(result.get("value_pointer"), f"{context}.result.value_pointer")
+        expected_kind = "upper_bound" if sense == "maximize" else "lower_bound"
+        if bound.get("kind") != expected_kind:
+            raise ValueError(
+                f"{context}.bound.kind must be {expected_kind} for {sense}"
+            )
+        _relative_path_text(bound.get("path"), f"{context}.bound.path")
+        _json_pointer_text(bound.get("value_pointer"), f"{context}.bound.value_pointer")
+        if not isinstance(bound.get("method"), str) or not bound["method"].strip():
+            raise ValueError(f"{context}.bound.method must be nonempty")
+        if not isinstance(bound.get("proof"), str) or not bound["proof"].strip():
+            raise ValueError(f"{context}.bound.proof must be a locator")
+        _relative_path_text(ladder.get("path"), f"{context}.ladder.path")
+        _json_pointer_text(ladder.get("entries_pointer"), f"{context}.ladder.entries_pointer")
+        for field_name in ("budget_key", "objective_key"):
+            if not isinstance(ladder.get(field_name), str) or not ladder[field_name].strip():
+                raise ValueError(f"{context}.ladder.{field_name} must be nonempty")
+        _positive_integer(
+            ladder.get("minimum_levels"), f"{context}.ladder.minimum_levels", minimum=2
+        )
+        plateau = ladder.get("plateau")
+        if not isinstance(plateau, dict):
+            raise ValueError(f"{context}.ladder.plateau must be an object")
+        if plateau.get("interpretation") not in {"required_evidence", "diagnostic_only"}:
+            raise ValueError(
+                f"{context}.ladder.plateau.interpretation must be required_evidence or diagnostic_only"
+            )
+        _positive_integer(
+            plateau.get("window"), f"{context}.ladder.plateau.window", minimum=2
+        )
+        _nonnegative_number(
+            plateau.get("tolerance"), f"{context}.ladder.plateau.tolerance"
+        )
+        _json_pointer_text(
+            plateau.get("explanation_pointer"),
+            f"{context}.ladder.plateau.explanation_pointer",
+        )
+        _relative_path_text(cross_check.get("path"), f"{context}.cross_check.path")
+        _json_pointer_text(
+            cross_check.get("algorithms_pointer"),
+            f"{context}.cross_check.algorithms_pointer",
+        )
+        if not isinstance(cross_check.get("family_key"), str) or not cross_check["family_key"].strip():
+            raise ValueError(f"{context}.cross_check.family_key must be nonempty")
+        _positive_integer(
+            cross_check.get("minimum_families"),
+            f"{context}.cross_check.minimum_families",
+            minimum=2,
+        )
+        _json_pointer_text(
+            cross_check.get("conclusion_pointer"),
+            f"{context}.cross_check.conclusion_pointer",
+        )
+    for index, check in enumerate(data.get("anomaly_checks", [])):
+        if not isinstance(check, dict):
+            raise ValueError(f"quality contract anomaly_checks[{index}] must be an object")
+        if check.get("hard") is True:
+            proof = check.get("proof")
+            if not isinstance(proof, str) or not proof.strip():
+                raise ValueError(
+                    f"quality contract v4 hard anomaly {check.get('id') or index} must declare proof"
+                )
 
 
 def _expanded_argv(
@@ -265,6 +436,249 @@ def _qualify_evidence_level(
     return "self_report", False, "invalid_declared_level"
 
 
+def _json_pointer(value: Any, pointer: str) -> Any:
+    current = value
+    for raw in pointer[1:].split("/"):
+        token = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict) and token in current:
+            current = current[token]
+        elif isinstance(current, list) and token.isdigit() and int(token) < len(current):
+            current = current[int(token)]
+        else:
+            raise ValueError(f"JSON pointer does not exist: {pointer}")
+    return current
+
+
+def _read_project_json(project_dir: Path, relative: Any) -> dict[str, Any]:
+    path = _project_locator_path(relative, project_dir)
+    if path is None:
+        raise ValueError(f"missing or unsafe project JSON: {relative}")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid project JSON {relative}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"project JSON root must be an object: {relative}")
+    return value
+
+
+def _finite_value(value: Any, context: str) -> float:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+    ):
+        raise ValueError(f"{context} must be a finite number")
+    return float(value)
+
+
+def _evaluate_competitiveness(
+    check: dict[str, Any], project_dir: Path
+) -> tuple[CompetitivenessResult, list[Finding], list[Finding]]:
+    check_id = str(check["id"])
+    sense = str(check["objective_sense"])
+    failures: list[Finding] = []
+    warnings: list[Finding] = []
+    objective: float | None = None
+    bound_value: float | None = None
+    absolute_gap: float | None = None
+    relative_gap: float | None = None
+    ladder_values: list[float] = []
+    plateau_observed: bool | None = None
+    families: list[str] = []
+    bound_kind = str(check["bound"]["kind"])
+    plateau = check["ladder"]["plateau"]
+    interpretation = str(plateau["interpretation"])
+
+    try:
+        result_json = _read_project_json(project_dir, check["result"]["path"])
+        objective = _finite_value(
+            _json_pointer(result_json, check["result"]["value_pointer"]),
+            f"{check_id}.objective",
+        )
+        bound_json = _read_project_json(project_dir, check["bound"]["path"])
+        bound_value = _finite_value(
+            _json_pointer(bound_json, check["bound"]["value_pointer"]),
+            f"{check_id}.bound",
+        )
+    except ValueError as exc:
+        failures.append(Finding("BOUND_EVIDENCE_INVALID", str(exc), check_id))
+
+    if _project_locator_path(check["bound"]["proof"], project_dir) is None:
+        failures.append(
+            Finding(
+                "BOUND_PROOF_MISSING",
+                "declared relaxation-bound proof locator is missing or unsafe",
+                check_id,
+            )
+        )
+
+    ladder_levels = 0
+    try:
+        ladder_json = _read_project_json(project_dir, check["ladder"]["path"])
+        entries = _json_pointer(ladder_json, check["ladder"]["entries_pointer"])
+        if not isinstance(entries, list):
+            raise ValueError("ladder entries must be an array")
+        ladder_levels = len(entries)
+        minimum_levels = int(check["ladder"]["minimum_levels"])
+        if ladder_levels < minimum_levels:
+            failures.append(
+                Finding(
+                    "INSUFFICIENT_BUDGET_LADDER",
+                    f"ladder has {ladder_levels} levels; requires {minimum_levels}",
+                    check_id,
+                )
+            )
+        budgets: list[float] = []
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                raise ValueError(f"ladder[{index}] must be an object")
+            budgets.append(
+                _finite_value(entry.get(check["ladder"]["budget_key"]), f"ladder[{index}].budget")
+            )
+            ladder_values.append(
+                _finite_value(
+                    entry.get(check["ladder"]["objective_key"]),
+                    f"ladder[{index}].objective",
+                )
+            )
+        if any(right <= left for left, right in zip(budgets, budgets[1:])):
+            failures.append(
+                Finding(
+                    "NON_INCREASING_BUDGET_LADDER",
+                    "budget levels must be strictly increasing",
+                    check_id,
+                )
+            )
+        tolerance = float(plateau["tolerance"])
+        if sense == "maximize":
+            regressed = any(
+                right + tolerance < left
+                for left, right in zip(ladder_values, ladder_values[1:])
+            )
+        else:
+            regressed = any(
+                right - tolerance > left
+                for left, right in zip(ladder_values, ladder_values[1:])
+            )
+        if regressed:
+            failures.append(
+                Finding(
+                    "NON_MONOTONE_BUDGET_LADDER",
+                    f"{sense} objective regresses as budget increases",
+                    check_id,
+                )
+            )
+        window = int(plateau["window"])
+        if len(ladder_values) >= window:
+            tail = ladder_values[-window:]
+            plateau_observed = max(tail) - min(tail) <= tolerance
+        else:
+            plateau_observed = False
+        explanation = _json_pointer(ladder_json, plateau["explanation_pointer"])
+        explanation_ok = isinstance(explanation, str) and bool(explanation.strip())
+        if interpretation == "required_evidence" and (
+            not plateau_observed or not explanation_ok
+        ):
+            failures.append(
+                Finding(
+                    "PLATEAU_EVIDENCE_MISSING",
+                    "required plateau was not established with a nonempty explanation",
+                    check_id,
+                )
+            )
+        elif interpretation == "diagnostic_only" and not plateau_observed:
+            warnings.append(
+                Finding(
+                    "PLATEAU_NOT_ESTABLISHED_DIAGNOSTIC",
+                    "budget ladder has not flattened; contract marks this diagnostic only",
+                    check_id,
+                )
+            )
+    except ValueError as exc:
+        failures.append(Finding("LADDER_EVIDENCE_INVALID", str(exc), check_id))
+
+    if objective is not None and bound_value is not None:
+        feasible_values = [objective, *ladder_values]
+        tolerance = float(plateau["tolerance"])
+        bound_tolerance = 1e-9 * max(
+            1.0, abs(bound_value), *(abs(value) for value in feasible_values)
+        )
+        invalid_bound = (
+            bound_value + bound_tolerance < max(feasible_values)
+            if sense == "maximize"
+            else bound_value - bound_tolerance > min(feasible_values)
+        )
+        if invalid_bound:
+            failures.append(
+                Finding(
+                    "INVALID_RELAXATION_BOUND",
+                    f"{bound_kind} contradicts an observed feasible objective",
+                    check_id,
+                )
+            )
+        absolute_gap = (
+            bound_value - objective if sense == "maximize" else objective - bound_value
+        )
+        relative_gap = absolute_gap / max(abs(bound_value), abs(objective), 1e-12)
+        best_ladder = max(ladder_values) if sense == "maximize" else min(ladder_values)
+        final_worse = (
+            objective + tolerance < best_ladder
+            if sense == "maximize"
+            else objective - tolerance > best_ladder
+        ) if ladder_values else False
+        if final_worse:
+            failures.append(
+                Finding(
+                    "FINAL_OBJECTIVE_WORSE_THAN_LADDER",
+                    "canonical objective is worse than an observed ladder solution",
+                    check_id,
+                )
+            )
+
+    try:
+        cross = _read_project_json(project_dir, check["cross_check"]["path"])
+        algorithms = _json_pointer(cross, check["cross_check"]["algorithms_pointer"])
+        conclusion = _json_pointer(cross, check["cross_check"]["conclusion_pointer"])
+        if not isinstance(algorithms, list):
+            raise ValueError("cross-check algorithms must be an array")
+        family_key = check["cross_check"]["family_key"]
+        families = sorted(
+            {
+                str(item[family_key]).strip()
+                for item in algorithms
+                if isinstance(item, dict)
+                and isinstance(item.get(family_key), str)
+                and item[family_key].strip()
+            }
+        )
+        if len(families) < int(check["cross_check"]["minimum_families"]):
+            raise ValueError("cross-check has too few distinct algorithm families")
+        if not isinstance(conclusion, str) or not conclusion.strip():
+            raise ValueError("cross-check conclusion must be nonempty")
+    except ValueError as exc:
+        failures.append(Finding("CROSS_CHECK_INVALID", str(exc), check_id))
+
+    return (
+        CompetitivenessResult(
+            check_id=check_id,
+            objective_sense=sense,
+            objective=objective,
+            bound_kind=bound_kind,
+            bound_value=bound_value,
+            absolute_gap=absolute_gap,
+            relative_gap=relative_gap,
+            ladder_levels=ladder_levels,
+            plateau_interpretation=interpretation,
+            plateau_observed=plateau_observed,
+            cross_check_families=families,
+            passed=not failures,
+        ),
+        failures,
+        warnings,
+    )
+
+
 def evaluate_contract(
     contract: dict[str, Any],
     project_dir: Path,
@@ -280,6 +694,31 @@ def evaluate_contract(
         claim_id = str(claim.get("id") or "")
         severity = str(claim.get("severity") or "advisory").lower()
         evidence = claim.get("evidence") or []
+        if contract.get("version") == 4 and severity == "hard":
+            if _project_locator_path(claim.get("source"), project_dir) is None:
+                result.failures.append(
+                    Finding(
+                        code="HARD_CLAIM_SOURCE_MISSING",
+                        item_id=claim_id,
+                        message="hard claim source locator is missing or unsafe",
+                    )
+                )
+            missing_implementations = [
+                locator
+                for locator in claim.get("implementation", [])
+                if _project_locator_path(locator, project_dir) is None
+            ]
+            if missing_implementations:
+                result.failures.append(
+                    Finding(
+                        code="HARD_CLAIM_IMPLEMENTATION_MISSING",
+                        item_id=claim_id,
+                        message=(
+                            "hard claim implementation locators are missing or unsafe: "
+                            + ", ".join(str(item) for item in missing_implementations)
+                        ),
+                    )
+                )
         if severity == "hard" and not evidence:
             result.failures.append(
                 Finding(
@@ -406,6 +845,18 @@ def evaluate_contract(
         hard = check.get("hard") is True
         justification = str(check.get("justification") or "").strip()
         failed = str(check.get("status") or "unknown").lower() in {"fail", "failed"}
+        if (
+            contract.get("version") == 4
+            and hard
+            and _project_locator_path(check.get("proof"), project_dir) is None
+        ):
+            result.failures.append(
+                Finding(
+                    code="HARD_ANOMALY_PROOF_MISSING",
+                    item_id=check_id,
+                    message="hard anomaly proof locator is missing or unsafe",
+                )
+            )
         if hard and not justification:
             result.failures.append(
                 Finding(
@@ -430,6 +881,13 @@ def evaluate_contract(
                     message=str(check.get("detail") or "advisory anomaly detected"),
                 )
             )
+
+    if contract.get("version") == 4:
+        for check in contract.get("competitiveness_checks", []):
+            item, failures, warnings = _evaluate_competitiveness(check, project_dir)
+            result.competitiveness_results.append(item)
+            result.failures.extend(failures)
+            result.warnings.extend(warnings)
 
     result.passed = not result.failures
     return result

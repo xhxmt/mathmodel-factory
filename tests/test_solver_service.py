@@ -78,8 +78,10 @@ def test_local_solver_job_uses_sqlite_lifecycle(tmp_path):
     assert completed["status"] == "completed"
     event_types = [event.type for event in SQLiteStateStore(project).events()]
     assert "SOLVER_JOB_SUBMITTED" in event_types
+    assert "SOLVER_JOB_RECEIPT_SUBMITTED" in event_types
     assert "SOLVER_JOB_RUNNING" in event_types
     assert "SOLVER_JOB_COMPLETED" in event_types
+    assert "SOLVER_JOB_RECEIPT_COMPLETED" in event_types
 
 
 def test_fake_cloud_and_local_share_solver_job_contract(tmp_path, monkeypatch):
@@ -108,6 +110,7 @@ def test_fake_cloud_and_local_share_solver_job_contract(tmp_path, monkeypatch):
     assert completed["status"] == "completed"
     assert completed["external_id"] == "cloud-123"
     assert transport.requests[0].runtime == "python"
+    assert transport.requests[0].env["FACTORY_SOLVER_JOB_ID"] == submitted["job_id"]
 
 
 def test_cloud_policy_cannot_bypass_global_quarantine(tmp_path, monkeypatch):

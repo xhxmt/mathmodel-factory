@@ -287,6 +287,32 @@ def test_v3_quality_contract_requires_declared_claim_registry(tmp_path):
     assert "quality contract v3" in "\n".join(registry["diagnostics"])
 
 
+def test_v4_quality_contract_requires_declared_claim_registry(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _write(project, "problem/problem_brief.md", "### 问题 1：基准模型\n")
+    _write(project, "demo_paper.tex", "问题一回答\n")
+    _write(
+        project,
+        "quality_contract.json",
+        json.dumps(
+            {
+                "version": 4,
+                "claims": [],
+                "anomaly_checks": [],
+                "competitiveness_checks": [],
+                "derived_artifacts": {"manifest": "results/derived_artifacts.json"},
+            }
+        ),
+    )
+
+    registry = build_claim_registry(project, "demo")
+
+    assert registry["source"]["declared_required"] is True
+    assert registry["source"]["declared_missing"] is True
+    assert "quality contract v4" in "\n".join(registry["diagnostics"])
+
+
 def test_derived_registry_reads_delivery_requirements(tmp_path):
     project = tmp_path / "demo"
     project.mkdir()

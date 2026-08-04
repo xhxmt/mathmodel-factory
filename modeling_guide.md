@@ -18,7 +18,11 @@ SOLVER_SUBMIT="../../solver_submit.sh"
 JOBID=$("$SOLVER_SUBMIT" --type python scripts/m1_solve.py)
 
 # With a wall-clock cap (recommended for any non-trivial job):
-JOBID=$("$SOLVER_SUBMIT" --type python --max-time 600 scripts/m1_solve.py)
+JOBID=$("$SOLVER_SUBMIT" --type python --max-time 600 \
+  --input data/final/instance.json \
+  --output results/problem1/values.json \
+  --seed 20260804 \
+  scripts/m1_solve.py)
 
 # Other types:
 "$SOLVER_SUBMIT" --type julia   scripts/m2_simulate.jl
@@ -32,6 +36,9 @@ Check status:
 ```bash
 "$SOLVER_SUBMIT" --status "$JOBID"
 # → RUNNING | COMPLETED | FAILED | TIMEOUT | EXITED | UNKNOWN
+
+"$SOLVER_SUBMIT" --status "$JOBID" --json
+# → solver-job-evidence-v2; trust only terminal receipt_ready=true evidence
 ```
 
 Block until terminal:
@@ -49,6 +56,16 @@ Important rules:
 - Always pass `--max-time` for jobs that could plausibly hang
   (optimization loops, ML training, simulation). A modeling competition
   has a hard total budget — every hung job steals from another model.
+- Declare every project input, expected output, and random seed with repeated
+  `--input`, `--output`, and `--seed`. The wrapper hashes code and inputs at
+  submission, then hashes declared outputs at completion. The solver receives
+  `FACTORY_SOLVER_JOB_ID`; write it into the final result provenance inside the
+  job, because editing an output after completion invalidates the receipt.
+- Use `--status "$JOBID" --json` as the only public evidence query. Native and
+  Legacy jobs share `solver-job-evidence-v2`; old jobs without immutable
+  submission/completion receipts return `receipt_ready=false` and are not proof
+  of execution identity. Native receipts additionally require matching hashes in
+  the append-only workflow event stream (`event_stream_bound=true`).
 - The solver's stdout/stderr appear in the project as
   `<script_stem>.log` and `logs/<script_stem>_stderr.log`. After the
   job finishes, move the stdout log into `logs/` (alongside the
@@ -380,6 +397,15 @@ update discipline:
   endpoint/event localization, a certified interval/error bound, or validated
   dual implementations. Rechecking the same sampled time array is useful
   diagnostics but is not independent hard-pass evidence.
+- Quality-contract v4 optimization checks are direction-aware: maximize uses an
+  upper bound and a nondecreasing budget ladder; minimize uses a lower bound and
+  a nonincreasing ladder. Each check binds a proof locator, plateau semantics,
+  and an on-disk cross-check with at least two algorithm families.
+- `results/derived_artifacts.json` — pins canonical results, the versioned
+  generator, and generated table/headline/xlsx outputs. Create it with
+  `scripts/create_derived_manifest.py`; verify it with
+  `scripts/verify_derived_artifacts.py`, which regenerates in isolation and
+  rejects current-output edits or undeclared/missing outputs.
 - `.factory/audits/profiles/{model,results,paper}/latest.json` — machine-owned
   stage feedback. On retry, read `evidence.checks` and its reports before
   editing. Fix the source artifact; do not hand-edit `AUDIT-*` ledger rows or

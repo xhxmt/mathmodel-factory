@@ -52,16 +52,24 @@ python3 -m factory_core.cli audit <project_dir>
 Inside a project directory:
 
 ```bash
-../../solver_submit.sh --type python --max-time 600 models/m3_milp/03_solve.py
+../../solver_submit.sh --type python --max-time 600 \
+  --input data/final/instance.json \
+  --output results/problem1/values.json \
+  --seed 20260804 \
+  models/m3_milp/03_solve.py
 ../../solver_submit.sh --status <jobid>
+../../solver_submit.sh --status <jobid> --json
 ../../solver_submit.sh --wait <jobid>
 ../../compile_paper.sh "$(pwd)" <base_name>
 python3 ../../scripts/verify_numbers.py "$(pwd)" <base_name>
 ```
 
 `solver_submit.sh` supports `python`, `julia`, `matlab`, `R`, and `gurobi` when
-the corresponding executable is installed. Use explicit `--max-time` for all
-nontrivial jobs.
+the corresponding executable is installed. Use explicit `--max-time` and
+repeated `--input` / `--output` / `--seed` declarations for all nontrivial jobs.
+Only `--status <jobid> --json` with `solver-job-evidence-v2` and
+`receipt_ready=true` proves the submitted code/input identity and current
+declared-output hashes; it does not prove optimality.
 
 ## Architecture
 
@@ -250,12 +258,19 @@ clear evidence-backed reason.
 Use `solver_submit.sh`, not ad hoc background jobs, for nontrivial runs:
 
 ```bash
-../../solver_submit.sh --type python --max-time 1800 models/m3_milp/05_sensitivity.py
+../../solver_submit.sh --type python --max-time 1800 \
+  --input results/canonical_results.json \
+  --output results/sensitivity/summary.json \
+  --seed 20260804 \
+  models/m3_milp/05_sensitivity.py
 ```
 
-It writes metadata under `run_state/solver_jobs/<jobid>.meta`, stdout next to
-the script as `<script>.log`, and stderr under the script directory's `logs/`.
-Agents should move or reference logs as needed in project evidence files.
+The wrapper exposes `FACTORY_SOLVER_JOB_ID` to the solver. Query public evidence
+through `--status <jobid> --json`; do not inspect SQLite or mutable Legacy
+metadata as proof. Submission receipts bind runtime/code/inputs/argv digest/
+seeds, completion receipts bind terminal status and declared output hashes;
+native jobs also bind both receipt hashes into workflow events.
+Stdout remains next to the script as `<script>.log`, and stderr under `logs/`.
 
 Legacy `stata_submit.sh` is retained only for historical projects.
 

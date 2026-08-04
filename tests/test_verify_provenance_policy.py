@@ -2,6 +2,11 @@ import json
 from pathlib import Path
 
 from scripts.verify_provenance import check_values
+from scripts.solver_job_receipt import (
+    build_completion_receipt,
+    build_submission_receipt,
+    write_receipt,
+)
 
 
 def test_generic_budget_floor_is_advisory_without_project_contract(tmp_path):
@@ -150,5 +155,122 @@ def test_current_canonical_results_require_explicit_source_path(tmp_path):
 
     assert any(
         kind == "HARD_FAIL" and "source/source_file" in message
+        for kind, _, message in findings
+    )
+
+
+def _v4_contract(project: Path) -> None:
+    (project / "quality_contract.json").write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "claims": [],
+                "anomaly_checks": [],
+                "competitiveness_checks": [],
+                "derived_artifacts": {"manifest": "results/derived_artifacts.json"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _receipt_bound_values(project: Path, job_id: str = "local_python_v4") -> Path:
+    script = project / "models/solve.py"
+    values = project / "results/p1/values.json"
+    script.parent.mkdir(parents=True)
+    values.parent.mkdir(parents=True)
+    script.write_text("print('solve')\n", encoding="utf-8")
+    receipt_dir = project / ".factory/solver_receipts"
+    submitted_path = receipt_dir / f"{job_id}.submitted.json"
+    completed_path = receipt_dir / f"{job_id}.completed.json"
+    submitted = build_submission_receipt(
+        project_dir=project,
+        job_id=job_id,
+        backend="local",
+        runtime="python",
+        script=script,
+        workdir=script.parent,
+        argv=(),
+        max_time_seconds=10,
+        requested_at=100,
+        output_paths=(values,),
+        seeds=(42,),
+    )
+    write_receipt(submitted_path, submitted)
+    values.write_text(
+        json.dumps(
+            {
+                "project": project.name,
+                "solver": "python",
+                "status": "FEASIBLE",
+                "provenance": {
+                    "solver": "python",
+                    "job_id": job_id,
+                    "repair": False,
+                    "budget": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    completed = build_completion_receipt(
+        project_dir=project,
+        submission_path=submitted_path,
+        status="COMPLETED",
+        finished_at=200,
+        result_refs={},
+    )
+    write_receipt(completed_path, completed)
+    return values
+
+
+def test_v4_provenance_requires_two_stage_receipt(tmp_path):
+    values = tmp_path / "results/p1/values.json"
+    values.parent.mkdir(parents=True)
+    values.write_text(
+        json.dumps(
+            {
+                "solver": "python",
+                "status": "FEASIBLE",
+                "provenance": {
+                    "solver": "python",
+                    "job_id": "old-job",
+                    "repair": False,
+                    "budget": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _v4_contract(tmp_path)
+
+    findings, _count = check_values(str(tmp_path))
+
+    assert any(
+        kind == "HARD_FAIL" and "两阶段 receipt" in message
+        for kind, _, message in findings
+    )
+
+
+def test_v4_provenance_accepts_receipt_bound_current_values(tmp_path):
+    _v4_contract(tmp_path)
+    _receipt_bound_values(tmp_path)
+
+    findings, _count = check_values(str(tmp_path))
+
+    assert not any(kind in {"HARD_FAIL", "REPAIR_FALLBACK"} for kind, _, _ in findings)
+
+
+def test_v4_provenance_rejects_output_changed_after_completion(tmp_path):
+    _v4_contract(tmp_path)
+    values = _receipt_bound_values(tmp_path)
+    payload = json.loads(values.read_text(encoding="utf-8"))
+    payload["objective"] = 999
+    values.write_text(json.dumps(payload), encoding="utf-8")
+
+    findings, _count = check_values(str(tmp_path))
+
+    assert any(
+        kind == "HARD_FAIL" and "receipt_ready=false" in message
         for kind, _, message in findings
     )

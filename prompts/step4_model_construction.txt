@@ -139,7 +139,7 @@ VERDICT: PASS | BLOCKED
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "claims": [
     {
       "id": "P1_CORE_PREDICATE",
@@ -171,11 +171,52 @@ VERDICT: PASS | BLOCKED
       "justification": "<为什么这是异常；若题面能推出必须非零，才可 hard=true>",
       "status": "unknown"
     }
-  ]
+  ],
+  "competitiveness_checks": [
+    {
+      "id": "P1_COMPETITIVENESS",
+      "question_ids": ["Q1"],
+      "objective_sense": "maximize",
+      "result": {
+        "path": "results/problem1/values.json",
+        "value_pointer": "/objective"
+      },
+      "bound": {
+        "kind": "upper_bound",
+        "path": "results/problem1/bound.json",
+        "value_pointer": "/value",
+        "method": "<有效松弛的名称>",
+        "proof": "model.md#<松弛为何给出有效界的证明位置>"
+      },
+      "ladder": {
+        "path": "results/problem1/convergence.json",
+        "entries_pointer": "/ladder",
+        "budget_key": "budget",
+        "objective_key": "objective",
+        "minimum_levels": 3,
+        "plateau": {
+          "interpretation": "required_evidence",
+          "window": 2,
+          "tolerance": 0.001,
+          "explanation_pointer": "/plateau_explanation"
+        }
+      },
+      "cross_check": {
+        "path": "results/problem1/cross_check.json",
+        "algorithms_pointer": "/algorithms",
+        "family_key": "family",
+        "minimum_families": 2,
+        "conclusion_pointer": "/conclusion"
+      }
+    }
+  ],
+  "derived_artifacts": {
+    "manifest": "results/derived_artifacts.json"
+  }
 }
 ```
 
-- `type` 描述命令用途，`level` 描述证据独立性；v3 的每条 evidence 都必须显式声明 `level`，每条 hard claim 都必须声明 `constraint_domain`。
+- `type` 描述命令用途，`level` 描述证据独立性；v4 的每条 evidence 都必须显式声明 `level`，每条 hard claim 都必须声明 `constraint_domain`、题面/证明 `source` 和非空 `implementation` 定位。
 - `constraint_domain` 只能是 `continuous_time`、`discrete` 或 `algebraic`。连续时间硬约束必须标 `continuous_time`，并绑定 `event_localization`、`certified_error_bound` / `interval_error_bound` 类型的 factory oracle，或结构验证通过的 `dual_impl`；复用同一采样数组再检查一次只能算诊断，不能 hard PASS。
 - `level` 只能是 `factory_oracle`、`dual_impl`、`project_test`、`self_report`。只有前两类能单独支持 hard PASS。
 - `factory_oracle` 仅用于 `__FACTORY__/scripts/domain_oracles/` 或 factory 明确白名单内的脚本；项目代码即使把自己标成 factory oracle，也会被降为 `self_report`。
@@ -184,6 +225,10 @@ VERDICT: PASS | BLOCKED
 - `severity=hard` 的主张必须有独立可执行证据；不能只引用同一求解脚本自产的 JSON。
 - `gt_strict`、`nonzero_each`、`quantized_off`、固定预算阈值默认是异常检测，不是普遍定理。
 - 只有在 `source`/`justification` 给出题目级推导时，异常规则才可升级为硬否决。
+- 每个有可比目标值的优化子问题都登记一条 `competitiveness_checks`。最大化只能声明 `upper_bound`，预算增加时目标不得下降；最小化只能声明 `lower_bound`，预算增加时目标不得上升。有效松弛界若与任一已观测可行值冲突，属于 BLOCKING，不得靠改 gap 公式掩盖。
+- `convergence.json` 必须记录严格递增的预算阶梯和平台期解释。`plateau.interpretation=required_evidence` 时，平台期与非空解释都必须成立；若本题只把平台期当诊断，显式写 `diagnostic_only`，不得宣称它证明全局最优。
+- `cross_check.json` 必须落盘至少两个不同算法族及非空结论；纯论文文字不算独立对照工件。非优化题可将 `competitiveness_checks` 留空，但不能伪造 bound。
+- `derived_artifacts.manifest` 预先声明确定性派生合同；Step 5/8/9 必须把 canonical 数字、版本化生成器和其生成的论文表格/JSON/xlsx 全部登记，Step 10 会在临时目录重生成并 diff。
 - Step 4 负责定义契约；Step 5 负责让证据命令可运行；Step 10/16 会实际执行并否决失败的硬主张。
 
 ═══════════════════════════════════════════════════════════════

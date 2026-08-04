@@ -44,6 +44,7 @@ set -euo pipefail
 
 FACTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 JOB_DIR="$FACTORY/run_state/solver_jobs"
+SUBMIT_PROJECT="$PWD"
 # Capture the operator-level quarantine before loading any project-owned
 # `.env.cloud`; a project must never be able to disable a global safety stop.
 GLOBAL_CLOUD_QUARANTINE="${CLOUD_SOLVER_QUARANTINED:-true}"
@@ -62,6 +63,29 @@ find_project_cloud_env() {
         dir="$(dirname "$dir")"
     done
     return 1
+}
+
+infer_submit_project() {
+    local workdir="$1" dir="$1" parent
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        if [[ -f "$dir/.factory/state.db" || -f "$dir/quality_contract.json" || \
+              -f "$dir/chosen_method.md" || -d "$dir/problem" ]]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+        case "$(basename "$dir")" in
+            models|scripts)
+                parent="$(dirname "$dir")"
+                printf '%s\n' "$parent"
+                return 0
+                ;;
+        esac
+        dir="$(dirname "$dir")"
+    done
+    case "$workdir" in
+        "$PWD"|"$PWD"/*) printf '%s\n' "$PWD" ;;
+        *) printf '%s\n' "$workdir" ;;
+    esac
 }
 
 load_project_cloud_env() {
@@ -181,7 +205,8 @@ usage() {
     cat <<'EOF'
 Usage:
   solver_submit.sh --type <type> <script> [--max-time <sec>] [--args "..."]
-  solver_submit.sh --status <jobid>
+      [--input <path>]... [--output <path>]... [--seed <value>]...
+  solver_submit.sh --status <jobid> [--json]
   solver_submit.sh --wait <jobid>
   solver_submit.sh --dry-run --type <type> <script> [...]
 
@@ -195,6 +220,10 @@ Supported --type values:
 Options:
   --max-time <sec>   Wall-clock limit. Job is killed with TERM then KILL.
   --args "..."       Extra argv passed to the script (where supported).
+  --input <path>     Declare and hash an input file at submission (repeatable).
+  --output <path>    Declare an expected output for the completion receipt (repeatable).
+  --seed <value>     Bind an explicit random seed (repeatable).
+  --json             With --status, emit solver-job-evidence-v2.
   --dry-run          Print what would run, don't launch.
 
 Returns:
@@ -245,6 +274,52 @@ job_status() {
     esac
 }
 
+job_evidence_json() {
+    local jobid="$1"
+    local meta status project_dir receipt_dir exit_file finished runtime backend script workdir max_time started
+    meta="$(job_meta "$jobid")"
+    [[ -f "$meta" ]] || { echo "UNKNOWN"; return 1; }
+    status="$(job_status "$jobid")"
+    project_dir="$(job_field "$jobid" project_dir)"
+    receipt_dir="$(job_field "$jobid" receipt_dir)"
+    exit_file="$(job_field "$jobid" exit_code_file)"
+    if [[ -z "$project_dir" || -z "$receipt_dir" ]]; then
+        runtime="$(job_field "$jobid" type)"
+        backend="$(job_field "$jobid" backend)"
+        script="$(job_field "$jobid" script)"
+        workdir="$(job_field "$jobid" workdir)"
+        max_time="$(job_field "$jobid" max_time)"
+        started="$(job_field "$jobid" started)"
+        python3 "$FACTORY/scripts/solver_job_receipt.py" legacy-evidence \
+            --job-id "$jobid" \
+            --backend "${backend:-local}" \
+            --runtime "${runtime:-unknown}" \
+            --script "${script:-unknown}" \
+            --workdir "${workdir:-unknown}" \
+            --status "$status" \
+            --max-time "${max_time:-0}" \
+            --requested-at "${started:-0}"
+        return 0
+    fi
+    case "$status" in
+        COMPLETED|FAILED|TIMEOUT|CANCELLED)
+            if [[ ! -f "$receipt_dir/$jobid.completed.json" ]]; then
+                finished="$(stat -c '%Y' "$exit_file" 2>/dev/null || date +%s)"
+                python3 "$FACTORY/scripts/solver_job_receipt.py" complete \
+                    --project-dir "$project_dir" \
+                    --receipt-dir "$receipt_dir" \
+                    --job-id "$jobid" \
+                    --status "$status" \
+                    --finished-at "$finished" >/dev/null
+            fi
+            ;;
+    esac
+    python3 "$FACTORY/scripts/solver_job_receipt.py" evidence \
+        --project-dir "$project_dir" \
+        --receipt-dir "$receipt_dir" \
+        --job-id "$jobid"
+}
+
 build_command() {
     # Print the command argv (one token per line) for the given solver type.
     local type="$1" script="$2"
@@ -286,15 +361,23 @@ EXTRA_ARGS=""
 DRY_RUN=false
 STATUS_JOB=""
 WAIT_JOB=""
+JSON_OUTPUT=false
+INPUT_PATHS=()
+OUTPUT_PATHS=()
+SEED_VALUES=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --type)     TYPE="$2"; shift 2 ;;
         --max-time) MAX_TIME="$2"; shift 2 ;;
         --args)     EXTRA_ARGS="$2"; shift 2 ;;
+        --input)    INPUT_PATHS+=("$2"); shift 2 ;;
+        --output)   OUTPUT_PATHS+=("$2"); shift 2 ;;
+        --seed)     SEED_VALUES+=("$2"); shift 2 ;;
         --dry-run)  DRY_RUN=true; shift ;;
         --status)   STATUS_JOB="$2"; shift 2 ;;
         --wait)     WAIT_JOB="$2"; shift 2 ;;
+        --json)     JSON_OUTPUT=true; shift ;;
         -h|--help)  usage; exit 0 ;;
         -*)         echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
         *)          SCRIPT="$1"; shift ;;
@@ -302,7 +385,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$STATUS_JOB" ]]; then
-    job_status "$STATUS_JOB"
+    if $JSON_OUTPUT; then
+        job_evidence_json "$STATUS_JOB"
+    else
+        job_status "$STATUS_JOB"
+    fi
     exit 0
 fi
 
@@ -337,6 +424,7 @@ if [[ ! -f "$SCRIPT" ]]; then
 fi
 
 WORKDIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+SUBMIT_PROJECT="$(infer_submit_project "$WORKDIR")"
 SCRIPT_BASE="$(basename "$SCRIPT")"
 SCRIPT_STEM="${SCRIPT_BASE%.*}"
 EFFECTIVE_MAX_TIME="${MAX_TIME:-1800}"
@@ -379,6 +467,8 @@ STDERR_LOG="$WORKDIR/logs/${SCRIPT_STEM}_stderr.log"
 JOBID="local_${TYPE}_$(date +%Y%m%d%H%M%S)_$$"
 EXIT_FILE="$JOB_DIR/${JOBID}.exit"
 META_FILE="$(job_meta "$JOBID")"
+RECEIPT_DIR="$JOB_DIR"
+REQUESTED_AT="$(date +%s)"
 
 if $DRY_RUN; then
     printf 'TYPE=%s\n' "$TYPE"
@@ -395,6 +485,24 @@ fi
 
 mkdir -p "$WORKDIR/logs"
 
+receipt_args=(
+    submit
+    --project-dir "$SUBMIT_PROJECT"
+    --receipt-dir "$RECEIPT_DIR"
+    --job-id "$JOBID"
+    --backend local
+    --runtime "$TYPE"
+    --script "$SCRIPT"
+    --workdir "$WORKDIR"
+    --max-time "$EFFECTIVE_MAX_TIME"
+    --requested-at "$REQUESTED_AT"
+)
+for value in "${EXTRA_ARRAY[@]}"; do receipt_args+=(--argv "$value"); done
+for value in "${INPUT_PATHS[@]}"; do receipt_args+=(--input "$value"); done
+for value in "${OUTPUT_PATHS[@]}"; do receipt_args+=(--output "$value"); done
+for value in "${SEED_VALUES[@]}"; do receipt_args+=(--seed "$value"); done
+python3 "$FACTORY/scripts/solver_job_receipt.py" "${receipt_args[@]}" >/dev/null
+
 # Launch via solver_wrapper.sh so $! is the pid of a process that
 # survives this script's exit and is recoverable by --status. setsid
 # puts the wrapper in its own session/process group so it survives if
@@ -404,7 +512,7 @@ mkdir -p "$WORKDIR/logs"
 SOLVER_WRAPPER="$FACTORY/solver_wrapper.sh"
 (
     cd "$WORKDIR"
-    setsid "$SOLVER_WRAPPER" "$EXIT_FILE" "${WRAPPED_CMD[@]}" \
+    setsid "$SOLVER_WRAPPER" "$EXIT_FILE" env FACTORY_SOLVER_JOB_ID="$JOBID" "${WRAPPED_CMD[@]}" \
         > "$STDOUT_LOG" 2> "$STDERR_LOG" < /dev/null &
     bg_pid=$!
     {
@@ -416,7 +524,9 @@ SOLVER_WRAPPER="$FACTORY/solver_wrapper.sh"
         echo "stderr_log=$STDERR_LOG"
         echo "exit_code_file=$EXIT_FILE"
         echo "max_time=${MAX_TIME:-}"
-        echo "started=$(date +%s)"
+        echo "started=$REQUESTED_AT"
+        echo "project_dir=$SUBMIT_PROJECT"
+        echo "receipt_dir=$RECEIPT_DIR"
     } > "$META_FILE"
     disown "$bg_pid" 2>/dev/null || true
 )

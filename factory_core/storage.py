@@ -640,6 +640,71 @@ class SQLiteStateStore:
             ).fetchone()
         return self._state_from_row(updated)
 
+    def record_solver_receipt(
+        self,
+        job_id: str,
+        *,
+        stage: str,
+        receipt_path: str,
+        receipt_sha256: str,
+        content_sha256: str,
+        request_sha256: str,
+    ) -> WorkflowState:
+        """Append an idempotent content-addressed receipt event."""
+
+        if stage not in {"submitted", "completed"}:
+            raise ValueError("solver receipt stage must be submitted or completed")
+        event_type = f"SOLVER_JOB_RECEIPT_{stage.upper()}"
+        payload = {
+            "job_id": job_id,
+            "stage": stage,
+            "receipt_path": receipt_path,
+            "receipt_sha256": receipt_sha256,
+            "content_sha256": content_sha256,
+            "request_sha256": request_sha256,
+        }
+        now = int(self._clock())
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT 1 FROM solver_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if job is None:
+                raise KeyError(f"solver job not found: {job_id}")
+            prior_rows = connection.execute(
+                "SELECT payload_json FROM events WHERE type=? ORDER BY revision",
+                (event_type,),
+            ).fetchall()
+            for row in prior_rows:
+                prior = json.loads(row["payload_json"])
+                if prior.get("job_id") != job_id:
+                    continue
+                if prior != payload:
+                    raise ValueError(
+                        f"immutable {stage} solver receipt event already differs for {job_id}"
+                    )
+                state = connection.execute(
+                    "SELECT * FROM project_state WHERE singleton=1"
+                ).fetchone()
+                return self._state_from_row(state)
+            state = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            revision = int(state["revision"]) + 1
+            connection.execute(
+                "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
+                (revision, now, now),
+            )
+            connection.execute(
+                "INSERT INTO events VALUES (?, ?, ?, NULL, 0, ?)",
+                (revision, event_type, now, json.dumps(payload, sort_keys=True)),
+            )
+            updated = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+        return self._state_from_row(updated)
+
     def solver_job(self, job_id: str) -> dict[str, Any]:
         with self._session() as connection:
             self._upgrade_schema(connection)

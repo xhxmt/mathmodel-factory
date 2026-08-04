@@ -536,7 +536,7 @@ def derive_registry(project: Path, base_name: str) -> dict[str, Any]:
             )
         except (OSError, json.JSONDecodeError):
             pass
-    declared_required = quality_version in {2, 3}
+    declared_required = quality_version in {2, 3, 4}
     if declared_required:
         diagnostics.append(
             f"quality contract v{quality_version} requires a declared claim_registry.json"

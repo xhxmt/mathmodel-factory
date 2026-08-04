@@ -59,7 +59,7 @@ VERDICT: ABANDONED
 **全部**满足才允许判 VALIDATED：
 1. `__STREAM_PREFIX___spec.md` 存在且 ≥ 30 行（runner 也会查，但你先查）
 2. `__STREAM_PREFIX___demo_result.json` 存在、JSON 合法、`status` 字段为 OPTIMAL/COMPLETED/CONVERGED 等明确成功值
-3. JSON 里的 `jobid` **确实存在**于 `__FACTORY__/run_state/solver_jobs/`（用 `ls __FACTORY__/run_state/solver_jobs/<jobid>.meta` 验证）—— 这是反伪造硬检查
+3. JSON 里的 `jobid` 能被统一入口查询：在 `__PROJECT_PATH__` 下执行 `__FACTORY__/solver_submit.sh --status <jobid> --json`，命令成功并返回 `solver-job-evidence-v2`。其中 `job_id` 必须等于 JSON 记录的 jobid，`runtime` 必须与提交类型一致，`script` 的规范化绝对路径必须等于本流实际 demo 脚本，`status` 必须为 `COMPLETED`，且 `receipt_ready` 必须为 true；submission 必须绑定实际输入与 seed，completion 必须包含 demo JSON 的输出哈希，并且 `current_outputs_match_completion` 必须为 true。不要直接读取内部状态目录；旧任务即使有可变 `.meta`，没有两阶段 receipt 也不得判 VALIDATED
 4. `models/__STREAM_PREFIX___*/demo.py`（或同类）真实存在且非空
 5. spec 中的方法 / 子问题覆盖范围**与 viable_streams.md 中本流授权一致**（没有偷偷换方法）
 6. spec 的"集合/参数/决策变量"三个表里，所有出现在目标和约束里的符号都登记了（无未声明符号）
@@ -71,7 +71,7 @@ VERDICT: ABANDONED
 [立即致命问题 → REVISE 或 ABANDONED]
 - memo 与 demo 不一致：spec 声称目标值在 $10^5$ 量级，JSON 里却是 $10^{-3}$
 - demo 数据规模与 spec 描述对不上（spec 说 n=50，JSON 写 n=5000——可能 demo 跑的不是 demo）
-- 求解器调用没走 `solver_submit.sh`（log 里没有 `local_*` 或 `cloud_*` 形式的 jobid，或 `run_state/solver_jobs/` 里查无此号）
+- 求解器调用没走 `solver_submit.sh`，或 `__FACTORY__/solver_submit.sh --status <jobid> --json` 报告任务不存在、`receipt_ready=false`、状态不是 COMPLETED，或 jobid/runtime/script/inputs/seeds/outputs 与当前 demo 不绑定
 - 关键约束写错（如目标是最大化但写成 min、容量约束方向写反）—— 这种是 REVISE，proposal agent 能改
 - 假设过强到把题目变了样：如题目要求"动态决策"，spec 用"静态一次性决策"绕开
 - spec 直接抄 `method_library/<>.md` 的玩具数据没改成本题情境
@@ -89,7 +89,7 @@ VERDICT: VALIDATED  ← 第一行（精确匹配 ^VERDICT: (VALIDATED|REVISE|ABA
 |---|---|---|
 | spec ≥ 30 行 | ✅/❌ | `wc -l ___PREFIX___spec.md` 输出 |
 | JSON 存在且合法 | ✅/❌ | `python -m json.tool` 输出片段 |
-| jobid 在 run_state 中 | ✅/❌ | `ls __FACTORY__/run_state/solver_jobs/<jobid>.meta` 输出 |
+| 两阶段 job receipt | ✅/❌ | `__FACTORY__/solver_submit.sh --status <jobid> --json` 的 `job_id` / `runtime` / `script` / `status` / `receipt_ready` / submission / completion |
 | 求解 status 成功 | ✅/❌ | JSON 中 status 字段值 |
 | models/ 目录存在 | ✅/❌ | `ls __PROJECT_PATH__/models/__STREAM_PREFIX___*` 输出 |
 | spec ↔ viable_streams 对齐 | ✅/❌ | 引用 viable_streams 中本流的方法名 + spec 中的方法名 |
@@ -107,7 +107,7 @@ VERDICT: VALIDATED  ← 第一行（精确匹配 ^VERDICT: (VALIDATED|REVISE|ABA
 如发现问题，逐条列出 `[公式编号] 问题 → 建议修复方式`。
 
 ## demo 可信度审查
-- 解算 jobid 真实性：列出在 `run_state/solver_jobs/` 找到的 .meta 内容（关键行即可）
+- 解算 jobid 真实性：列出 `__FACTORY__/solver_submit.sh --status <jobid> --json` 的必要 evidence，并核对 `job_id` / `runtime` / `script` / `status` / `receipt_ready`、submission 的 inputs/seeds 与 completion 的 outputs；不要绕过 wrapper 直接读取 SQLite 或兼容状态文件
 - demo 规模与 spec 声明的"Demo 设计说明"一致性
 - sanity_checks 的实质性（不是占位）
 - log 文件里有没有警告 / 退化迭代 / 数值警报
@@ -136,7 +136,7 @@ VERDICT: VALIDATED  ← 第一行（精确匹配 ^VERDICT: (VALIDATED|REVISE|ABA
 ```
 
 [执行流程]
-1. `cd __PROJECT_PATH__` 后**先做硬条件核查**（spec 行数、JSON 合法性、jobid 真实性、models/ 存在性），这一步如果有 ❌ 直接定性。
+1. `cd __PROJECT_PATH__` 后**先做硬条件核查**（spec 行数、JSON 合法性、两阶段 job receipt、models/ 存在性）。jobid 使用 `__FACTORY__/solver_submit.sh --status <jobid> --json` 核验并绑定到当前 demo，这一步如果有 ❌ 直接定性。
 2. 读 `viable_streams.md` 找本流的授权范围，把它作为审 spec 的"contract"
 3. 读 `__STREAM_PREFIX___spec.md` 全文 + `__STREAM_PREFIX___demo_result.json` + `models/__STREAM_PREFIX___*/demo.py`
 4. 看求解 log（`logs/__STREAM_PREFIX___demo.log` 如存在）。注意：solver_submit.sh 把退出码 0 当 COMPLETED，但 LP infeasible / NLP 不收敛在 log 里才能看到——这是 critic 的真活

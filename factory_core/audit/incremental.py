@@ -244,11 +244,11 @@ class IncrementalAuditService:
             from scripts.quality_contract import load_contract
 
             contract = load_contract(project / "quality_contract.json")
-            valid = contract.get("version") == 3
+            valid = contract.get("version") in {3, 4}
             detail = (
-                "quality contract v3 schema is valid"
+                f"quality contract v{contract.get('version')} schema is valid"
                 if valid
-                else f"quality contract version={contract.get('version')} (expected 3)"
+                else f"quality contract version={contract.get('version')} (expected 3 or 4)"
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             detail = f"quality contract invalid: {exc}"
@@ -401,6 +401,17 @@ class IncrementalAuditService:
                         "scripts/verify_deliverables.py",
                         [project, project.name],
                         project / "deliverables_verification.latest.txt",
+                        "hard",
+                    ),
+                    (
+                        "derived_artifacts",
+                        "scripts/verify_derived_artifacts.py",
+                        [
+                            project,
+                            "--json-out",
+                            project / "derived_artifacts_verification.latest.json",
+                        ],
+                        project / "logs" / "native_paper_derived_artifacts.log",
                         "hard",
                     ),
                     (
@@ -704,6 +715,7 @@ class IncrementalAuditService:
                 "scripts/verify_numbers.py",
                 "scripts/verify_symbols.py",
                 "scripts/verify_deliverables.py",
+                "scripts/verify_derived_artifacts.py",
                 "scripts/verify_invariants.py",
                 "scripts/verify_spec_impl.py",
                 "scripts/verify_quality_contract.py",

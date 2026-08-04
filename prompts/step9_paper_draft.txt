@@ -37,7 +37,7 @@ Step 9 是论文质量的中央枢纽 —— 评委读到的只有这份 PDF。�
 - 兼容产物：同时确保 `__PROJECT_PATH__/paper/paper.tex` 指向或复制同一份论文源文件（例如 `mkdir -p paper; ln -sfn ../__BASE_NAME___paper.tex paper/paper.tex`）。当前 runner 的 Step 9/14 验证仍读取该兼容路径；缺失会导致 Step 9 NOT VERIFIED。
 - 摘要位置写 `\AbstractPlaceholder % ABSTRACT_PLACEHOLDER compatibility marker`（需在 preamble 加 `\usepackage{__FACTORY__/latex_templates/abstract_placeholder}`），**绝对不要自己写摘要**（那是 Step 14）。`\AbstractPlaceholder` 是正式占位命令；同一行注释里的 `ABSTRACT_PLACEHOLDER` 是当前 runner 的兼容识别标记，Step 14 填摘要时应随占位行一起移除。
 - 图引用：`\includegraphics{figures/<filename>}` 直接引用 Step 8 准备好的图; 不要新画图。
-- 表格：从 `solve_log.md` / `sensitivity_report.md` 的 markdown table 翻译成 LaTeX (booktabs)。
+- 表格与 headline 数字：从 `results/canonical_results.json` 通过版本化 `models/generate_derived.py` 生成 `tables/*.tex`（booktabs）和 `tables/headline_values.tex` 数字宏；正文只 `\input` 表片段并引用宏，不手抄 canonical 数字。
 - 引用：放到 `__PROJECT_PATH__/references.bib`（若不存在则新建; 引用方式 `\cite{key}`）。
 
 [必读资料 — 顺序就是建议阅读次序]
@@ -56,6 +56,7 @@ Step 9 是论文质量的中央枢纽 —— 评委读到的只有这份 PDF。�
 12. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— § 提交格式硬约束（页数 / 字号 / 文档类）必须遵守。
 12.5. `__PROJECT_PATH__/problem/deliverables.json` —— **交付物契约**。`strategy_tables` 声明的每个子问题必须在 §模型求解 有对应明细表；`attachments` 声明的每个 `result*.xlsx` 必须在正文相应位置被引用（"详见表 X 和 result1.xlsx"）。
 13. `__PROJECT_PATH__/results/<subproblem>/values.json` —— 每个数字的「真相之锚」, 论文里的每个数字都必须可追溯到这里。
+13.5. `__PROJECT_PATH__/quality_contract.json` —— v4 的 `derived_artifacts.manifest` 是硬契约；读取其路径并确保下述生成器、manifest 和所有派生输出齐全。
 14. `__FACTORY__/modeling_guide.md` §LaTeX Document Requirements + §Mathematical Symbol Conventions + §Table Conventions + §LaTeX Compilation。
 15. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— CUMCM 优秀论文写作基准；起稿时必须落实到 §问题分析、§模型求解、§灵敏度分析、§模型评价 和 §结论。
 16. `__FACTORY__/docs/guides/EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md` —— 优秀论文可视化基准；嵌图时用它检查图表角色、主图位置和局限图后置。
@@ -471,8 +472,18 @@ Step 9 是论文质量的中央枢纽 —— 评委读到的只有这份 PDF。�
 3. 每问先用 `reviewer_entry_map.md` 的“正文首段承接版”起段，再展开公式、过程和数值。
 4. 起草每个章节, 先骨架后填充。骨架阶段每个 section 一行 placeholder; 一气呵成填完再回头编辑。
 5. 嵌图: 主图 / 主表优先按 `anchor_figure_plan.md` 摆放，再按 `visualization_log.md` 表格顺序和叙事角色逐张引用; caption 用 visualization_log.md 起草的版本 (Step 8 已经精修过)。`explain_model` 放在问题分析/模型建立, `report_result` 放在模型求解, `validate_result` 放在灵敏度或结果验证, `show_limitation` 放在模型评价/局限/附录。
-6. 嵌表: 把 markdown 表格手动翻译成 LaTeX booktabs (不要复杂的工具; 手动可控)。
-7. 数字: 每个引用的数字都从 `results/<sub>/values.json` 取 (用 python -c "import json; print(json.load(...)..." 或直接读), 不要从 solve_log.md 表格里间接抄 (那容易抄错)。
+6. 嵌表与 headline 数字：创建或更新版本化 `models/generate_derived.py`，固定接口为 `--canonical <path> --output-dir <dir>`；它只从 canonical JSON 读取，生成 `tables/*.tex`、`tables/headline_values.tex` 和题面要求的 `result*.xlsx`。先生成到项目目录，正文通过 `\input{tables/...}` 和 `headline_values.tex` 的 `\newcommand` 宏引用，不手填另一套数。
+6.5. 生成 `results/derived_artifacts.json`：
+   ```bash
+   python3 ../../scripts/create_derived_manifest.py "$(pwd)" \
+     --output tables/headline_values.tex=bytes \
+     --output tables/<主结果表>.tex=bytes \
+     --output result1.xlsx=xlsx_cells
+   python3 ../../scripts/verify_derived_artifacts.py "$(pwd)" \
+     --json-out derived_artifacts_verification.latest.json
+   ```
+   `--output` 对每个生成文件重复；没有题面 xlsx 时不要虚构该项。verifier 会在临时目录重跑生成器，拒绝 canonical/generator hash 漂移、未声明输出、缺输出及任何 diff。必须 `VERDICT: PASS` 后才能继续。
+7. 数字：普通非 headline 数字也直接从 `results/<sub>/values.json` 取，不要从 solve_log.md 表格间接抄；凡会进入摘要、结论或主结果表的 headline 数字必须使用上一步生成的宏。
 7.5. **算法描述必须与实际求解元数据一致（D4）**：正文里凡是描述求解器/算法规模的话
    （"差分进化 N 代"、"种群 M"、"采样 K 点"、"多起点 P 次"、"迭代 I 步"），数字都必须
    来自 `results/<sub>/values.json` 的 `provenance.budget`（或 `convergence.json`），
@@ -499,6 +510,7 @@ Step 9 是论文质量的中央枢纽 —— 评委读到的只有这份 PDF。�
    ```
    `TABLES_MISSING > 0` = 题目要求的策略表没进论文，回 §模型求解 补表再继续。
    （附件 xlsx 本身是 Step 5 的产物；如缺失，在本步骤结束时明确报告，不要静默。）
+11.5. **确定性派生物硬预检**：再次运行 `verify_derived_artifacts.py`。如果论文编辑导致表格或 headline 数字需要变化，只能修改 canonical 或版本化生成器后整体重生成，再用 `create_derived_manifest.py` 更新 manifest；不得直接手改 `.tex`/xlsx 输出。
 12. **sanity check**:
    - `wc -l __BASE_NAME___paper.tex` —— ≥ 200 行
    - `grep "\\AbstractPlaceholder" __BASE_NAME___paper.tex` —— 必须出现 1 次
@@ -513,7 +525,7 @@ Step 9 是论文质量的中央枢纽 —— 评委读到的只有这份 PDF。�
 
 - ❌ 自己写摘要 (那是 Step 14 human-gate 的工作)
 - ❌ 引用 `figures/` 里不存在的图 (会让 `compile_paper.sh` 编译失败 — 评委拿不到 PDF 直接 0 分)
-- ❌ 用 model.md / solve_log.md 的 markdown 表格原样贴到 .tex (那是 markdown 格式, 不是 LaTeX; 必须翻译成 booktabs)
+- ❌ 手工维护论文表格、headline 数字或 xlsx 的第二套数值；这些必须由 manifest 锁定的生成器从 canonical 单向生成
 - ❌ 用论文里没出现过的术语 (terminology_table.md 是 canon, 不允许造词)
 - ❌ 在论文里写 "我们" / "本团队" / "据我们所知" 之类的口语化表达 (Step 15 polish 会去掉; Step 9 起稿时也避免)
 - ❌ 跳过 §模型假设 章节 — 即使本论文假设很少, 也至少列 3-5 条 (评委按 12 个章节打分)
