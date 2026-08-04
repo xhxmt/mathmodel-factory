@@ -1,8 +1,8 @@
 # Complete Project Contract Audit
 
 This document records the current delivery contract for completed Modeling
-Factory projects and how legacy projects are classified after the July 2026
-quality-gate tightening.
+Factory projects and how legacy projects are classified after the August 2026
+snapshot-audit split.
 
 Generated contract status is stored in `complete/_validation_index.json`.
 Each audited project also has `complete/<base>/delivery_manifest.json` when the
@@ -11,6 +11,7 @@ audit is run with `--write-manifests`.
 ## Status Meanings
 
 - `CURRENT_PASS`: satisfies the current delivery contract.
+- `GATE2_OVERRIDE_DELIVERED`: delivered through an explicit project-scoped override; no quality PASS is implied.
 - `LEGACY_DELIVERED`: has delivered PDF/zip artifacts, but fails at least one current gate.
 - `INVALID_OR_INCOMPLETE`: missing delivery artifacts or too incomplete to treat as delivered.
 
@@ -19,7 +20,7 @@ audit is run with `--write-manifests`.
 The active contract version is defined in `scripts/delivery_contract.py`:
 
 ```text
-2026-07-02.step8_5_gate2_zip
+2026-08-04.incremental_audit_v6
 ```
 
 A project can be `CURRENT_PASS` only when all of the structural checks in
@@ -31,11 +32,31 @@ reports Step 16. The practical hard gates are:
 - `numbers_manifest.json` exists and `verify_numbers.py --verify` passes.
 - Symbol audit passes, or the allowed degraded-symbol path is explicitly documented in `code_review.md`.
 - Canonical result files under `results/**` do not report incomplete states such as `RUNNING`, `PARTIAL`, or `FAILED`.
+- `.factory/audits/latest.json` has `profile: final`, records `PASS` or a valid explicit `OVERRIDDEN` result, and names the same snapshot as `judge_outputs/final_submission.sha256`.
 - Project PDF, copied `papers/<base>_paper.pdf`, and `papers/<base>_submission.zip` exist, and the zip is readable.
 
 The shared predicates for Gate 2, Step 8.5, zip validity, and Step 16 readiness
 now live in `scripts/workflow_state.py`. Runner and evaluator code should call
 that helper instead of adding new ad hoc shell parsing.
+
+### Independent Final Audit
+
+Earlier deterministic profiles run at Step 4 (`model`), Step 5/6 (`results`),
+and Step 10 (`paper`). They store cacheable evidence under
+`.factory/audits/profiles/`, synchronize machine findings to
+`audit_issue_ledger.md`, and never authorize delivery.
+
+`factory_core.audit` owns release acceptance, final compilation, visual checks,
+isolated judge execution, routing, fingerprints, and receipts. Run it without
+publishing or changing workflow state:
+
+```bash
+python3 -m factory_core.cli audit ongoing/<base>
+```
+
+Audit identity and attempts live under `.factory/audits/<snapshot>/`. Step 16
+consumes the same result and owns only publication, packaging, cleanup, and the
+workflow transition. Concurrent audits of one project are rejected.
 
 ## Implemented Changes
 
@@ -47,7 +68,8 @@ and records:
 
 - contract version;
 - generated timestamp;
-- `CURRENT_PASS` / `LEGACY_DELIVERED` / `INVALID_OR_INCOMPLETE` status;
+- `CURRENT_PASS` / `GATE2_OVERRIDE_DELIVERED` / `LEGACY_DELIVERED` / `INVALID_OR_INCOMPLETE` status;
+- snapshot-audit status, decision, profile, and artifact hashes;
 - runner commit, when available;
 - inferred step and failed non-warning checks;
 - PDF and submission zip size/hash records.
@@ -98,9 +120,10 @@ logic in small Python helpers, then keep shell code as orchestration glue.
 Runtime secret loading is handled inside `run_paper.sh`, so project listing and
 launcher commands do not fail merely because cloud secret loading is unavailable.
 
-## Current Audit Summary
+## Historical Audit Snapshot
 
-Current audit summary as of 2026-07-02:
+The following is retained as historical evidence from 2026-07-02, not current
+state. Run the command below for current totals:
 
 | Status | Count |
 | --- | ---: |
@@ -121,6 +144,12 @@ Audit all completed projects and write manifests:
 
 ```bash
 python3 scripts/audit_complete_projects.py --write-manifests
+```
+
+Run or reuse the release audit for one content-ready project without delivery:
+
+```bash
+python3 -m factory_core.cli audit ongoing/<base>
 ```
 
 Audit without writing files:

@@ -269,6 +269,24 @@ def test_v2_quality_contract_requires_declared_claim_registry(tmp_path):
     assert requirement["satisfied"] is False
 
 
+def test_v3_quality_contract_requires_declared_claim_registry(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _write(project, "problem/problem_brief.md", "### 问题 1：基准模型\n")
+    _write(project, "demo_paper.tex", "问题一回答\n")
+    _write(
+        project,
+        "quality_contract.json",
+        json.dumps({"version": 3, "claims": [], "anomaly_checks": []}),
+    )
+
+    registry = build_claim_registry(project, "demo")
+
+    assert registry["source"]["declared_required"] is True
+    assert registry["source"]["declared_missing"] is True
+    assert "quality contract v3" in "\n".join(registry["diagnostics"])
+
+
 def test_derived_registry_reads_delivery_requirements(tmp_path):
     project = tmp_path / "demo"
     project.mkdir()

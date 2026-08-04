@@ -320,6 +320,89 @@ def test_v2_contract_requires_explicit_evidence_level(tmp_path):
         load_contract(write_contract(tmp_path, payload))
 
 
+def test_continuous_time_hard_claim_rejects_shared_sample_only_evidence(tmp_path):
+    factory = tmp_path / "factory"
+    oracle = factory / "scripts/domain_oracles/sample_check.py"
+    oracle.parent.mkdir(parents=True)
+    oracle.write_text("print('same sampled array passes')\n", encoding="utf-8")
+    payload = base_contract()
+    payload["version"] = 3
+    payload["claims"].append(
+        {
+            "id": "CONTINUOUS_INTERVAL",
+            "severity": "hard",
+            "constraint_domain": "continuous_time",
+            "statement": "The constraint holds between sampled time points.",
+            "evidence": [
+                {
+                    "type": "sample_grid_recheck",
+                    "level": "factory_oracle",
+                    "argv": [sys.executable, str(oracle)],
+                }
+            ],
+        }
+    )
+
+    result = evaluate_contract(
+        load_contract(write_contract(tmp_path, payload)),
+        tmp_path,
+        factory_root=factory,
+    )
+
+    assert result.passed is False
+    assert "MISSING_CONTINUOUS_TIME_CERTIFICATE" in {
+        finding.code for finding in result.failures
+    }
+
+
+def test_continuous_time_hard_claim_accepts_independent_event_oracle(tmp_path):
+    factory = tmp_path / "factory"
+    oracle = factory / "scripts/domain_oracles/event_check.py"
+    oracle.parent.mkdir(parents=True)
+    oracle.write_text("print('independent endpoint localization passes')\n", encoding="utf-8")
+    payload = base_contract()
+    payload["version"] = 3
+    payload["claims"].append(
+        {
+            "id": "CONTINUOUS_INTERVAL",
+            "severity": "hard",
+            "constraint_domain": "continuous_time",
+            "statement": "Every interval endpoint is independently localized.",
+            "evidence": [
+                {
+                    "type": "event_localization",
+                    "level": "factory_oracle",
+                    "argv": [sys.executable, str(oracle)],
+                }
+            ],
+        }
+    )
+
+    result = evaluate_contract(
+        load_contract(write_contract(tmp_path, payload)),
+        tmp_path,
+        factory_root=factory,
+    )
+
+    assert result.passed is True
+
+
+def test_v3_hard_claim_requires_constraint_domain(tmp_path):
+    payload = base_contract()
+    payload["version"] = 3
+    payload["claims"].append(
+        {
+            "id": "UNCLASSIFIED_HARD_CLAIM",
+            "severity": "hard",
+            "statement": "A hard claim cannot omit its mathematical domain.",
+            "evidence": [],
+        }
+    )
+
+    with pytest.raises(ValueError, match="must declare constraint_domain"):
+        load_contract(write_contract(tmp_path, payload))
+
+
 def test_anomaly_rule_is_advisory_without_problem_specific_hardening(tmp_path):
     payload = base_contract()
     payload["anomaly_checks"].append(

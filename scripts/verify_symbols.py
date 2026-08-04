@@ -253,6 +253,15 @@ def extract_used_symbols(paper_path: str):
                 ' ',
                 expr,
             )
+            # LaTeX font commands may also take one unbraced token, e.g.
+            # ``^\\circ\\mathrm C`` for a degrees-Celsius unit.  Treat that
+            # token as formatted text just like the braced form above;
+            # otherwise the unit letter is reported as an undefined variable.
+            expr = re.sub(
+                r'\\(?:mathrm|textrm|texttt)\s*([A-Za-z])',
+                ' ',
+                expr,
+            )
             ln = line_of(m.start())
             for tok in _split_math_tokens(expr):
                 base = normalize_symbol(tok)

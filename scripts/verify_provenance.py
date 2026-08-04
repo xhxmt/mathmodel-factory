@@ -75,6 +75,14 @@ def _load_json(path):
         return None
 
 
+def _read_text(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
 def _find_values_files(project_dir):
     results = os.path.join(project_dir, 'results')
     out = []
@@ -166,6 +174,106 @@ def _solver_needs_budget(v):
     prov = v.get('provenance') or {}
     hay += ' ' + str(prov.get('solver', ''))
     return bool(_GLOBAL_SEARCH_HINTS.search(hay))
+
+
+def _canonical_source(project_dir, relative):
+    if not isinstance(relative, str) or not relative.strip() or '\x00' in relative:
+        return None
+    candidate = os.path.normpath(relative)
+    if os.path.isabs(candidate) or candidate == '..' or candidate.startswith('../'):
+        return None
+    absolute = os.path.realpath(os.path.join(project_dir, candidate))
+    project_real = os.path.realpath(project_dir)
+    try:
+        if os.path.commonpath((project_real, absolute)) != project_real:
+            return None
+    except ValueError:
+        return None
+    return absolute if os.path.isfile(absolute) else None
+
+
+def check_canonical_results(project_dir):
+    """Bind the consolidated truth source to the selected method and source files.
+
+    The strict contract is enabled only for current-format canonical files that
+    declare both ``project`` and ``primary_method``. Historical snapshots remain
+    auditable without being silently promoted to the current contract.
+    """
+    path = os.path.join(project_dir, 'results', 'canonical_results.json')
+    canonical = _load_json(path)
+    if not isinstance(canonical, dict):
+        return []
+    root_method = canonical.get('primary_method')
+    if not canonical.get('project') or not isinstance(root_method, str) or not root_method:
+        return []
+
+    findings = []
+    chosen_path = os.path.join(project_dir, 'chosen_method.md')
+    chosen_text = _read_text(chosen_path) or ''
+    chosen_match = re.search(r'^PRIMARY:\s*(m\d+)\b', chosen_text, re.MULTILINE | re.IGNORECASE)
+    if chosen_match and chosen_match.group(1).lower() != root_method.lower():
+        findings.append((
+            'HARD_FAIL',
+            'results/canonical_results.json',
+            f'chosen_method.md PRIMARY={chosen_match.group(1)} 与 canonical primary_method={root_method} 不一致',
+        ))
+
+    for key, item in canonical.items():
+        if not re.fullmatch(r'(?:p|P|problem)\d+', str(key)) or not isinstance(item, dict):
+            continue
+        item_method = item.get('primary_method')
+        if item_method and str(item_method).lower() != root_method.lower():
+            findings.append((
+                'HARD_FAIL',
+                f'results/canonical_results.json::{key}',
+                f'primary_method={item_method} 与 canonical root primary_method={root_method} 不一致',
+            ))
+        source_relative = item.get('source_file') or item.get('source')
+        if not source_relative:
+            findings.append((
+                'HARD_FAIL',
+                f'results/canonical_results.json::{key}',
+                'current canonical subproblem 缺 source/source_file，无法绑定实际 solver 结果',
+            ))
+            continue
+        source_path = _canonical_source(project_dir, source_relative)
+        if source_path is None:
+            findings.append((
+                'HARD_FAIL',
+                f'results/canonical_results.json::{key}',
+                f'canonical source path 无效或不存在: {source_relative}',
+            ))
+            continue
+        source = _load_json(source_path)
+        if not isinstance(source, dict):
+            findings.append((
+                'HARD_FAIL',
+                f'results/canonical_results.json::{key}',
+                f'canonical source 不是 JSON object: {source_relative}',
+            ))
+            continue
+        source_method = source.get('primary_method')
+        if not source_method:
+            findings.append((
+                'HARD_FAIL',
+                f'results/canonical_results.json::{key}',
+                f'canonical source 缺 primary_method: {source_relative}',
+            ))
+        elif str(source_method).lower() != root_method.lower():
+            findings.append((
+                'HARD_FAIL',
+                f'results/canonical_results.json::{key}',
+                f'source primary_method={source_method} 与 canonical primary_method={root_method} 不一致',
+            ))
+        source_solver = source.get('solver') or (source.get('provenance') or {}).get('solver')
+        item_solver = item.get('solver') or (item.get('provenance') or {}).get('solver')
+        if item_solver and source_solver and str(item_solver) != str(source_solver):
+            findings.append((
+                'HARD_FAIL',
+                f'results/canonical_results.json::{key}',
+                f'canonical solver={item_solver} 与 source solver={source_solver} 不一致',
+            ))
+    return findings
 
 
 def check_values(project_dir):
@@ -285,6 +393,7 @@ def check_values(project_dir):
                     findings.append(('WARN', rel,
                                      'C2: convergence.json 的 ladder 少于 2 级 (无法证明已收敛)'))
 
+    findings.extend(check_canonical_results(project_dir))
     return findings, len(files)
 
 

@@ -163,8 +163,13 @@ def make_evaluator_factory(root: Path) -> None:
         "factory_core/domain.py",
         "factory_core/engine.py",
         "factory_core/registry.py",
+        "factory_core/audit/domain.py",
+        "factory_core/audit/service.py",
         "factory_core/adapters/legacy.py",
         "factory_core/adapters/legacy_runner.sh",
+        "factory_core/steps/catalog.py",
+        "factory_core/steps/specialized.py",
+        "factory_core/steps/validators.py",
         "scripts/judge_packet.py",
         "scripts/aggregate_judges.py",
         "scripts/llm_judge_call.py",
@@ -203,6 +208,7 @@ def test_evaluator_contract_records_prompt_implementation_and_registry_selection
     assert contract["prompts"]["prompts/judges/paper_reviewer.txt"]["sha256"]
     assert contract["implementation"]["scripts/aggregate_judges.py"]["sha256"]
     assert contract["implementation"]["factory_core/engine.py"]["sha256"]
+    assert contract["implementation"]["factory_core/audit/service.py"]["sha256"]
     assert contract["implementation"]["factory_core/adapters/legacy_runner.sh"]["sha256"]
     dispatch = contract["model_dispatch"]
     assert dispatch["selection_source"] == "model_config"
@@ -220,6 +226,8 @@ def test_evaluator_contract_records_prompt_implementation_and_registry_selection
         "scripts/judge_packet.py",
         "scripts/llm_judge_call.py",
         "factory_core/engine.py",
+        "factory_core/audit/service.py",
+        "factory_core/steps/specialized.py",
         "factory_core/adapters/legacy.py",
         "web/model_config.json",
         "web/model_registry.json",
@@ -237,5 +245,21 @@ def test_final_fingerprint_changes_when_evaluator_contract_changes(
 
     path = factory / relative
     path.write_bytes(path.read_bytes() + b"changed\n")
+
+    assert submission_fingerprint(project, "demo") != before
+
+
+def test_final_fingerprint_binds_runtime_judge_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "demo"
+    make_submission(project)
+    factory = tmp_path / "factory"
+    make_evaluator_factory(factory)
+    monkeypatch.setattr(submission_fingerprint_module, "FACTORY_ROOT", factory)
+    monkeypatch.setenv("JUDGE_POLICY_MODE", "shadow")
+    before = submission_fingerprint(project, "demo")
+
+    monkeypatch.setenv("JUDGE_POLICY_MODE", "enforce")
 
     assert submission_fingerprint(project, "demo") != before

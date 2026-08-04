@@ -226,7 +226,8 @@ def test_execution_packet_includes_claim_ledger_and_paper_before_results(tmp_pat
     usable = [item["path"] for item in manifest["files"] if item["status"] != "omitted"]
     context = (project / "judge_packets/execution/context.txt").read_text(encoding="utf-8")
 
-    assert usable[:2] == ["claim_ledger.json", "demo_paper.tex"]
+    assert usable[:2] == ["demo_paper.tex", "results/canonical_results.json"]
+    assert "claim_ledger.json" in usable
     assert "FINAL PAPER CLAIM" in context
     assert '"claim_id": "objective"' in context
 
@@ -284,7 +285,7 @@ def test_execution_packet_places_required_implementation_before_secondary_eviden
     }
     usable = [item["path"] for item in manifest["files"] if item["status"] != "omitted"]
 
-    assert usable[0] == "claim_ledger.json"
+    assert "claim_ledger.json" in usable
     assert requirements["implementation"]["satisfied"] is True
     assert usable.index("models/a/02_model.py") < usable.index("results/secondary_0.json")
 
@@ -314,6 +315,88 @@ def test_execution_packet_prioritizes_solver_trace_and_machine_reports(tmp_path)
     assert requirements["provenance"]["satisfied"] is True
     assert usable.index("models/a/03_solve.py") < usable.index("results/secondary.json")
     assert usable.index("number_chain_verification.latest.txt") < usable.index("results/secondary.json")
+
+
+def test_math_packet_keeps_each_model_and_solver_entry_before_large_appendices(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _write(project, "problem/problem_brief.md", "problem")
+    _write(project, "demo_paper.tex", "paper")
+    _write(project, "model.md", "model exposition")
+    _write(project, "models/a/02_model.py", "A_MODEL")
+    _write(project, "models/a/03_solve.py", "A_SOLVER")
+    _write(project, "models/a/04_postprocess.py", "X" * 150_000)
+    _write(project, "models/b/02_model.py", "B_MODEL")
+    _write(project, "models/b/03_solve.py", "B_SOLVER")
+
+    manifest = build_packets(project, base_name="demo")["math"]
+    by_path = {item["path"]: item for item in manifest["files"]}
+
+    assert all(
+        by_path[path]["status"] == "included"
+        for path in (
+            "models/a/02_model.py",
+            "models/a/03_solve.py",
+            "models/b/02_model.py",
+            "models/b/03_solve.py",
+        )
+    )
+    assert by_path["models/a/04_postprocess.py"]["status"] in {"truncated", "omitted"}
+
+
+def test_execution_packet_reserves_budget_for_registered_question_evidence(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _write(project, "problem/problem_brief.md", "Question 1\nQuestion 2\nQuestion 3\nQuestion 4")
+    _write(project, "demo_paper.tex", "P" * 50_000)
+    _write(project, "results/canonical_results.json", "C" * 70_000)
+    _write(project, "models/a/02_model.py", "M" * 20_000)
+    _write(project, "models/a/03_solve.py", "S" * 30_000)
+    _write(project, "solve_log.md", "L" * 17_000)
+    for index in range(1, 5):
+        _write(project, f"results/problem{index}/values.json", f"Q{index}" * 20_000)
+        _write(project, f"results/problem{index}/solver.log", f"solver {index}")
+    _write(project, "results/secondary.json", "X" * 200_000)
+    registry = {
+        "contract_version": "claim-registry-v1",
+        "questions": [
+            {
+                "id": f"Q{index}",
+                "statement": f"Question {index}",
+                "source": {"path": "problem/problem_brief.md", "line": index},
+                "required_roles": ["execution"],
+            }
+            for index in range(1, 5)
+        ],
+        "claims": [
+            {
+                "id": f"Q{index}_RESULT",
+                "statement": f"Question {index} result",
+                "question_ids": [f"Q{index}"],
+                "required_roles": ["execution"],
+                "artifacts": [
+                    {"path": f"results/problem{index}/values.json", "roles": ["execution"]}
+                ],
+            }
+            for index in range(1, 5)
+        ],
+        "delivery_requirements": [],
+    }
+    _write(project, "claim_registry.json", json.dumps(registry))
+
+    manifest = build_packets(project, base_name="demo")["execution"]
+    by_path = {item["path"]: item for item in manifest["files"]}
+
+    assert manifest["limits"]["context_bytes"] == 360_000
+    assert manifest["context"]["size"] <= 360_000
+    assert manifest["completeness"]["status"] == "COMPLETE"
+    assert manifest["claim_coverage"]["status"] == "COMPLETE"
+    assert by_path["models/a/03_solve.py"]["status"] == "included"
+    assert all(
+        by_path[f"results/problem{index}/values.json"]["status"] == "included"
+        for index in range(1, 5)
+    )
+    assert by_path["results/secondary.json"]["status"] in {"truncated", "omitted"}
 
 
 def test_context_fits_api_limit_and_preserves_priority_math_evidence(tmp_path):
@@ -348,7 +431,7 @@ def test_context_fits_api_limit_and_preserves_priority_math_evidence(tmp_path):
 def test_manifest_marks_files_omitted_by_total_context_limit(tmp_path):
     project = tmp_path / "demo"
     project.mkdir()
-    for index in range(5):
+    for index in range(9):
         _write(project, f"models/m{index}/02_model.py", f"MARKER_{index}\n" + "x" * 80_000)
 
     manifest = build_packets(project, base_name="demo")["execution"]
@@ -405,7 +488,7 @@ def test_oversized_critical_paper_makes_roles_incomplete_instead_of_truncated(tm
 
     manifests = build_packets(project, base_name="demo")
 
-    for role in ("paper", "math", "execution"):
+    for role in ("paper", "math"):
         paper = next(item for item in manifests[role]["files"] if item["path"] == "demo_paper.tex")
         assert paper["status"] == "omitted"
         assert manifests[role]["completeness"]["status"] == "INCOMPLETE"
@@ -414,6 +497,13 @@ def test_oversized_critical_paper_makes_roles_incomplete_instead_of_truncated(tm
             for requirement in manifests[role]["completeness"]["requirements"]
             if not requirement["satisfied"]
         }
+
+    execution_paper = next(
+        item
+        for item in manifests["execution"]["files"]
+        if item["path"] == "demo_paper.tex"
+    )
+    assert execution_paper["status"] == "included"
 
 
 def test_noncritical_large_code_is_disclosed_without_blocking_execution_role(tmp_path):

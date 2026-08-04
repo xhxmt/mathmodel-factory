@@ -252,6 +252,19 @@ class FactoryEngine:
                     evidence=validation.evidence,
                     lease=lease,
                 )
+            if validation.metadata.get("killed"):
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="KILLED",
+                    changes={
+                        "status": WorkflowStatus.KILLED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={**validation.metadata, **result.metadata},
+                )
             if result.returncode == 0 and validation.is_valid:
                 completed_step = int(
                     result.metadata.get(
@@ -277,8 +290,26 @@ class FactoryEngine:
                 )
                 completed_this_run += 1
                 continue
-            permanent = result.error_class.startswith("PERMANENT")
+            failure_metadata = {**validation.metadata, **result.metadata}
+            missing_artifacts = self._missing_evidence(validation.evidence)
+            if missing_artifacts and "missing_artifacts" not in failure_metadata:
+                failure_metadata["missing_artifacts"] = missing_artifacts
+            error_class = (
+                result.error_class
+                or str(validation.metadata.get("error_class") or "")
+                or (
+                    "TRANSIENT_ARTIFACT_MISSING"
+                    if failure_metadata.get("missing_artifacts")
+                    else "TRANSIENT_ARTIFACT_INVALID"
+                )
+            )
+            permanent = error_class.startswith("PERMANENT")
             if permanent or attempt >= definition.max_attempts:
+                terminal_error_class = self._terminal_error_class(
+                    error_class, exhausted=not permanent
+                )
+                if terminal_error_class != error_class:
+                    failure_metadata["exhausted_error_class"] = error_class
                 return self._owned_transition(
                     state,
                     lease,
@@ -290,7 +321,8 @@ class FactoryEngine:
                         "heartbeat_at": None,
                     },
                     payload={
-                        "error_class": result.error_class,
+                        **failure_metadata,
+                        "error_class": terminal_error_class,
                         "reason": validation.reason,
                         "returncode": result.returncode,
                     },
@@ -301,7 +333,8 @@ class FactoryEngine:
                 event_type="RETRY_SCHEDULED",
                 changes={"status": WorkflowStatus.RETRYING},
                 payload={
-                    "error_class": result.error_class,
+                    **failure_metadata,
+                    "error_class": error_class,
                     "reason": validation.reason,
                     "delay_seconds": self._retry_delay(attempt),
                 },
@@ -686,6 +719,22 @@ class FactoryEngine:
     @staticmethod
     def _retry_delay(attempt: int) -> int:
         return (30, 60, 120, 300, 600)[min(max(attempt - 1, 0), 4)]
+
+    def _missing_evidence(self, evidence: tuple[str, ...]) -> list[str]:
+        missing: list[str] = []
+        for relative in evidence:
+            path = Path(relative)
+            if path.is_absolute() or "::" in relative or "#" in relative:
+                continue
+            if not (self.project_dir / path).is_file():
+                missing.append(relative)
+        return missing
+
+    @staticmethod
+    def _terminal_error_class(error_class: str, *, exhausted: bool) -> str:
+        if exhausted and error_class.startswith("TRANSIENT_JUDGE"):
+            return "PERMANENT_JUDGE_INFRASTRUCTURE"
+        return error_class
 
     @staticmethod
     def _pid_is_live(pid: int) -> bool:

@@ -63,19 +63,45 @@ class _ProcessModelBackend:
             return ExecutionResult.succeeded(**metadata)
         if result.metadata.get("launch_error"):
             error = "PERMANENT_BACKEND_UNAVAILABLE"
+        elif self._unsupported_model_error(log):
+            error = "PERMANENT_MODEL_UNSUPPORTED"
         else:
             error = "TRANSIENT_TIMEOUT" if result.timed_out else "TRANSIENT_MODEL_BACKEND"
         metadata.update(result.metadata)
         return ExecutionResult.failed(error, returncode=result.returncode, **metadata)
+
+    @staticmethod
+    def _unsupported_model_error(log: Path) -> bool:
+        """Recognize stable model/configuration rejection without exposing log text."""
+        try:
+            text = log.read_text(encoding="utf-8", errors="replace").lower()
+        except OSError:
+            return False
+        markers = (
+            "model is not supported",
+            "model not supported",
+            "unknown model",
+            "unsupported model",
+            "does not exist or you do not have access to it",
+        )
+        if "model \"" in text and "is not supported" in text:
+            return True
+        return any(marker in text for marker in markers)
 
 
 class CodexCliBackend(_ProcessModelBackend):
     name = "codex"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
+        effective_model = (
+            request.model
+            or request.env.get("CODEX_MODEL", "")
+            or os.getenv("CODEX_MODEL", "")
+        )
+        request = replace(request, model=effective_model)
         argv = ["codex", "exec"]
-        if request.model:
-            argv.extend(["--model", request.model])
+        if effective_model:
+            argv.extend(["--model", effective_model])
         argv.extend(["-c", f'model_reasoning_effort="{request.effort or "xhigh"}"'])
         if request.isolated:
             argv.extend(["--full-auto", "--ephemeral"])
@@ -131,6 +157,23 @@ class ApiAgentBackend(_ProcessModelBackend):
     def execute(self, request: ModelRequest) -> ExecutionResult:
         if request.output_file is None:
             return ExecutionResult.failed("PERMANENT_OUTPUT_CONTRACT", returncode=2)
+        try:
+            output_file = request.output_file.resolve().relative_to(
+                request.project_dir.resolve()
+            ).as_posix()
+            effective_prompt_file = (
+                request.effective_prompt_file.resolve()
+                .relative_to(request.project_dir.resolve())
+                .as_posix()
+                if request.effective_prompt_file is not None
+                else None
+            )
+        except (OSError, ValueError):
+            return ExecutionResult.failed(
+                "PERMANENT_OUTPUT_CONTRACT",
+                returncode=2,
+                reason="API output paths must be inside the project",
+            )
         prompt_file = request.project_dir / "logs" / f"step_{request.step_id}_api_{os.getpid()}.prompt.txt"
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.write_text(request.prompt, encoding="utf-8")
@@ -146,7 +189,7 @@ class ApiAgentBackend(_ProcessModelBackend):
             "--project",
             str(request.project_dir),
             "--output-file",
-            str(request.output_file),
+            output_file,
             "--overwrite",
             "--timeout",
             str(max(60, request.timeout_seconds - 30)),
@@ -155,8 +198,8 @@ class ApiAgentBackend(_ProcessModelBackend):
             argv.extend(["--base-url", request.base_url])
         if request.key_env:
             argv.extend(["--key-env", request.key_env])
-        if request.effective_prompt_file is not None:
-            argv.extend(["--effective-prompt-file", str(request.effective_prompt_file)])
+        if effective_prompt_file is not None:
+            argv.extend(["--effective-prompt-file", effective_prompt_file])
         for context_file in request.context_files:
             argv.extend(["--context-file", context_file])
         return self._run(request, argv, "api")

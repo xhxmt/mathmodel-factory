@@ -46,6 +46,7 @@ Direct runner invocations:
 ./run_paper.sh <project_dir>
 ./run_paper.sh --infer-step <project_dir>
 ./run_paper.sh --status <project_dir>
+python3 -m factory_core.cli audit <project_dir>
 ```
 
 Inside a project directory:
@@ -95,6 +96,14 @@ registered Step validator: valid artifacts promote the interrupted Step;
 invalid artifacts retry it. File modification times do not determine the
 authoritative state.
 
+Native failure events preserve execution and validation metadata such as the
+failed check, role, backend, report, and missing artifact paths. A model process
+that exits zero without producing the required artifact is
+`TRANSIENT_ARTIFACT_MISSING`, not an unclassified success. Permanently rejected
+model routes are quarantined in the worker and a healthy configured fallback is
+tried; a missing API credential or unsupported model must not be invoked again
+on every workflow retry.
+
 For unmigrated modeling projects only, `infer_step()` in the frozen Legacy
 Adapter continues to infer progress from artifacts. `run_paper.sh --infer-step`
 routes to SQLite or Legacy inference without changing its public output.
@@ -102,6 +111,25 @@ routes to SQLite or Legacy inference without changing its public output.
 Modeling-mode is detected by the `problem/` directory after setup. The runner
 then uses the modeling branch of `infer_step()` and the modeling Step 1-16
 contracts.
+
+### Audit And Delivery Boundary
+
+Step 4, Step 5/6, and Step 10 run cacheable `model`, `results`, and `paper`
+profiles. Their records live under
+`.factory/audits/profiles/<profile>/<snapshot>/`, synchronize deterministic
+failures into `audit_issue_ledger.md`, and always set `delivery_allowed=false`.
+Step 15 is the `CONTENT_READY` boundary. The `final` profile owns release
+acceptance checks, compilation, visual inspection, isolated judge execution,
+decision routing, snapshot fingerprints, and judgment receipts. Final records
+are stored under `.factory/audits/<snapshot>/`; current `judge_outputs/` files
+remain compatibility projections.
+
+`python3 -m factory_core.cli audit <project>` runs that subsystem independently.
+It must not publish into `papers/`, package, clean, archive, or mutate SQLite
+workflow state. Step 16 is a compatibility adapter: it invokes or reuses the
+same snapshot-bound audit, then publishes and packages only a `PASS` or explicit
+`OVERRIDDEN` result. Audit failures return structured repair hints to the engine;
+the audit subsystem does not directly rewind workflow state.
 
 ### Human Consultation Window (opt-in)
 
@@ -164,27 +192,36 @@ See `STEPS.md` for exact outputs and line/file gates. In short:
 - Step 1: background research, candidate methods, viability gate.
 - Step 2: parallel modeling proposals, demo solves, critic verdicts.
 - Step 3: method selection, with `human_review.md` override support.
-- Step 4: full model construction, symbol table, assumption ledger, runnable code.
-- Step 5: full solve through `solver_submit.sh`.
-- Step 6: sensitivity and robustness.
+- Step 4: full model construction, symbol table, assumption ledger, runnable code, then the `model` audit profile.
+- Step 5: full solve through `solver_submit.sh`, then the Step-5 `results` audit checkpoint.
+- Step 6: sensitivity and robustness, then the Step-6 `results` audit checkpoint.
 - Step 7: model evaluation.
 - Step 8: visualization polish.
 - Step 9: full paper draft with `ABSTRACT_PLACEHOLDER`.
-- Step 10: Gate 1 numerical and code consistency check.
+- Step 10: `paper` profile for numerical, code, result, and deliverable consistency; symbol findings are warnings.
 - Step 11: constructive review.
 - Step 12: revision and archive of the pre-revision draft.
-- Step 13: provisional Gate 2 via isolated math, execution, and paper roles.
+- Step 13: isolated math-only precheck; `PRECHECK_PASS` allows progress but never delivery.
 - Step 14: abstract replacement.
-- Step 15: citation audit, table/prose polish, de-robotification; these edits invalidate the provisional judge fingerprint.
-- Step 16: compile a fresh PDF, rerun Gate 2 on the post-Step-15 three-role text packets, bind the PASS, prompts, evaluator implementation, Step-13 model routing, and those exact PDF bytes to `judge_outputs/final_submission.sha256`, then write the `final_judge_v3` delivery contract, copy, package, cleanup, and move to `complete/`. The hash proves delivery consistency; the automated reviewer does not inspect rendered PDF pixels, so layout and visual quality require machine preflight or human review. Only an unchanged evaluator+packet+PDF fingerprint may reuse the final PASS; compilation failure stops delivery.
+- Step 15: citation audit, table/prose polish, de-robotification; these edits make the Step-13 precheck non-final and produce the `CONTENT_READY` boundary.
+- Step 16: consume the independent final-audit result. On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. The Step then copies, packages, cleans, and moves to `complete/`; audit alone performs none of those delivery mutations.
 
-Gate 2 verdict tokens in modeling mode are:
+Step 13 precheck verdict tokens are `PRECHECK_PASS`,
+`REOPEN_REVISION_MODEL`, and `INDETERMINATE_REVIEW`. Final-audit Gate 2 verdict
+tokens are:
 
 - `VERDICT: PASS`
 - `VERDICT: REOPEN_REVISION_TEXT`
 - `VERDICT: REOPEN_REVISION_MODEL`
 
 Math and execution use the hard three-valued state `PASS / FAIL / INDETERMINATE`. Paper six-dimension scores are conditional: they are comparable only when both hard roles PASS and every role output satisfies `judge-role-v1`. A hard FAIL, missing evidence, malformed output, or INDETERMINATE state must not be averaged into a score.
+
+Only a substantive math/execution `FAIL` consumes the scientific reopen budget.
+Malformed output, quote grounding failure, unavailable judge routing, and an
+otherwise indeterminate review retry only the affected audit role and stop as
+`PERMANENT_JUDGE_INFRASTRUCTURE` when exhausted. A packet that
+names a genuinely absent upstream artifact reopens that artifact's earliest
+owning Step; packet truncation or judge uncertainty does not default to Step 4.
 
 The runner allows one repair cycle. If the reopened or final-submission judge still does not PASS, normal delivery is blocked. Legacy Markdown scorecards are `LEGACY_UNVERIFIED` and are never comparison-ready under the current contract.
 
@@ -199,8 +236,10 @@ Important project files include:
 - `model.md`, `symbol_table.md`, `assumption_ledger.md`: modeling state.
 - `solve_log.md`, `results/**`: numerical evidence.
 - `sensitivity_report.md`, `evaluation.md`, `visualization_log.md`: downstream evidence.
-- `audit_issue_ledger.md`: issue status tracker. Blocking issues must not be silently dropped.
-- `judge_evaluation.md`: current `judge-aggregate-v1` Gate 2 control file.
+- `audit_issue_ledger.md`: issue status tracker. `AUDIT-*` rows are maintained by stage profiles; blocking issues must not be silently dropped.
+- `.factory/audits/profiles/**`: non-delivery `model` / `results` / `paper` snapshots and attempts.
+- `.factory/audits/latest.json`: current `profile=final` audit record used by delivery.
+- `judge_evaluation.md`: Step-13 `PRECHECK_PASS` control file until the final audit replaces it with the full aggregate verdict.
 - `judge_packets/**`, `judge_outputs/**`: isolated evidence manifests, strict role outputs, aggregate JSON, and final-submission fingerprint. Each manifest carries `judge-packet-completeness-v1`; required evidence that is missing, truncated, or omitted forces the role to `INDETERMINATE`, while non-critical truncation must remain visible in `limitations`.
 
 Protected assumptions or issues must not be deleted or downgraded without a

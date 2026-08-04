@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..domain import PendingAction, ValidationResult
+from ..audit.ledger import has_unresolved_blocking
 from scripts.step8_5_gate import collect_step8_5_state
 from scripts.workflow_state import gate2_delivery_allowed, gate2_verdict, step16_ready
 
@@ -50,7 +51,19 @@ def _stream_verdict(project: Path, stream_id: int) -> str:
     return _verdict(project / f"m{stream_id}_critique.md")
 
 
-def _run(root: Path, args: list[str], *, stdout: Path | None = None, accepted: tuple[int, ...] = (0,)) -> bool:
+@dataclass(frozen=True)
+class ValidatorCommandResult:
+    returncode: int
+    accepted: bool
+
+
+def _run_status(
+    root: Path,
+    args: list[str],
+    *,
+    stdout: Path | None = None,
+    accepted: tuple[int, ...] = (0,),
+) -> ValidatorCommandResult:
     if stdout is not None:
         stdout.parent.mkdir(parents=True, exist_ok=True)
         with stdout.open("w", encoding="utf-8") as handle:
@@ -71,7 +84,14 @@ def _run(root: Path, args: list[str], *, stdout: Path | None = None, accepted: t
             timeout=300,
             check=False,
         )
-    return result.returncode in accepted
+    return ValidatorCommandResult(
+        returncode=result.returncode,
+        accepted=result.returncode in accepted,
+    )
+
+
+def _run(root: Path, args: list[str], *, stdout: Path | None = None, accepted: tuple[int, ...] = (0,)) -> bool:
+    return _run_status(root, args, stdout=stdout, accepted=accepted).accepted
 
 
 def _no_stubs(project: Path) -> bool:
@@ -90,16 +110,52 @@ def _verification_fresh(project: Path, report: Path) -> bool:
 
 
 def _unresolved_blocking(project: Path) -> bool:
-    ledger = project / "audit_issue_ledger.md"
-    if not ledger.is_file():
-        return False
-    for line in _text(ledger).splitlines():
-        if "|" not in line:
-            continue
-        cells = [cell.strip().replace("*", "").replace("`", "") for cell in line.split("|")]
-        if len(cells) > 6 and cells[3].upper() == "BLOCKING" and "RESOLVED" not in cells[6].upper():
-            return True
-    return False
+    return has_unresolved_blocking(project / "audit_issue_ledger.md")
+
+
+def _incremental_gate(
+    factory_root: Path,
+    project: Path,
+    profile: str,
+    checkpoint_step: int,
+) -> tuple[bool, str, tuple[str, ...], dict[str, object]]:
+    from ..audit.domain import AuditStatus
+    from ..audit.incremental import IncrementalAuditService
+
+    outcome = IncrementalAuditService(factory_root).run_project(
+        project,
+        profile,
+        checkpoint_step=checkpoint_step,
+    )
+    checks = outcome.record.evidence.get("checks", [])
+    reports = tuple(
+        str(check.get("report"))
+        for check in checks
+        if isinstance(check, dict) and check.get("report")
+    )
+    latest = str(
+        (
+            Path(".factory")
+            / "audits"
+            / "profiles"
+            / profile
+            / "latest.json"
+        )
+    )
+    evidence = tuple(dict.fromkeys((latest, *reports)))
+    valid = outcome.record.status is AuditStatus.PASS
+    metadata: dict[str, object] = {
+        **outcome.execution.metadata,
+        "audit_profile": profile,
+        "audit_status": outcome.record.status.value,
+        "audit_snapshot": outcome.snapshot.snapshot_id,
+        "audit_warnings": outcome.record.evidence.get("warnings", []),
+    }
+    if not valid:
+        metadata["error_class"] = outcome.execution.error_class
+        metadata["returncode"] = outcome.record.returncode
+    reason = "" if valid else f"{profile} audit {outcome.record.status.value}: {outcome.record.decision}"
+    return valid, reason, evidence, metadata
 
 
 @dataclass(frozen=True)
@@ -165,18 +221,22 @@ class NativeArtifactValidator:
     def _step_4(self, project: Path):
         ok = all((_has(project, name, minimum) for name, minimum in (("model.md", 100), ("symbol_table.md", 10), ("assumption_ledger.md", 10))))
         ok = ok and _verdict(project / "modeling_scope_gate.md") == "PASS" and (project / "quality_contract.json").is_file()
+        if ok:
+            return _incremental_gate(self.factory_root, project, "model", 4)
         return ok, "Step 4 model contract invalid", ("model.md", "symbol_table.md", "assumption_ledger.md", "modeling_scope_gate.md", "quality_contract.json"), {}
 
     def _step_5(self, project: Path):
         values = list((project / "results").rglob("values.json")) if (project / "results").is_dir() else []
         ok = _has(project, "solve_log.md", 20) and bool(values) and (project / "results/canonical_results.json").is_file() and _no_stubs(project)
         if ok:
-            ok = _run(self.factory_root, ["scripts/verify_provenance.py", str(project)], stdout=project / "provenance_verification.latest.txt", accepted=(0, 2))
+            return _incremental_gate(self.factory_root, project, "results", 5)
         return ok, "Step 5 solve/provenance contract invalid", ("solve_log.md", "results/canonical_results.json"), {}
 
     def _step_6(self, project: Path):
         figures = list((project / "figures").glob("sensitivity_*.pdf")) + list((project / "figures").glob("sensitivity_*.png")) if (project / "figures").is_dir() else []
         ok = _has(project, "sensitivity_report.md", 20) and bool(figures)
+        if ok:
+            return _incremental_gate(self.factory_root, project, "results", 6)
         return ok, "Step 6 sensitivity artifacts invalid", ("sensitivity_report.md",), {}
 
     def _step_7(self, project: Path):
@@ -198,19 +258,12 @@ class NativeArtifactValidator:
 
     def _step_10(self, project: Path):
         if not _has(project, "code_review.md", 20):
-            return False, "code_review.md is incomplete", ("code_review.md",), {}
-        commands = (
-            (["scripts/verify_numbers.py", "--verify", str(project), project.name], project / "number_verification.latest.stdout", (0,)),
-            (["scripts/verify_symbols.py", str(project), project.name], project / "symbol_verification.latest.txt", (0,)),
-            (["scripts/verify_deliverables.py", str(project), project.name], project / "deliverables_verification.latest.txt", (0,)),
-            (["scripts/verify_invariants.py", str(project)], project / "invariants_verification.latest.txt", (0,)),
-            (["scripts/verify_spec_impl.py", str(project)], project / "spec_impl_verification.latest.txt", (0,)),
-            (["scripts/verify_quality_contract.py", str(project), "--factory-root", str(self.factory_root), "--json-out", str(project / "quality_contract_verification.latest.json"), "--text-out", str(project / "quality_contract_verification.latest.txt")], None, (0, 2)),
-        )
-        ok = all(_run(self.factory_root, args, stdout=output, accepted=accepted) for args, output, accepted in commands)
-        for report in (project / "invariants_verification.latest.txt", project / "spec_impl_verification.latest.txt", project / "quality_contract_verification.latest.txt"):
-            ok = ok and _verification_fresh(project, report)
-        return ok, "Step 10 numerical gate failed", ("code_review.md", "number_verification.latest.stdout"), {}
+            return False, "code_review.md is incomplete", ("code_review.md",), {
+                "error_class": "TRANSIENT_ARTIFACT_MISSING",
+                "failed_check": "code_review",
+                "missing_artifacts": ["code_review.md"],
+            }
+        return _incremental_gate(self.factory_root, project, "paper", 10)
 
     def _step_11(self, project: Path):
         return _has(project, "review_comments.md", 30), "Step 11 review is incomplete", ("review_comments.md",), {}
@@ -221,12 +274,117 @@ class NativeArtifactValidator:
 
     def _step_13(self, project: Path):
         verdict = gate2_verdict(project)
-        if verdict == "PASS" or gate2_delivery_allowed(project):
+        if verdict in {"PASS", "PRECHECK_PASS"} or gate2_delivery_allowed(project):
             return True, "", ("judge_evaluation.md",), {}
+        if verdict == "INDETERMINATE_REVIEW":
+            missing, resume = self._missing_packet_sources(project)
+            if missing and resume is not None:
+                return False, "Gate 2 packet is missing upstream artifacts", (
+                    "judge_evaluation.md",
+                ), {
+                    "resume_after_step": resume,
+                    "normalized_verdict": "PACKET_UPSTREAM_MISSING",
+                    "missing_artifacts": missing,
+                }
+            return False, "Gate 2 evidence is indeterminate", ("judge_evaluation.md",), {
+                "error_class": "TRANSIENT_JUDGE_INFRASTRUCTURE",
+                "normalized_verdict": "INFRA_RETRY",
+                "retry_scope": "step_13",
+            }
         if verdict in {"REOPEN_REVISION_TEXT", "REOPEN_REVISION_MODEL"}:
             resume = self._gate2_resume(project, verdict)
             return False, f"Gate 2 requests {verdict}", ("judge_evaluation.md",), {"resume_after_step": resume}
         return False, "Step 13 judge verdict missing or invalid", ("judge_evaluation.md",), {}
+
+    @staticmethod
+    def _missing_packet_sources(project: Path) -> tuple[list[str], int | None]:
+        missing: set[str] = set()
+        for manifest_path in sorted((project / "judge_packets").glob("*/manifest.json")):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            completeness = manifest.get("completeness")
+            if not isinstance(completeness, dict):
+                continue
+            requirements = completeness.get("requirements")
+            if not isinstance(requirements, list):
+                continue
+            for requirement in requirements:
+                if not isinstance(requirement, dict) or requirement.get("satisfied") is True:
+                    continue
+                paths = requirement.get("paths")
+                if not isinstance(paths, list):
+                    continue
+                if not paths:
+                    inferred = NativeArtifactValidator._required_artifact_for(
+                        project, str(requirement.get("id") or "")
+                    )
+                    if inferred:
+                        missing.add(inferred)
+                    continue
+                for relative in paths:
+                    if isinstance(relative, str) and not (project / relative).is_file():
+                        missing.add(relative)
+        if not missing:
+            return [], None
+        resume = min(NativeArtifactValidator._artifact_owner(path) for path in missing)
+        return sorted(missing), resume
+
+    @staticmethod
+    def _required_artifact_for(project: Path, requirement_id: str) -> str:
+        if requirement_id == "final_paper":
+            return str(_paper(project).relative_to(project))
+        if requirement_id.startswith(("question:", "claim:")):
+            return "claim_registry.json"
+        return {
+            "problem_statement": "problem/problem_brief.md",
+            "mathematical_exposition": "model.md",
+            "primary_results": "results/canonical_results.json",
+            "implementation": "models/<primary>/03_solve.py",
+            "execution_trace": "solve_log.md",
+            "claim_registry": "claim_registry.json",
+        }.get(requirement_id, "")
+
+    @staticmethod
+    def _artifact_owner(relative: str) -> int:
+        """Return the last completed step needed to rerun an artifact's owner."""
+        if relative.startswith("problem/"):
+            return -1
+        if relative in {"research_brief.md", "viable_streams.md", "viability_gate.md"}:
+            return 0
+        if re.match(r"m\d+_(spec|demo_result|critique)", relative):
+            return 1
+        if relative in {"method_decision.md", "chosen_method.md"}:
+            return 2
+        if relative.startswith("models/") or relative in {
+            "claim_registry.json",
+            "model.md",
+            "symbol_table.md",
+            "assumption_ledger.md",
+            "modeling_scope_gate.md",
+            "quality_contract.json",
+        }:
+            return 3
+        if relative.startswith("results/") or relative == "solve_log.md":
+            return 4
+        if relative.startswith("figures/sensitivity_") or relative == "sensitivity_report.md":
+            return 5
+        if relative == "evaluation.md":
+            return 6
+        if relative.startswith("figures/") or relative == "visualization_log.md":
+            return 7
+        if relative.endswith("_paper.tex") or relative.startswith("paper/") or relative in {
+            "reviewer_entry_map.md",
+            "anchor_figure_plan.md",
+            "entry_gate.md",
+        }:
+            return 8
+        if relative.endswith("verification.latest.txt") or relative.endswith("verification.latest.json"):
+            return 9
+        if relative == "review_comments.md":
+            return 10
+        return 11
 
     def _step_14(self, project: Path):
         paper = _paper(project)

@@ -9,7 +9,7 @@ from ...domain import ExecutionResult
 from ...registry import ModelBackendRegistry
 from scripts.model_dispatch_config import get_model_entry, get_step_model_ids
 
-from .backends import ModelRequest
+from .backends import ApiAgentBackend, ModelRequest
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,7 @@ class ModelDispatcher:
         self.root = Path(factory_root).resolve()
         self.backends = backends
         self.artifact_valid = artifact_valid
+        self._quarantined_models: dict[str, dict[str, str]] = {}
 
     def policy_for(self, project_id: str, step_key: str | int, defaults: tuple[str, ...]) -> ModelPolicy:
         assigned = get_step_model_ids(self.root / "web" / "model_config.json", project_id, step_key)
@@ -58,6 +59,14 @@ class ModelDispatcher:
                 candidates.append(model_id)
         last = ExecutionResult.failed("PERMANENT_MODEL_CONFIG", returncode=2)
         for model_id in candidates:
+            if model_id in self._quarantined_models:
+                last = ExecutionResult.failed(
+                    "PERMANENT_MODEL_CONFIG",
+                    returncode=2,
+                    model_id=model_id,
+                    quarantine=self._quarantined_models[model_id],
+                )
+                continue
             entry = self._entry(model_id)
             if entry is None:
                 last = ExecutionResult.failed(
@@ -74,6 +83,24 @@ class ModelDispatcher:
                     "PERMANENT_MODEL_CONFIG", returncode=2, model_id=model_id
                 )
                 continue
+            key_env = entry.get("key_env", "")
+            if (
+                key_env
+                and isinstance(backend, ApiAgentBackend)
+                and not (request.env.get(key_env) or os.getenv(key_env))
+            ):
+                self._quarantined_models[model_id] = {
+                    "error_class": "PERMANENT_MODEL_CONFIG",
+                    "reason": "required credential environment variable is unavailable",
+                }
+                last = ExecutionResult.failed(
+                    "PERMANENT_MODEL_CONFIG",
+                    returncode=2,
+                    model_id=model_id,
+                    backend=backend_name,
+                    missing_key_env=key_env,
+                )
+                continue
             configured = replace(
                 request,
                 model=entry["model"],
@@ -82,17 +109,38 @@ class ModelDispatcher:
                 key_env=entry["key_env"],
                 env={**request.env, "FACTORY_API_BACKEND": backend_name},
             )
-            last = backend.execute(configured)
+            backend_result = backend.execute(configured)
+            metadata = {
+                **backend_result.metadata,
+                "model_id": model_id,
+                "backend": backend_name,
+                "model": entry["model"],
+            }
+            last = ExecutionResult(
+                returncode=backend_result.returncode,
+                error_class=backend_result.error_class,
+                metadata=metadata,
+            )
+            if last.error_class in {
+                "PERMANENT_BACKEND_UNAVAILABLE",
+                "PERMANENT_MODEL_CONFIG",
+                "PERMANENT_MODEL_UNSUPPORTED",
+                "PERMANENT_OUTPUT_CONTRACT",
+            }:
+                self._quarantined_models[model_id] = {
+                    "error_class": last.error_class,
+                    "reason": str(last.metadata.get("reason") or "candidate failed native preflight"),
+                }
             if last.returncode == 0:
                 if self.artifact_valid is None or self.artifact_valid(
                     request.step_id, request.project_dir
                 ):
-                    metadata = {
-                        **last.metadata,
-                        "model_id": model_id,
-                        "backend": backend_name,
-                    }
                     return ExecutionResult.succeeded(**metadata)
+                last = ExecutionResult.failed(
+                    "TRANSIENT_ARTIFACT_MISSING",
+                    returncode=1,
+                    **metadata,
+                )
         return last
 
     def execute_model_id(self, model_id: str, request: ModelRequest) -> ExecutionResult:

@@ -83,7 +83,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 这些运行输出会被 Git 自动忽略。
 
-## 最新更新（2026-07-30）
+## 最新更新（2026-08-04）
 
 当前未发布变更集中在核心编排、Web 控制面与仓库治理：
 
@@ -134,6 +134,27 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 ./launch_agents.sh status
 ```
 
+工作流会在 Step 4、5/6 和 10 后分别运行 `model`、`results` 和 `paper`
+增量审计。也可以手动运行；这些 profile 只记录阶段就绪状态，永远不授权交付：
+
+```bash
+python3 -m factory_core.cli audit ongoing/test_cumcm2024b --profile model
+python3 -m factory_core.cli audit ongoing/test_cumcm2024b --profile results --checkpoint-step 5
+python3 -m factory_core.cli audit ongoing/test_cumcm2024b --profile results --checkpoint-step 6
+python3 -m factory_core.cli audit ongoing/test_cumcm2024b --profile paper
+```
+
+Step 15 完成后，项目内容达到 `CONTENT_READY` 边界。此时可独立运行最终审计，
+但仍不发布、打包、归档或修改工作流状态：
+
+```bash
+python3 -m factory_core.cli audit ongoing/test_cumcm2024b
+```
+
+阶段审计写入 `.factory/audits/profiles/<profile>/<snapshot>/`，最终审计继续写入
+兼容交付契约的 `.factory/audits/<snapshot>/`。同一快照已有可验证 PASS 时会复用；
+使用 `--no-reuse` 可强制新审计，最终 profile 可用 `--no-compile` 审计现有 PDF。
+
 跟踪运行日志：
 
 ```bash
@@ -166,20 +187,20 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 - Step 1：背景调研及方法预选。
 - Step 2：并行生成建模方案及示例求解。
 - Step 3：方法选择，支持 `human_review.md` 手工介入修改；显式启用 `selection/config.json` 时会先暂停，让用户在 Step 2 验证过的候选流中选择 `PRIMARY/AUXILIARY`。
-- Step 4：构建完整模型。
-- Step 5：执行完整求解过程。
-- Step 6：敏感性与鲁棒性分析。
+- Step 4：构建完整模型，并运行 `model` profile 审计。
+- Step 5：执行完整求解过程，并运行 Step-5 `results` profile 审计。
+- Step 6：敏感性与鲁棒性分析，并以新快照运行 Step-6 `results` profile 审计。
 - Step 7：模型评估。
 - Step 8：数据可视化润色。
 - Step 8.5：阅卷入口设计。为每个子问题定义评委入口三句式、主图/主表锚点和正文首段承接提纲。
 - Step 9：撰写论文初稿。
-- Step 10：门禁1 - 数值与代码一致性检查。
+- Step 10：门禁1 - 运行 `paper` profile，检查论文数字、代码、结果与交付附件一致性；符号检查先记 warning。
 - Step 11：建设性审稿。
 - Step 12：论文修订。
-- Step 13：门禁2 - 数学有效性、执行证据和论文质量三角色隔离评审（此时为预提交结果）。
+- Step 13：运行隔离的数学预审；`PRECHECK_PASS` 只允许继续写摘要和润色，不代表最终质量 PASS。
 - Step 14：撰写摘要。
-- Step 15：引用、图表及排版润色；任何修改都会使 Step 13 的预提交结果失效。
-- Step 16：缓存未命中时先编译最终 PDF，再对 Step 15 后的三角色文本 packet 重新执行 Gate 2，并把通过结果绑定到该 PDF 的精确字节；自动评委不读取 PDF 画面，视觉质量另行检查。之后打包、清理并移至 `complete/`。
+- Step 15：引用、图表及排版润色；任何修改都会使 Step 13 的预提交结果失效。通过校验后形成 `CONTENT_READY` 内容边界。
+- Step 16：兼容工作流适配器调用独立审计模块；缓存未命中时编译最终 PDF、执行最终 Gate 2，并把结果绑定到内容快照。只有审计 PASS 或显式治理 override 才进入复制、打包、清理和归档。
 
 完整的详细步骤要求请参阅 `STEPS.md`。这些文件仍是产物与验证契约；项目的运行状态权威见下节。
 
@@ -189,7 +210,7 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
 - 未迁移建模项目继续由冻结的 Legacy Adapter 根据产物文件推断。不要手工创建 `.factory/state.db`；使用下述显式迁移命令。
 - 当 `modeling_guide.md` 和遗留的 `analysis_guide.md` 同时存在时，以 `modeling_guide.md` 为准。
 - 已完成的项目将从 `ongoing/` 移至 `complete/`。
-- Step 16 在缓存未命中时先成功编译新 PDF，再以当前数学 / 执行 / 论文三角色文本 packet 执行最终 Gate 2；`judge_outputs/final_submission.sha256` 同时绑定 packet、角色 prompts、聚合 / 调用实现、Step 13 模型路由与该 PDF 的精确字节，证明交付物和评审契约版本一致。它不表示自动评委观察过 PDF 渲染或图片像素。编译失败会立即停止，不会复制旧 PDF。之后才复制到 `papers/`、生成 `papers/<base>_submission.zip` 并按 `final_judge_v3` 契约写入 `delivery_manifest.json`。
+- 独立审计模块同时负责阶段化确定性审计和最终发布审计。Step 13 只调用数学角色；最终 profile 才运行数学、执行和论文质量三角色 Judge、判决路由、指纹和 receipt。兼容文件继续投影到 `judge_outputs/`。`judge_outputs/final_submission.sha256` 绑定 packet、角色 prompts、聚合 / 调用实现、Judge 模型路由与 PDF 精确字节。审计本身不会写 `papers/`、打包、清理或归档；Step 16 消费获准的最终审计结果后才执行这些交付动作。
 - `complete/` 是历史交付目录，不等价于“符合当前最新契约”。使用 `python3 scripts/audit_complete_projects.py --write-manifests` 生成 `complete/_validation_index.json`，将项目分为 `CURRENT_PASS`、`LEGACY_DELIVERED` 和 `INVALID_OR_INCOMPLETE`。
 
 ## 迁移旧项目

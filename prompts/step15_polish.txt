@@ -26,11 +26,12 @@
 
 1. `__PROJECT_PATH__/__BASE_NAME___paper.tex` —— **逐行扫**, 提取每个 `\cite{key}` / 每个表格 / 每段文字。
 2. `__PROJECT_PATH__/references.bib` —— 现有所有 entry。
-3. `__PROJECT_PATH__/judge_evaluation.md` §写作清晰度 —— Step 13 Gate 2 评委指出的写作 issue 是本步骤的重点修复对象。
+3. `__PROJECT_PATH__/judge_evaluation.md` —— Step 13 数学预审的真实 verdict 与问题；它不包含最终论文质量评分，不得虚构“写作清晰度”结论。完整三角色评审在本步骤完成后的 `final` 审计运行。
 4. `__PROJECT_PATH__/review_comments.md` §m? MINOR —— Step 11 标为 MINOR 的写作 issue, Step 12 deferred 的, 本步骤处理。
 5. `__PROJECT_PATH__/revision_summary.md` §未处理 issue —— 上轮 deferred 到 polish 的 issue 清单。
 6. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 用于检查优秀论文风格、工程痕迹、结果口径和验证措辞。
 7. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 15 polish:` 段落, 最高优先级指令。
+8. `__PROJECT_PATH__/.factory/audits/profiles/paper/latest.json` 与 `audit_issue_ledger.md`（如存在）—— 读取机器审计 warning/未解决项；不得手工关闭 `AUDIT-*` 行或把阶段 PASS 写成最终 PASS。
 
 [输出契约 — runner 用磁盘文件判定本步骤是否 ready]
 

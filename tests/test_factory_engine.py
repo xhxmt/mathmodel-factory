@@ -79,6 +79,80 @@ def test_engine_retries_through_registry_without_step_number_branches(tmp_path):
     ]
 
 
+def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_path):
+    handler = FakeHandler(
+        [
+            ExecutionResult.failed(
+                "TRANSIENT_JUDGE_ROLE",
+                returncode=2,
+                role="math",
+                backend="codex",
+            ),
+            ExecutionResult.failed(
+                "TRANSIENT_JUDGE_ROLE",
+                returncode=2,
+                role="math",
+                backend="codex",
+            ),
+        ]
+    )
+    validator = FakeValidator(
+        [
+            ValidationResult.invalid(
+                "judge output missing",
+                metadata={"failed_check": "grounding", "missing_artifacts": ["judge_outputs/math.md"]},
+            ),
+            ValidationResult.invalid(
+                "judge output missing",
+                metadata={"failed_check": "grounding", "missing_artifacts": ["judge_outputs/math.md"]},
+            ),
+        ]
+    )
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling")
+    engine = FactoryEngine(
+        tmp_path,
+        store=store,
+        registry=registry_for(handler, validator, max_attempts=2),
+        sleeper=lambda _: None,
+    )
+
+    state = engine.run()
+
+    assert state.status is WorkflowStatus.FAILED
+    retry = next(event for event in store.events() if event.type == "RETRY_SCHEDULED")
+    failure = store.events()[-1]
+    for event in (retry, failure):
+        assert event.payload["failed_check"] == "grounding"
+        assert event.payload["role"] == "math"
+        assert event.payload["backend"] == "codex"
+        assert event.payload["missing_artifacts"] == ["judge_outputs/math.md"]
+    assert failure.payload["error_class"] == "PERMANENT_JUDGE_INFRASTRUCTURE"
+    assert failure.payload["exhausted_error_class"] == "TRANSIENT_JUDGE_ROLE"
+
+
+def test_engine_classifies_exit_zero_with_missing_artifact(tmp_path):
+    handler = FakeHandler([ExecutionResult.succeeded(model_id="codex-test")])
+    validator = FakeValidator(
+        [ValidationResult.invalid("artifact missing", "model.md")]
+    )
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling")
+    engine = FactoryEngine(
+        tmp_path,
+        store=store,
+        registry=registry_for(handler, validator, max_attempts=1),
+    )
+
+    state = engine.run()
+
+    assert state.status is WorkflowStatus.FAILED
+    payload = store.events()[-1].payload
+    assert payload["error_class"] == "TRANSIENT_ARTIFACT_MISSING"
+    assert payload["missing_artifacts"] == ["model.md"]
+    assert payload["model_id"] == "codex-test"
+
+
 def test_engine_persists_pending_action_and_stops_dispatch(tmp_path):
     handler = FakeHandler([ExecutionResult.succeeded()])
     validator = FakeValidator(

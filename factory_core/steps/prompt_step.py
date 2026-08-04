@@ -45,9 +45,6 @@ class PromptStep:
             step_key=context.step_id,
             defaults=self.contract.default_models,
         )
-        validation = self.validator.validate(context)
-        if validation.metadata.get("killed"):
-            return ExecutionResult.succeeded(killed=True)
         return result
 
     def validate(self, context):

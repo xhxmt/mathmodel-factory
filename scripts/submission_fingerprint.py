@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -16,8 +17,8 @@ from scripts.judge_packet import packet_fingerprints
 from scripts.model_dispatch_config import get_model_entry, get_step_model_ids
 
 
-FINGERPRINT_VERSION = 4
-EVALUATOR_CONTRACT_VERSION = 3
+FINGERPRINT_VERSION = 6
+EVALUATOR_CONTRACT_VERSION = 5
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -116,8 +117,16 @@ def evaluator_contract_payload(base: str, factory_root: Path | None = None) -> d
         "factory_core/domain.py",
         "factory_core/engine.py",
         "factory_core/registry.py",
+        "factory_core/audit/domain.py",
+        "factory_core/audit/incremental.py",
+        "factory_core/audit/ledger.py",
+        "factory_core/audit/persistence.py",
+        "factory_core/audit/service.py",
         "factory_core/adapters/legacy.py",
         "factory_core/adapters/legacy_runner.sh",
+        "factory_core/steps/catalog.py",
+        "factory_core/steps/specialized.py",
+        "factory_core/steps/validators.py",
         "scripts/claim_graph.py",
         "scripts/judge_packet.py",
         "scripts/objective_evidence.py",
@@ -165,6 +174,11 @@ def evaluator_contract_payload(base: str, factory_root: Path | None = None) -> d
             "selection": selected,
             "config": _versioned_file_record(root, "web/model_config.json"),
             "registry": _versioned_file_record(root, "web/model_registry.json"),
+        },
+        "runtime_policy": {
+            "judge_policy_mode": os.getenv("JUDGE_POLICY_MODE", "shadow").lower(),
+            "ablate_no_judge": os.getenv("ABLATE_NO_JUDGE", "0").lower()
+            in {"1", "true", "yes", "on"},
         },
     }
 

@@ -74,12 +74,43 @@ commits `WORKER_LAUNCHED` with the exact resulting revision before releasing the
 worker. Stale requests do not launch a process. The lower-level `resume` method
 remains available for explicit no-start maintenance and tests.
 
-Step 16 validates compile, visual gate, final judge receipt, publication, and
-submission package evidence. `FactoryService` writes `delivery_manifest.json`
+Step 16 consumes the independent final-audit result, then validates publication
+and submission package evidence. `FactoryService` writes `delivery_manifest.json`
 only after the engine reaches `completed`. Archiving then writes an
 archive-request event, checkpoints and closes SQLite, moves the project from
 `ongoing/` to `complete/`, and writes the archive-complete event. Re-entry
 completes either half-finished archive state.
+
+## Audit Boundary
+
+The native validators run deterministic audit profiles at the earliest useful
+boundaries: `model` after Step 4, `results` after Step 5 and again after Step 6,
+and `paper` after Step 10. Records are stored under
+`.factory/audits/profiles/<profile>/<snapshot>/`; failures synchronize to
+`audit_issue_ledger.md`. Their snapshots include checker implementation hashes,
+so unchanged inputs are reused only under the same checker contract. Stage
+profiles never authorize delivery.
+
+Step 15 is the `CONTENT_READY` boundary. The `final` profile owns release
+acceptance checks, final compilation, visual gate execution, isolated judge
+roles, decision routing, content fingerprints, and judgment receipts. It writes
+immutable snapshot identity plus append-only attempts under
+`.factory/audits/<snapshot>/`; `judge_outputs/` remains a compatibility
+projection for existing tools and delivery contracts.
+
+The audit subsystem does not publish into `papers/`, create a submission zip,
+clean project artifacts, archive a project, or write workflow state. It can be
+run independently:
+
+```bash
+python3 -m factory_core.cli audit ongoing/<base>
+```
+
+Step 16 invokes the same service as a compatibility adapter. A verified PASS
+for the unchanged evaluator+packet+asset+PDF snapshot can be reused. FAIL and
+INDETERMINATE results carry structured repair or retry metadata; the engine,
+not the audit subsystem, decides whether to reopen a Step. An explicit scoped
+delivery override remains `OVERRIDDEN`, never a fabricated PASS receipt.
 
 ## Application And Solver Service
 

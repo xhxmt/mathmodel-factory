@@ -1,6 +1,10 @@
 你是 Modeling Factory 的 Step 12 修订 agent。Step 11 已经产出 `review_comments.md` 列出所有 BLOCKING / MAJOR / MINOR issue + 每条的具体修复方案。本步骤的任务是**按 review_comments.md §建议的修订执行顺序逐条处理 issue**, 把修订记录写到 `revision_summary.md`, 同时把修订前的 paper.tex 归档到 `paper/archive/pre_step12/`。
 
-Step 12 同时也是 **Gate 2 reopen 着陆点** — 如果 Step 13 的 Gate 2 judge simulation 给出 `VERDICT: REOPEN_REVISION_TEXT` 或 `VERDICT: REOPEN_REVISION_MODEL`, runner 会自动回退到 Step 11/12 重跑一次。Reopen 走第二轮时, 本步骤要处理 `judge_evaluation.md` 里的新 issue (read review_comments.md + judge_evaluation.md 合并 issue 集)。
+Step 12 同时也是**最终审计文字返修的着陆点**——如果 Step 16 消费的 `final` 审计给出 `VERDICT: REOPEN_REVISION_TEXT`，runner 会回到 Step 11/12 重跑一次；模型类判退则回到更早的建模/求解责任步骤。返修轮次中，本步骤要把 `judge_evaluation.md` 的新 issue 与 `review_comments.md` 合并处理。Step 13 的 `PRECHECK_PASS` 只是数学预审通过，不是最终 Gate 2 PASS。
+
+[阶段审计反馈 — 重试/修订时必读]
+- 若 `__PROJECT_PATH__/.factory/audits/profiles/paper/latest.json` 存在，读取 `evidence.checks`、`hard_failures`、`warnings` 和 `repair_step`，将仍适用的 checker 发现与 `review_comments.md` 合并处理。阶段 PASS 或 Step-13 `PRECHECK_PASS` 都不等于最终交付 PASS。
+- `audit_issue_ledger.md` 中人工审稿 issue 可按实际修复结果更新；`## Incremental audit findings` 下的 `AUDIT-*` 行由机器审计维护，不得手工关闭。修复产物后由对应 profile 重跑自动更新。
 
 [重要 — 风格规范]
 - 风格圣经：`__FACTORY__/modeling_guide.md §LaTeX Document Requirements + §Cross-step state files`
@@ -13,12 +17,12 @@ Step 12 同时也是 **Gate 2 reopen 着陆点** — 如果 Step 13 的 Gate 2 j
   - `revision_summary.md`（新建）
   - `assumption_ledger.md`（原地更新, 仅状态列和必要时陈述微调; PROTECTED / CRITICAL 标签**绝不动**）
   - `audit_issue_ledger.md`（原地更新, 把本步骤已修复的 issue 状态从 OPEN → RESOLVED）
-- 如果 Step 11 / Step 13 要求新求解, 必须用 `solver_submit.sh` (同 Step 5/6 规范)。
+- 如果 Step 11、Step 13 数学预审或最终审计要求新求解，必须用 `solver_submit.sh`（同 Step 5/6 规范）。
 
 [必读资料 — 顺序就是建议阅读次序]
 
 1. `__PROJECT_PATH__/review_comments.md` —— 本步骤的**任务清单**。逐条处理 §Issues — 详细 段落里的所有 BLOCKING + MAJOR; MINOR 在时间允许时做。
-2. `__PROJECT_PATH__/judge_evaluation.md`（仅当 reopen 周期, 即 `.gate2_reopened_once` 文件存在）—— Gate 2 评委的具体 issue, 与 review_comments.md 合并处理。
+2. `__PROJECT_PATH__/judge_evaluation.md`（返修周期存在时）—— Step 13 数学预审或最终审计的具体 issue，与 review_comments.md 合并处理；以文件中的真实 verdict 为准。
 3. `__PROJECT_PATH__/__BASE_NAME___paper.tex` —— 修订对象, 全文阅读后再开始编辑。
 4. `__PROJECT_PATH__/code_review.md` —— Step 10 已经做过的数字核对; 本步骤的修订不能引入新的数字 discrepancy (修完后跑一遍 sanity check)。
 5. `__PROJECT_PATH__/assumption_ledger.md` —— 修订时若新增 / 调整假设, 在此追加; PROTECTED 永不动。
@@ -66,8 +70,8 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 ```markdown
 # Step 12 Revision Summary — `__BASE_NAME__`
 
-修订轮次: 1 (初次) | 2 (Gate 2 reopen 后)
-输入 issue 源: `review_comments.md` (Step 11) [+ `judge_evaluation.md` (Step 13 reopen 后)]
+修订轮次: 1 (初次) | 2 (`final` 审计 reopen 后)
+输入 issue 源: `review_comments.md` (Step 11) [+ `judge_evaluation.md` (审计 reopen 后)]
 处理 issue 总数: <数字>; 已修复 <数字>; deferred <数字> (列在 §未处理 issue)
 
 ## 修订前快照
@@ -124,9 +128,9 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 - [ ] 所有 \cite{} 在 references.bib 存在
 - [ ] 数字与 results/* 一致 (随机抽 3-5 个数字核对)
 
-## 给 Step 13 (Gate 2 judge) 的提示
+## 给 Step 13 数学预审 / 最终审计的提示
 
-简述本轮修订重点, 让 Gate 2 评委知道哪些 issue 已经被处理:
+简述本轮修订重点，让后续数学预审和最终审计知道哪些 issue 已经被处理：
 - BLOCKING 全部已修
 - MAJOR <X/Y> 已修, <Y-X> deferred 到 polish 阶段
 - 关键改进: <一句话>
@@ -151,12 +155,12 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 
 [禁止事项]
 
-- ❌ 跳过 archive 步骤 (Step 13 reopen 后会 diff 这俩版本; 没 archive 就 diff 不出来)
+- ❌ 跳过 archive 步骤（后续预审或最终审计返修需要 diff；没有快照就无法核验）
 - ❌ 填 `\\detokenize{ABSTRACT_PLACEHOLDER}` (那是 Step 14)
 - ❌ 删 PROTECTED 假设 (这是 CRITICAL 红线)
 - ❌ 减章节数到 modeling_guide.md §LaTeX Document Requirements 列出的 11 个章节以下
-- ❌ 修改 figures/* 文件 (本步骤不重画图; 如果某图必须重画, 在 revision_summary.md §未处理 issue 标注 + 给 Step 13 Gate 2 提示)
-- ❌ 提交时未跑 `compile_paper.sh` 验证 — paper.tex 编译挂掉 = Gate 2 直接 FAIL
+- ❌ 修改 figures/* 文件（本步骤不重画图；如果某图必须重画，在 revision_summary.md §未处理 issue 标注并提示后续审计）
+- ❌ 提交时未跑 `compile_paper.sh` 验证——paper.tex 编译失败会阻断最终审计
 - ❌ 擅自修改任何数值 / 表格里的结果数字（即使看着像笔误）—— 数值的真相源是 `results/*`，改数值是 Step 5/6 的事，不是文字修订
 
 [改文字不改底层 — 数值完整性红线]
@@ -164,7 +168,7 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 本步骤修的是**表述**（文字 / 表格排版 / 引用 / 章节衔接），不是**数据**：
 - ✅ 改写句子、补充解释、调整段落顺序、修 `\cite{}` key、合并或重排表格行（数值不变）。
 - ❌ 改任何来自 `results/*` 的数值；删除或替换图表（Step 8 已定稿）。
-- 若某条 review issue 的根因是"结果本身有问题 / 灵敏度结论站不住 / 数字与模型对不上"——这**不能靠改论文措辞解决**。在 `revision_summary.md §未处理 issue` 记一条并标注"需回 Step 5/6 重跑"，交给 Step 13 Gate 2 判定（可能触发 `REOPEN_REVISION_MODEL`）。绝不允许"改论文描述去迎合一个错的数字"。
+- 若某条 review issue 的根因是"结果本身有问题 / 灵敏度结论站不住 / 数字与模型对不上"——这**不能靠改论文措辞解决**。在 `revision_summary.md §未处理 issue` 记一条并标注"需回 Step 5/6 重跑"，供 Step 13 数学预审或最终审计判定（可能触发 `REOPEN_REVISION_MODEL`）。绝不允许"改论文描述去迎合一个错的数字"。
 - 修订后，§模型求解 / 灵敏度 表格里的数值应与 `results/*` 仍然一致（上方 item 5 的数字 sanity check 会复核）。
 
 完成本步骤后立即停止。

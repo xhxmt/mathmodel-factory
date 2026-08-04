@@ -372,6 +372,18 @@ update discipline:
 - `findings_brief.md` (legacy name kept for runner compatibility) —
   the running synthesis of the chosen model's results and limitations.
   Audit sections from Step 5, 6 are appended, not overwritten.
+- `results/canonical_results.json` — when present under the current contract,
+  every subproblem records an explicit project-relative `source`/`source_file`.
+  Its selected method and solver provenance must agree with `chosen_method.md`
+  and the source `values.json`; prose is never allowed to override this chain.
+- `quality_contract.json` — continuous-time hard constraints require independent
+  endpoint/event localization, a certified interval/error bound, or validated
+  dual implementations. Rechecking the same sampled time array is useful
+  diagnostics but is not independent hard-pass evidence.
+- `.factory/audits/profiles/{model,results,paper}/latest.json` — machine-owned
+  stage feedback. On retry, read `evidence.checks` and its reports before
+  editing. Fix the source artifact; do not hand-edit `AUDIT-*` ledger rows or
+  treat a stage PASS as delivery approval.
 
 ## What you may NOT do
 

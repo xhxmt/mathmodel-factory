@@ -2,6 +2,10 @@
 
 Step 5 是数据的「真相之锚」：评委读论文时所有引用的数字、所有图里的曲线、所有表里的值，都必须**单向追溯到本步骤产出的 `results/` 文件**。求解过程必须可重复，每条 solver 调用必须经 `solver_submit.sh`（不允许 `nohup python ... &` 直接调），日志和 jobid 元信息必须落到 `run_state/solver_jobs/` 让 runner 的 hang detection 看得见。
 
+[阶段审计反馈 — 重试时必读]
+- 若 `__PROJECT_PATH__/.factory/audits/profiles/results/latest.json` 存在且 `evidence.checkpoint_step` 为 5，先读取 `evidence.checks`、`hard_failures` 和 `repair_step`。优先修复 canonical source 绑定、invariants、provenance、spec/implementation 或 quality-contract 的精确失败项，禁止靠改论文表述掩盖求解错误。
+- 同时读取 `__PROJECT_PATH__/audit_issue_ledger.md` 的 `## Incremental audit findings`。`AUDIT-RESULTS-*` 行由机器审计维护；不要手工关闭，修复真相源和执行证据后让 runner 重跑 Step-5 `results` profile 自动更新。
+
 [重要 — 风格规范]
 - 风格圣经：`__FACTORY__/modeling_guide.md`
   - §Solver Execution（行 8–58）—— `solver_submit.sh` 调用语法、`--max-time` 强制要求、log 落盘约定
@@ -96,7 +100,7 @@ __PROJECT_PATH__/results/
 }
 ```
 
-禁止把 `status` 留成 `RUNNING` / `PARTIAL` / `PENDING` / `INCOMPLETE` 后继续后续步骤；这类状态表示本子问题还不是 canonical result。若多个 solver 共同产生最终答案，额外生成 `results/canonical_results.json` 汇总每个子问题的最终采用值、来源文件、solver 状态和表格/Excel 派生字段。后续论文表格、摘要关键数字和 `result*.xlsx` 必须从 `values.json` 或 `canonical_results.json` 派生，不允许手工维护另一套数字。
+禁止把 `status` 留成 `RUNNING` / `PARTIAL` / `PENDING` / `INCOMPLETE` 后继续后续步骤；这类状态表示本子问题还不是 canonical result。若多个 solver 共同产生最终答案，额外生成 `results/canonical_results.json` 汇总每个子问题的最终采用值、`primary_method`、实际 `source` / `source_file`、solver 状态和表格/Excel 派生字段。每个 source 必须指向项目内真实存在的 `results/problemN/values.json`，其 primary method 与 solver provenance 必须和 `chosen_method.md` 及 canonical 条目一致。后续论文表格、摘要关键数字和 `result*.xlsx` 必须从 `values.json` 或 `canonical_results.json` 派生，不允许手工维护另一套数字。
 
 **真求解硬约束（B1/B2/B3 门禁，Step 5 完成前会跑 `verify_provenance.py`）**：
 - **每个 `values.json` 必须带可对账的 `provenance`**：`job_id` 要能在

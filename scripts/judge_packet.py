@@ -55,6 +55,7 @@ TEXT_SUFFIXES = {
     ".yml",
 }
 MAX_CONTEXT_BYTES = 180_000
+EXECUTION_CONTEXT_BYTES = 360_000
 MAX_FILE_BYTES = 55_000
 PACKET_VERSION = 3
 COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v1"
@@ -132,26 +133,39 @@ def _is_execution_evidence(relative: str) -> bool:
 def _execution_priority(project: Path, path: Path) -> tuple[int, str]:
     relative = path.relative_to(project).as_posix()
     name = path.name
-    if name == "claim_ledger.json":
+    suffix = path.suffix.lower()
+    if relative.endswith("_paper.tex") or relative == "paper/paper.tex":
         priority = 0
-    elif relative.endswith("_paper.tex") or relative == "paper/paper.tex":
+    elif relative == "results/canonical_results.json":
         priority = 1
-    elif relative.startswith("results/"):
+    elif relative.startswith("models/") and path.stem.lower() == "03_solve":
         priority = 2
-    elif name.endswith(("_verification.latest.json", "_verification.latest.txt")):
+    elif relative.startswith("models/") and path.stem.lower() == "02_model":
         priority = 3
-    elif name in {
-        "solve_log.md",
-        "sensitivity_report.md",
-        "numbers_manifest.json",
-    }:
+    elif name == "solve_log.md":
         priority = 4
-    elif relative.startswith("logs/"):
+    elif name.endswith(("_verification.latest.json", "_verification.latest.txt")):
         priority = 5
-    elif relative.startswith("models/"):
+    elif relative.startswith("results/problem") and name == "values.json":
         priority = 6
-    else:
+    elif relative.startswith("results/problem") and name in {"solver.log", "jobid.txt"}:
         priority = 7
+    elif relative.startswith("models/") and (
+        "solver" in path.stem.lower() or suffix == ".log"
+    ):
+        priority = 8
+    elif name in {"claim_ledger.json", "numbers_manifest.json"}:
+        priority = 9
+    elif relative.startswith("models/"):
+        priority = 10
+    elif relative.startswith("results/"):
+        priority = 11
+    elif relative.startswith("logs/"):
+        priority = 12
+    elif name == "sensitivity_report.md":
+        priority = 13
+    else:
+        priority = 14
     return priority, relative
 
 
@@ -174,17 +188,21 @@ def _math_priority(project: Path, path: Path, base_name: str) -> tuple[int, str]
         priority = 1
     elif relative in {f"{base_name}_paper.tex", "paper/paper.tex"}:
         priority = 2
+    elif relative.startswith("models/") and Path(relative).stem.lower() == "03_solve":
+        priority = 3
+    elif relative.startswith("models/") and Path(relative).stem.lower() == "02_model":
+        priority = 4
     elif relative in {
         "symbol_table.md",
         "assumption_ledger.md",
         "chosen_method.md",
         "quality_contract.json",
     }:
-        priority = 3
-    elif relative.startswith("models/"):
-        priority = 4
-    else:
         priority = 5
+    elif relative.startswith("models/"):
+        priority = 6
+    else:
+        priority = 7
     return priority, relative
 
 
@@ -430,26 +448,11 @@ def _render_context(
         for relative in requirement["paths"]:
             normalized = str(relative)
             critical_for.setdefault(normalized, []).append(str(requirement["id"]))
-    if critical_for:
-        first_critical = next(
-            (
-                index
-                for index, path in enumerate(paths)
-                if path.relative_to(project).as_posix() in critical_for
-            ),
-            len(paths),
-        )
-        prefix = paths[:first_critical]
-        remainder = paths[first_critical:]
-        paths = prefix + [
-            path
-            for path in remainder
-            if path.relative_to(project).as_posix() in critical_for
-        ] + [
-            path
-            for path in remainder
-            if path.relative_to(project).as_posix() not in critical_for
-        ]
+    context_limit = EXECUTION_CONTEXT_BYTES if role == "execution" else MAX_CONTEXT_BYTES
+    paths = sorted(
+        paths,
+        key=lambda path: path.relative_to(project).as_posix() not in critical_for,
+    )
     for path in paths:
         relative = path.relative_to(project).as_posix()
         item = {"path": relative}
@@ -476,10 +479,10 @@ def _render_context(
             text = original
         else:
             framing_bytes = len((header + "\n").encode("utf-8"))
-            remaining = max(0, MAX_CONTEXT_BYTES - used - framing_bytes)
+            remaining = max(0, context_limit - used - framing_bytes)
             text = _truncate_text(original, min(MAX_FILE_BYTES, remaining))
         encoded_size = len((header + text + "\n").encode("utf-8"))
-        if not text or used + encoded_size > MAX_CONTEXT_BYTES:
+        if not text or used + encoded_size > context_limit:
             item.update({"status": "omitted", "reason": "context_byte_limit"})
             files.append(item)
             continue
@@ -510,7 +513,7 @@ def _render_context(
         omitted_marker = "\n----- SOME SELECTED FILES OMITTED; SEE PACKET MANIFEST -----\n"
     else:
         omitted_marker = ""
-    if omitted_marker and used + len(omitted_marker.encode("utf-8")) <= MAX_CONTEXT_BYTES:
+    if omitted_marker and used + len(omitted_marker.encode("utf-8")) <= context_limit:
         chunks.append(omitted_marker)
     return "".join(chunks), files
 
@@ -602,6 +605,7 @@ def _manifest(
     registry: dict[str, object],
     objective_evidence: Path | None = None,
 ) -> dict:
+    context_limit = EXECUTION_CONTEXT_BYTES if role == "execution" else MAX_CONTEXT_BYTES
     status_counts = {
         status: sum(item["status"] == status for item in files)
         for status in ("included", "truncated", "omitted")
@@ -612,7 +616,7 @@ def _manifest(
         "project": project.name,
         "status_counts": status_counts,
         "limits": {
-            "context_bytes": MAX_CONTEXT_BYTES,
+            "context_bytes": context_limit,
             "per_file_bytes": MAX_FILE_BYTES,
             "critical_file_policy": "include_in_full_or_mark_role_incomplete",
         },

@@ -6,6 +6,7 @@
 
 ### 新增
 
+- 新增独立 `factory_core.audit` 子系统与 `factory audit` CLI：Step 4、5/6、10 分别运行 `model`、`results`、`paper` 确定性审计并将失败同步到 issue ledger；最终 `final` 审计按内容指纹记录在项目 `.factory/audits/<snapshot>/`。四类审计均可脱离交付运行并复用同一输入与 checker 契约的 PASS，只有 `final` profile 可以授权交付。
 - 新增 `factory_core/` Python 编排核心：项目内 SQLite 快照、追加式事件、乐观 revision、注册式 Step/执行后端、重试与验证驱动恢复。
 - 新增旧建模项目的两阶段显式迁移和可审计 rollback 命令；活动进程、状态冲突和已退役社会科学项目会拒绝导入。
 - 新增原生 Step 0-16 lifecycle/catalog、模型 backend registry、统一 `FactoryService`、SQLite solver policy/job 记录，以及本地与可替换 Cloud Run solver adapter。
@@ -19,6 +20,7 @@
 
 ### 变更
 
+- Step 13 缩为数学单角色预审，`PRECHECK_PASS` 只允许继续摘要与润色；完整数学/执行/论文三角色 Gate 2 仅在 Step 15 后的 `final` 审计执行。Step 15 明确为 `CONTENT_READY` 边界；Step 16 改为独立审计与交付之间的兼容适配器，只消费 `PASS` 或显式 `OVERRIDDEN` 审计结果，复制 PDF、submission 打包和清理不再属于审计职责。
 - `run_paper.sh` 降级为兼容启动器；新项目默认 `native_v2` 并原生运行 Step 0-16，冻结 Bash 只供未迁移或显式回滚项目使用。
 - CLI、Web 状态和项目控制对已迁移项目统一读写 `.factory/state.db`；checkpoint、heartbeat、marker 和 diagnostics 成为兼容投影。
 - Web 项目创建/控制直接调用 `FactoryService`，后台执行统一由 Python worker launcher 启动；根 shell 命令保留为兼容入口。
@@ -39,6 +41,29 @@
 
 ### 修复
 
+- 原生审计将科学判退与评委基础设施失败分流：Step 13 仅处理真实 math FAIL，
+  最终审计再处理 math/execution FAIL；`INDETERMINATE_REVIEW`、格式/grounding/路由故障只重试当前角色，
+  耗尽后明确停止为 `PERMANENT_JUDGE_INFRASTRUCTURE`。只有 packet 证明上游文件确实
+  缺失时，才回到该文件最早责任步骤。
+- 原生失败与重试事件保留执行器和验证器的结构化 metadata；Step 10 逐项报告
+  `failed_check`、report 和 returncode，模型退出 0 但产物缺失统一标记为
+  `TRANSIENT_ARTIFACT_MISSING`，不再以 `UNKNOWN` 重跑。
+- 模型调度器会隔离已确认不支持/不可用的候选并继续健康 fallback；API judge 输出和
+  rendered prompt 路径统一传项目相对路径，避免同一不支持模型与绝对路径错误反复调用。
+- 当前 canonical 汇总强制绑定 `chosen_method.md`、逐问题 source 文件和 solver
+  provenance；`quality_contract` v3 要求 hard claim 声明数学域，连续时间 hard claim
+  必须提供独立事件定位、认证误差界或双实现证据，复用同一采样数组不能 hard PASS。
+- 原生隔离评委提示明确覆盖通用 agent 启动读取，禁止读取 guide、human review、memory 和 Git 状态，并要求保留 `judge_packets/<role>/` 角色目录，避免把存在的 packet 误报为缺失。
+- 评委证据包改为硬性文件优先；数学包优先纳入每个模型的 `02_model`/`03_solve` 入口，执行包使用 360 KB 上下文预算，确保问题结果、求解日志和验证报告不会被大型附录挤出；声明式 claim 路径必须与实际产物一致。
+- 原生隔离评委不再让 Codex 最终回复覆盖 `judge_outputs/*.md` 协议文件；
+  Step 13 预审明确忽略流程要求保留的摘要占位符，而 Step 16 最终复审仍将其视为阻断缺陷。
+- 原生 Codex backend 现在与兼容 runner 一致，在未显式指定模型时继承
+  `CODEX_MODEL`，避免配置模型失败后的内置 Codex 重试静默切换模型。
+- 项目级 `gate2_delivery_override.json` 现在同时覆盖原生 Step 13/16 的评委判退与
+  评委基础设施失败：保留真实 verdict/错误证据且不生成虚假 PASS receipt，流程不再
+  回退并继续摘要、润色和交付，最终状态明确归类为 `GATE2_OVERRIDE_DELIVERED`。
+- Step 14 摘要提示不再硬编码“Gate 2 已 PASS”；override 交付必须读取并保留真实
+  verdict 与未解决问题，避免后续 agent 把治理旁路误述为质量通过。
 - Worker lease 现在在 SQLite transition 内同时核对 PID 与 lease；连续 Step
   执行期间保持 `RUNNING`，任何存活 Worker 都会阻止重复 start，失去 lease
   的旧 Worker 以 `RunnerLeaseLost` 退出且不能提交后续事件。

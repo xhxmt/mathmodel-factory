@@ -331,6 +331,17 @@ def evaluate(project: Path, root: Path) -> Evaluation:
             else "final paper inputs changed after the latest judge or were never final-judged"
         ),
     )
+    audit = workflow_state.final_audit_record(project)
+    final_audit_current = workflow_state.final_audit_is_current(project)
+    ev.add(
+        "final_audit_current",
+        final_audit_current,
+        (
+            f"snapshot audit {audit.get('status')} matches final submission"
+            if final_audit_current
+            else "snapshot-bound final audit missing, non-deliverable, or stale"
+        ),
+    )
 
     methods = method_paths_in(project)
     missing_methods = sorted(path for path in methods if not (root / path).is_file())

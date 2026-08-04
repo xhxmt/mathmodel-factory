@@ -2,6 +2,10 @@
 
 **注意**: Runner 在启动本步骤前已运行覆盖度预检查(`scripts/step6_coverage_precheck.py`)。如果预检查 BLOCKED，本步骤不会被调用。如果你被调用，说明 Step 5 的基础产物已就绪，可以直接开始扫描工作。
 
+[阶段审计反馈 — 重试时必读]
+- 若 `__PROJECT_PATH__/.factory/audits/profiles/results/latest.json` 存在且 `evidence.checkpoint_step` 为 6，先读取 `evidence.checks`、`hard_failures` 和 `repair_step`。只在本步骤修复 sensitivity 产物；若 `repair_step` 指向 Step 5，则明确保留失败证据，不得篡改 baseline 数值或用灵敏度输出冒充 canonical 结果。
+- 同时读取 `__PROJECT_PATH__/audit_issue_ledger.md` 的 `## Incremental audit findings`。`AUDIT-RESULTS-*` 行由机器审计维护；修复对应产物后由 runner 重跑 Step-6 `results` profile 自动关闭，不要手工改状态。
+
 Step 6 不是装饰品 —— 缺失或敷衍灵敏度分析是 CUMCM 已识别的硬性扣分项（见 `problem/feasibility_constraints.md § 已识别的硬性扣分项` 段落），评委明确写在评分细则里。本步骤必须产出**至少一张 tornado/one-at-a-time 图 + 至少一张 scenario-comparison 图**（STEPS.md:92 强制要求），且每条扰动结论必须**反向回写到 `assumption_ledger.md`** —— 若某条假设 ±δ 扰动后结论定性翻转，状态从 `INHERITED` → `RELAXED` 并在 `sensitivity_report.md` §定性翻转记录 段落详述。
 
 **重试预算收紧**: 本步骤最多重试 3 次(而非默认 5 次)。如果第 2 次尝试仍未通过，runner 会输出详细诊断提示。请确保:

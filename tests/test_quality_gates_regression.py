@@ -173,6 +173,16 @@ def test_gate2_indeterminate_roles_route_by_responsible_stage():
     assert "else\n            echo 3" in helper
 
 
+def test_step14_prompt_does_not_fabricate_gate2_pass():
+    prompt = (Path(REPO_ROOT) / "prompts/step14_abstract.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Step 13 Gate 2 已经 PASS" not in prompt
+    assert "不得假定 Gate 2 PASS" in prompt
+    assert "gate2_delivery_override.json" in prompt
+
+
 def test_verify_step_output_rejects_step9_without_step8_5_pass(tmp_path):
     project = tmp_path / "ongoing" / "demo_step9"
     write_file(project / "problem" / "problem_brief.md", "# brief\n")
@@ -485,6 +495,28 @@ def test_verify_symbols_ignores_norm_delimiters_and_equation_labels(tmp_path):
         "\\lVert x\\rVert = t.\n"
         "\\label{eq:active_window}\n"
         "\\end{equation}\n"
+        "\\end{document}\n",
+    )
+
+    from verify_symbols import collect_symbol_metrics
+
+    metrics = collect_symbol_metrics(project, base)
+
+    assert metrics["_undefined_list"] == []
+
+
+def test_verify_symbols_ignores_unbraced_roman_unit_letter(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(
+        project / "symbol_table.md",
+        "| 符号 | 含义 |\n|---|---|\n| $T$ | temperature |\n",
+    )
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n"
+        "\\section{符号说明}\n"
+        "The temperature is $T=240\\,{}^\\circ\\mathrm C$.\n"
         "\\end{document}\n",
     )
 

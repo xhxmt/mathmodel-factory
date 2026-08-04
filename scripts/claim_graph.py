@@ -536,9 +536,11 @@ def derive_registry(project: Path, base_name: str) -> dict[str, Any]:
             )
         except (OSError, json.JSONDecodeError):
             pass
-    declared_required = quality_version == 2
+    declared_required = quality_version in {2, 3}
     if declared_required:
-        diagnostics.append("quality contract v2 requires a declared claim_registry.json")
+        diagnostics.append(
+            f"quality contract v{quality_version} requires a declared claim_registry.json"
+        )
     mode = "derived" if questions else "unavailable"
     if not questions:
         diagnostics.append("no machine-recognizable problem question headings found")
@@ -619,7 +621,7 @@ def coverage_requirements(registry: dict[str, Any], role: str) -> list[dict[str,
         requirements.append(
             {
                 "id": "claim_registry",
-                "description": "quality contract v2 requires declared claim_registry.json",
+                "description": "quality contract v2+ requires declared claim_registry.json",
                 "required_status": "included",
                 "paths": [],
             }

@@ -142,6 +142,30 @@ def build_parser() -> argparse.ArgumentParser:
     archive = sub.add_parser("archive")
     archive.add_argument("project_dir")
 
+    audit = sub.add_parser("audit")
+    audit.add_argument("project_dir")
+    audit.add_argument(
+        "--profile",
+        choices=["model", "results", "paper", "final"],
+        default="final",
+        help="Run a stage audit; only the final profile may authorize delivery.",
+    )
+    audit.add_argument(
+        "--checkpoint-step",
+        type=int,
+        help="Bind a results audit to Step 5 or Step 6 (advanced use).",
+    )
+    audit.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Audit the existing compiled PDF instead of compiling a fresh one.",
+    )
+    audit.add_argument(
+        "--no-reuse",
+        action="store_true",
+        help="Run a new audit even when the same snapshot already has a valid PASS.",
+    )
+
     solver = sub.add_parser("solver")
     solver_sub = solver.add_subparsers(dest="solver_command", required=True)
     solver_submit = solver_sub.add_parser("submit")
@@ -251,6 +275,61 @@ def main(argv: list[str] | None = None) -> int:
             state = service.archive(project)
             print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
             return 0
+        if args.command == "audit":
+            from .audit import (
+                AuditProfile,
+                AuditStatus,
+                IncrementalAuditService,
+                build_final_audit_service,
+            )
+
+            resolved = service.resolve_project(args.project_dir)
+            profile = AuditProfile(args.profile)
+            if profile is AuditProfile.FINAL:
+                if args.checkpoint_step is not None:
+                    print(
+                        "ERROR: --checkpoint-step is not valid for the final profile",
+                        file=sys.stderr,
+                    )
+                    return 2
+                outcome = build_final_audit_service(CODE_ROOT).run_project(
+                    resolved,
+                    compile_pdf=not args.no_compile,
+                    reuse_pass=not args.no_reuse,
+                )
+            else:
+                if args.no_compile:
+                    print(
+                        "ERROR: --no-compile is only valid for the final profile",
+                        file=sys.stderr,
+                    )
+                    return 2
+                if args.checkpoint_step is not None and not (
+                    profile is AuditProfile.RESULTS
+                    and args.checkpoint_step in {5, 6}
+                ):
+                    print(
+                        "ERROR: --checkpoint-step is only valid as 5 or 6 for the results profile",
+                        file=sys.stderr,
+                    )
+                    return 2
+                outcome = IncrementalAuditService(CODE_ROOT).run_project(
+                    resolved,
+                    profile,
+                    checkpoint_step=args.checkpoint_step,
+                    reuse_pass=not args.no_reuse,
+                )
+            print(
+                json.dumps(
+                    outcome.record.to_dict(),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+            )
+            if profile is AuditProfile.FINAL:
+                return 0 if outcome.record.delivery_allowed else 1
+            return 0 if outcome.record.status is AuditStatus.PASS else 1
         if args.command == "solver":
             assert project is not None
             if args.solver_command == "submit":

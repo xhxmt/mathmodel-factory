@@ -68,3 +68,87 @@ def test_cross_project_result_and_unstructured_solver_log_are_hard_failures(tmp_
     messages = [message for kind, _, message in findings if kind == "HARD_FAIL"]
     assert any("跨项目" in message for message in messages)
     assert any("solver.log" in message and "结构化" in message for message in messages)
+
+
+def test_canonical_results_must_match_selected_method_and_source(tmp_path):
+    (tmp_path / "chosen_method.md").write_text(
+        "PRIMARY: m1 family=test\n", encoding="utf-8"
+    )
+    values = tmp_path / "results/problem1/values.json"
+    values.parent.mkdir(parents=True)
+    values.write_text(
+        json.dumps(
+            {
+                "project": tmp_path.name,
+                "primary_method": "m1",
+                "solver": "solver-a",
+                "status": "FEASIBLE",
+                "provenance": {
+                    "solver": "solver-a",
+                    "repair": False,
+                    "budget": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    canonical = tmp_path / "results/canonical_results.json"
+    canonical.write_text(
+        json.dumps(
+            {
+                "project": tmp_path.name,
+                "primary_method": "m3",
+                "p1": {
+                    "primary_method": "m3",
+                    "source": "results/problem1/values.json",
+                    "status": "FEASIBLE",
+                    "objective": 1.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings, _count = check_values(str(tmp_path))
+
+    hard_messages = [message for kind, _, message in findings if kind == "HARD_FAIL"]
+    assert any("chosen_method" in message and "m1" in message and "m3" in message for message in hard_messages)
+    assert any("source primary_method=m1" in message for message in hard_messages)
+
+
+def test_current_canonical_results_require_explicit_source_path(tmp_path):
+    values = tmp_path / "results/problem1/values.json"
+    values.parent.mkdir(parents=True)
+    values.write_text(
+        json.dumps(
+            {
+                "project": tmp_path.name,
+                "primary_method": "m1",
+                "solver": "solver-a",
+                "status": "FEASIBLE",
+                "provenance": {
+                    "solver": "solver-a",
+                    "repair": False,
+                    "budget": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "results/canonical_results.json").write_text(
+        json.dumps(
+            {
+                "project": tmp_path.name,
+                "primary_method": "m1",
+                "p1": {"status": "FEASIBLE", "objective": 1.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings, _count = check_values(str(tmp_path))
+
+    assert any(
+        kind == "HARD_FAIL" and "source/source_file" in message
+        for kind, _, message in findings
+    )

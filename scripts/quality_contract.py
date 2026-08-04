@@ -17,11 +17,14 @@ from pathlib import Path
 from typing import Any
 
 
-CONTRACT_VERSIONS = {1, 2}
+CONTRACT_VERSIONS = {1, 2, 3}
 EVIDENCE_LEVELS = frozenset(
     {"factory_oracle", "dual_impl", "project_test", "self_report"}
 )
 HARD_PASS_LEVELS = frozenset({"factory_oracle", "dual_impl"})
+CONTINUOUS_TIME_PROOF_TYPES = frozenset(
+    {"event_localization", "certified_error_bound", "interval_error_bound"}
+)
 TRUSTED_FACTORY_ORACLE_FILES = frozenset(
     {
         "scripts/verify_deliverables.py",
@@ -73,7 +76,7 @@ def load_contract(path: Path) -> dict[str, Any]:
         raise ValueError("quality contract must be a JSON object")
     version = data.get("version")
     if version not in CONTRACT_VERSIONS:
-        raise ValueError("quality contract version must be 1 or 2")
+        raise ValueError("quality contract version must be 1, 2, or 3")
     if not isinstance(data.get("claims", []), list):
         raise ValueError("quality contract claims must be a list")
     if not isinstance(data.get("anomaly_checks", []), list):
@@ -91,6 +94,19 @@ def load_contract(path: Path) -> dict[str, Any]:
         severity = claim.get("severity", "advisory")
         if severity not in {"hard", "advisory"}:
             raise ValueError(f"quality contract claim {claim_id} has invalid severity")
+        constraint_domain = claim.get("constraint_domain")
+        if version == 3 and severity == "hard" and constraint_domain is None:
+            raise ValueError(
+                f"quality contract v3 hard claim {claim_id} must declare constraint_domain"
+            )
+        if constraint_domain is not None and constraint_domain not in {
+            "continuous_time",
+            "discrete",
+            "algebraic",
+        }:
+            raise ValueError(
+                f"quality contract claim {claim_id} has invalid constraint_domain"
+            )
         evidence = claim.get("evidence", [])
         if not isinstance(evidence, list):
             raise ValueError(f"quality contract claim {claim_id} evidence must be a list")
@@ -106,9 +122,9 @@ def load_contract(path: Path) -> dict[str, Any]:
                     "must be an object"
                 )
             level = item.get("level")
-            if version == 2 and level is None:
+            if version in {2, 3} and level is None:
                 raise ValueError(
-                    f"quality contract v2 claim {claim_id} evidence[{evidence_index}] "
+                    f"quality contract v{version} claim {claim_id} evidence[{evidence_index}] "
                     "must declare level"
                 )
             if level is not None and level not in EVIDENCE_LEVELS:
@@ -275,6 +291,7 @@ def evaluate_contract(
             continue
 
         configured_hard_pass_evidence = 0
+        configured_continuous_time_evidence = 0
         for item in evidence:
             argv_raw = item.get("argv") if isinstance(item, dict) else None
             evidence_type = (
@@ -296,6 +313,8 @@ def evaluate_contract(
             )
             if hard_pass_eligible:
                 configured_hard_pass_evidence += 1
+                if evidence_level == "dual_impl" or evidence_type in CONTINUOUS_TIME_PROOF_TYPES:
+                    configured_continuous_time_evidence += 1
             declared_level = item.get("level")
             if declared_level != evidence_level:
                 result.warnings.append(
@@ -362,6 +381,22 @@ def evaluate_contract(
                     message=(
                         "hard claim requires factory_oracle or structurally validated "
                         "dual_impl evidence; project_test/self_report cannot certify PASS"
+                    ),
+                )
+            )
+        if (
+            severity == "hard"
+            and claim.get("constraint_domain") == "continuous_time"
+            and configured_continuous_time_evidence == 0
+        ):
+            result.failures.append(
+                Finding(
+                    code="MISSING_CONTINUOUS_TIME_CERTIFICATE",
+                    item_id=claim_id,
+                    message=(
+                        "continuous-time hard claims require independent event localization, "
+                        "a certified interval/error bound, or structurally validated dual_impl "
+                        "evidence; rechecking the same sampled array cannot certify hard PASS"
                     ),
                 )
             )

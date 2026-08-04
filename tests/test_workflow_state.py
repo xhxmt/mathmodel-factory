@@ -18,10 +18,35 @@ def mark_final_judge_current(project: Path, base: str) -> None:
 
     write_file(project / f"{base}_paper.tex", "\\begin{document}\nfinal\n\\end{document}\n")
     write_file(project / f"{base}_paper.pdf", "pdf\n")
+    fingerprint = submission_fingerprint(project, base)
     write_file(
         project / "judge_outputs" / "final_submission.sha256",
-        submission_fingerprint(project, base) + "\n",
+        fingerprint + "\n",
     )
+    status = (
+        "OVERRIDDEN"
+        if (project / "gate2_delivery_override.json").is_file()
+        else "PASS"
+    )
+    decision = "REOPEN_REVISION_MODEL" if status == "OVERRIDDEN" else "PASS"
+    write_file(
+        project / ".factory" / "audits" / "latest.json",
+        '{"snapshot_id":"'
+        + fingerprint
+        + '","status":"'
+        + status
+        + '","profile":"final","decision":"'
+        + decision
+        + '","judge_completed":'
+        + ("false" if status == "OVERRIDDEN" else "true")
+        + ',"delivery_allowed":true}\n',
+    )
+    if status == "OVERRIDDEN":
+        write_file(
+            project / "judge_outputs" / "decision_route.json",
+            '{"effective_decision":"CONTINUE_TO_STEP16",'
+            '"quality_pass_fabricated":false}\n',
+        )
 
 
 def test_verdict_parser_uses_first_verdict_line(tmp_path):
@@ -44,6 +69,39 @@ def test_step8_5_and_gate2_pass_predicates(tmp_path):
 
     assert step8_5_passed(project) is True
     assert gate2_passed(project) is False
+
+
+def test_precheck_pass_allows_progress_but_not_delivery(tmp_path):
+    project = tmp_path / "project"
+    write_file(project / "judge_evaluation.md", "VERDICT: PRECHECK_PASS\n")
+
+    from scripts.workflow_state import (
+        gate2_delivery_allowed,
+        gate2_passed,
+        gate2_precheck_passed,
+    )
+
+    assert gate2_precheck_passed(project) is True
+    assert gate2_passed(project) is False
+    assert gate2_delivery_allowed(project) is False
+
+
+def test_final_audit_current_requires_final_profile(tmp_path):
+    project = tmp_path / "project"
+    snapshot_id = "e" * 64
+    write_file(
+        project / ".factory/audits/latest.json",
+        '{"snapshot_id":"'
+        + snapshot_id
+        + '","status":"PASS","profile":"model"}\n',
+    )
+    write_file(
+        project / "judge_outputs/final_submission.sha256", snapshot_id + "\n"
+    )
+
+    from scripts.workflow_state import final_audit_is_current
+
+    assert final_audit_is_current(project) is False
 
 
 def test_delivery_artifacts_and_step16_ready(tmp_path):

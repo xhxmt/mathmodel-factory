@@ -40,6 +40,10 @@ def gate2_passed(project: Path) -> bool:
     return gate2_verdict(project) == "PASS"
 
 
+def gate2_precheck_passed(project: Path) -> bool:
+    return gate2_verdict(project) in {"PRECHECK_PASS", "PASS"}
+
+
 def gate2_delivery_override(project: Path) -> bool:
     path = project / "gate2_delivery_override.json"
     if not path.is_file():
@@ -57,6 +61,64 @@ def gate2_delivery_override(project: Path) -> bool:
 
 def gate2_delivery_allowed(project: Path) -> bool:
     return gate2_passed(project) or gate2_delivery_override(project)
+
+
+def final_audit_record(project: Path) -> dict[str, Any]:
+    path = project / ".factory" / "audits" / "latest.json"
+    try:
+        value = json.loads(read_text(path))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def final_audit_is_current(project: Path) -> bool:
+    record = final_audit_record(project)
+    snapshot_id = record.get("snapshot_id")
+    status = record.get("status")
+    if record.get("profile") != "final":
+        return False
+    if status not in {"PASS", "OVERRIDDEN"}:
+        return False
+    if record.get("delivery_allowed") is not True:
+        return False
+    if status == "PASS" and (
+        record.get("decision") != "PASS"
+        or record.get("judge_completed") is not True
+    ):
+        return False
+    if not isinstance(snapshot_id, str) or len(snapshot_id) != 64:
+        return False
+    try:
+        int(snapshot_id, 16)
+        current = read_text(project / "judge_outputs/final_submission.sha256").strip()
+    except (OSError, ValueError):
+        return False
+    if current != snapshot_id:
+        return False
+    if status == "OVERRIDDEN":
+        ablation_path = project / "judge_outputs/final_submission.ablation.json"
+        try:
+            ablation = json.loads(read_text(ablation_path))
+        except (json.JSONDecodeError, OSError):
+            ablation = {}
+        if (
+            record.get("decision") == "ABLATE_NO_JUDGE"
+            and ablation.get("judge_executed") is False
+            and ablation.get("snapshot_id") == snapshot_id
+            and ablation.get("quality_pass_fabricated") is False
+        ):
+            return True
+        try:
+            route = json.loads(read_text(project / "judge_outputs/decision_route.json"))
+        except (json.JSONDecodeError, OSError):
+            return False
+        return (
+            gate2_delivery_override(project)
+            and route.get("effective_decision") == "CONTINUE_TO_STEP16"
+            and route.get("quality_pass_fabricated") is False
+        )
+    return True
 
 
 def step8_5_verdict(project: Path) -> str | None:
@@ -91,6 +153,7 @@ def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:
         delivery_artifacts_ready(root, resolved_base)
         and gate2_delivery_allowed(project)
         and step8_5_passed(project)
+        and final_audit_is_current(project)
         and final_judge_is_current(project, resolved_base)
     )
 
@@ -100,9 +163,12 @@ def collect_state(project: Path, root: Path, base: str | None = None) -> dict[st
     return {
         "base": resolved_base,
         "gate2_verdict": gate2_verdict(project),
+        "gate2_precheck_passed": gate2_precheck_passed(project),
         "gate2_passed": gate2_passed(project),
         "gate2_delivery_override": gate2_delivery_override(project),
         "gate2_delivery_allowed": gate2_delivery_allowed(project),
+        "final_audit": final_audit_record(project),
+        "final_audit_current": final_audit_is_current(project),
         "step8_5": collect_step8_5_state(project),
         "delivery_artifacts_ready": delivery_artifacts_ready(root, resolved_base),
         "final_submission_judge_current": final_judge_is_current(project, resolved_base),

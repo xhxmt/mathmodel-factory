@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,13 +75,25 @@ class ParallelProposalStep:
                         failures.append(stream)
                 except Exception:
                     failures.append(stream)
-        validation = self.validator.validate(context)
-        if validation.is_valid:
+        failures.sort()
+        if not failures:
             return ExecutionResult.succeeded(streams=streams)
+        missing_artifacts = sorted(
+            relative
+            for stream in failures
+            for relative in (
+                f"m{stream}_spec.md",
+                f"m{stream}_demo_result.json",
+                f"m{stream}_critique.md",
+            )
+            if not (context.project_dir / relative).is_file()
+        )
         return ExecutionResult.failed(
-            "TRANSIENT_PARALLEL_PROPOSALS",
+            "TRANSIENT_ARTIFACT_MISSING"
+            if missing_artifacts
+            else "TRANSIENT_PARALLEL_PROPOSALS",
             failed_streams=failures,
-            reason=validation.reason,
+            missing_artifacts=missing_artifacts,
         )
 
     def _run_stream(self, context, stream: int, last_stream: bool) -> bool:
@@ -250,11 +263,113 @@ class JudgeStep:
     def execute(self, context) -> ExecutionResult:
         project = context.project_dir
         if os.getenv("ABLATE_NO_JUDGE", "0").lower() in {"1", "true", "yes", "on"}:
+            verdict = "PRECHECK_PASS" if context.step_id == 13 else "PASS"
             (project / "judge_evaluation.md").write_text(
-                "VERDICT: PASS\n\nAblation: automated judge disabled.\n",
+                f"VERDICT: {verdict}\n\nAblation: automated judge disabled.\n",
                 encoding="utf-8",
             )
             return ExecutionResult.succeeded(ablation="ABLATE_NO_JUDGE")
+        prepared = self.prepare_packets(context)
+        if prepared.returncode != 0:
+            return (
+                self._continue_after_failure(project, "packet", prepared)
+                or prepared
+            )
+        if context.step_id == 13:
+            return self.execute_precheck(context)
+        return self.execute_prepared(context)
+
+    def execute_precheck(self, context) -> ExecutionResult:
+        """Run the in-loop math precheck; full three-role review belongs to final audit."""
+
+        project = context.project_dir
+        role_result = self._run_role_with_retry(
+            context, "math", self.ROLE_PROMPTS["math"]
+        )
+        if role_result.returncode != 0:
+            return (
+                self._continue_after_failure(project, "precheck:math", role_result)
+                or role_result
+            )
+        source_verdict = _verdict(project / "judge_outputs" / "math.md")
+        if source_verdict == "PASS":
+            verdict = "PRECHECK_PASS"
+            self._write_precheck(project, verdict, source_verdict, role_result.metadata)
+            return ExecutionResult.succeeded(
+                judge_completed=False,
+                precheck_completed=True,
+                judge_verdict=verdict,
+                reviewed_roles=["math"],
+                **role_result.metadata,
+            )
+        if source_verdict == "FAIL":
+            verdict = "REOPEN_REVISION_MODEL"
+            self._write_precheck(project, verdict, source_verdict, role_result.metadata)
+            return ExecutionResult.succeeded(
+                resume_after_step=self.validator._gate2_resume(project, verdict),
+                judge_completed=False,
+                precheck_completed=True,
+                judge_verdict=verdict,
+                reviewed_roles=["math"],
+                **role_result.metadata,
+            )
+
+        verdict = "INDETERMINATE_REVIEW"
+        self._write_precheck(project, verdict, source_verdict, role_result.metadata)
+        failure = ExecutionResult.failed(
+            "TRANSIENT_JUDGE_INDETERMINATE",
+            returncode=1,
+            judge_completed=False,
+            precheck_completed=True,
+            judge_verdict=verdict,
+            reviewed_roles=["math"],
+            source_verdict=source_verdict or "MISSING",
+            **role_result.metadata,
+        )
+        return (
+            self._continue_after_failure(project, "precheck:math", failure)
+            or failure
+        )
+
+    @staticmethod
+    def _write_precheck(
+        project: Path,
+        verdict: str,
+        source_verdict: str,
+        metadata: dict[str, object],
+    ) -> None:
+        outputs = project / "judge_outputs"
+        outputs.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": "judge-precheck-v1",
+            "review_mode": "math_only",
+            "verdict": verdict,
+            "source_role": "math",
+            "source_verdict": source_verdict or "MISSING",
+            "model_id": metadata.get("model_id"),
+            "backend": metadata.get("backend"),
+            "quality_pass_fabricated": False,
+            "delivery_allowed": False,
+        }
+        (outputs / "precheck.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        (project / "judge_evaluation.md").write_text(
+            f"VERDICT: {verdict}\n\n"
+            "Step 13 preliminary math-only review. Full math, execution, and paper "
+            "review is owned by the final audit.\n\n"
+            "```json\n"
+            + json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n```\n",
+            encoding="utf-8",
+        )
+
+    def prepare_packets(self, context) -> ExecutionResult:
+        """Build deterministic judge inputs without invoking a judge model."""
+
+        project = context.project_dir
         (project / "judge_packets").mkdir(parents=True, exist_ok=True)
         (project / "judge_outputs").mkdir(parents=True, exist_ok=True)
         commands = [
@@ -282,16 +397,154 @@ class JudgeStep:
                 return ExecutionResult.failed(
                     "TRANSIENT_JUDGE_PACKET", returncode=result.returncode, command=label
                 )
+        return ExecutionResult.succeeded(packets_prepared=True)
+
+    def execute_prepared(self, context) -> ExecutionResult:
+        """Run isolated roles against packets prepared for this content snapshot."""
+
+        project = context.project_dir
         for role, template in self.ROLE_PROMPTS.items():
-            result = self._run_role(context, role, template)
+            result = self._run_role_with_retry(context, role, template)
             if result.returncode != 0:
-                return result
+                return self._continue_after_failure(project, f"role:{role}", result) or result
         bound = self.runner.python(
             self.factory_root,
             project,
             "scripts/judgment_receipt.py",
             ["bind-group", project],
             label="judge_bind_group",
+            timeout_seconds=120,
+        )
+        if not bound.accepted:
+            failure = ExecutionResult.failed(
+                "TRANSIENT_JUDGE_PROVENANCE", returncode=bound.returncode
+            )
+            return self._continue_after_failure(project, "bind_group", failure) or failure
+        aggregate = self.runner.python(
+            self.factory_root,
+            project,
+            "scripts/aggregate_judges.py",
+            [
+                "--math", project / "judge_outputs/math.md",
+                "--execution", project / "judge_outputs/execution.md",
+                "--paper", project / "judge_outputs/paper.md",
+                "--math-manifest", project / "judge_packets/math/manifest.json",
+                "--execution-manifest", project / "judge_packets/execution/manifest.json",
+                "--paper-manifest", project / "judge_packets/paper/manifest.json",
+                "--output", project / "judge_evaluation.md",
+                "--json", project / "judge_outputs/aggregate.json",
+                "--base", project.name,
+            ],
+            label="judge_aggregate",
+            timeout_seconds=300,
+        )
+        if not aggregate.accepted:
+            failure = ExecutionResult.failed(
+                "TRANSIENT_JUDGE_AGGREGATION", returncode=aggregate.returncode
+            )
+            return self._continue_after_failure(project, "aggregate", failure) or failure
+        validation = self.validator.validate(context)
+        if (
+            not validation.is_valid
+            and validation.metadata.get("normalized_verdict") == "INFRA_RETRY"
+        ):
+            retried_roles = self._indeterminate_roles(project)
+            if retried_roles:
+                for role in retried_roles:
+                    result = self._run_role_with_retry(
+                        context, role, self.ROLE_PROMPTS[role]
+                    )
+                    if result.returncode != 0:
+                        return self._continue_after_failure(
+                            project, f"role:{role}", result
+                        ) or result
+                failure = self._reaggregate(project)
+                if failure is not None:
+                    return self._continue_after_failure(
+                        project, "aggregate_retry", failure
+                    ) or failure
+                validation = self.validator.validate(context)
+                if (
+                    not validation.is_valid
+                    and validation.metadata.get("normalized_verdict") == "INFRA_RETRY"
+                ):
+                    retry_metadata = {
+                        key: value
+                        for key, value in validation.metadata.items()
+                        if key != "error_class"
+                    }
+                    failure = ExecutionResult.failed(
+                        "PERMANENT_JUDGE_INFRASTRUCTURE",
+                        returncode=2,
+                        exhausted_error_class=str(
+                            validation.metadata.get("error_class")
+                            or "TRANSIENT_JUDGE_INFRASTRUCTURE"
+                        ),
+                        retried_roles=retried_roles,
+                        **retry_metadata,
+                    )
+                    return self._continue_after_failure(
+                        project, "aggregate_retry", failure
+                    ) or failure
+        resume_after = validation.metadata.get("resume_after_step")
+        verdict = _verdict(project / "judge_evaluation.md")
+        result_metadata = {
+            "judge_verdict": verdict,
+            "judge_completed": True,
+            "gate2_delivery_override": self._record_delivery_override(
+                project, verdict, stage="aggregate"
+            ),
+        }
+        if resume_after is not None:
+            return ExecutionResult.succeeded(
+                resume_after_step=int(resume_after), **result_metadata
+            )
+        if not validation.is_valid:
+            error_class = str(
+                validation.metadata.get("error_class")
+                or "TRANSIENT_JUDGE_INFRASTRUCTURE"
+            )
+            failure_metadata = {
+                key: value
+                for key, value in validation.metadata.items()
+                if key != "error_class"
+            }
+            failure = ExecutionResult.failed(
+                error_class,
+                returncode=2,
+                **failure_metadata,
+                **result_metadata,
+            )
+            return self._continue_after_failure(project, "aggregate", failure) or failure
+        return ExecutionResult.succeeded(**result_metadata)
+
+    def _run_role_with_retry(
+        self, context, role: str, template: str
+    ) -> ExecutionResult:
+        last = ExecutionResult.failed(
+            "TRANSIENT_JUDGE_ROLE", returncode=1, role=role
+        )
+        for role_attempt in (1, 2):
+            last = self._run_role(context, role, template)
+            if last.returncode == 0:
+                return ExecutionResult.succeeded(
+                    **last.metadata, role_attempts=role_attempt
+                )
+        return ExecutionResult.failed(
+            "PERMANENT_JUDGE_INFRASTRUCTURE",
+            returncode=last.returncode,
+            exhausted_error_class=last.error_class,
+            role_attempts=2,
+            **last.metadata,
+        )
+
+    def _reaggregate(self, project: Path) -> ExecutionResult | None:
+        bound = self.runner.python(
+            self.factory_root,
+            project,
+            "scripts/judgment_receipt.py",
+            ["bind-group", project],
+            label="judge_bind_group_retry",
             timeout_seconds=120,
         )
         if not bound.accepted:
@@ -313,27 +566,107 @@ class JudgeStep:
                 "--json", project / "judge_outputs/aggregate.json",
                 "--base", project.name,
             ],
-            label="judge_aggregate",
+            label="judge_aggregate_retry",
             timeout_seconds=300,
         )
         if not aggregate.accepted:
             return ExecutionResult.failed(
                 "TRANSIENT_JUDGE_AGGREGATION", returncode=aggregate.returncode
             )
-        validation = self.validator.validate(context)
-        resume_after = validation.metadata.get("resume_after_step")
-        if resume_after is not None:
-            return ExecutionResult.succeeded(
-                resume_after_step=int(resume_after), judge_verdict=_verdict(project / "judge_evaluation.md")
+        return None
+
+    @staticmethod
+    def _indeterminate_roles(project: Path) -> list[str]:
+        try:
+            aggregate = json.loads(
+                (project / "judge_outputs/aggregate.json").read_text(encoding="utf-8")
             )
-        return ExecutionResult.succeeded(judge_verdict=_verdict(project / "judge_evaluation.md"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        declared = aggregate.get("indeterminate_roles")
+        if not isinstance(declared, list):
+            return []
+        return [role for role in JudgeStep.ROLE_PROMPTS if role in declared]
+
+    @staticmethod
+    def _delivery_override_active(project: Path) -> bool:
+        path = project / "gate2_delivery_override.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        return bool(
+            payload.get("enabled") is True
+            and payload.get("scope") == "continue_to_step16"
+            and str(payload.get("reason", "")).strip()
+        )
+
+    @classmethod
+    def _record_delivery_override(
+        cls,
+        project: Path,
+        verdict: str,
+        *,
+        stage: str,
+        error_class: str = "",
+        returncode: int | None = None,
+    ) -> bool:
+        """Record an explicit continuation without changing the Gate 2 verdict."""
+        if not cls._delivery_override_active(project):
+            return False
+        log_path = project / "logs" / "gate2_continuation_override.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        failure = ""
+        if error_class:
+            failure = f" error_class={error_class} returncode={returncode};"
+        with log_path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
+                f"Gate2 stage={stage} verdict={verdict or 'MISSING'};{failure} "
+                "user continuation override active; scope=continue_to_step16; "
+                "quality PASS not fabricated.\n"
+            )
+        return True
+
+    @classmethod
+    def _continue_after_failure(
+        cls, project: Path, stage: str, failure: ExecutionResult
+    ) -> ExecutionResult | None:
+        verdict = _verdict(project / "judge_evaluation.md")
+        if not cls._record_delivery_override(
+            project,
+            verdict,
+            stage=stage,
+            error_class=failure.error_class,
+            returncode=failure.returncode,
+        ):
+            return None
+        return ExecutionResult.succeeded(
+            judge_completed=False,
+            judge_verdict=verdict,
+            judge_failure_stage=stage,
+            judge_error_class=failure.error_class,
+            judge_returncode=failure.returncode,
+            gate2_delivery_override=True,
+        )
 
     def _run_role(self, context, role: str, template: str) -> ExecutionResult:
         project = context.project_dir
         output = project / "judge_outputs" / f"{role}.md"
         snapshot = project / "judge_outputs" / f"{role}.rendered_prompt.txt"
+        output.parent.mkdir(parents=True, exist_ok=True)
         prompt = self.renderer.render(template, project, step_key=f"13_{role}")
+        prompt += self._phase_instructions(context.step_id, role)
         snapshot.write_text(prompt, encoding="utf-8")
+        final_response = project / "tmp" / "native_judges" / role / "final_response.md"
+        final_response.parent.mkdir(parents=True, exist_ok=True)
+        for stale in (
+            output,
+            output.with_suffix(output.suffix + ".llm-result.json"),
+            output.with_name(f"{role}.grounding.json"),
+            final_response,
+        ):
+            stale.unlink(missing_ok=True)
         result = self.dispatcher.execute(
             ModelRequest(
                 project_dir=project,
@@ -350,14 +683,26 @@ class JudgeStep:
                 ),
                 effective_prompt_file=snapshot,
                 isolated=True,
-                final_response_file=output,
+                final_response_file=final_response,
             ),
             step_key=13,
             defaults=self.contract.default_models,
         )
+        if not _verdict(output) and _verdict(final_response):
+            shutil.copyfile(final_response, output)
         if result.returncode != 0 or not output.is_file() or not _verdict(output):
+            missing_artifacts = []
+            if not output.is_file():
+                missing_artifacts.append(str(output.relative_to(project)))
+            elif not _verdict(output):
+                missing_artifacts.append(f"{output.relative_to(project)}::VERDICT")
             return ExecutionResult.failed(
-                "TRANSIENT_JUDGE_ROLE", returncode=result.returncode or 1, role=role
+                "TRANSIENT_JUDGE_ROLE",
+                returncode=result.returncode or 1,
+                role=role,
+                dispatcher_error_class=result.error_class,
+                missing_artifacts=missing_artifacts,
+                **result.metadata,
             )
         model_id = str(result.metadata.get("model_id") or self.contract.default_models[0])
         backend = str(result.metadata.get("backend") or "unknown")
@@ -385,6 +730,41 @@ class JudgeStep:
             )
         return ExecutionResult.succeeded(role=role, model_id=model_id, backend=backend)
 
+    @staticmethod
+    def _phase_instructions(step_id: int, role: str) -> str:
+        instructions = [
+            "",
+            "NATIVE ISOLATED JUDGE OUTPUT CONTRACT:",
+            "- These role-specific instructions override any general startup request to read "
+            "project guides, human review, memory, git status, or worktrees.",
+            "- Do not read those general project files. The only permitted inputs are exactly "
+            f"judge_packets/{role}/context.txt, judge_packets/{role}/manifest.json, and "
+            "judge_packets/objective_evidence.json.",
+            f"- The generic paths judge_packets/context.txt and judge_packets/manifest.json do "
+            f"not exist. Never omit the {role}/ directory.",
+            "- Write only the required judge output file.",
+            "- Return the exact same protocol text as the final response; do not return a summary.",
+        ]
+        if role == "paper" and step_id == 13:
+            instructions.extend(
+                [
+                    "- REVIEW_PHASE: PROVISIONAL_STEP_13.",
+                    "- Step 14 has deliberately not run yet. The exact LaTeX abstract placeholder "
+                    "required by the workflow is expected at this phase.",
+                    "- Exclude that expected abstract placeholder from scoring and do not report it "
+                    "as an issue or use it to determine the verdict.",
+                ]
+            )
+        elif role == "paper":
+            instructions.extend(
+                [
+                    "- REVIEW_PHASE: FINAL_SUBMISSION.",
+                    "- Step 14 and Step 15 must already be complete. Any remaining abstract "
+                    "placeholder is a blocking delivery defect.",
+                ]
+            )
+        return "\n".join(instructions) + "\n"
+
     def validate(self, context):
         return self.validator.validate(context)
 
@@ -400,6 +780,7 @@ class DeliveryStep:
     validator: NativeArtifactValidator
     runner: CommandRunner
     fingerprinter: Callable[[Path, str], str] | None = None
+    audit_service: object | None = None
 
     def prepare(self, context):
         return prepare_human_gates(context.project_dir, context.step_id)
@@ -407,134 +788,31 @@ class DeliveryStep:
     def execute(self, context) -> ExecutionResult:
         project = context.project_dir
         base = project.name
-        cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
-        if cleanup.is_file():
-            self.runner.python(
-                self.factory_root,
-                project,
-                "scripts/cleanup_project_artifacts.py",
-                [project],
-                label="delivery_cleanup",
-                timeout_seconds=300,
-                accepted=(0, 1),
-            )
-        if self._has_stub(project) or self._unresolved_blocking(project):
-            return ExecutionResult.failed("PERMANENT_DELIVERY_ACCEPTANCE", returncode=2)
-        checks = [
-            (
-                "scripts/verify_provenance.py",
-                [project],
-                "provenance_verification",
-                project / "provenance_verification.latest.txt",
-                (0,),
-            ),
-            (
-                "scripts/verify_quality_contract.py",
-                [
-                    project,
-                    "--factory-root", self.factory_root,
-                    "--json-out", project / "quality_contract_verification.latest.json",
-                    "--text-out", project / "quality_contract_verification.latest.txt",
-                ],
-                "quality_contract_verification",
-                project / "logs/native_quality_contract.log",
-                (0, 2),
-            ),
-        ]
-        for script, args, label, log_path, accepted in checks:
-            result = self.runner.python(
-                self.factory_root,
-                project,
-                script,
-                args,
-                label=label,
-                timeout_seconds=600,
-                accepted=accepted,
-                log_path=log_path,
-            )
-            if not result.accepted:
-                return ExecutionResult.failed(
-                    "PERMANENT_DELIVERY_ACCEPTANCE", returncode=result.returncode, check=label
-                )
-        compile_result = self.runner.run(
-            project,
-            [self.factory_root / "compile_paper.sh", project, base],
-            label="compile_paper",
-            timeout_seconds=1_800,
-            cwd=self.factory_root,
-        )
-        pdf = project / f"{base}_paper.pdf"
-        if not compile_result.accepted or not pdf.is_file() or pdf.stat().st_size == 0:
-            return ExecutionResult.failed("TRANSIENT_COMPILATION", returncode=compile_result.returncode)
-        visual_args: list[str | Path] = [pdf, "--output", project / "judge_outputs/visual_gate.json"]
-        tex_log = project / f"{base}_paper.log"
-        if tex_log.is_file():
-            visual_args.extend(["--tex-log", tex_log])
-        visual = self.runner.python(
-            self.factory_root,
-            project,
-            "scripts/pdf_visual_gate.py",
-            visual_args,
-            label="pdf_visual_gate",
-            timeout_seconds=600,
-            accepted=(0, 1, 2),
-        )
-        if not visual.accepted:
-            return ExecutionResult.failed("TRANSIENT_VISUAL_GATE", returncode=visual.returncode)
-        judge = self.judge_step.execute(context)
-        if judge.returncode != 0:
-            return judge
-        if judge.metadata.get("resume_after_step") is not None:
-            return judge
-        route = self.runner.python(
-            self.factory_root,
-            project,
-            "scripts/judge_decision_router.py",
-            [
-                "--aggregate", project / "judge_outputs/aggregate.json",
-                "--visual-gate", project / "judge_outputs/visual_gate.json",
-                "--policy-mode", os.getenv("JUDGE_POLICY_MODE", "shadow").lower(),
-                "--output", project / "judge_outputs/decision_route.json",
-            ],
-            label="judge_route",
-            timeout_seconds=120,
-        )
-        if not route.accepted:
-            return ExecutionResult.failed("TRANSIENT_JUDGE_ROUTING", returncode=route.returncode)
-        decision = self._decision(project)
-        if decision in {"REOPEN_REVISION_TEXT", "REOPEN_REVISION_MODEL"}:
-            resume = 11 if decision == "REOPEN_REVISION_TEXT" else self.validator._gate2_resume(project, decision)
-            return ExecutionResult.succeeded(resume_after_step=resume, final_decision=decision)
-        if decision != "PASS":
-            return ExecutionResult.failed("PERMANENT_FINAL_JUDGE", returncode=2, decision=decision)
-        if self.fingerprinter is None:
-            from scripts.submission_fingerprint import submission_fingerprint
+        if self.audit_service is None:
+            from ..audit.service import FinalAuditService
 
-            fingerprint = submission_fingerprint(project, base)
-        else:
-            fingerprint = self.fingerprinter(project, base)
-        for command, args, label in (
-            (
-                "scripts/judgment_receipt.py",
-                ["build", project, "--base", base, "--input-fingerprint", fingerprint],
-                "receipt_build",
-            ),
-            (
-                "scripts/judgment_receipt.py",
-                ["verify", project, "--base", base, "--input-fingerprint", fingerprint, "--require-pass"],
-                "receipt_verify",
-            ),
-        ):
-            result = self.runner.python(
+            audit_service = FinalAuditService(
                 self.factory_root,
-                project,
-                command,
-                args,
-                label=label,
-                timeout_seconds=180,
+                self.judge_step,
+                getattr(self.judge_step, "validator", self.validator),
+                self.runner,
+                self.fingerprinter,
             )
-            if not result.accepted:
-                return ExecutionResult.failed("PERMANENT_JUDGMENT_RECEIPT", returncode=result.returncode)
+        else:
+            audit_service = self.audit_service
+        outcome = audit_service.run(context)
+        audit = outcome.execution
+        if audit.returncode != 0 or audit.metadata.get("resume_after_step") is not None:
+            return audit
+        if not outcome.record.delivery_allowed:
+            return ExecutionResult.failed(
+                "PERMANENT_AUDIT_NOT_APPROVED",
+                returncode=2,
+                audit_status=outcome.record.status.value,
+                audit_snapshot=outcome.snapshot.snapshot_id,
+            )
+
+        pdf = project / f"{base}_paper.pdf"
         papers = self.factory_root / "papers"
         papers.mkdir(parents=True, exist_ok=True)
         published = papers / f"{base}_paper.pdf"
@@ -551,10 +829,24 @@ class DeliveryStep:
         )
         if not package.accepted:
             return ExecutionResult.failed("PERMANENT_PACKAGING", returncode=package.returncode)
-        (project / "judge_outputs/final_submission.sha256").write_text(
-            fingerprint + "\n", encoding="ascii"
+
+        cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
+        if cleanup.is_file():
+            self.runner.python(
+                self.factory_root,
+                project,
+                "scripts/cleanup_project_artifacts.py",
+                [project],
+                label="delivery_cleanup",
+                timeout_seconds=300,
+                accepted=(0, 1),
+            )
+        return ExecutionResult.succeeded(
+            **audit.metadata,
+            input_fingerprint=outcome.snapshot.snapshot_id,
+            published_pdf=str(published),
+            submission_zip=str(papers / f"{base}_submission.zip"),
         )
-        return ExecutionResult.succeeded(input_fingerprint=fingerprint)
 
     def validate(self, context):
         return self.validator.validate(context)
@@ -563,25 +855,9 @@ class DeliveryStep:
         return _recover(self.validator, context)
 
     @staticmethod
-    def _has_stub(project: Path) -> bool:
-        models = project / "models"
-        return models.is_dir() and any(models.rglob("*.stub"))
+    def _decision(project: Path, *, prefer_new: bool = False) -> str:
+        """Compatibility alias; decision routing is owned by the audit service."""
 
-    @staticmethod
-    def _unresolved_blocking(project: Path) -> bool:
-        ledger = project / "audit_issue_ledger.md"
-        if not ledger.is_file():
-            return False
-        for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
-            cells = [cell.strip().replace("*", "").replace("`", "") for cell in line.split("|")]
-            if len(cells) > 6 and cells[3].upper() == "BLOCKING" and "RESOLVED" not in cells[6].upper():
-                return True
-        return False
+        from ..audit.service import FinalAuditService
 
-    @staticmethod
-    def _decision(project: Path) -> str:
-        try:
-            value = json.loads((project / "judge_outputs/decision_route.json").read_text(encoding="utf-8"))
-            return str(value.get("effective_decision", ""))
-        except (OSError, json.JSONDecodeError, AttributeError):
-            return ""
+        return FinalAuditService._decision(project, prefer_new=prefer_new)
