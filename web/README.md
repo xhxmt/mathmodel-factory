@@ -13,11 +13,11 @@
 
 ## 当前能力
 
-- 未登录访客只能浏览 `SHOWCASE_PROJECTS` 白名单中的完成论文及 PDF。
+- 管理员可分别配置未登录访客和具体注册用户可阅读的完成论文；展示 ACL 与项目控制 ACL 独立。
 - 用户可注册账号；新账号默认是 `pending`，管理员审批后才能登录。
 - 认证和审批状态持久化在 `web/auth.db`，密码使用 bcrypt 哈希。
 - 普通用户提交项目申请，管理员审批后创建项目并写入项目 ACL；普通用户只能看到获授权项目，管理员可见全部项目。
-- 管理员可直接创建项目，并管理用户、项目申请、Secret Manager 元数据状态和审计日志。
+- 管理员可直接创建项目，并管理用户、项目申请、完成论文展示权限、Secret Manager 元数据状态和审计日志。
 - Dashboard 将题目内容相同的多次运行按 canonical SHA-256 身份聚合为一个“题目归档”。这只是展示层分组，不移动或改名 `ongoing/`、`complete/` 中的目录。
 - 进行中的运行可暂停、恢复或终止；完成归档保持只读。
 - 人工咨询和 Step 3 方法选择可在 Web 中完成。CLI 路径始终保留，见下文。
@@ -57,7 +57,7 @@ cd /home/tfisher/paper_factory/web
 
 ### 访客
 
-访客进入公开论文展厅，只能读取 `SHOWCASE_PROJECTS` 中存在于 `complete/` 的项目及其最终 PDF，不能查看内部项目、日志或控制动作。
+访客进入公开论文展厅，只能读取管理员授予“默认未登录用户”的完成项目最终 PDF，不能查看内部项目、日志或控制动作。
 
 ### 普通用户
 
@@ -65,7 +65,7 @@ cd /home/tfisher/paper_factory/web
 2. 等待管理员审批；`pending`、`rejected` 或 `disabled` 用户不能登录。
 3. 上传 PDF、Markdown 或压缩包，并提交项目申请。
 4. 管理员审批后，项目由 `FactoryService` 创建，申请人获得该项目的 owner ACL。
-5. 用户只能查看和控制自己获授权的项目。
+5. 用户只能查看和控制 owner ACL 授权的项目；另可在只读展厅查看公共论文及管理员单独授予自己的论文。
 
 ### 管理员
 
@@ -73,8 +73,11 @@ cd /home/tfisher/paper_factory/web
 
 - 审批、拒绝、禁用或删除普通用户；`admin` 自身不能被删除。
 - 审批或拒绝项目申请，也可直接创建项目。
+- 在 `complete/` 中带最终 PDF 的项目范围内，按默认访客或具体注册用户维护展示权限。
 - 查看全部项目、Secret Manager 元数据健康状态和最近审计记录。
 - 对进行中的项目执行暂停、恢复和终止。
+
+展示权限持久化在 `web/auth.db` 的独立 ACL 中。`SHOWCASE_PROJECTS` 仅在数据库首次升级到该结构时初始化默认访客集合；初始化完成后，包括空集合在内的管理员配置都不会再被环境变量覆盖。注册用户看到访客公共集合与个人授权集合的并集。
 
 ## 上传与创建项目
 
@@ -135,6 +138,8 @@ revision；过期页面会收到 `409`，不会写入旧决策或启动 worker�
 - `POST /api/auth/login`
 - `GET /api/auth/me`
 - `POST /api/auth/logout`
+- `GET /api/showcase/user-papers`
+- `GET /api/showcase/user-papers/{base_name}/pdf`
 
 项目与申请：
 
@@ -151,6 +156,8 @@ revision；过期页面会收到 `409`，不会写入旧决策或启动 worker�
 - `GET /api/admin/users`
 - `POST /api/admin/users/{username}/approve|reject|disable`
 - `DELETE /api/admin/users/{username}`
+- `GET /api/admin/showcase`
+- `PUT /api/admin/showcase/audiences/{audience_id}`
 - `GET /api/admin/ops/secrets`
 - `GET /api/admin/audit-log`
 

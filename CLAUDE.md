@@ -279,8 +279,10 @@ Authentication and approvals are persisted in SQLite at `web/auth.db` through
 `web/backend/auth_store.py`. Passwords are bcrypt hashes. Registration creates
 a pending user; administrators approve users and project requests. A non-admin
 user sees and manages only projects granted through `project_acl`, while an
-administrator can manage all projects. Unauthenticated visitors can only use
-the read-only showcase configured by `SHOWCASE_PROJECTS`.
+administrator can manage all projects. Read-only paper visibility is a separate
+`showcase_acl`: visitors use the `guest` audience, and active users inherit that
+public set plus their personal grants. `SHOWCASE_PROJECTS` seeds the guest
+audience only when an existing database is first upgraded to this contract.
 
 Engine project creation, lifecycle controls, and solver policy call
 `FactoryService` directly. FastAPI owns authentication, ACL checks, and HTTP

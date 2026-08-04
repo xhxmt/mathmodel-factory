@@ -201,6 +201,24 @@ class ShowcasePaper(BaseModel):
     pdf_url: str
 
 
+class ShowcaseAudience(BaseModel):
+    id: str
+    kind: str
+    username: str | None = None
+    display_name: str = ""
+    status: str = ""
+    base_names: list[str] = []
+
+
+class ShowcaseAdminConfig(BaseModel):
+    candidates: list[ShowcasePaper] = []
+    audiences: list[ShowcaseAudience] = []
+
+
+class ShowcaseVisibilityUpdate(BaseModel):
+    base_names: list[str] = []
+
+
 class ConsultationRequest(BaseModel):
     gate: str
     step: int

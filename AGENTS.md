@@ -43,8 +43,10 @@ and update the current document. Do not silently preserve two current answers.
 - Registration creates a pending user. Administrators approve users and project
   requests. Non-admin users see and control only projects granted through the
   project ACL; administrators see all projects.
-- Unauthenticated access is limited to the read-only paper showcase configured
-  by `SHOWCASE_PROJECTS`.
+- Showcase visibility is persisted separately from project control ACLs.
+  Unauthenticated visitors see the `guest` audience; active users see that
+  public set plus their own grants. `SHOWCASE_PROJECTS` only seeds the guest
+  audience on the first database upgrade.
 - The dashboard groups repeated runs of the same contained problem statement by
   a canonical SHA-256 problem identity. `ongoing/` and `complete/` remain the
   storage/runtime truth; the UI grouping is not a data migration.

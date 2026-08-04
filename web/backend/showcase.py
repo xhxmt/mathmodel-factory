@@ -57,10 +57,29 @@ def _updated_at(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
 
 
-def list_showcase_papers(settings: Settings) -> list[ShowcasePaper]:
+def list_completed_showcase_papers(
+    settings: Settings,
+    *,
+    pdf_url_prefix: str = "/api/showcase/papers",
+) -> list[ShowcasePaper]:
+    if not settings.complete_dir.is_dir():
+        return []
+    return list_showcase_papers(
+        settings,
+        [path.name for path in sorted(settings.complete_dir.iterdir()) if path.is_dir()],
+        pdf_url_prefix=pdf_url_prefix,
+    )
+
+
+def list_showcase_papers(
+    settings: Settings,
+    base_names: tuple[str, ...] | list[str] | None = None,
+    *,
+    pdf_url_prefix: str = "/api/showcase/papers",
+) -> list[ShowcasePaper]:
     papers: list[ShowcasePaper] = []
     seen: set[str] = set()
-    for base_name in settings.showcase_projects:
+    for base_name in settings.showcase_projects if base_names is None else base_names:
         if base_name in seen:
             continue
         seen.add(base_name)
@@ -74,14 +93,19 @@ def list_showcase_papers(settings: Settings) -> list[ShowcasePaper]:
                 collection="CUMCM · 完成论文",
                 updated_at=_updated_at(paper),
                 size_bytes=paper.stat().st_size,
-                pdf_url=f"/api/showcase/papers/{base_name}/pdf",
+                pdf_url=f"{pdf_url_prefix}/{base_name}/pdf",
             )
         )
     return papers
 
 
-def resolve_showcase_paper(settings: Settings, base_name: str) -> Path:
-    if base_name not in settings.showcase_projects:
+def resolve_showcase_paper(
+    settings: Settings,
+    base_name: str,
+    allowed_base_names: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> Path:
+    allowed = settings.showcase_projects if allowed_base_names is None else allowed_base_names
+    if base_name not in allowed:
         raise ShowcasePaperNotFound(base_name)
     paper = _showcase_pdf(settings, base_name)
     if paper is None:

@@ -23,7 +23,7 @@ paper-factory-api.service
 - 当前分支已完成代码审查和聚焦测试；不要从 dirty worktree 直接发布未经确认的变更。
 - `gcloud` CLI、GCP 项目和 Secret Manager IAM 可用。
 - 必需 secret（MinerU、Gemini、DeepSeek、JWT、管理员密码）已存在；只验证元数据/访问状态，不打印值或片段。
-- `web/.env` 只含非敏感运行配置，例如 `GCP_PROJECT_ID`、`CORS_ORIGINS` 和 `SHOWCASE_PROJECTS`。敏感键会使部署预检失败。
+- `web/.env` 只含非敏感运行配置，例如 `GCP_PROJECT_ID`、`CORS_ORIGINS` 和首次升级时用于初始化访客展示集合的 `SHOWCASE_PROJECTS`。初始化后展示权限由管理员页面和 `web/auth.db` 持久化；敏感键会使部署预检失败。
 - 前端构建由服务用户执行，避免 root-owned `dist/` 阻塞下一次构建。
 - 根 `.venv` 已由 `uv sync --extra web --extra models --locked` 准备；部署时不会安装 Python 依赖。
 - `pyproject.toml`、`uv.lock`、两个 requirements lock export 和前端 `package-lock.json` 完整且已审查。

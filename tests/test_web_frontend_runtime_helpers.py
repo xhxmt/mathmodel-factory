@@ -352,6 +352,39 @@ assert.deepEqual(seen, [
     assert result.returncode == 0, result.stderr
 
 
+def test_showcase_helpers_select_guest_user_and_admin_endpoints():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+globalThis.localStorage = { getItem() { return null } }
+const apiModule = await import('./web/frontend/src/lib/api.js')
+const api = apiModule.default
+const { AdminShowcase, Showcase } = apiModule
+
+const seen = []
+api.defaults.adapter = async (config) => {
+  seen.push({ method: config.method, url: config.url, data: config.data ? JSON.parse(config.data) : null })
+  return { data: config.method === 'get' ? [] : { id: 'user:alice', base_names: ['demo'] }, status: 200, statusText: 'OK', headers: {}, config }
+}
+
+await Showcase.list(false)
+await Showcase.list(true)
+await AdminShowcase.get()
+const updated = await AdminShowcase.replace('user:alice', ['demo'])
+
+assert.deepEqual(updated.base_names, ['demo'])
+assert.deepEqual(seen, [
+  { method: 'get', url: '/api/showcase/papers', data: null },
+  { method: 'get', url: '/api/showcase/user-papers', data: null },
+  { method: 'get', url: '/api/admin/showcase', data: null },
+  { method: 'put', url: '/api/admin/showcase/audiences/user%3Aalice', data: { base_names: ['demo'] } },
+])
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_use_auth_tracks_role_and_status_from_login_and_bootstrap():
     result = run_node(
         """

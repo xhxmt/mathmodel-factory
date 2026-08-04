@@ -130,6 +130,19 @@ CREATE TABLE IF NOT EXISTS project_acl (
     PRIMARY KEY (base_name, username)
 );
 
+CREATE TABLE IF NOT EXISTS showcase_acl (
+    audience TEXT NOT NULL,
+    base_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    created_by TEXT NOT NULL,
+    PRIMARY KEY (audience, base_name)
+);
+
+CREATE TABLE IF NOT EXISTS app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor TEXT NOT NULL,
@@ -315,6 +328,7 @@ class AuthStore:
 
         with self._connect() as conn:
             conn.execute("DELETE FROM project_acl WHERE username = ?", (username,))
+            conn.execute("DELETE FROM showcase_acl WHERE audience = ?", (self.showcase_user_audience(username),))
             conn.execute("DELETE FROM users WHERE username = ?", (username,))
             self._insert_audit(
                 conn,
@@ -512,6 +526,76 @@ class AuthStore:
             ).fetchall()
         return [str(row["base_name"]) for row in rows]
 
+    @staticmethod
+    def showcase_user_audience(username: str) -> str:
+        return f"user:{normalize_username(username)}"
+
+    def bootstrap_guest_showcase(self, base_names: tuple[str, ...] | list[str]) -> None:
+        """Seed the legacy env whitelist once, then leave SQLite authoritative."""
+        now = utc_now()
+        normalized: list[str] = []
+        for base_name in base_names:
+            try:
+                normalized.append(normalize_username(base_name))
+            except InvalidUsername:
+                continue
+        with self._connect() as conn:
+            initialized = conn.execute(
+                "SELECT 1 FROM app_meta WHERE key = 'showcase_acl_v1_initialized'"
+            ).fetchone()
+            if initialized is not None:
+                return
+            for base_name in sorted(set(normalized)):
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO showcase_acl (
+                        audience, base_name, created_at, created_by
+                    ) VALUES ('guest', ?, ?, 'system')
+                    """,
+                    (base_name, now),
+                )
+            conn.execute(
+                "INSERT INTO app_meta (key, value) VALUES ('showcase_acl_v1_initialized', '1')"
+            )
+
+    def list_showcase_project_names(self, audience: str) -> list[str]:
+        audience = self._normalize_showcase_audience(audience)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT base_name FROM showcase_acl WHERE audience = ? ORDER BY base_name",
+                (audience,),
+            ).fetchall()
+        return [str(row["base_name"]) for row in rows]
+
+    def replace_showcase_projects(
+        self,
+        audience: str,
+        base_names: list[str] | tuple[str, ...],
+        *,
+        actor: str,
+    ) -> list[str]:
+        audience = self._normalize_showcase_audience(audience)
+        normalized = self._normalize_project_names(base_names)
+        now = utc_now()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM showcase_acl WHERE audience = ?", (audience,))
+            conn.executemany(
+                """
+                INSERT INTO showcase_acl (audience, base_name, created_at, created_by)
+                VALUES (?, ?, ?, ?)
+                """,
+                [(audience, base_name, now, actor) for base_name in normalized],
+            )
+            self._insert_audit(
+                conn,
+                actor,
+                "showcase_acl.replace",
+                "showcase_audience",
+                audience,
+                {"base_names": normalized, "project_count": len(normalized)},
+            )
+        return normalized
+
     def list_audit_log(self) -> list[AuditLogRecord]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM audit_log ORDER BY id").fetchall()
@@ -521,6 +605,18 @@ class AuthStore:
         conn = sqlite3.connect(self.db_file)
         conn.row_factory = sqlite3.Row
         return conn
+
+    @staticmethod
+    def _normalize_showcase_audience(audience: str) -> str:
+        if audience == "guest":
+            return audience
+        if audience.startswith("user:"):
+            return AuthStore.showcase_user_audience(audience.removeprefix("user:"))
+        raise ValueError("invalid showcase audience")
+
+    @staticmethod
+    def _normalize_project_names(base_names: tuple[str, ...] | list[str]) -> list[str]:
+        return sorted({normalize_username(base_name) for base_name in base_names})
 
     def _insert_audit(
         self,

@@ -45,7 +45,7 @@ cd /home/tfisher/paper_factory/web
 
 - 管理员账号名为 `admin`，密码来自 Secret Manager；不存在默认密码。
 - 普通用户在页面注册后状态为 `pending`，需管理员审批才能登录。
-- 未登录访客只能浏览 `SHOWCASE_PROJECTS` 中的公开完成论文。
+- 未登录访客只能浏览管理员授予默认访客的公开完成论文；注册用户登录后还可浏览管理员单独授予自己的论文。
 
 ## 5. 创建项目
 

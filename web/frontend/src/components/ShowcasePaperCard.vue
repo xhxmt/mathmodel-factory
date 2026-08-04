@@ -22,12 +22,12 @@
         <span><Icon name="package" :size="11" /> {{ bytes(paper.size_bytes) }}</span>
       </div>
       <div class="paper-actions" @click.stop>
-        <a
+        <button
           class="btn btn-icon btn-sm btn-ghost"
-          :href="downloadUrl"
+          :disabled="downloading"
+          @click="downloadPaper"
           title="下载论文"
-          download
-        ><Icon name="download" :size="13" /></a>
+        ><Icon name="download" :size="13" /></button>
         <button class="btn btn-sm btn-ghost open-paper" @click="$emit('open', paper)">
           阅读 <Icon name="book-open" :size="13" />
         </button>
@@ -38,19 +38,27 @@
 
 <script>
 import Icon from './Icon.vue'
-import { Showcase, formatBytes, relativeTime } from '../lib/api.js'
+import { downloadBlob, formatBytes, relativeTime } from '../lib/api.js'
 
 export default {
   name: 'ShowcasePaperCard',
   components: { Icon },
   props: { paper: { type: Object, required: true } },
   emits: ['open'],
-  computed: {
-    downloadUrl() { return Showcase.downloadUrl(this.paper) },
+  data() {
+    return { downloading: false }
   },
   methods: {
     bytes: formatBytes,
     rel: relativeTime,
+    async downloadPaper() {
+      this.downloading = true
+      try {
+        await downloadBlob(this.paper.pdf_url, `${this.paper.base_name}_paper.pdf`)
+      } finally {
+        this.downloading = false
+      }
+    },
   },
 }
 </script>
@@ -99,7 +107,6 @@ export default {
 .paper-meta { display: flex; flex-wrap: wrap; gap: 10px; color: var(--ink-3); font-size: 10.5px; }
 .paper-meta span { display: inline-flex; align-items: center; gap: 5px; }
 .paper-actions { display: flex; align-items: center; gap: 6px; }
-.paper-actions a { text-decoration: none; }
 .open-paper { color: var(--ink); }
 .open-paper:hover { border-color: var(--live); color: var(--live); }
 

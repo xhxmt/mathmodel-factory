@@ -32,6 +32,9 @@ from .schemas import (
     ProjectRequestDecision,
     RegisterRequest,
     SelectionDecisionRequest,
+    ShowcaseAdminConfig,
+    ShowcaseAudience,
+    ShowcaseVisibilityUpdate,
     UserDecisionRequest,
     UserInfo,
     UserResponse,
@@ -39,6 +42,7 @@ from .schemas import (
     WsTicketResponse,
 )
 from .showcase_api import create_showcase_router
+from .showcase import list_completed_showcase_papers
 from .ws import ConnectionManager, create_monitor_task, create_ws_router
 
 
@@ -47,6 +51,7 @@ validate_settings(settings)
 auth_store = AuthStore(settings.resolved_auth_db_file)
 auth_store.initialize()
 auth_store.bootstrap_admin(settings.admin_password)
+auth_store.bootstrap_guest_showcase(settings.showcase_projects)
 ticket_store = WsTicketStore(ttl_seconds=60)
 manager = ConnectionManager()
 monitor_projects_task = create_monitor_task(settings, manager)
@@ -117,6 +122,36 @@ def _audit_response(record) -> AuditLogResponse:
 def _require_admin(current_user: UserInfo) -> None:
     if current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="ADMIN_REQUIRED")
+
+
+def _showcase_audience_response(user=None, available_base_names: set[str] | None = None) -> ShowcaseAudience:
+    audience_key = "guest" if user is None else auth_store.showcase_user_audience(user.username)
+    base_names = auth_store.list_showcase_project_names(audience_key)
+    if available_base_names is not None:
+        base_names = [base_name for base_name in base_names if base_name in available_base_names]
+    return ShowcaseAudience(
+        id=audience_key,
+        kind="guest" if user is None else "user",
+        username=None if user is None else user.username,
+        display_name="默认未登录用户" if user is None else user.display_name or "",
+        status="public" if user is None else user.status,
+        base_names=base_names,
+    )
+
+
+def _showcase_admin_config() -> ShowcaseAdminConfig:
+    candidates = list_completed_showcase_papers(settings)
+    available = {paper.base_name for paper in candidates}
+    audiences = [_showcase_audience_response(available_base_names=available)]
+    audiences.extend(
+        _showcase_audience_response(user, available)
+        for user in auth_store.list_users()
+        if user.role != "admin"
+    )
+    return ShowcaseAdminConfig(
+        candidates=candidates,
+        audiences=audiences,
+    )
 
 
 @app.post("/api/auth/login", response_model=LoginResponse)
@@ -253,6 +288,48 @@ async def delete_user(
     return {"status": "ok", "username": username}
 
 
+@app.get("/api/admin/showcase", response_model=ShowcaseAdminConfig)
+async def get_admin_showcase(current_user: UserInfo = Depends(get_current_user(settings))):
+    _require_admin(current_user)
+    return _showcase_admin_config()
+
+
+@app.put("/api/admin/showcase/audiences/{audience_id}", response_model=ShowcaseAudience)
+async def update_admin_showcase_audience(
+    audience_id: str,
+    request: ShowcaseVisibilityUpdate,
+    current_user: UserInfo = Depends(get_current_user(settings)),
+):
+    _require_admin(current_user)
+    user = None
+    if audience_id != "guest":
+        if not audience_id.startswith("user:"):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="USER_NOT_FOUND")
+        try:
+            user = auth_store.get_user(audience_id.removeprefix("user:"))
+        except InvalidUsername as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="USER_NOT_FOUND") from exc
+        if user is None or user.role == "admin":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="USER_NOT_FOUND")
+
+    available = {paper.base_name for paper in list_completed_showcase_papers(settings)}
+    requested = set(request.base_names)
+    invalid = sorted(requested - available)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "SHOWCASE_PROJECT_NOT_AVAILABLE", "base_names": invalid},
+        )
+
+    audience_key = "guest" if user is None else auth_store.showcase_user_audience(user.username)
+    auth_store.replace_showcase_projects(
+        audience_key,
+        sorted(requested),
+        actor=current_user.username,
+    )
+    return _showcase_audience_response(user)
+
+
 @app.get("/api/admin/ops/secrets", response_model=OpsSecretsStatus)
 async def get_admin_secret_ops(current_user: UserInfo = Depends(get_current_user(settings))):
     _require_admin(current_user)
@@ -269,7 +346,7 @@ async def list_admin_audit_log(current_user: UserInfo = Depends(get_current_user
 project_router = create_project_router(settings, ticket_store, manager)
 cloud_router = create_cloud_router(settings)
 ws_router = create_ws_router(settings, ticket_store, manager)
-showcase_router = create_showcase_router(settings)
+showcase_router = create_showcase_router(settings, auth_store)
 
 app.include_router(project_router)
 app.include_router(cloud_router)

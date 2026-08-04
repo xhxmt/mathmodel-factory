@@ -91,6 +91,14 @@ export const AdminOps = {
   auditLog: () => api.get('/api/admin/audit-log').then((r) => (Array.isArray(r.data) ? r.data : [])),
 }
 
+export const AdminShowcase = {
+  get: () => api.get('/api/admin/showcase').then((r) => r.data),
+  replace: (audienceId, baseNames) => api.put(
+    `/api/admin/showcase/audiences/${encodeURIComponent(audienceId)}`,
+    { base_names: baseNames },
+  ).then((r) => r.data),
+}
+
 // ---- projects ----
 export const Projects = {
   list: () => api.get('/api/projects').then((r) => (Array.isArray(r.data) ? r.data.map(normalizeProjectStatus) : [])),
@@ -123,10 +131,11 @@ export const Projects = {
 }
 
 export const Showcase = {
-  list: () => api.get('/api/showcase/papers').then((r) => (
+  list: (authenticated = false) => api.get(
+    authenticated ? '/api/showcase/user-papers' : '/api/showcase/papers',
+  ).then((r) => (
     Array.isArray(r.data) ? r.data.map(normalizeShowcasePaper) : []
   )),
-  downloadUrl: (paper) => `${paper.pdf_url}?download=1`,
 }
 
 // Fetch an authenticated binary resource as an object URL (for <img>/<iframe>,
@@ -134,6 +143,18 @@ export const Showcase = {
 export async function fetchBlobUrl(url) {
   const resp = await api.get(url, { responseType: 'blob' })
   return URL.createObjectURL(resp.data)
+}
+
+export async function downloadBlob(url, filename = 'paper.pdf') {
+  const resp = await api.get(url, { params: { download: 1 }, responseType: 'blob' })
+  const objectUrl = URL.createObjectURL(resp.data)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
 }
 
 // ---- models (registry + per-step assignment) ----

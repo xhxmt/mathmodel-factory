@@ -7,6 +7,7 @@
 ### 新增
 
 - 新增独立 `factory_core.audit` 子系统与 `factory audit` CLI：Step 4、5/6、10 分别运行 `model`、`results`、`paper` 确定性审计并将失败同步到 issue ledger；最终 `final` 审计按内容指纹记录在项目 `.factory/audits/<snapshot>/`。四类审计均可脱离交付运行并复用同一输入与 checker 契约的 PASS，只有 `final` profile 可以授权交付。
+- Web 新增独立的完成论文展示 ACL：管理员可分别配置默认未登录访客和具体注册用户的只读论文集合；注册用户继承公共集合，展示授权不授予项目控制、日志或内部文件权限。
 - 新增 `factory_core/` Python 编排核心：项目内 SQLite 快照、追加式事件、乐观 revision、注册式 Step/执行后端、重试与验证驱动恢复。
 - 新增旧建模项目的两阶段显式迁移和可审计 rollback 命令；活动进程、状态冲突和已退役社会科学项目会拒绝导入。
 - 新增原生 Step 0-16 lifecycle/catalog、模型 backend registry、统一 `FactoryService`、SQLite solver policy/job 记录，以及本地与可替换 Cloud Run solver adapter。

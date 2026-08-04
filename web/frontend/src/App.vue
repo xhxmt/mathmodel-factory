@@ -99,6 +99,28 @@
             <span class="hint mono">点击「{{ isAdmin ? '新建' : '申请' }}」{{ isAdmin ? '创建项目' : '提交项目申请' }}</span>
           </div>
         </section>
+
+        <section class="fleet member-showcase">
+          <div class="fleet-h">
+            <span class="label">授权展示论文 · SHOWCASE <b class="mono">{{ filteredShowcasePapers.length }}</b></span>
+            <div class="search">
+              <Icon name="search" :size="13" />
+              <input v-model="showcaseQuery" class="search-in mono" placeholder="搜索展示论文…" spellcheck="false" />
+              <button v-if="showcaseQuery" class="clr" @click="showcaseQuery = ''" title="清除搜索"><Icon name="x" :size="11" /></button>
+            </div>
+          </div>
+          <div v-if="showcaseLoading" class="grid showcase-grid">
+            <div v-for="i in 3" :key="i" class="skel showcase-skel panel"></div>
+          </div>
+          <div v-else-if="filteredShowcasePapers.length" class="grid showcase-grid">
+            <ShowcasePaperCard v-for="paper in filteredShowcasePapers" :key="paper.base_name" :paper="paper" @open="openShowcasePaper" />
+          </div>
+          <div v-else class="empty panel">
+            <Icon :name="showcaseError ? 'alert-triangle' : 'book-open'" :size="34" />
+            <p>{{ showcaseError || (showcaseQuery ? '无匹配论文' : '暂无向你展示的论文') }}</p>
+            <button v-if="showcaseError" class="btn btn-sm btn-ghost" @click="loadShowcase"><Icon name="refresh" :size="13" /> 重试</button>
+          </div>
+        </section>
       </main>
 
       <main v-else class="main showcase-main">
@@ -141,7 +163,7 @@
     <ProjectRequestsPanel v-if="isAuthenticated && showRequests" :admin="isAdmin" @close="showRequests = false" @changed="onAdminChanged" />
     <CommandPalette v-if="isAuthenticated" :visible="showPalette" :projects="projects" @close="showPalette = false" @open-project="openByBase" @new-project="openNew" @toggle-theme="toggleTheme" />
     <ModelManager v-if="isAuthenticated && showModels && isAdmin" @close="showModels = false" @saved="() => {}" />
-    <ShowcasePaperViewer v-if="!isAuthenticated && selectedShowcasePaper" :paper="selectedShowcasePaper" @close="selectedShowcasePaper = null" />
+    <ShowcasePaperViewer v-if="selectedShowcasePaper" :paper="selectedShowcasePaper" @close="selectedShowcasePaper = null" />
   </template>
 </template>
 
@@ -288,7 +310,7 @@ export default {
       showcaseLoading.value = true
       showcaseError.value = ''
       try {
-        showcasePapers.value = await Showcase.list()
+        showcasePapers.value = await Showcase.list(isAuthenticated.value)
       } catch (error) {
         showcasePapers.value = []
         showcaseError.value = '展示论文暂不可用'
@@ -312,6 +334,7 @@ export default {
         },
         data,
       )
+      await loadShowcase()
     }
     function logout() {
       clearAuth()
@@ -341,6 +364,8 @@ export default {
           loading.value = false
           resetProjects()
           selectedBase.value = null
+          await loadShowcase()
+        } else {
           await loadShowcase()
         }
       } catch (e) {
@@ -375,7 +400,7 @@ export default {
       toasts.success(`项目 ${result.base_name} 已提交审批`)
     }
     async function onAdminChanged() {
-      await refreshProjects()
+      await Promise.all([refreshProjects(), loadShowcase()])
     }
 
     // ---- navigation / deep-link ----
@@ -521,6 +546,7 @@ export default {
 .readonly { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink-3); font-size: 9.5px; }
 .readonly svg { color: var(--ok); }
 .showcase-skel { height: 208px; }
+.member-showcase { margin-top: 34px; }
 
 @media (max-width: 720px) {
   .rail { flex-wrap: wrap; gap: 14px; }
