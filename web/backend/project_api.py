@@ -1256,6 +1256,30 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         await manager.broadcast({"type": "project_action", "project": base_name, "action": action.action})
         return {"status": "ok", "action": action.action, "output": result.stdout}
 
+    @router.get("/api/projects/{base_name}/solver-jobs")
+    async def get_solver_jobs(
+        base_name: str,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        from .solver_jobs_api import list_solver_jobs
+        return list_solver_jobs(settings, project, base_name)
+
+    @router.get("/api/projects/{base_name}/solver-jobs/{job_id}")
+    async def get_solver_job_detail(
+        base_name: str,
+        job_id: str,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        from .solver_jobs_api import get_solver_job_evidence
+        try:
+            return get_solver_job_evidence(settings, project, base_name, job_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="SOLVER_JOB_NOT_FOUND")
+
     @router.get("/api/models")
     async def get_models(current_user: UserInfo = Depends(get_current_user(settings))):
         del current_user

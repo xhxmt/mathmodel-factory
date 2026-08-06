@@ -180,6 +180,13 @@
         @changed="onSelectionChanged"
       />
 
+      <SolverJobPanel
+        v-else-if="activeTab === 'solver'"
+        class="tab-panel rise"
+        :base="project.base_name"
+        @changed="refresh"
+      />
+
       <CloudTaskPanel
         v-else-if="activeTab === 'cloud'"
         class="rise"
@@ -232,6 +239,7 @@ const asyncOpts = { loadingComponent: TabFallback, delay: 120 }
 const PipelineTimeline = defineAsyncComponent({ loader: () => import('./PipelineTimeline.vue'), ...asyncOpts })
 const LogConsole = defineAsyncComponent({ loader: () => import('./LogConsole.vue'), ...asyncOpts })
 const ArtifactBrowser = defineAsyncComponent({ loader: () => import('./ArtifactBrowser.vue'), ...asyncOpts })
+const SolverJobPanel = defineAsyncComponent({ loader: () => import('./SolverJobPanel.vue'), ...asyncOpts })
 const ConsultationPanel = defineAsyncComponent({ loader: () => import('./ConsultationPanel.vue'), ...asyncOpts })
 const DiagnosticsCard = defineAsyncComponent({ loader: () => import('./DiagnosticsCard.vue'), ...asyncOpts })
 const ModelManager = defineAsyncComponent({ loader: () => import('./ModelManager.vue'), ...asyncOpts })
@@ -240,7 +248,7 @@ const CloudTaskPanel = defineAsyncComponent({ loader: () => import('./CloudTaskP
 
 export default {
   name: 'ProjectWorkspace',
-  components: { Icon, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, LogConsole, ArtifactBrowser, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel },
+  components: { Icon, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel },
   props: {
     project: { type: Object, required: true },
     isAdmin: { type: Boolean, default: false },
@@ -470,7 +478,7 @@ export default {
     }, { immediate: true })
 
     // ---- tab deep-linking: keep activeTab and route.query.tab in sync ----
-    const VALID_TABS = new Set(['overview', 'pipeline', 'logs', 'artifacts', 'diagnostics', 'consultation', 'selection', 'cloud'])
+    const VALID_TABS = new Set(['overview', 'pipeline', 'logs', 'artifacts', 'solver', 'diagnostics', 'consultation', 'selection', 'cloud'])
     let syncingTab = false
     // URL -> tab. Only act when the URL explicitly carries a valid tab, so an
     // absent ?tab leaves the consultation auto-jump / default 'overview' intact.
@@ -586,8 +594,9 @@ export default {
   display: flex; align-items: center; justify-content: space-between; gap: 14px;
   padding: 12px 20px; min-height: var(--header-h);
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 80%, transparent);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
   flex-shrink: 0;
 }
 .wh-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
@@ -642,7 +651,9 @@ export default {
   gap: 5px;
   padding: 8px 20px;
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
   overflow-x: auto;
   flex-shrink: 0;
 }
@@ -661,9 +672,9 @@ export default {
   white-space: nowrap;
 }
 .ws-tab:hover { color: var(--ink); background: var(--panel-2); }
-.ws-tab.on { color: var(--ink); background: var(--panel-3); border-color: var(--line-2); }
+.ws-tab.on { color: var(--accent-ink); background: var(--grad); border-color: transparent; box-shadow: 0 2px 12px var(--accent-glow); }
 .ws-tab.attention { color: var(--amber); }
-.ws-tab.attention.on { border-color: var(--amber-line); background: var(--amber-dim); }
+.ws-tab.attention.on { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); box-shadow: none; }
 
 .ws-scroll { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 20px 32px; display: flex; flex-direction: column; gap: 16px; }
 

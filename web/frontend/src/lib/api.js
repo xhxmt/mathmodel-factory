@@ -179,6 +179,13 @@ export const Cloud = {
   config: () => api.get('/api/cloud/config').then((r) => r.data),
 }
 
+// ---- solver jobs (per-project solver job listing and evidence) ----
+export const SolverJobs = {
+  list: (b) => api.get(`/api/projects/${b}/solver-jobs`).then((r) => r.data),
+  detail: (b, jobId) => api.get(`/api/projects/${b}/solver-jobs/${jobId}`).then((r) => r.data),
+}
+}
+
 // ---- formatters ----
 export function relativeTime(ts) {
   if (!ts) return '—'

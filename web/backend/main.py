@@ -424,6 +424,8 @@ cloud_config = _router_endpoint(cloud_router, "/api/cloud/config")
 project_cloud_config = _router_endpoint(cloud_router, "/api/projects/{base_name}/cloud/config")
 enable_cloud_solver = _router_endpoint(cloud_router, "/api/projects/{base_name}/cloud/enable")
 disable_cloud_solver = _router_endpoint(cloud_router, "/api/projects/{base_name}/cloud/disable")
+get_solver_jobs = _router_endpoint(project_router, "/api/projects/{base_name}/solver-jobs")
+get_solver_job_detail = _router_endpoint(project_router, "/api/projects/{base_name}/solver-jobs/{job_id}")
 websocket_endpoint = _router_endpoint(ws_router, "/ws")
 project_api = __import__("web.backend.project_api", fromlist=["run_project_launcher"])
 
