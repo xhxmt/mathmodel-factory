@@ -1,6 +1,7 @@
 # 无人工真值的评委能力校准与 Shadow 准入
 
-`scripts/capability_harness.py` 和 `scripts/shadow_cutover.py` 实现 P2/P3 的离线核心。
+`scripts/capability_harness.py`、`scripts/judge_reliability.py`、
+`scripts/hard_gate_calibration.py` 和 `scripts/shadow_cutover.py` 实现 R0a/P2/P3 的离线核心。
 它们不调用模型、不修改生产路由，也不把模型共识当成真值。
 
 能力报告只回答：指定的 `model + backend + prompt hash + schema hash` 在一组具有机器
@@ -130,17 +131,81 @@ grounding、indeterminate 和 false-reopen；每个比例都包含 95% Wilson �
 `BLOCK_MODEL/BLOCK_TEXT/PASS/INDETERMINATE` 动作，同时单独报告 raw-label agreement，避免
 schema 标签迁移被误记成行为回归。
 
-## 3. Shadow 比较与人工切换
+## 3. R0a exact-runtime 硬门能力校准
 
-shadow manifest 使用 `judge-shadow-manifest-v1`，必须固定 capability report 的文件 SHA-256，
-声明目标 role/evaluator、实际 packet 路径、legacy/new decision，以及全部核心阈值。能力下限
-使用 Wilson lower bound；错误率上限使用 Wilson upper bound。还必须设置最少能力 case、
-shadow case 和 shadow project 数量。
+单次 capability observation 不能证明评委可以稳定充当硬门。R0a 使用
+`judge-hard-gate-calibration-manifest-v1`，把 hash 固定的 prepared manifest、capability
+report 和每个 held-out test case 的 `judge-reliability-input-v1` 合并为一个失败关闭的合同：
 
 ```json
 {
-  "schema": "judge-shadow-manifest-v1",
+  "schema": "judge-hard-gate-calibration-manifest-v1",
+  "prepared_manifest_sha256": "<prepared-manifest-file-sha256>",
+  "capability_report_sha256": "<capability-report-file-sha256>",
+  "required_roles": ["math", "execution"],
+  "minimum_reliability_runs": 5,
+  "thresholds": {
+    "minimum_test_cases": 50,
+    "capability": {
+      "sensitivity": 0.90,
+      "specificity": 0.90,
+      "precision": 0.90,
+      "evidence_grounding_rate": 0.99,
+      "neutral_flip_rate": 0.05,
+      "position_bias_rate": 0.05,
+      "indeterminate_rate": 0.05,
+      "false_reopen_rate": 0.05
+    }
+  },
+  "reliability_cases": [
+    {
+      "case_id": "p1-unit-error",
+      "input_path": "reliability/p1-unit-error.json",
+      "input_sha256": "<reliability-input-file-sha256>"
+    }
+  ]
+}
+```
+
+`reliability_cases` 必须不多不少地覆盖 math/execution 的所有 held-out test case；每个角色
+至少同时包含 `hard_defect` 和 `neutral_transform`。每个 reliability input 只能包含该 case
+的角色，并必须绑定：
+
+- `packet_identity.packet_sha256` = prepared packet tree hash；
+- `packet_identity.condition_fingerprint` = prepared `runtime_identity_fingerprint`；
+- `evaluator_identity` = 相同的 model/backend/prompt/schema identity；
+- 至少 5 次完整有效运行，所有运行均绑定相同 packet 与 condition。
+
+硬缺陷的 capability observation 与重复聚合都必须为 `FAIL`，中性变换都必须为 `PASS`；
+重复结果必须为 `STABLE`。例如一次 `FAIL` 加四次 `PASS` 虽然触发 hard veto，仍因
+`UNSTABLE` 被 R0a 拒绝，不能借“一次检出”取得硬门资格。
+
+```bash
+python3 scripts/hard_gate_calibration.py evaluation/r0a_manifest.json \
+  --prepared-manifest evaluation/capability_runs/run-001/prepared_manifest.json \
+  --capability-report evaluation/capability_runs/run-001/capability_report.json \
+  --json-output evaluation/capability_runs/run-001/hard_gate_calibration.json \
+  --require-ready
+```
+
+退出码 `0/3/2` 分别表示报告生成且 ready、报告有效但未 ready、输入合同无效。报告的
+`hard_gate_ready` 只说明这套 exact runtime identity 在声明的 oracle mutation scope 内同时
+通过能力与重复稳定性门；报告固定 `automatic_switch_performed=false`、
+`operator_authorization_required=true`，不证明人类评分、奖级或 selector 正确性。
+
+## 4. Shadow 比较与人工切换
+
+shadow manifest 使用 `judge-shadow-manifest-v2`，必须同时固定 capability report 与 R0a
+hard-gate calibration report 的文件 SHA-256，声明目标 role/evaluator、实际 packet 路径、
+legacy/new decision，以及全部核心阈值。能力下限使用 Wilson lower bound；错误率上限使用
+Wilson upper bound。还必须设置最少能力 case、shadow case 和 shadow project 数量。
+
+```json
+{
+  "schema": "judge-shadow-manifest-v2",
   "capability_report_sha256": "<reviewed report file hash>",
+  "hard_gate_calibration_report_path": "capability_runs/run-001/hard_gate_calibration.json",
+  "hard_gate_calibration_report_sha256": "<reviewed R0a report file hash>",
   "target_route": {
     "role": "math",
     "evaluator": {
@@ -193,6 +258,10 @@ shadow case 和 shadow project 数量。
 }
 ```
 
+v2 中 shadow 的 capability 阈值必须与 R0a 报告完全一致，目标 role/evaluator 和 capability
+report hash 也必须一致。旧 `judge-shadow-manifest-v1` 仍可生成诊断报告，但固定
+`legacy_capability_only=true`、`cutover_ready=false`，不能绕过重复可靠性门。
+
 ```bash
 python3 scripts/shadow_cutover.py evaluation/shadow_manifest.json \
   --capability-report evaluation/capability_runs/run-001/capability_report.json \
@@ -203,6 +272,7 @@ python3 scripts/shadow_cutover.py evaluation/shadow_manifest.json \
 退出码 `0` 表示报告生成成功且（启用 `--require-ready` 时）阈值通过，`3` 表示报告有效但
 尚未达到阈值，`2` 表示身份、hash、holdout、schema 或阈值合同无效。
 
+只有 v2 的 R0a、capability 与 shadow checks 全部通过时，`cutover_ready` 才可能为 true。
 即使 `cutover_ready=true`，输出仍固定包含：
 
 ```json

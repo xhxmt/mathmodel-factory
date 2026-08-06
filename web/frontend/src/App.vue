@@ -475,11 +475,17 @@ export default {
   display: flex; align-items: center; gap: 22px;
   padding: 11px 22px; min-height: var(--header-h);
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg) 86%, transparent);
-  backdrop-filter: blur(10px);
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
 }
 .brand { display: flex; align-items: center; gap: 11px; }
-.mark { width: 38px; height: 38px; border-radius: var(--r); background: var(--amber); color: var(--amber-ink); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 18px var(--amber-glow); }
+.mark {
+  width: 38px; height: 38px; border-radius: var(--r);
+  background: var(--grad); color: var(--accent-ink);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 20px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.28);
+}
 .brand-name { font-size: 14px; font-weight: 700; letter-spacing: 0.06em; }
 .brand-sub { font-size: 9.5px; color: var(--ink-3); letter-spacing: 0.14em; margin-top: 1px; }
 

@@ -74,10 +74,10 @@ export default {
 .kind-human { box-shadow: 0 0 0 3px var(--panel), 0 0 0 4.5px var(--c); }
 
 /* states */
-.st-done   { --c: var(--ok);    background: var(--ok); color: #06140f; }
-.st-done .num { color: #06140f; }
-.st-live   { --c: var(--live);  background: var(--live); color: #04161c; box-shadow: 0 0 0 4px var(--live-dim); animation: livepulse 2s var(--ease) infinite; }
-.st-live .num { color: #04161c; }
+.st-done   { --c: var(--ok);    background: var(--ok); color: var(--accent-ink); box-shadow: 0 0 8px var(--ok-glow); }
+.st-done .num { color: var(--accent-ink); }
+.st-live   { --c: var(--live);  background: var(--live); color: var(--accent-ink); box-shadow: 0 0 0 4px var(--live-dim), 0 0 12px var(--live-glow); animation: livepulse 2s var(--ease) infinite; }
+.st-live .num { color: var(--accent-ink); }
 .st-attention { --c: var(--amber); background: var(--amber); color: var(--amber-ink); box-shadow: 0 0 0 4px var(--amber-dim); animation: attnpulse 1.3s var(--ease) infinite; }
 .st-attention .num { color: var(--amber-ink); }
 .st-pending { --c: var(--ink-3); background: var(--panel); }

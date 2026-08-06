@@ -184,7 +184,6 @@ export const SolverJobs = {
   list: (b) => api.get(`/api/projects/${b}/solver-jobs`).then((r) => r.data),
   detail: (b, jobId) => api.get(`/api/projects/${b}/solver-jobs/${jobId}`).then((r) => r.data),
 }
-}
 
 // ---- formatters ----
 export function relativeTime(ts) {

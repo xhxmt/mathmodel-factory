@@ -145,13 +145,13 @@ export default {
 .bc-close:hover { color: var(--ink); background: var(--panel-2); }
 
 .bc-brand { display: flex; align-items: center; gap: 13px; margin-bottom: 22px; }
-.mono-mark { width: 46px; height: 46px; border-radius: var(--r); background: var(--amber); color: var(--amber-ink); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 24px var(--amber-glow); }
+.mono-mark { width: 46px; height: 46px; border-radius: var(--r); background: var(--grad); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 24px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.28); }
 .bc-name { font-size: 18px; font-weight: 700; letter-spacing: 0.04em; }
 .bc-sub { font-size: 11px; color: var(--ink-3); letter-spacing: 0.1em; margin-top: 2px; }
 
 .bc-boot { font-size: 12px; color: var(--ink-3); padding: 10px 12px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-sm); margin-bottom: 22px; }
 .bp { color: var(--ok); margin-right: 6px; }
-.caret { animation: blink 1.1s step-end infinite; color: var(--amber); }
+.caret { animation: blink 1.1s step-end infinite; color: var(--accent); }
 
 .bc-form { display: flex; flex-direction: column; gap: 15px; }
 .seg { display: flex; gap: 4px; padding: 4px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r); }
@@ -171,10 +171,10 @@ export default {
 @keyframes shake { 10%,90% { transform: translateX(-1px); } 30%,70% { transform: translateX(3px); } 50% { transform: translateX(-4px); } }
 
 .bc-go { width: 100%; padding: 12px; margin-top: 4px; font-size: 14px; }
-.spinner.sm { width: 16px; height: 16px; border-top-color: var(--amber-ink); }
+.spinner.sm { width: 16px; height: 16px; border-top-color: var(--accent-ink); }
 
 .bc-foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); text-align: center; font-size: 11px; color: var(--ink-3); }
-.bc-foot b { color: var(--amber); font-weight: 700; }
+.bc-foot b { color: var(--accent); font-weight: 700; }
 .guest-return { display: inline-flex; align-items: center; gap: 7px; padding: 3px; border: 0; background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; }
 .guest-return:hover { color: var(--live); }
 </style>

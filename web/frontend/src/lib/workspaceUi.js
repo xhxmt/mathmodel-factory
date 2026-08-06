@@ -38,6 +38,7 @@ export function workspaceTabs({ consultationPending = false, selectionPending = 
     { key: 'pipeline', label: '流水线', icon: 'layers' },
     { key: 'logs', label: '日志', icon: 'terminal' },
     { key: 'artifacts', label: '产物', icon: 'folder' },
+    { key: 'solver', label: '求解任务', icon: 'cpu' },
     { key: 'diagnostics', label: '诊断', icon: 'alert-triangle', attention: hasDiagnostics },
     { key: 'cloud', label: '云端', icon: 'zap', attention: cloudEnabled },
   ]

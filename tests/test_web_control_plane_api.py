@@ -194,6 +194,8 @@ def test_main_module_exposes_runtime_api_surface():
         "project_cloud_config",
         "enable_cloud_solver",
         "disable_cloud_solver",
+        "get_solver_jobs",
+        "get_solver_job_detail",
         "websocket_endpoint",
     ]
 

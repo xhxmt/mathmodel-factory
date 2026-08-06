@@ -49,6 +49,18 @@ NEUTRAL_INVARIANTS = {
     "redaction_equivalent_to_source",
     "whitespace_equivalent_to_source",
 }
+CAPABILITY_LOWER_BOUND_METRICS = {
+    "sensitivity",
+    "specificity",
+    "precision",
+    "evidence_grounding_rate",
+}
+CAPABILITY_UPPER_BOUND_METRICS = {
+    "neutral_flip_rate",
+    "position_bias_rate",
+    "indeterminate_rate",
+    "false_reopen_rate",
+}
 
 
 class CapabilityError(ValueError):
@@ -538,6 +550,86 @@ def binomial_metric(successes: int, total: int) -> dict[str, Any]:
         "estimate": successes / total if total else None,
         "wilson_95": wilson_interval(successes, total),
     }
+
+
+def _unit_rate(value: Any, context: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+        raise CapabilityError(f"{context} must be between 0 and 1")
+    return float(value)
+
+
+def _positive_integer(value: Any, context: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise CapabilityError(f"{context} must be a positive integer")
+    return value
+
+
+def check_capability_thresholds(
+    row: dict[str, Any], thresholds: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Evaluate the shared Wilson-bound capability admission contract.
+
+    Both R0a and shadow cutover use this function so one path cannot weaken or
+    reinterpret the oracle-backed capability thresholds used by the other.
+    """
+
+    configured = thresholds.get("capability")
+    required = CAPABILITY_LOWER_BOUND_METRICS | CAPABILITY_UPPER_BOUND_METRICS
+    if not isinstance(configured, dict) or set(configured) != required:
+        raise CapabilityError(f"thresholds.capability must configure exactly {sorted(required)}")
+    metrics = row.get("metrics")
+    if not isinstance(metrics, dict):
+        raise CapabilityError("capability matrix row has no metrics")
+    checks: list[dict[str, Any]] = []
+    for name in sorted(required):
+        metric = metrics.get(name)
+        if not isinstance(metric, dict):
+            raise CapabilityError(f"missing capability metric: {name}")
+        interval = metric.get("wilson_95")
+        if not isinstance(interval, dict):
+            raise CapabilityError(f"missing Wilson interval: {name}")
+        low, high = interval.get("low"), interval.get("high")
+        if (low is None) != (high is None):
+            raise CapabilityError(f"incomplete Wilson interval: {name}")
+        if low is not None:
+            low = _unit_rate(low, f"{name}.wilson_95.low")
+            high = _unit_rate(high, f"{name}.wilson_95.high")
+            if low > high:
+                raise CapabilityError(f"reversed Wilson interval: {name}")
+        threshold = _unit_rate(configured[name], f"thresholds.capability.{name}")
+        if name in CAPABILITY_LOWER_BOUND_METRICS:
+            observed = low
+            passed = isinstance(observed, (int, float)) and observed >= threshold
+            comparison = "wilson_95.low >= threshold"
+        else:
+            observed = high
+            passed = isinstance(observed, (int, float)) and observed <= threshold
+            comparison = "wilson_95.high <= threshold"
+        checks.append(
+            {
+                "name": name,
+                "observed": observed,
+                "threshold": threshold,
+                "comparison": comparison,
+                "passed": passed,
+            }
+        )
+    minimum = _positive_integer(thresholds.get("minimum_test_cases"), "thresholds.minimum_test_cases")
+    observed_cases = row.get("test_cases")
+    checks.append(
+        {
+            "name": "minimum_test_cases",
+            "observed": observed_cases,
+            "threshold": minimum,
+            "comparison": "observed >= threshold",
+            "passed": (
+                isinstance(observed_cases, int)
+                and not isinstance(observed_cases, bool)
+                and observed_cases >= minimum
+            ),
+        }
+    )
+    return checks
 
 
 def _grounding_refs(

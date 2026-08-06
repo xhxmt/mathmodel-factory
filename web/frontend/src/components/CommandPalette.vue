@@ -93,7 +93,7 @@ export default {
 </script>
 
 <style scoped>
-.pal-overlay { position: fixed; inset: 0; z-index: 500; background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(3px); display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; }
+.pal-overlay { position: fixed; inset: 0; z-index: 500; background: var(--overlay); -webkit-backdrop-filter: blur(8px) saturate(140%); backdrop-filter: blur(8px) saturate(140%); display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; }
 .pal { width: 100%; max-width: 560px; overflow: hidden; box-shadow: var(--shadow-lg); }
 .pal-in { display: flex; align-items: center; gap: 11px; padding: 15px 16px; border-bottom: 1px solid var(--line); color: var(--ink-3); }
 .pal-input { flex: 1; background: none; border: none; outline: none; color: var(--ink); font: 15px var(--sans); }

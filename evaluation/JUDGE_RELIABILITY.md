@@ -26,6 +26,9 @@ batch of distinct packet identities.  Hard roles use fail-closed logic: any
 validated `FAIL` remains a veto, while only complete unanimous `PASS` can pass;
 other cases are `INDETERMINATE`.  Paper scores and dimensions are
 `UNCALIBRATED_DIAGNOSTIC_ONLY`, and `workflow_gate_eligible` is always false.
+`scripts/hard_gate_calibration.py` may consume hash-pinned math/execution reports only as one
+part of R0a exact-runtime capability calibration; the reliability report by itself never
+authorizes a workflow gate or routing change.
 If runs provide `pair_id`, `orientation=AB|BA`, and displayed `winner=A|B`,
 the report also emits an AB/BA position-consistency diagnostic; incomplete or
 malformed pairs become `UNKNOWN` rather than being dropped.

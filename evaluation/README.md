@@ -31,10 +31,17 @@
 | `../scripts/calibration_judge.py` | 面向独立获奖 PDF 的盲评与分轨校准入口 |
 | `../scripts/evaluate_calibration.py` | 计算奖项顺序准确率、Kendall-style 次序、缺失覆盖、格式失败和致命缺陷检出率 |
 | `../scripts/capability_harness.py` | 生成带前置/后置 oracle 的 exact-runtime mutation packet，并计算带 Wilson 区间的能力矩阵 |
-| `../scripts/shadow_cutover.py` | 比较 legacy/new 决策并输出仅供人工批准的 shadow cutover readiness；绝不自动切换 |
-| `CAPABILITY_HARNESS.md` | 无人工真值时的 P2/P3 manifest、观测格式、holdout 与 CLI 合同 |
-| `../scripts/judge_reliability.py` | 固定 packet 的重复评委可靠性：多数/中位数、离散、位置无关的重复一致率与显式 UNKNOWN alpha；不驱动门禁 |
+| `../scripts/hard_gate_calibration.py` | 将 oracle capability 与同一 exact-runtime identity 的 K>=5 重复稳定性合并为 R0a 硬门能力校准；失败关闭且不自动放权 |
+| `../scripts/selector_calibration.py` | R0b 冻结 dev/holdout 的盲化 pairwise selector 校准；计算 Wilson 界、AB/BA 与重复翻转、TIE 带，并分别报告 proxy/human readiness；不自动选稿 |
+| `../scripts/shadow_portfolio.py` | R3 纯影子 portfolio 编排：先验 hard-pass、预算、R0b TIE 与独立 adjudication/regret；只记录推荐，不改主线 |
+| `../scripts/selector_cutover_authorization.py` | 校验人工签发、限 scope/有效期/canary 的 selector 放权 receipt；只生成 assessment，不创建批准或改路由 |
+| `../scripts/shadow_cutover.py` | v2 必须绑定 R0a 报告后才可能输出仅供人工批准的 shadow cutover readiness；v1 仅保留失败关闭诊断 |
+| `CAPABILITY_HARNESS.md` | 无人工真值时的 R0a/P2/P3 manifest、观测格式、holdout 与 CLI 合同 |
+| `../scripts/judge_reliability.py` | 固定 packet 的重复评委可靠性：多数/中位数、离散、位置无关的重复一致率与显式 UNKNOWN alpha；原始报告不直接驱动门禁，R0a 仅消费 exact-runtime hard-case 子集 |
 | `JUDGE_RELIABILITY.md` | 无人工标签时的重复评委输入、身份绑定与保守聚合合同 |
+| `SELECTOR_ROLLOUT_PLAN.md` | R0a → R1/R2-min → R0b → R3 → 人工放权的权威实施计划、状态矩阵与断点续跑清单 |
+| `SELECTOR_RELIABILITY.md` / `SHADOW_PORTFOLIO.md` | R0b/R3 manifest、身份绑定、失败关闭指标、CLI 与 advisory-only 合同 |
+| `SELECTOR_AUTHORIZATION.md` | R0a/R0b/R3 报告绑定、人工批准 scope、过期/撤销和独立路由事件合同 |
 | `../scripts/llm_judge_call.py` | 共享 LLM 调用器：按 model 名分派 DeepSeek / Gemini / Claude 三后端（run_evaluation.sh 与 perturbation_harness.py 共用） |
 | `../scripts/enrich_evaluation_result.py` | 将聚合结果拆成 `structural` 硬证据和 `llm_score` 软评分 |
 | `../scripts/build_objective_evidence.py` | 生成带输入指纹的 `objective-evidence-v1` 机器证据 bundle |

@@ -9,8 +9,6 @@ reports.
 - `STEPS.md`: active modeling workflow and file gates.
 - `modeling_guide.md`: modeling, solver, evidence, LaTeX, figure, and table rules.
 - `CLAUDE.md`: detailed repository architecture and editing guidance.
-- `.agent/rules/superpowers.md`: local planning and verification gate. A user may
-  explicitly waive its execute-plan pause; do not infer a waiver.
 - `web/README.md` and `web/docs/deployment/DEPLOYMENT.md`: current Web usage and
   production runbook. Other Web reports are historical snapshots unless they
   explicitly say otherwise.

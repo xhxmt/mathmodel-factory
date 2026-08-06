@@ -47,6 +47,7 @@
 
 - [docs/complete_project_contract_audit.md](docs/complete_project_contract_audit.md)：历史完成项目与当前交付契约的审计说明。
 - [evaluation/README.md](evaluation/README.md)：独立外部评估框架。
+- [evaluation/SELECTOR_ROLLOUT_PLAN.md](evaluation/SELECTOR_ROLLOUT_PLAN.md)：Selector 可靠性、影子 portfolio 与人工放权的现役实施计划。
 - [evaluation/human_rubric.md](evaluation/human_rubric.md)：人工评审量表。
 - [evaluation/baseline_scores.md](evaluation/baseline_scores.md)：基准评分记录。
 - [evaluation/calibration_report.md](evaluation/calibration_report.md)：评委校准报告。
@@ -92,4 +93,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料。
 
-**最后更新：2026-07-27**
+**最后更新：2026-08-04**

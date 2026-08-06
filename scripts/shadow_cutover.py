@@ -2,14 +2,14 @@
 """Compare legacy/new judge decisions and emit an advisory cutover assessment.
 
 The command never edits routing configuration or invokes production judges.
-``cutover_ready`` means only that the explicitly configured capability and
-shadow thresholds passed; an operator must still authorize any rollout.
+``cutover_ready`` means only that the hash-bound R0a capability/repeatability
+report and explicitly configured shadow thresholds passed; an operator must
+still authorize any rollout.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,11 +26,15 @@ try:
         _write_json,
         binomial_metric,
         canonical_hash,
+        check_capability_thresholds,
         decision_class,
         evaluator_identity,
         evaluator_fingerprint,
         file_sha256,
         tree_sha256,
+    )
+    from scripts.hard_gate_calibration import (
+        REPORT_SCHEMA as HARD_GATE_CALIBRATION_REPORT_SCHEMA,
     )
 except ModuleNotFoundError:  # Direct execution from scripts/.
     from capability_harness import (  # type: ignore
@@ -43,28 +47,21 @@ except ModuleNotFoundError:  # Direct execution from scripts/.
         _write_json,
         binomial_metric,
         canonical_hash,
+        check_capability_thresholds,
         decision_class,
         evaluator_identity,
         evaluator_fingerprint,
         file_sha256,
         tree_sha256,
     )
+    from hard_gate_calibration import (  # type: ignore
+        REPORT_SCHEMA as HARD_GATE_CALIBRATION_REPORT_SCHEMA,
+    )
 
 
-SHADOW_SCHEMA = "judge-shadow-manifest-v1"
-SHADOW_REPORT_SCHEMA = "judge-shadow-report-v1"
-LOWER_BOUND_METRICS = {
-    "sensitivity",
-    "specificity",
-    "precision",
-    "evidence_grounding_rate",
-}
-UPPER_BOUND_METRICS = {
-    "neutral_flip_rate",
-    "position_bias_rate",
-    "indeterminate_rate",
-    "false_reopen_rate",
-}
+LEGACY_SHADOW_SCHEMA = "judge-shadow-manifest-v1"
+SHADOW_SCHEMA = "judge-shadow-manifest-v2"
+SHADOW_REPORT_SCHEMA = "judge-shadow-report-v2"
 SHADOW_THRESHOLDS = {
     "agreement_rate_min",
     "new_indeterminate_rate_max",
@@ -111,57 +108,6 @@ def _find_matrix_row(report: dict[str, Any], role: str, fingerprint: str) -> dic
     if row.get("permitted_use") != "ROLE_ROUTING_AND_SHADOW_ELIGIBILITY_ONLY" or row.get("truth_claim") != "NONE":
         raise CapabilityError("capability matrix row overstates its permitted use")
     return row
-
-
-def _check_capability_thresholds(
-    row: dict[str, Any], thresholds: dict[str, Any]
-) -> list[dict[str, Any]]:
-    configured = thresholds.get("capability")
-    required = LOWER_BOUND_METRICS | UPPER_BOUND_METRICS
-    if not isinstance(configured, dict) or set(configured) != required:
-        raise CapabilityError(f"thresholds.capability must configure exactly {sorted(required)}")
-    metrics = row.get("metrics")
-    if not isinstance(metrics, dict):
-        raise CapabilityError("capability matrix row has no metrics")
-    checks: list[dict[str, Any]] = []
-    for name in sorted(required):
-        metric = metrics.get(name)
-        if not isinstance(metric, dict):
-            raise CapabilityError(f"missing capability metric: {name}")
-        interval = metric.get("wilson_95")
-        if not isinstance(interval, dict):
-            raise CapabilityError(f"missing Wilson interval: {name}")
-        if name in LOWER_BOUND_METRICS:
-            threshold = _rate(configured[name], f"thresholds.capability.{name}")
-            observed = interval.get("low")
-            passed = isinstance(observed, (int, float)) and observed >= threshold
-            comparison = "wilson_95.low >= threshold"
-        else:
-            threshold = _rate(configured[name], f"thresholds.capability.{name}")
-            observed = interval.get("high")
-            passed = isinstance(observed, (int, float)) and observed <= threshold
-            comparison = "wilson_95.high <= threshold"
-        checks.append(
-            {
-                "name": name,
-                "observed": observed,
-                "threshold": threshold,
-                "comparison": comparison,
-                "passed": passed,
-            }
-        )
-    minimum = _integer(thresholds.get("minimum_test_cases"), "thresholds.minimum_test_cases")
-    observed_cases = row.get("test_cases")
-    checks.append(
-        {
-            "name": "minimum_test_cases",
-            "observed": observed_cases,
-            "threshold": minimum,
-            "comparison": "observed >= threshold",
-            "passed": isinstance(observed_cases, int) and observed_cases >= minimum,
-        }
-    )
-    return checks
 
 
 def _shadow_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -230,11 +176,78 @@ def _check_shadow_thresholds(
     return checks
 
 
+def _hard_gate_calibration_check(
+    manifest: dict[str, Any],
+    root: Path,
+    *,
+    capability_report_sha256: str,
+    identity: dict[str, str],
+    fingerprint: str,
+    role: str,
+    thresholds: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any], str | None]:
+    if manifest.get("schema") == LEGACY_SHADOW_SCHEMA:
+        return (
+            None,
+            {
+                "name": "r0a_hard_gate_calibration",
+                "observed": "MISSING_LEGACY_CAPABILITY_ONLY_MANIFEST",
+                "threshold": "HASH_BOUND_HARD_GATE_READY",
+                "comparison": "v2 R0a report required",
+                "passed": False,
+            },
+            None,
+        )
+    report_path = _safe_relative(root, manifest.get("hard_gate_calibration_report_path"))
+    if not report_path.is_file():
+        raise CapabilityError("hard-gate calibration report path must be a regular file")
+    expected_hash = manifest.get("hard_gate_calibration_report_sha256")
+    if not _is_sha256(expected_hash) or file_sha256(report_path) != expected_hash:
+        raise CapabilityError("hard-gate calibration report is not pinned by the shadow manifest")
+    report = _read_json(report_path)
+    if report.get("schema") != HARD_GATE_CALIBRATION_REPORT_SCHEMA:
+        raise CapabilityError("hard-gate calibration report schema mismatch")
+    if report.get("claim_limit") != "EXACT_RUNTIME_ORACLE_CAPABILITY_AND_REPEATABILITY_ONLY":
+        raise CapabilityError("hard-gate calibration report lacks its bounded claim limit")
+    if report.get("automatic_switch_performed") is not False or report.get("operator_authorization_required") is not True:
+        raise CapabilityError("hard-gate calibration report violates manual authorization policy")
+    if report.get("capability_report_sha256") != capability_report_sha256:
+        raise CapabilityError("hard-gate calibration and shadow capability reports differ")
+    if report.get("evaluator") != identity or report.get("evaluator_identity_fingerprint") != fingerprint:
+        raise CapabilityError("hard-gate calibration evaluator differs from the target route")
+    required_roles = report.get("required_roles")
+    if not isinstance(required_roles, list) or set(required_roles) != {"math", "execution"}:
+        raise CapabilityError("hard-gate calibration does not cover both hard roles")
+    role_result = report.get("roles", {}).get(role)
+    if not isinstance(role_result, dict):
+        raise CapabilityError("hard-gate calibration does not cover the target role")
+    calibration_thresholds = report.get("thresholds")
+    if not isinstance(calibration_thresholds, dict) or (
+        calibration_thresholds.get("minimum_test_cases") != thresholds.get("minimum_test_cases")
+        or calibration_thresholds.get("capability") != thresholds.get("capability")
+    ):
+        raise CapabilityError("shadow capability thresholds differ from the R0a calibration")
+    ready = report.get("hard_gate_ready") is True and role_result.get("ready") is True
+    return (
+        report,
+        {
+            "name": "r0a_hard_gate_calibration",
+            "observed": "READY" if ready else "NOT_READY",
+            "threshold": "HASH_BOUND_HARD_GATE_READY",
+            "comparison": "hard_gate_ready and target role ready",
+            "passed": ready,
+        },
+        expected_hash,
+    )
+
+
 def evaluate_shadow(
     manifest: dict[str, Any], root: Path, capability_report: dict[str, Any], capability_path: Path
 ) -> dict[str, Any]:
-    if manifest.get("schema") != SHADOW_SCHEMA:
-        raise CapabilityError(f"shadow manifest schema must be {SHADOW_SCHEMA}")
+    if manifest.get("schema") not in {LEGACY_SHADOW_SCHEMA, SHADOW_SCHEMA}:
+        raise CapabilityError(
+            f"shadow manifest schema must be {SHADOW_SCHEMA} (or legacy diagnostic {LEGACY_SHADOW_SCHEMA})"
+        )
     if capability_report.get("schema") != REPORT_SCHEMA:
         raise CapabilityError(f"capability report schema must be {REPORT_SCHEMA}")
     if _read_json(capability_path) != capability_report:
@@ -323,7 +336,16 @@ def evaluate_shadow(
     thresholds = manifest.get("thresholds")
     if not isinstance(thresholds, dict):
         raise CapabilityError("thresholds must be an object")
-    capability_checks = _check_capability_thresholds(row, thresholds)
+    capability_checks = check_capability_thresholds(row, thresholds)
+    _hard_gate_report, hard_gate_check, hard_gate_hash = _hard_gate_calibration_check(
+        manifest,
+        root,
+        capability_report_sha256=expected_hash,
+        identity=identity,
+        fingerprint=fingerprint,
+        role=role,
+        thresholds=thresholds,
+    )
     metrics = _shadow_metrics(rows)
     shadow_checks = _check_shadow_thresholds(metrics, len(rows), thresholds)
     minimum_projects = _integer(
@@ -339,13 +361,14 @@ def evaluate_shadow(
             "passed": observed_projects >= minimum_projects,
         }
     )
-    checks = capability_checks + shadow_checks
+    checks = capability_checks + [hard_gate_check] + shadow_checks
     ready = all(check["passed"] for check in checks)
     return {
         "schema": SHADOW_REPORT_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "shadow_manifest_sha256": canonical_hash(manifest),
         "capability_report_sha256": expected_hash,
+        "hard_gate_calibration_report_sha256": hard_gate_hash,
         "target_route": {
             "role": role,
             "evaluator_identity_fingerprint": fingerprint,
@@ -356,6 +379,7 @@ def evaluate_shadow(
         "holdout_audit": {"axes": disjoint_axes, "overlap": disjoint_audit, "passed": True},
         "threshold_checks": checks,
         "cutover_ready": ready,
+        "legacy_capability_only": manifest.get("schema") == LEGACY_SHADOW_SCHEMA,
         "advisory_only": True,
         "automatic_switch_performed": False,
         "operator_authorization_required": True,

@@ -8,6 +8,10 @@
 
 - 新增 `quality_contract.json` v4：按最大化/最小化方向硬验有效松弛界、预算阶梯、平台期语义和跨算法族对照工件；新增 canonical 派生物 manifest、生成辅助脚本及临时目录重生成/diff 门禁。
 - Solver 新增 content-addressed 两阶段 receipt：submission 绑定 runtime、代码、输入、参数摘要和 seeds，completion 绑定终态及声明输出哈希；native/Legacy 统一通过 `--status <jobid> --json` 返回 fail-closed `solver-job-evidence-v2`。
+- 新增 R0a exact-runtime 硬门能力校准：数学/执行角色必须同时覆盖 oracle-backed hard defect 与 neutral transform，并将每个 held-out packet 的 capability observation 与 K>=5 重复稳定性、evaluator/packet/condition hash 逐项绑定；报告失败关闭且不自动放权。
+- 新增 R0b pairwise selector 可靠性合同：冻结 dev/holdout family、exact evaluator/packet identity、AB/BA 与重复观测，使用 dev-only TIE 带和 Wilson 界分别报告 proxy/human readiness；未取得独立人工 holdout 前不允许自然稿择优。
+- 新增 R3 shadow portfolio 编排器：候选须先通过 R0a 与 R1/R2-min，绑定不可变求解/结果/PDF证据并遵守预算政策；报告 selector 覆盖、TIE、主线分歧、独立 adjudication/regret 与候选数 K，但始终不自动改变主线。
+- 新增 selector cutover authorization 校验器：人工 receipt 必须 hash 绑定 ready 的 R0a/R0b/R3 报告，并限定 evaluator、workflow step、项目/题型、最大 K、预算、packet builder、TIE 带、canary 与有效期；assessment 与实际路由事件保持分离。
 - 新增独立 `factory_core.audit` 子系统与 `factory audit` CLI：Step 4、5/6、10 分别运行 `model`、`results`、`paper` 确定性审计并将失败同步到 issue ledger；最终 `final` 审计按内容指纹记录在项目 `.factory/audits/<snapshot>/`。四类审计均可脱离交付运行并复用同一输入与 checker 契约的 PASS，只有 `final` profile 可以授权交付。
 - Web 新增独立的完成论文展示 ACL：管理员可分别配置默认未登录访客和具体注册用户的只读论文集合；注册用户继承公共集合，展示授权不授予项目控制、日志或内部文件权限。
 - 新增 `factory_core/` Python 编排核心：项目内 SQLite 快照、追加式事件、乐观 revision、注册式 Step/执行后端、重试与验证驱动恢复。
@@ -24,7 +28,10 @@
 ### 变更
 
 - 新项目 Step 4 使用 quality-contract v4；Step 5 必须显式声明 solver inputs/outputs/seeds，并由任务内 `FACTORY_SOLVER_JOB_ID` 写 provenance。Step 10 paper audit 新增确定性派生物硬门，旧 v1–v3 合同继续按原边界审计而不被静默升级。
+- Shadow cutover manifest 升级为 v2，只有 hash 绑定且 `hard_gate_ready=true` 的 R0a 报告才可能产生 cutover 建议；v1 继续输出诊断但永久 `cutover_ready=false`，所有放权仍需人工批准。
 - Step 13 缩为数学单角色预审，`PRECHECK_PASS` 只允许继续摘要与润色；完整数学/执行/论文三角色 Gate 2 仅在 Step 15 后的 `final` 审计执行。Step 15 明确为 `CONTENT_READY` 边界；Step 16 改为独立审计与交付之间的兼容适配器，只消费 `PASS` 或显式 `OVERRIDDEN` 审计结果，复制 PDF、submission 打包和清理不再属于审计职责。
+- 移除仓库内 `superpowers-*` agent Skill、配套 workflow 和强制执行规则；
+  历史 `docs/superpowers/` 与 `artifacts/superpowers/` 记录继续保留。
 - `run_paper.sh` 降级为兼容启动器；新项目默认 `native_v2` 并原生运行 Step 0-16，冻结 Bash 只供未迁移或显式回滚项目使用。
 - CLI、Web 状态和项目控制对已迁移项目统一读写 `.factory/state.db`；checkpoint、heartbeat、marker 和 diagnostics 成为兼容投影。
 - Web 项目创建/控制直接调用 `FactoryService`，后台执行统一由 Python worker launcher 启动；根 shell 命令保留为兼容入口。

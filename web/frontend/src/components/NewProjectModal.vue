@@ -124,7 +124,7 @@ export default {
 </script>
 
 <style scoped>
-.ov { position: fixed; inset: 0; z-index: 300; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.ov { position: fixed; inset: 0; z-index: 300; background: var(--overlay); -webkit-backdrop-filter: blur(8px) saturate(140%); backdrop-filter: blur(8px) saturate(140%); display: flex; align-items: center; justify-content: center; padding: 20px; }
 .modal { width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto; box-shadow: var(--shadow-lg); }
 
 .dragmask { position: fixed; inset: 22px; z-index: 310; background: color-mix(in srgb, var(--bg) 88%, transparent); border: 2px dashed var(--amber); border-radius: var(--r-xl); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--amber); }

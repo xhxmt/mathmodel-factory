@@ -77,13 +77,17 @@ export default {
   border-left: 2px solid var(--ink-3);
   transition: border-color 0.2s var(--ease), transform 0.2s var(--ease), box-shadow 0.2s var(--ease), background 0.2s var(--ease);
 }
-.card:hover { transform: translateY(-2px); box-shadow: var(--shadow); background: var(--panel-2); }
-.card:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.card:hover { transform: translateY(-3px); box-shadow: var(--shadow); background: var(--panel-2); }
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ac-running { border-left-color: var(--live); }
+.ac-running:hover { box-shadow: var(--shadow), 0 10px 34px var(--live-glow); }
 .ac-completed { border-left-color: var(--ok); }
+.ac-completed:hover { box-shadow: var(--shadow), 0 10px 34px var(--ok-glow); }
 .ac-paused { border-left-color: var(--paused); }
 .ac-failed, .ac-killed { border-left-color: var(--bad); }
+.ac-failed:hover, .ac-killed:hover { box-shadow: var(--shadow), 0 10px 34px var(--bad-glow); }
 .card.pending { border-left-color: var(--amber); box-shadow: inset 2px 0 0 var(--amber), 0 0 0 1px var(--amber-line); }
+.card.pending:hover { box-shadow: inset 2px 0 0 var(--amber), 0 0 0 1px var(--amber-line), 0 10px 34px var(--amber-glow); }
 
 .c-top { display: flex; align-items: center; gap: 9px; }
 .c-name { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

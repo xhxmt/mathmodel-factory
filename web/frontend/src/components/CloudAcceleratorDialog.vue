@@ -160,7 +160,7 @@ export default {
 </script>
 
 <style scoped>
-.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 20px; animation: fadeIn 0.2s var(--ease); }
+.modal-backdrop { position: fixed; inset: 0; background: var(--overlay); -webkit-backdrop-filter: blur(8px) saturate(140%); backdrop-filter: blur(8px) saturate(140%); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 20px; animation: fadeIn 0.2s var(--ease); }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 .cloud-modal { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); max-width: 620px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; box-shadow: var(--shadow-lg); animation: slideUp 0.3s var(--ease); }

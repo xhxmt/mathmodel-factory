@@ -364,7 +364,7 @@ export default {
 </script>
 
 <style scoped>
-.ov { position: fixed; inset: 0; z-index: 300; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.ov { position: fixed; inset: 0; z-index: 300; background: var(--overlay); -webkit-backdrop-filter: blur(8px) saturate(140%); backdrop-filter: blur(8px) saturate(140%); display: flex; align-items: center; justify-content: center; padding: 20px; }
 .modal { width: min(880px, 100%); max-height: 90vh; display: flex; flex-direction: column; box-shadow: var(--shadow-lg); overflow: hidden; }
 .m-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .mh-l, .mh-actions { display: flex; align-items: center; gap: 9px; }
