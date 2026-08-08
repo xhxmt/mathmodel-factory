@@ -611,7 +611,7 @@ const tabs = workspaceTabs({
   diagnostics: { status: { reason_code: 'runner_failed' } },
   cloudEnabled: true,
 })
-assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'logs', 'artifacts', 'diagnostics', 'consultation', 'cloud'])
+assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'logs', 'artifacts', 'solver', 'consultation', 'diagnostics', 'cloud'])
 assert.equal(tabs.find((t) => t.key === 'diagnostics').attention, true)
 assert.equal(workspaceTabs({}).some((t) => t.key === 'consultation'), false)
 assert.equal(workspaceTabs({ selectionPending: true }).find((t) => t.key === 'selection').attention, true)

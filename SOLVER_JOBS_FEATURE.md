@@ -1,8 +1,8 @@
-# Solver Jobs 面板功能实现总结
+# Solver Jobs 面板功能与维护说明
 
 ## 概述
 
-2026-08-06 实现了三个优先级最高的前端功能增强：
+2026-08-06 实现并由提交 `5841aae` 合入 `main` 的三个前端功能增强：
 1. **Solver 作业面板**（证据链可视化）
 2. **统一人工收件箱**（已在 ProjectWorkspace 中实现）
 3. **每步耗时/重试预算可视化**（已通过 diagnostics 部分实现）
@@ -123,16 +123,28 @@ GET /api/projects/{base_name}/solver-jobs/{job_id}
 
 2. **前端集成** (`web/frontend/src/components/ProjectWorkspace.vue`)
    - 新增 "Solver Jobs" tab
-   - 在 Pipeline 之后、Logs 之前
+   - 位于常驻的产物页签之后、按需出现的选择/咨询/诊断页签之前
    - 使用 API 客户端自动处理认证
 
-3. **API 客户端** (`web/frontend/src/api/client.js`)
+3. **API 客户端** (`web/frontend/src/lib/api.js`)
    ```javascript
-   getSolverJobs(baseName)
-   getSolverJobDetail(baseName, jobId)
+   SolverJobs.list(baseName)
+   SolverJobs.detail(baseName, jobId)
    ```
 
-## 二、端到端验证结果
+## 二、验证结果
+
+2026-08-08 对当前 `main` 重新运行：
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_web_solver_jobs_api.py \
+  tests/test_repository_hygiene.py
+```
+
+结果为 `13 passed`；同日使用 `uv.lock` 的 Web/Cloud/Models/dev 全量环境复跑仓库测试，
+结果为 `770 passed`。下列 API 示例来自 2026-08-06 的实现验收，只用于说明返回语义，
+不代表当前生产部署状态。
 
 ### 测试环境
 - 后端：`uv run python3 -m apps.web.backend.main`
@@ -194,20 +206,15 @@ GET /api/projects/cumcm_2020_a_codex_luna/solver-jobs/local_python_2026080103561
 ## 五、文件清单
 
 ### 新增文件
-- `web/backend/solver_jobs_api.py` (331 行)
-- `web/frontend/src/components/SolverJobPanel.vue` (683 行)
-- `tests/test_solver_jobs_api.py` (88 行)
+- `web/backend/solver_jobs_api.py`
+- `web/frontend/src/components/SolverJobPanel.vue`
+- `tests/test_web_solver_jobs_api.py`
 
 ### 修改文件
 - `web/backend/project_api.py` (注册路由)
 - `web/backend/main.py` (导入新模块)
 - `web/frontend/src/components/ProjectWorkspace.vue` (新增 tab)
-- `web/frontend/src/api/client.js` (新增 API 方法)
-
-### 总代码量
-- 后端：~400 行（含测试）
-- 前端：~700 行
-- **总计：~1100 行**
+- `web/frontend/src/lib/api.js` (新增 API 方法)
 
 ## 六、维护注意事项
 
@@ -218,6 +225,10 @@ GET /api/projects/cumcm_2020_a_codex_luna/solver-jobs/local_python_2026080103561
 
 ---
 
-**实现日期**：2026-08-06  
-**测试通过**：✅ 所有端到端测试通过  
-**生产就绪**：✅ 可合并到 main 分支
+**实现日期**：2026-08-06
+
+**合并状态**：已进入 `main`（`5841aae`）
+
+**当前验证**：2026-08-08，聚焦测试 `13 passed`，锁定环境全量测试 `770 passed`
+
+**部署边界**：本文不声明已部署或 live verified；生产状态以 `web/docs/deployment/DEPLOYMENT.md` 的现场核验为准

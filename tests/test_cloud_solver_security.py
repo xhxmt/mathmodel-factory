@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import stat
@@ -204,15 +205,41 @@ def test_output_collection_rejects_unsafe_names_and_skips_private_temp(tmp_path)
 
 
 def test_api_rejects_oversized_body_before_json_parsing():
-    client = TestClient(solver_api.app)
-    response = client.post(
-        "/solve/python",
-        content=b"x" * (solver_runner.MAX_REQUEST_BYTES + 1),
-        headers={"Content-Type": "application/json"},
-    )
+    downstream_called = False
+    receive_called = False
+    messages = []
 
-    assert response.status_code == 413
-    assert response.json()["error_code"] == "REQUEST_TOO_LARGE"
+    async def downstream(scope, receive, send):
+        nonlocal downstream_called
+        downstream_called = True
+
+    async def receive():
+        nonlocal receive_called
+        receive_called = True
+        return {"type": "http.request", "body": b"not-read", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "headers": [
+            (b"content-length", str(solver_runner.MAX_REQUEST_BYTES + 1).encode("ascii")),
+            (b"content-type", b"application/json"),
+        ],
+    }
+    middleware = solver_api.RequestBodyLimitMiddleware(
+        downstream,
+        max_body_bytes=solver_runner.MAX_REQUEST_BYTES,
+    )
+    asyncio.run(middleware(scope, receive, send))
+
+    assert downstream_called is False
+    assert receive_called is False
+    assert messages[0]["status"] == 413
+    payload = json.loads(messages[1]["body"])
+    assert payload["error_code"] == "REQUEST_TOO_LARGE"
 
 
 def test_api_validation_does_not_echo_submitted_script(monkeypatch):

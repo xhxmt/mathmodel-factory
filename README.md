@@ -25,6 +25,7 @@ cd web
 - **注册与审批**：用户注册后处于 pending，管理员审批用户和项目申请；普通用户只能看到自己的 ACL 项目。
 - **题目归档**：按项目内题目内容的规范化 SHA-256 标识聚合同题多次运行，同时保留 `ongoing/` / `complete/` 的真实目录状态。
 - **实时监控**：WebSocket 自动推送项目状态、诊断、日志与阻塞原因。
+- **求解证据**：在项目工作区查看本地/云端 Solver 作业、终态、耗时与两阶段 receipt 完整性。
 - **项目控制**：在权限范围内暂停、恢复或终止运行。
 - **人工咨询与选择**：处理咨询请求；交互式项目可启用 Step 3 `PRIMARY/AUXILIARY` 选择门，CLI 路径仍然保留。
 
@@ -83,9 +84,9 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 这些运行输出会被 Git 自动忽略。
 
-## 最新更新（2026-08-04）
+## 最新更新（2026-08-08）
 
-当前未发布变更集中在核心编排、Web 控制面与仓库治理：
+当前 `main` 分支的近期变更集中在核心编排、Web 控制面、评测治理与仓库治理：
 
 - 新项目使用 `factory_core.FactoryEngine`，状态与事件保存在项目内 `.factory/state.db`。
 - `run_paper.sh` 已降级为兼容启动器；原生 Step 0-16 不再调用冻结 Bash，冻结实现只服务未迁移或显式回滚的项目。
@@ -94,6 +95,8 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 - 重复运行按题目内容标识聚合成“题目归档”，历史完成运行保持只读。
 - SQLite 用户库、bcrypt 密码、注册/审批、项目申请与项目 ACL 已成为现役权限模型。
 - Secret Manager 是生产敏感值来源，弱默认管理员密码或缺失 JWT Secret 会阻止后端启动。
+- Solver Jobs 面板通过项目 ACL 展示作业状态和 `solver-job-evidence-v2` receipt，不授予额外文件或控制权限。
+- Selector 的 R0a/R0b/R3 与人工放权校验器已进入主线，但尚无真实冻结 holdout、shadow cohort 或生产授权。
 - 当前 Web 使用、部署和历史报告的所有权已重新收敛，避免旧文档继续充当现役 runbook。
 
 详见 [CHANGELOG.md](CHANGELOG.md)。优秀论文写作与可视化基准仍位于 `docs/guides/`。

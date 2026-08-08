@@ -15,6 +15,7 @@
 | 使用 Web Dashboard | [web/README.md](web/README.md) |
 | 5 分钟启动 Dashboard | [web/QUICKSTART.md](web/QUICKSTART.md) |
 | 部署和回滚 Dashboard | [web/docs/deployment/DEPLOYMENT.md](web/docs/deployment/DEPLOYMENT.md) |
+| 查看 Solver 作业证据面板 | [SOLVER_JOBS_FEATURE.md](SOLVER_JOBS_FEATURE.md) |
 | 运行外部评估 | [evaluation/README.md](evaluation/README.md) |
 | 运行消融实验 | [experiments/README.md](experiments/README.md) |
 | 查看 Agent 入口规则 | [AGENTS.md](AGENTS.md) |
@@ -48,6 +49,9 @@
 - [docs/complete_project_contract_audit.md](docs/complete_project_contract_audit.md)：历史完成项目与当前交付契约的审计说明。
 - [evaluation/README.md](evaluation/README.md)：独立外部评估框架。
 - [evaluation/SELECTOR_ROLLOUT_PLAN.md](evaluation/SELECTOR_ROLLOUT_PLAN.md)：Selector 可靠性、影子 portfolio 与人工放权的现役实施计划。
+- [evaluation/SELECTOR_RELIABILITY.md](evaluation/SELECTOR_RELIABILITY.md)：R0b 同题 pairwise selector、TIE 带与 holdout 合同。
+- [evaluation/SHADOW_PORTFOLIO.md](evaluation/SHADOW_PORTFOLIO.md)：R3 advisory-only portfolio 编排与报告合同。
+- [evaluation/SELECTOR_AUTHORIZATION.md](evaluation/SELECTOR_AUTHORIZATION.md)：人工放权 receipt、scope、有效期和撤销合同。
 - [evaluation/human_rubric.md](evaluation/human_rubric.md)：人工评审量表。
 - [evaluation/baseline_scores.md](evaluation/baseline_scores.md)：基准评分记录。
 - [evaluation/calibration_report.md](evaluation/calibration_report.md)：评委校准报告。
@@ -61,6 +65,7 @@
 - [web/QUICKSTART.md](web/QUICKSTART.md)：最短启动路径。
 - [web/USAGE_GUIDE.md](web/USAGE_GUIDE.md)：上传、题目归档与权限使用说明。
 - [web/docs/deployment/DEPLOYMENT.md](web/docs/deployment/DEPLOYMENT.md)：唯一现役生产部署与回滚 runbook。
+- [SOLVER_JOBS_FEATURE.md](SOLVER_JOBS_FEATURE.md)：Solver Jobs API、前端面板、receipt 语义和维护边界。
 - [web/INTERFACE_GUIDE.md](web/INTERFACE_GUIDE.md)：历史界面快照；当前行为以 `web/README.md` 为准。
 - [docs/GCP_SERVICES_INTEGRATION.md](docs/GCP_SERVICES_INTEGRATION.md)：历史 GCP 服务集成设计；当前状态以 Cloud Solver 隔离合同为准。
 - [docs/SECRET_MANAGER_GUIDE.md](docs/SECRET_MANAGER_GUIDE.md)：Secret Manager 配置。
@@ -93,4 +98,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料。
 
-**最后更新：2026-08-04**
+**最后更新：2026-08-08**

@@ -6,8 +6,8 @@
 > [`JUDGE_RELIABILITY.md`](JUDGE_RELIABILITY.md)、[`STEPS.md`](../STEPS.md)
 > 和代码为准。
 >
-> 状态快照：2026-08-04，分支 `main`，本地 HEAD `22efcfc`，相对
-> `origin/main` 领先 1 个提交。开始后续工作前必须重新核对 Git、测试和运行产物，不能把本快照
+> 审计基线：2026-08-08 开始收尾时，分支 `main` 的本地与 `origin/main` 均为 `75f6978`。
+> 开始后续工作前必须重新核对 Git、测试和运行产物，不能把本快照
 > 当作持续有效的运行证明。
 
 ## 1. 目标和不可越过的边界
@@ -61,15 +61,15 @@ R0a 与 R1 + R2-min 可以并行积累证据，但 R0b 的每个候选必须先�
 
 | 阶段 | 代码 / 合同 | 真实校准或项目证据 | Git / 放权状态 | 下一退出条件 |
 |---|---|---|---|---|
-| R0a | `IMPLEMENTED + LOCALLY_VERIFIED`；2026-08-04 相关 67 项 focused tests 通过，当前仍是未提交工作树改动 | 尚无真实冻结 held-out campaign，也无 `hard_gate_ready=true` 报告 | 未提交、未推送、未放权 | 完成 exact-runtime 数据运行并人工复核 hash 绑定报告 |
-| R1 + R2-min | `IMPLEMENTED`，提交 `22efcfc` | 代码合同已具备；每个进入 R0b/R3 的项目仍须单独生成并通过 v4 工件 | 已本地提交；尚未推送 | 目标候选逐一 hard-pass，且 receipt / 派生物验证通过 |
-| R0b | `IMPLEMENTED + LOCALLY_VERIFIED`；2026-08-06 新增 `scripts/selector_calibration.py` 与 6 项失败关闭 focused tests | 仍无真实冻结 dev / holdout、无 `comparison_ready_human=true` 质量排序报告 | 未提交、未推送、未放权 | 冻结 exact-runtime dev/holdout manifest，完成真实人工 holdout 并输出有效 TIE 带 |
-| R3 | `IMPLEMENTED + LOCALLY_VERIFIED`；2026-08-06 新增独立 `scripts/shadow_portfolio.py` 与 7 项 focused tests，未复用 hard-gate cutover readiness | 仍无真实 shadow portfolio cohort，也无 `portfolio_ready=true` 报告 | 未提交、未推送、未放权 | 先取得相同 exact identities 的 R0a/R0b readiness，再运行隔离 cohort 并完成分歧 adjudication |
-| 人工放权 | `IMPLEMENTED + LOCALLY_VERIFIED`；2026-08-06 新增 `selector-cutover-authorization-v1` 校验器与 5 项 focused tests，只验证、不创建批准或改路由 | 无人工签发 receipt，无有效 assessment | `AUTHORIZED=false` | R0a/R0b/R3 evidence-ready 后由人工签发限 scope/有效期/canary receipt，并另记路由事件 |
+| R0a | `IMPLEMENTED + LOCALLY_VERIFIED`；2026-08-08 含 R0a/R0b/R3/authorization 的 85 项 focused tests 通过 | 尚无真实冻结 held-out campaign，也无 `hard_gate_ready=true` 报告 | `COMMITTED + PUSHED`（`75f6978`）；未放权 | 完成 exact-runtime 数据运行并人工复核 hash 绑定报告 |
+| R1 + R2-min | `IMPLEMENTED + LOCALLY_VERIFIED`，提交 `22efcfc` | 代码合同已具备；每个进入 R0b/R3 的项目仍须单独生成并通过 v4 工件 | `COMMITTED + PUSHED`（`22efcfc`） | 目标候选逐一 hard-pass，且 receipt / 派生物验证通过 |
+| R0b | `IMPLEMENTED + LOCALLY_VERIFIED`；`scripts/selector_calibration.py` 及失败关闭测试已进入主线 | 仍无真实冻结 dev / holdout、无 `comparison_ready_human=true` 质量排序报告 | `COMMITTED + PUSHED`（`75f6978`）；未放权 | 冻结 exact-runtime dev/holdout manifest，完成真实人工 holdout 并输出有效 TIE 带 |
+| R3 | `IMPLEMENTED + LOCALLY_VERIFIED`；独立 `scripts/shadow_portfolio.py` 未复用 hard-gate cutover readiness | 仍无真实 shadow portfolio cohort，也无 `portfolio_ready=true` 报告 | `COMMITTED + PUSHED`（`75f6978`）；未放权 | 先取得相同 exact identities 的 R0a/R0b readiness，再运行隔离 cohort 并完成分歧 adjudication |
+| 人工放权 | `IMPLEMENTED + LOCALLY_VERIFIED`；`selector-cutover-authorization-v1` 只验证、不创建批准或改路由 | 无人工签发 receipt，无有效 assessment | `COMMITTED + PUSHED`（`75f6978`）；`AUTHORIZED=false` | R0a/R0b/R3 evidence-ready 后由人工签发限 scope/有效期/canary receipt，并另记路由事件 |
 | 独立 Gate 2 | 最终否决边界已存在 | 只在具体最终 PDF/packet 上产生证据 | 不授予 selector 权限 | 保持 evaluator 隔离并绑定最终提交字节 |
 
-当前工作树还包含 Web、agent rules 和其他用户改动。后续提交必须按路径精确暂存，不能用全量
-`git add` 混入无关变更。
+2026-08-08 工作区审计发现三条保留 worktree 的实现文件已逐项与 `main` 哈希等价，只有旧版
+状态文档比主线更陈旧。不要把这些旧摘要重新提交；物理清理仍须在完整汇报后取得明确确认。
 
 ## 4. R0a：收口 exact-runtime 硬门能力校准
 
@@ -170,8 +170,8 @@ python3 -m factory_core.cli audit <project-dir> --profile results --checkpoint-s
 python3 -m factory_core.cli audit <project-dir> --profile paper
 ```
 
-上述项目化验收是候选准入条件，不改变 R1 + R2-min 代码实现已完成的状态。推送
-`22efcfc` 属于独立发布授权，本计划不把“本地提交”写成“远端已集成”。
+上述项目化验收是候选准入条件，不改变 R1 + R2-min 代码实现已完成且提交
+`22efcfc` 已进入 `origin/main` 的状态；它也不证明任何具体候选已具备准入证据。
 
 ## 6. R0b：校准 hard-pass 稿之间的同题质量排序
 
@@ -314,12 +314,12 @@ find evaluation -maxdepth 3 -type f \
 然后按以下顺序恢复：
 
 - [ ] 精确识别并保留当前脏文件所有者；不要删除 worktree、分支、报告或生成稿。
-- [ ] 复跑 R0a focused tests；审阅并单独提交 R0a 代码，不混入 Web/agent 变更。
+- [x] 复跑 R0a/R0b/R3/authorization focused tests；2026-08-08 共 85 项通过，代码已进入 `origin/main`。
 - [ ] 建立真实 R0a held-out campaign；只有 `hard_gate_ready=true` 才勾选本项。
-- [ ] 确认 `22efcfc` 是否已推送/合并；没有就继续标记 local-only。
+- [x] 确认 `22efcfc` 已进入 `origin/main`；具体候选的 v4 工件仍须逐项目生成与验证。
 - [ ] 给 R0b/R3 候选逐一补齐 R1 + R2-min hard-pass 工件。
-- [x] 实现 R0b schema、runner、测试和报告合同；2026-08-06 已本地验证，冻结 dev/holdout 与真实报告仍待执行。
-- [x] 实现 R3 portfolio orchestrator 与报告合同；2026-08-06 已本地验证，真实纯影子 cohort 仍待 R0a/R0b evidence-ready 后执行。
+- [x] 实现并推送 R0b schema、runner、测试和报告合同；冻结 dev/holdout 与真实报告仍待执行。
+- [x] 实现并推送 R3 portfolio orchestrator 与报告合同；真实纯影子 cohort 仍待 R0a/R0b evidence-ready 后执行。
 - [ ] 人工审阅并签发有限范围授权 receipt；未签发前不得改主线。
 - [ ] 保持独立 Gate 2 最终否决，并验证其与 selector 信息隔离。
 - [ ] 每阶段完成后更新本文件状态矩阵和绝对日期，不另建平行“当前计划”。

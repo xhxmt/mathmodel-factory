@@ -12,6 +12,7 @@
 - 新增 R0b pairwise selector 可靠性合同：冻结 dev/holdout family、exact evaluator/packet identity、AB/BA 与重复观测，使用 dev-only TIE 带和 Wilson 界分别报告 proxy/human readiness；未取得独立人工 holdout 前不允许自然稿择优。
 - 新增 R3 shadow portfolio 编排器：候选须先通过 R0a 与 R1/R2-min，绑定不可变求解/结果/PDF证据并遵守预算政策；报告 selector 覆盖、TIE、主线分歧、独立 adjudication/regret 与候选数 K，但始终不自动改变主线。
 - 新增 selector cutover authorization 校验器：人工 receipt 必须 hash 绑定 ready 的 R0a/R0b/R3 报告，并限定 evaluator、workflow step、项目/题型、最大 K、预算、packet builder、TIE 带、canary 与有效期；assessment 与实际路由事件保持分离。
+- Web 新增 Solver Jobs API 与项目工作区面板：按项目 ACL 展示本地/云端作业状态、耗时、输入输出引用及 `solver-job-evidence-v2` 两阶段 receipt 完整性。
 - 新增独立 `factory_core.audit` 子系统与 `factory audit` CLI：Step 4、5/6、10 分别运行 `model`、`results`、`paper` 确定性审计并将失败同步到 issue ledger；最终 `final` 审计按内容指纹记录在项目 `.factory/audits/<snapshot>/`。四类审计均可脱离交付运行并复用同一输入与 checker 契约的 PASS，只有 `final` profile 可以授权交付。
 - Web 新增独立的完成论文展示 ACL：管理员可分别配置默认未登录访客和具体注册用户的只读论文集合；注册用户继承公共集合，展示授权不授予项目控制、日志或内部文件权限。
 - 新增 `factory_core/` Python 编排核心：项目内 SQLite 快照、追加式事件、乐观 revision、注册式 Step/执行后端、重试与验证驱动恢复。
@@ -40,6 +41,7 @@
 - `agy` 模型 SDK 作为 `models` extra 与生产 Web 环境一起锁定；Cloud Solver 依赖集保持隔离。
 - 生产 systemd unit 改用仓库根工作目录、根 `.venv` 和稳定 ASGI 入口；部署预检会拒绝旧 unit。
 - 前端构建升级到 Vite 8 / Vue plugin 6，并更新 Axios；全新 `npm ci` 审计不再报告已知依赖漏洞。
+- Web Dashboard 更新深浅主题、工作区导航与状态视觉层级；选择、咨询、诊断和 Solver Jobs 仍保持独立入口。
 - 社会科学执行路径正式退役，历史 prompt、Stata 脚本和项目产物继续保留但不再承诺恢复运行。
 - Cloud Solver 鉴权统一为私有 Cloud Run IAM；CLI、监控和 Web 使用同一 ID Token 策略及无密钥专用 Invoker impersonation。
 - 云端能力收敛为经过镜像冒烟验证的 Python；API、Web 和 Shell 路由从同一能力清单读取，未安装运行时在提交阶段拒绝。
@@ -52,6 +54,7 @@
 
 ### 修复
 
+- Dev 测试依赖显式锁定 `httpx2`，避免 Starlette 1.3 `TestClient` 回退到已弃用的 `httpx` 兼容层后挂起；超大请求测试改为直接驱动 ASGI middleware，并确认 413 在 JSON 解析前返回。
 - 原生审计将科学判退与评委基础设施失败分流：Step 13 仅处理真实 math FAIL，
   最终审计再处理 math/execution FAIL；`INDETERMINATE_REVIEW`、格式/grounding/路由故障只重试当前角色，
   耗尽后明确停止为 `PERMANENT_JUDGE_INFRASTRUCTURE`。只有 packet 证明上游文件确实

@@ -1187,6 +1187,7 @@ web = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "httpx2" },
     { name = "pytest" },
 ]
 
@@ -1223,6 +1224,7 @@ provides-extras = ["models", "web", "cloud"]
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = "==0.28.1" },
+    { name = "httpx2", specifier = "==2.9.1" },
     { name = "pytest", specifier = ">=8,<10" },
 ]
 
