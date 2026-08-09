@@ -341,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
                         file=sys.stderr,
                     )
                     return 2
-                outcome = build_final_audit_service(CODE_ROOT).run_project(
+                outcome = build_final_audit_service(ROOT).run_project(
                     resolved,
                     compile_pdf=not args.no_compile,
                     reuse_pass=not args.no_reuse,

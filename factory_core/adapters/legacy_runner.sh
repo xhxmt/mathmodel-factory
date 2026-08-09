@@ -112,14 +112,21 @@ gate2_passed_for_path() {
     python3 "$FACTORY/scripts/workflow_state.py" gate2-passed "$1" 2>/dev/null
 }
 
+gate2_continuation_override_active() {
+    python3 "$FACTORY/scripts/workflow_state.py" gate2-continuation-allowed \
+        "$PROJECT" --root "$FACTORY" 2>/dev/null
+}
+
 gate2_delivery_allowed_for_path() {
-    python3 "$FACTORY/scripts/workflow_state.py" gate2-delivery-allowed "$1" 2>/dev/null
+    python3 "$FACTORY/scripts/workflow_state.py" gate2-delivery-allowed \
+        "$1" --root "$FACTORY" 2>/dev/null
 }
 
 gate2_delivery_override_active() {
-    [[ -f "$PROJECT/gate2_delivery_override.json" ]] \
-        && gate2_delivery_allowed_for_path "$PROJECT" \
-        && ! gate2_passed_for_path "$PROJECT"
+    local snapshot_id="$1"
+    [[ -n "$snapshot_id" ]] || return 1
+    python3 "$FACTORY/scripts/workflow_state.py" gate2-delivery-override \
+        "$PROJECT" --root "$FACTORY" --snapshot "$snapshot_id" 2>/dev/null
 }
 
 submission_hash_for_path() {
@@ -733,12 +740,10 @@ infer_step() {
     # Killed projects stop before Step 1 completes.
     [[ -f "$P/$KILL_MARKER" ]] && echo 0 && return
 
-    # 16: final PDF and submission bundle delivered to papers/, with the final
-    # quality gates still passing. A stale PDF/zip pair is not enough.
-    if [[ -f "$FACTORY/papers/${base}_paper.pdf" && -f "$FACTORY/papers/${base}_submission.zip" ]] \
-        && gate2_delivery_allowed_for_path "$P" \
-        && step8_5_passed_for_path "$P" \
-        && final_submission_judge_current_for_path "$P" "$base"; then
+    # 16: the atomic release pointer, final audit, and all quality gates agree.
+    # Legacy flat PDF/zip aliases are compatibility copies, never authority.
+    if python3 "$FACTORY/scripts/workflow_state.py" step16-ready \
+        "$P" --root "$FACTORY" --base "$base" 2>/dev/null; then
         echo 16
         return
     fi
@@ -1485,7 +1490,13 @@ recover_pending_gate2_reopen() {
     local verdict resume
     verdict=$(gate2_verdict)
     [[ "$verdict" == "REOPEN_REVISION_TEXT" || "$verdict" == "REOPEN_REVISION_MODEL" ]] || return 0
-    gate2_delivery_override_active && return 0
+    if [[ -f "$(final_judge_reopen_pending_file)" || -f "$(final_judge_in_progress_file)" ]]; then
+        local recorded_snapshot
+        recorded_snapshot=$(cat "$(final_judge_hash_file)" 2>/dev/null || true)
+        gate2_delivery_override_active "$recorded_snapshot" && return 0
+    else
+        gate2_continuation_override_active && return 0
+    fi
 
     # Final-submission judging has an independent repair budget.  Resolve its
     # durable state before consulting the ordinary Step-13 markers, otherwise a
@@ -4190,7 +4201,7 @@ run_final_submission_judge() {
             log "   Final submission ablation cache HIT (judge inputs and PDF unchanged)"
             return 0
         fi
-        if gate2_delivery_override_active; then
+        if gate2_delivery_override_active "$current_hash"; then
             rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
                   "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)"
             log "   Final submission override cache HIT (judge inputs and PDF unchanged)"
@@ -4222,7 +4233,7 @@ run_final_submission_judge() {
         return 0
     fi
 
-    if gate2_delivery_override_active; then
+    if gate2_delivery_override_active "$current_hash"; then
         rm -f "$(final_judge_in_progress_file)" "$(final_judge_reopen_pending_file)" \
               "$(final_judge_reopened_once_file)" "$(gate2_reopen_marker)"
         mkdir -p "$PROJECT/judge_outputs"
@@ -4324,43 +4335,37 @@ run_step_16() {
         log "   WARNING: cleanup_project_artifacts.py not found or not executable"
     fi
 
-    log "   Refreshing hard-acceptance reports before final judging"
-    step16_hard_acceptance "$PROJECT" || return 1
+    log "   Running snapshot-bound Final Audit"
+    if ! python3 -m factory_core.cli audit "$PROJECT" \
+        >> "$PROJECT/logs/runner.log" 2>&1; then
+        local resume_after=""
+        resume_after=$(python3 - "$PROJECT/.factory/audits/latest.json" <<'PY' 2>/dev/null || true
+import json
+import sys
 
-    run_final_submission_judge
-    local final_judge_rc=$?
-    (( final_judge_rc == 0 )) || return "$final_judge_rc"
-
-    log "   Delivering final PDF"
-    mkdir -p "$FACTORY/papers"
-    local delivery_tmp="$FACTORY/papers/.${BASE}_paper.pdf.tmp"
-    rm -f "$delivery_tmp"
-    if ! cp "$PROJECT/${BASE}_paper.pdf" "$delivery_tmp"; then
-        rm -f "$delivery_tmp"
-        log "   ERROR: failed to copy the reviewed final PDF"
-        return 1
-    fi
-    if ! mv -f "$delivery_tmp" "$FACTORY/papers/${BASE}_paper.pdf"; then
-        rm -f "$delivery_tmp"
-        log "   ERROR: failed to publish the reviewed final PDF"
-        return 1
-    fi
-    if ! cmp -s "$PROJECT/${BASE}_paper.pdf" "$FACTORY/papers/${BASE}_paper.pdf"; then
-        log "   ERROR: delivered PDF bytes differ from the final-judged PDF"
-        return 1
-    fi
-    if [[ -x "$FACTORY/scripts/package_submission.py" ]]; then
-        log "   Creating submission bundle"
-        if "$FACTORY/scripts/package_submission.py" "$PROJECT" "$BASE" "$FACTORY/papers/${BASE}_submission.zip" >> "$PROJECT/logs/runner.log" 2>&1; then
-            log "   Submission bundle OK"
-        else
-            log "   WARNING: submission bundle creation failed (exit $?)"
-            return 1
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    value = {}
+resume = value.get("resume_after_step")
+print(resume if isinstance(resume, int) else "")
+PY
+)
+        if [[ "$resume_after" =~ ^(10|11)$ ]]; then
+            log "   Final Audit requires revision after Step $resume_after"
+            return 43
         fi
-    else
-        log "   WARNING: package_submission.py not found or not executable"
+        log "   Final Audit did not authorize delivery"
         return 1
     fi
+
+    log "   Publishing immutable release and atomically switching current.json"
+    if ! python3 "$FACTORY/scripts/publish_release.py" "$PROJECT" --root "$FACTORY" \
+        >> "$PROJECT/logs/runner.log" 2>&1; then
+        log "   Atomic release publication failed — previous current release preserved"
+        return 1
+    fi
+    log "   Atomic release publication OK"
     log "   Running final delivery quality gate"
     if delivery_quality_gate "$PROJECT" > "$PROJECT/delivery_quality_gate.json" 2> "$PROJECT/delivery_quality_gate.stderr.log"; then
         log "   Final delivery quality gate PASS"
@@ -4515,12 +4520,12 @@ while (( STEP < 16 )); do
                 verdict=""
                 verdict=$(gate2_verdict)
 
-                if gate2_delivery_override_active; then
+                if gate2_continuation_override_active; then
                     rm -f "$(gate2_reopen_marker)" "$(gate2_reopened_once_file)" "$PROJECT/.gate2_blocked"
-                    log "   Gate 2 verdict ${verdict:-MISSING} recorded; user delivery override active — continuing to Step 14"
+                    log "   Gate 2 verdict ${verdict:-MISSING} recorded; administrator continuation override active — continuing to Step 14"
                     diag_event "$PROJECT" 13 gate_override GATE2_DELIVERY_OVERRIDE \
-                        "Gate 2 result retained; user requested completion through Step 16 without reopen" \
-                        "gate2_delivery_override.json,judge_evaluation.md"
+                        "Gate 2 result retained; administrator approved continuation without fabricating PASS" \
+                        "web/auth.db,judge_evaluation.md"
                 elif [[ -f "$(gate2_reopen_marker)" ]]; then
                     rm -f "$(gate2_reopen_marker)"
                     log "   Gate 2 reopen cycle completed"

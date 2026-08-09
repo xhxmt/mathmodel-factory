@@ -136,8 +136,25 @@ remain compatibility projections.
 It must not publish into `papers/`, package, clean, archive, or mutate SQLite
 workflow state. Step 16 is a compatibility adapter: it invokes or reuses the
 same snapshot-bound audit, then publishes and packages only a `PASS` or explicit
-`OVERRIDDEN` result. Audit failures return structured repair hints to the engine;
-the audit subsystem does not directly rewind workflow state.
+`OVERRIDDEN` result. Final audit ordering is compile → full paper/provenance
+checks → visual/page gate → packets/fingerprint → enforce-mode three-role Judge
+→ snapshot recheck → judgment/final-acceptance receipts. Audit failures return
+structured repair hints to the engine; the audit subsystem does not directly
+rewind workflow state.
+
+Delivery governance authority lives only in `web/auth.db`. The scopes are
+`continue_after_gate2` and `deliver_snapshot`; the latter must bind the exact
+64-character final snapshot and is consumed when the final acceptance is
+recorded. A project-local `gate2_delivery_override.json` never authorizes
+anything. This is an operational boundary for the single-operator deployment,
+not cryptographic isolation from another process running as the same Unix UID.
+
+Step 16 publishes immutable releases under
+`papers/releases/<base>/<snapshot>/` and atomically replaces only
+`papers/<base>/current.json` after all bytes and receipts verify. Flat
+`papers/<base>_paper.pdf` and `_submission.zip` files are compatibility aliases,
+not release authority. Native and frozen Legacy adapters must use the same
+Final Audit and release publisher.
 
 ### Human Consultation Window (opt-in)
 
@@ -247,6 +264,8 @@ Important project files include:
 - `audit_issue_ledger.md`: issue status tracker. `AUDIT-*` rows are maintained by stage profiles; blocking issues must not be silently dropped.
 - `.factory/audits/profiles/**`: non-delivery `model` / `results` / `paper` snapshots and attempts.
 - `.factory/audits/latest.json`: current `profile=final` audit record used by delivery.
+- `judge_outputs/final_paper_checks.json`: hash-bound final paper/provenance check report.
+- `judge_outputs/final_acceptance_receipt.json`: binds the approved snapshot to PDF, checks, visual gate, decision route, and judgment or override receipt.
 - `judge_evaluation.md`: Step-13 `PRECHECK_PASS` control file until the final audit replaces it with the full aggregate verdict.
 - `judge_packets/**`, `judge_outputs/**`: isolated evidence manifests, strict role outputs, aggregate JSON, and final-submission fingerprint. Each manifest carries `judge-packet-completeness-v1`; required evidence that is missing, truncated, or omitted forces the role to `INDETERMINATE`, while non-critical truncation must remain visible in `limitations`.
 

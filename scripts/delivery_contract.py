@@ -18,7 +18,7 @@ if __package__ in (None, ""):
 from scripts import evaluate_modeling_project, workflow_state
 
 
-CURRENT_CONTRACT_VERSION = "2026-08-04.incremental_audit_v6"
+CURRENT_CONTRACT_VERSION = "2026-08-09.atomic_release_v7"
 
 
 def utc_now() -> str:
@@ -136,6 +136,17 @@ def build_delivery_manifest(
         and all(character in "0123456789abcdef" for character in snapshot_id)
         else project / ".factory" / "audits" / "invalid-snapshot.json"
     )
+    from factory_core.delivery.release import resolve_current_release
+
+    release = resolve_current_release(root / "papers", base)
+    papers_pdf = (
+        release.paper if release is not None else root / "papers" / f"{base}_paper.pdf"
+    )
+    submission_zip = (
+        release.submission_zip
+        if release is not None
+        else root / "papers" / f"{base}_submission.zip"
+    )
 
     return {
         "contract_version": CURRENT_CONTRACT_VERSION,
@@ -151,7 +162,10 @@ def build_delivery_manifest(
             "passed": ev.passed,
             "gate2_verdict": workflow_state.gate2_verdict(project),
             "gate2_passed": workflow_state.gate2_passed(project),
-            "gate2_delivery_override": workflow_state.gate2_delivery_override(project),
+            "gate2_delivery_override": (
+                workflow_state.gate2_delivery_override(project)
+                or workflow_state.delivered_snapshot_override(project)
+            ),
             "judge_policy_mode": route.get("policy_mode"),
             "new_judge_decision": route.get("new_decision"),
             "effective_judge_decision": route.get("effective_decision"),
@@ -161,14 +175,20 @@ def build_delivery_manifest(
             "audit_snapshot": snapshot_id,
             "audit_profile": audit.get("profile"),
             "audit_decision": audit.get("decision"),
+            "release_id": release.release_id if release is not None else None,
             "human_alignment": "UNAVAILABLE_WITHOUT_HUMAN_CALIBRATION",
             "award_prediction": "UNAVAILABLE_WITHOUT_HUMAN_CALIBRATION",
             "failed_checks": failed_checks,
         },
         "artifacts": {
             "project_pdf": artifact_record(project / f"{base}_paper.pdf"),
-            "papers_pdf": artifact_record(root / "papers" / f"{base}_paper.pdf"),
-            "submission_zip": artifact_record(root / "papers" / f"{base}_submission.zip"),
+            "papers_pdf": artifact_record(papers_pdf),
+            "submission_zip": artifact_record(submission_zip),
+            "release_manifest": artifact_record(
+                release.manifest
+                if release is not None
+                else root / "papers" / base / "missing-release-manifest.json"
+            ),
             "judgment_receipt": artifact_record(judgment_receipt_path),
             "decision_route": artifact_record(decision_route_path),
             "visual_gate": artifact_record(visual_gate_path),

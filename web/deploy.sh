@@ -8,6 +8,10 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WEB_ROOT="/var/www/tfisher.de"
 SERVICE_USER="${SERVICE_USER:-tfisher}"
 MODE="${1:-full}"
+SERVICE_NAME="${SERVICE_NAME:-paper-factory-api.service}"
+
+# shellcheck source=backend_service_health.sh
+source "$SCRIPT_DIR/backend_service_health.sh"
 
 echo "════════════════════════════════════════"
 echo "Paper Factory Web Dashboard 部署脚本"
@@ -137,16 +141,10 @@ deploy_frontend() {
 
 deploy_backend() {
     echo -e "${GREEN}► 步骤 3/4: 重启后端服务${NC}"
-    systemctl restart paper-factory-api
-    sleep 2
-
-    echo -e "${GREEN}► 步骤 4/4: 检查服务状态${NC}"
-    if systemctl is-active --quiet paper-factory-api; then
-        echo -e "${GREEN}✓ 后端服务运行正常${NC}"
+    if [ "$EUID" -eq 0 ]; then
+        systemctl restart "$SERVICE_NAME"
     else
-        echo -e "${RED}✗ 后端服务启动失败${NC}"
-        systemctl status paper-factory-api --no-pager
-        exit 1
+        sudo systemctl restart "$SERVICE_NAME"
     fi
 }
 
@@ -168,19 +166,35 @@ test_deployment() {
     echo -e "${GREEN}► 测试部署${NC}"
     local failed=0
 
-    # 测试后端
-    if wait_for_http "http://127.0.0.1:8000/" 30; then
-        echo -e "${GREEN}✓ 后端 API 响应正常${NC}"
+    # 先验证 systemd 所有权和稳定性，再接受 HTTP 结果。这样旧会话留下的
+    # rogue listener 无法把失败的正式服务伪装成部署成功。
+    local backend_snapshot
+    if backend_snapshot="$(verify_backend_service_stable)"; then
+        echo -e "${GREEN}✓ 后端由正式 unit 持有并通过稳定窗口: $backend_snapshot${NC}"
     else
-        echo -e "${RED}✗ 后端 API 无响应${NC}"
+        echo -e "${RED}✗ 后端 systemd/PID/cgroup/HTTP 验收失败${NC}"
+        systemctl status "$SERVICE_NAME" --no-pager || true
         failed=1
     fi
 
     # 测试前端
-    if wait_for_http "https://tfisher.de/" 10; then
+    if wait_for_http "https://tfisher.de/" 30; then
         echo -e "${GREEN}✓ 前端 HTTPS 访问正常${NC}"
     else
-        echo -e "${YELLOW}! 前端访问测试失败（可能需要等待 nginx 重载）${NC}"
+        echo -e "${RED}✗ canonical HTTPS 访问失败${NC}"
+        failed=1
+    fi
+
+    if [ "$MODE" != "backend-only" ]; then
+        local source_hash deployed_hash
+        source_hash="$(sha256sum "$PROJECT_ROOT/web/frontend/dist/index.html" | awk '{print $1}')"
+        deployed_hash="$(sha256sum "$WEB_ROOT/index.html" | awk '{print $1}')"
+        if [ "$source_hash" = "$deployed_hash" ]; then
+            echo -e "${GREEN}✓ 前端部署指纹一致${NC}"
+        else
+            echo -e "${RED}✗ 前端 dist 与生产 index.html 指纹不一致${NC}"
+            failed=1
+        fi
     fi
 
     if [ "$failed" -ne 0 ]; then
@@ -195,7 +209,7 @@ show_summary() {
     echo "════════════════════════════════════════"
     echo ""
     echo "🌐 访问地址：https://tfisher.de"
-    echo "🔐 登录账号由 web/.env 中的管理员配置决定"
+    echo "🔐 管理员凭据由 GCP Secret Manager 注入"
     echo ""
     echo "管理命令："
     echo "  查看日志：sudo journalctl -u paper-factory-api -f"
@@ -208,8 +222,9 @@ show_summary() {
 if [ "$MODE" = "backend-only" ]; then
     echo "仅更新后端服务..."
     preflight
-    sudo systemctl restart paper-factory-api
-    sudo systemctl status paper-factory-api --no-pager
+    deploy_backend
+    test_deployment
+    show_summary
     exit 0
 fi
 

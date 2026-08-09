@@ -11,6 +11,7 @@ from factory_core.adapters.models.backends import ApiAgentBackend, CodexCliBacke
 from factory_core.adapters.models.dispatcher import ModelDispatcher
 from factory_core.domain import ExecutionResult, StepContext, ValidationResult, WorkflowStatus
 from factory_core.engine import FactoryEngine
+from factory_core.governance.overrides import DeliveryOverride
 from factory_core.registry import ModelBackendRegistry
 from factory_core.steps import STEP_CONTRACTS, build_native_registry, catalog_payload
 from factory_core.steps.prompting import PromptRenderer
@@ -365,10 +366,18 @@ class FakeCommandRunner:
         elif script.endswith("judge_decision_router.py"):
             output = project / "judge_outputs/decision_route.json"
             output.write_text('{"effective_decision":"PASS"}\n', encoding="utf-8")
+        elif script.endswith("judgment_receipt.py") and args[0] == "build":
+            output = project / "judge_outputs/judgment_receipt.json"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text('{"status":"VALID"}\n', encoding="utf-8")
         elif script.endswith("package_submission.py"):
             output = Path(args[-1])
             output.parent.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(output, "w") as archive:
+                archive.write(
+                    project / f"{project.name}_paper.pdf",
+                    f"{project.name}_paper.pdf",
+                )
                 archive.writestr("fixture.txt", "ok")
         return self._ok(project, label)
 
@@ -486,6 +495,30 @@ def test_native_judge_failure_continues_only_with_delivery_override(tmp_path):
         + "\n",
         encoding="utf-8",
     )
+    # Project-local JSON is only a request/compatibility artifact. Authority is
+    # supplied by the administrator override provider.
+    class AdminOverrideProvider:
+        @staticmethod
+        def active_override(base_name, scope, *, snapshot_id=None):
+            del snapshot_id
+            if base_name != project.name or scope != "continue_after_gate2":
+                return None
+            return DeliveryOverride(
+                override_id="override-test",
+                base_name=base_name,
+                scope=scope,
+                bound_snapshot_id=None,
+                source_verdict="MISSING",
+                reason="administrator approved continuation",
+                actor="admin",
+                issued_at=1,
+            )
+
+        @staticmethod
+        def consume(_override_id):
+            return True
+
+    step.override_provider = AdminOverrideProvider()
     override_result = step.execute(context)
 
     assert override_result.returncode == 0
@@ -496,6 +529,7 @@ def test_native_judge_failure_continues_only_with_delivery_override(tmp_path):
         "judge_error_class": "PERMANENT_JUDGE_INFRASTRUCTURE",
         "judge_returncode": 2,
         "gate2_delivery_override": True,
+        "gate2_override_id": "override-test",
     }
     assert step.dispatcher.calls == 4
     log = (project / "logs/gate2_continuation_override.log").read_text(
@@ -576,6 +610,13 @@ def test_native_delivery_override_packages_after_final_judge_failure(tmp_path):
         + "\n",
         encoding="utf-8",
     )
+    (project / f"{project.name}_paper.tex").write_text(
+        "\\begin{document}\nfinal\n\\end{document}\n", encoding="utf-8"
+    )
+    (project / "code_review.md").write_text(
+        "\n".join(f"check {index}" for index in range(20)) + "\n",
+        encoding="utf-8",
+    )
 
     class FailedJudge:
         @staticmethod
@@ -593,6 +634,34 @@ def test_native_delivery_override_packages_after_final_judge_failure(tmp_path):
             )
 
     contract = next(item for item in STEP_CONTRACTS if item.id == 16)
+
+    class DeliverOverrideProvider:
+        consumed = []
+
+        @staticmethod
+        def active_override(base_name, scope, *, snapshot_id=None):
+            if (
+                base_name == project.name
+                and scope == "deliver_snapshot"
+                and snapshot_id == "a" * 64
+            ):
+                return DeliveryOverride(
+                    override_id="delivery-test",
+                    base_name=base_name,
+                    scope=scope,
+                    bound_snapshot_id=snapshot_id,
+                    source_verdict="REOPEN_REVISION_MODEL",
+                    reason="administrator approved exact snapshot",
+                    actor="admin",
+                    issued_at=1,
+                )
+            return None
+
+        @staticmethod
+        def consume(_override_id):
+            DeliverOverrideProvider.consumed.append(_override_id)
+            return True
+
     step = DeliveryStep(
         contract,
         root,
@@ -600,6 +669,7 @@ def test_native_delivery_override_packages_after_final_judge_failure(tmp_path):
         AlwaysValidValidator(),
         FakeCommandRunner(),
         fingerprinter=lambda _project, _base: "a" * 64,
+        override_provider=DeliverOverrideProvider(),
     )
 
     result = step.execute(StepContext(project, project.name, 16, 1, 3600, 0))
@@ -607,6 +677,8 @@ def test_native_delivery_override_packages_after_final_judge_failure(tmp_path):
     assert result.returncode == 0
     assert result.metadata["final_decision"] == "REOPEN_REVISION_MODEL"
     assert result.metadata["gate2_delivery_override"] is True
+    assert DeliverOverrideProvider.consumed == ["delivery-test"]
+    assert (root / "papers/judge_fixture/current.json").is_file()
     assert (root / "papers/judge_fixture_submission.zip").is_file()
     route = json.loads(
         (project / "judge_outputs/decision_route.json").read_text(encoding="utf-8")
@@ -788,6 +860,13 @@ def test_fake_backends_drive_native_steps_zero_through_sixteen(tmp_path):
     root = Path(__file__).resolve().parents[1]
     project = tmp_path / "ongoing" / "native_fixture"
     project.mkdir(parents=True)
+    (project / "native_fixture_paper.tex").write_text(
+        "\\begin{document}\nfinal\n\\end{document}\n", encoding="utf-8"
+    )
+    (project / "code_review.md").write_text(
+        "\n".join(f"check {index}" for index in range(20)) + "\n",
+        encoding="utf-8",
+    )
     (project / "viable_streams.md").write_text(
         "## Stream m1: first\n## Stream m2: second\n", encoding="utf-8"
     )

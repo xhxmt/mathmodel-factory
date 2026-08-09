@@ -237,8 +237,12 @@ isolated math role against `judge_packets/math/`. It produces:
 Execution consistency has already been checked by the Step-5/6 `results`
 profile, and paper/result traceability by the Step-10 `paper` profile. The full
 non-compensatory math + execution + paper review is therefore run exactly once,
-inside the post-Step-15 final audit. A project-scoped delivery override still
-preserves the real precheck/final failure and never fabricates a PASS receipt.
+inside the post-Step-15 final audit. Overrides are administrator-issued records
+in `web/auth.db`, never project-authored authority. `continue_after_gate2` only
+allows work to proceed after Step 13; `deliver_snapshot` separately authorizes
+one exact 64-character final snapshot. Both preserve the real verdict and set
+`quality_pass_fabricated=false`. A project-local
+`gate2_delivery_override.json` is at most a request or historical artifact.
 
 **Quality checks** (introduced 2026-06-24):
 - **Excellent paper writing benchmark**: abstract structure (opening + per-question delivery), problem analysis indexing, result presentation order (adopted solution first), validation phrasing (support credibility, not amplify uncertainty), internal traces removal
@@ -284,14 +288,27 @@ workflow database.
 Step 16 is the workflow compatibility adapter between the independent audit
 subsystem and delivery. It invokes or reuses the audit for the current content
 snapshot, then performs delivery mutations only when the result is `PASS` or an
-explicit project-scoped governance override is active.
+administrator-issued, exact-snapshot `deliver_snapshot` authorization produces
+an `OVERRIDDEN` audit result. Native and Legacy adapters use this same path.
 
 Produce:
 - a freshly compiled `{base}_paper.pdf` (via `../../compile_paper.sh`); compilation failure is fatal and may not fall back to an older PDF
-- a fresh final-submission Gate-2 result whose `judge_outputs/final_submission.sha256` matches all current math / execution / paper packet fingerprints, role prompts, evaluator implementation, Judge model registry/config selection, paper assets, and the exact compiled PDF bytes. The PDF hash is a delivery-consistency binding, not evidence that the text-only LLM inspected its rendered appearance. Delivery manifests use the `incremental_audit_v6` contract.
+- a fresh final-submission Gate-2 result whose `judge_outputs/final_submission.sha256` matches all current math / execution / paper packet fingerprints, role prompts, checker/evaluator implementation, Judge model registry/config selection, final paper-check report, paper assets, and the exact compiled PDF bytes. The PDF hash is a delivery-consistency binding, not evidence that the text-only LLM inspected its rendered appearance. Delivery manifests use the `2026-08-09.atomic_release_v7` contract.
 - code appendix integrated as `paper/appendix_code.tex` or `\inputminted{}` chunks
-- `papers/{base}_paper.pdf` — copy delivered to the factory's papers/ dir
-- `papers/{base}_submission.zip` — submission bundle (PDF + code + selected data, matching `problem/feasibility_constraints.md` § 提交格式硬约束)
-- `scripts/cleanup_project_artifacts.py` invoked to prune rebuildable intermediates
+- `papers/releases/{base}/{snapshot}/` — immutable release containing the exact audited PDF, submission ZIP, delivery manifest, final acceptance receipt, audit result, and audit snapshot
+- `papers/{base}/current.json` — the sole authoritative current-release pointer, switched with one atomic replace only after every release artifact verifies
+- `papers/{base}_paper.pdf` and `papers/{base}_submission.zip` — compatibility aliases repaired from the current release; consumers must prefer `current.json`
+- `scripts/cleanup_project_artifacts.py` invoked before final snapshot construction to prune rebuildable intermediates
 
-On a fingerprint cache miss, the audit subsystem compiles before the final-submission judge so the PASS binds the exact PDF that will be copied and packaged. A compile failure, non-PASS, INDETERMINATE, malformed, or stale-fingerprint result blocks normal delivery. Audit failures produce structured status and resume hints but do not themselves change workflow state. After an allowed audit result and successful delivery, the runner moves the project from `ongoing/` to `complete/`.
+On a fingerprint cache miss, the audit subsystem compiles the final PDF, reruns
+the complete Step-10 paper checks plus provenance, runs the visual/page gate,
+builds packets and the enforce-mode three-role Judge result, rejects any
+snapshot mutation during judging, then creates a judgment receipt and final
+acceptance receipt. `FINAL_AUDIT_MAX_PAGES` or machine-readable
+`problem/deliverables.json` `max_pages` configures the page limit. A compile
+failure, hard check failure, visual failure, non-PASS, INDETERMINATE, malformed
+receipt, or stale fingerprint blocks normal delivery. Submission packaging is
+prepared and verified inside a same-filesystem staging release; failure leaves
+the previous `current.json` untouched. After an allowed audit result and
+successful atomic publication, the runner moves the project from `ongoing/` to
+`complete/`.

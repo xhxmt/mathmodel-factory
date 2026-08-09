@@ -88,6 +88,34 @@
           </section>
 
           <section class="section">
+            <div class="sec-h"><span class="label">交付例外授权</span><b class="mono">{{ overrides.length }}</b></div>
+            <div class="override-form">
+              <input v-model.trim="overrideDraft.base_name" class="audience-select mono" placeholder="项目 base_name" />
+              <select v-model="overrideDraft.scope" class="audience-select mono">
+                <option value="continue_after_gate2">仅允许继续到最终审计</option>
+                <option value="deliver_snapshot">允许交付指定 snapshot</option>
+              </select>
+              <input v-if="overrideDraft.scope === 'deliver_snapshot'" v-model.trim="overrideDraft.bound_snapshot_id" class="audience-select mono" placeholder="64 位 final snapshot SHA-256" />
+              <input v-model.trim="overrideDraft.source_verdict" class="audience-select mono" placeholder="真实 verdict，例如 REOPEN_REVISION_TEXT" />
+              <input v-model.trim="overrideDraft.reason" class="audience-select" placeholder="必须填写授权理由" />
+              <button class="btn btn-sm btn-amber" :disabled="busyOverride || !overrideDraft.base_name || !overrideDraft.reason" @click="issueOverride">
+                <Icon name="shield" :size="13" /> 签发管理员授权
+              </button>
+            </div>
+            <div v-if="overrides.length" class="rows">
+              <div v-for="item in overrides" :key="item.override_id" class="row">
+                <div class="main">
+                  <div class="line"><span class="name mono">{{ item.base_name }}</span><span class="badge mono" :class="overrideActive(item) ? 'st-active' : 'st-failed'">{{ item.scope }}</span></div>
+                  <div class="meta mono">{{ item.override_id }} · {{ item.source_verdict }} · {{ formatUnix(item.issued_at) }}</div>
+                  <div class="note">{{ item.reason }}<span v-if="item.bound_snapshot_id" class="mono"> · {{ item.bound_snapshot_id }}</span></div>
+                </div>
+                <button v-if="overrideActive(item)" class="btn btn-icon btn-sm btn-ghost danger" :disabled="busyOverride === item.override_id" title="撤销" @click="revokeOverride(item)"><Icon name="x" :size="13" /></button>
+              </div>
+            </div>
+            <div v-else class="empty-row">暂无交付例外授权</div>
+          </section>
+
+          <section class="section">
             <div class="sec-h">
               <span class="label">Secret Manager</span>
               <b class="mono">{{ secretHealthLabel }}</b>
@@ -157,7 +185,7 @@
 
 <script>
 import Icon from './Icon.vue'
-import { AdminOps, AdminShowcase, AdminUsers, ProjectRequests } from '../lib/api.js'
+import { AdminOps, AdminOverrides, AdminShowcase, AdminUsers, ProjectRequests } from '../lib/api.js'
 
 export default {
   name: 'AdminPanel',
@@ -170,12 +198,21 @@ export default {
       ops: null,
       auditLog: [],
       showcase: { candidates: [], audiences: [] },
+      overrides: [],
+      overrideDraft: {
+        base_name: '',
+        scope: 'continue_after_gate2',
+        bound_snapshot_id: '',
+        source_verdict: '',
+        reason: '',
+      },
       selectedAudience: 'guest',
       selectedProjectNames: [],
       loading: false,
       busyUser: null,
       busyRequest: null,
       busyShowcase: false,
+      busyOverride: false,
       error: '',
     }
   },
@@ -234,18 +271,20 @@ export default {
       this.loading = true
       this.error = ''
       try {
-        const [users, requests, ops, auditLog, showcase] = await Promise.all([
+        const [users, requests, ops, auditLog, showcase, overrides] = await Promise.all([
           AdminUsers.list(),
           ProjectRequests.list(),
           AdminOps.secrets(),
           AdminOps.auditLog(),
           AdminShowcase.get(),
+          AdminOverrides.list(),
         ])
         this.users = users
         this.requests = requests
         this.ops = ops
         this.auditLog = auditLog
         this.showcase = showcase || { candidates: [], audiences: [] }
+        this.overrides = overrides
         if (!this.showcaseAudiences.some((audience) => audience.id === this.selectedAudience)) {
           this.selectedAudience = this.showcaseAudiences[0]?.id || ''
         }
@@ -303,6 +342,37 @@ export default {
         this.error = err.response?.data?.detail || '项目操作失败'
       } finally {
         this.busyRequest = null
+      }
+    },
+    overrideActive(item) {
+      const now = Math.floor(Date.now() / 1000)
+      return !item.revoked_at && !item.consumed_at && (!item.expires_at || item.expires_at > now)
+    },
+    async issueOverride() {
+      this.busyOverride = true
+      this.error = ''
+      try {
+        const payload = { ...this.overrideDraft }
+        if (payload.scope !== 'deliver_snapshot') payload.bound_snapshot_id = null
+        await AdminOverrides.issue(payload)
+        this.overrideDraft.reason = ''
+        await this.load()
+      } catch (err) {
+        this.error = err.response?.data?.detail || '授权签发失败'
+      } finally {
+        this.busyOverride = false
+      }
+    },
+    async revokeOverride(item) {
+      this.busyOverride = item.override_id
+      this.error = ''
+      try {
+        await AdminOverrides.revoke(item.override_id)
+        await this.load()
+      } catch (err) {
+        this.error = err.response?.data?.detail || '授权撤销失败'
+      } finally {
+        this.busyOverride = false
       }
     },
     audienceLabel(audience) {
@@ -392,6 +462,8 @@ export default {
 .env-row { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); }
 .audit-rows { max-height: 300px; overflow-y: auto; }
 .showcase-config { display: flex; flex-direction: column; gap: 9px; }
+.override-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.override-form .btn { justify-self: start; }
 .audience-picker { display: grid; grid-template-columns: auto minmax(220px, 1fr); align-items: center; gap: 8px 12px; padding: 11px 13px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
 .audience-picker label { font-size: 12px; color: var(--ink-2); }
 .audience-picker .meta { grid-column: 1 / -1; }

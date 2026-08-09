@@ -10,6 +10,7 @@ they are needed as ordinary source files.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import zipfile
 from pathlib import Path
@@ -89,8 +90,44 @@ def should_skip(path: Path, rel: Path) -> bool:
     return False
 
 
-def should_include(path: Path, rel: Path, base: str) -> bool:
+def declared_delivery_files(project: Path) -> set[str]:
+    contract = project / "problem" / "deliverables.json"
+    if not contract.is_file():
+        return set()
+    try:
+        value = json.loads(contract.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid deliverables contract: {exc}") from exc
+    attachments = value.get("attachments") if isinstance(value, dict) else None
+    if not isinstance(attachments, list):
+        raise ValueError("deliverables attachments must be an array")
+    declared: set[str] = set()
+    for index, attachment in enumerate(attachments):
+        relative = attachment.get("file") if isinstance(attachment, dict) else None
+        if not isinstance(relative, str) or not relative.strip():
+            raise ValueError(f"deliverables attachment {index} has no file")
+        candidate = Path(relative)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(f"deliverables attachment escapes project: {relative}")
+        resolved = (project / candidate).resolve()
+        try:
+            resolved.relative_to(project.resolve())
+        except ValueError as exc:
+            raise ValueError(
+                f"deliverables attachment escapes project: {relative}"
+            ) from exc
+        if not resolved.is_file():
+            raise ValueError(f"declared deliverable is missing: {relative}")
+        declared.add(candidate.as_posix())
+    return declared
+
+
+def should_include(
+    path: Path, rel: Path, base: str, declared: set[str] | None = None
+) -> bool:
     rel_posix = rel.as_posix()
+    if rel_posix in (declared or set()):
+        return True
     if rel.name in {f"{base}_paper.pdf", f"{base}_paper.tex"}:
         return True
     if rel.parent == Path(".") and (rel.name in TOP_LEVEL_FILES or rel.name.startswith("m") and rel.suffix in {".md", ".json", ".csv"}):
@@ -103,6 +140,7 @@ def should_include(path: Path, rel: Path, base: str) -> bool:
 
 def iter_bundle_files(project: Path, base: str) -> list[tuple[Path, str]]:
     files: list[tuple[Path, str]] = []
+    declared = declared_delivery_files(project)
     for root, dirs, names in os.walk(project):
         root_path = Path(root)
         rel_root = root_path.relative_to(project)
@@ -110,7 +148,9 @@ def iter_bundle_files(project: Path, base: str) -> list[tuple[Path, str]]:
         for name in names:
             path = root_path / name
             rel = rel_root / name if rel_root != Path(".") else Path(name)
-            if should_skip(path, rel) or not should_include(path, rel, base):
+            if should_skip(path, rel) or not should_include(
+                path, rel, base, declared
+            ):
                 continue
             files.append((path, rel.as_posix()))
     return sorted(files, key=lambda item: item[1])
@@ -138,7 +178,10 @@ def main() -> int:
     if tmp.exists():
         tmp.unlink()
 
-    files = iter_bundle_files(project, base)
+    try:
+        files = iter_bundle_files(project, base)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if not any(arc == f"{base}_paper.pdf" for _path, arc in files):
         raise SystemExit(f"Final PDF was not selected for packaging: {pdf}")
     if not any(arc.startswith("models/") for _path, arc in files):

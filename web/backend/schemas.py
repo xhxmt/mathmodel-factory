@@ -93,6 +93,46 @@ class AuditLogResponse(BaseModel):
     metadata: dict = {}
 
 
+class DeliveryOverrideIssueRequest(BaseModel):
+    base_name: str
+    scope: str
+    source_verdict: str
+    reason: str
+    bound_snapshot_id: str | None = None
+    expires_at: int | None = None
+
+    @field_validator("base_name")
+    @classmethod
+    def _check_override_base(cls, value: str) -> str:
+        import re
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            raise ValueError("invalid base_name")
+        return value
+
+    @field_validator("scope")
+    @classmethod
+    def _check_override_scope(cls, value: str) -> str:
+        if value not in {"continue_after_gate2", "deliver_snapshot"}:
+            raise ValueError("invalid override scope")
+        return value
+
+
+class DeliveryOverrideResponse(BaseModel):
+    override_id: str
+    base_name: str
+    scope: str
+    bound_snapshot_id: str | None = None
+    source_verdict: str
+    reason: str
+    actor: str
+    issued_at: int
+    expires_at: int | None = None
+    revoked_at: int | None = None
+    revoked_by: str | None = None
+    consumed_at: int | None = None
+
+
 class ProjectAction(BaseModel):
     action: str
     expected_revision: int | None = None

@@ -8,6 +8,8 @@ from factory_core.adapters.infrastructure.commands import CommandResult
 from factory_core.audit import AuditStatus, FinalAuditService
 from factory_core.cli import build_parser
 from factory_core.domain import ExecutionResult, StepContext
+from factory_core.governance.overrides import SQLiteOverrideProvider
+from web.backend.auth_store import AuthStore
 
 
 class FakeValidator:
@@ -19,6 +21,7 @@ class FakeValidator:
 class RecordingRunner:
     def __init__(self) -> None:
         self.labels: list[str] = []
+        self.calls: list[tuple[str, list[object]]] = []
 
     def _ok(self, project: Path, label: str) -> CommandResult:
         self.labels.append(label)
@@ -35,6 +38,7 @@ class RecordingRunner:
 
     def python(self, _root, project, script, args, *, label, **_kwargs):
         project = Path(project)
+        self.calls.append((script, list(args)))
         if script.endswith("pdf_visual_gate.py"):
             output = project / "judge_outputs/visual_gate.json"
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -46,6 +50,10 @@ class RecordingRunner:
                 '{"new_decision":"PASS","effective_decision":"PASS"}\n',
                 encoding="utf-8",
             )
+        elif script.endswith("judgment_receipt.py") and args[0] == "build":
+            output = project / "judge_outputs/judgment_receipt.json"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text('{"status":"VALID"}\n', encoding="utf-8")
         return self._ok(project, label)
 
 
@@ -79,6 +87,13 @@ class PassingJudge:
 
 
 def make_context(project: Path) -> StepContext:
+    (project / f"{project.name}_paper.tex").write_text(
+        "\\begin{document}\nfinal\n\\end{document}\n", encoding="utf-8"
+    )
+    (project / "code_review.md").write_text(
+        "\n".join(f"check {index}" for index in range(20)) + "\n",
+        encoding="utf-8",
+    )
     return StepContext(project, project.name, 16, 1, 3_600, 0)
 
 
@@ -113,6 +128,29 @@ def test_final_audit_writes_snapshot_without_publishing(tmp_path: Path) -> None:
     assert not (root / "papers").exists()
     assert "package_submission" not in runner.labels
     assert "delivery_cleanup" not in runner.labels
+    assert runner.labels.index("compile_paper") < runner.labels.index(
+        "audit_paper_numbers"
+    )
+    assert runner.labels.index("audit_final_provenance") < runner.labels.index(
+        "pdf_visual_gate"
+    )
+    assert runner.labels.index("pdf_visual_gate") < runner.labels.index(
+        "judge_route"
+    )
+    for label in (
+        "audit_paper_numbers",
+        "audit_paper_deliverables",
+        "audit_paper_derived_artifacts",
+        "audit_paper_invariants",
+        "audit_paper_spec_impl",
+        "audit_paper_quality_contract",
+        "audit_final_provenance",
+    ):
+        assert label in runner.labels
+    router_args = next(
+        args for script, args in runner.calls if script.endswith("judge_decision_router.py")
+    )
+    assert router_args[router_args.index("--policy-mode") + 1] == "enforce"
 
 
 def test_final_audit_reuses_valid_pass_for_same_snapshot(
@@ -144,6 +182,47 @@ def test_final_audit_reuses_valid_pass_for_same_snapshot(
     assert second.execution.metadata["audit_reused"] is True
     assert judge.packet_calls == 2
     assert judge.judge_calls == 1
+
+
+def test_consumed_exact_snapshot_override_remains_reusable(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    snapshot_id = "9" * 64
+    store = AuthStore(root / "web/auth.db")
+    store.initialize()
+    store.bootstrap_admin("correct horse battery staple test only")
+    authorization = store.issue_delivery_override(
+        base_name="demo",
+        scope="deliver_snapshot",
+        bound_snapshot_id=snapshot_id,
+        source_verdict="REOPEN_REVISION_MODEL",
+        reason="accept exact tested snapshot",
+        actor="admin",
+    )
+    provider = SQLiteOverrideProvider(root / "web/auth.db")
+    judge = PassingJudge()
+    service = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: snapshot_id,
+        override_provider=provider,
+    )
+
+    first = service.run(make_context(project), reuse_pass=False)
+    second = service.run(make_context(project), reuse_pass=True)
+
+    assert first.record.status is AuditStatus.OVERRIDDEN
+    assert second.record.status is AuditStatus.OVERRIDDEN
+    assert second.record.reused is True
+    assert judge.judge_calls == 0
+    consumed = provider.get_override(authorization.override_id)
+    assert consumed is not None
+    assert consumed.consumed_at is not None
 
 
 def test_final_audit_does_not_reuse_non_final_profile(
@@ -180,6 +259,83 @@ def test_final_audit_does_not_reuse_non_final_profile(
     assert second.record.reused is False
     assert second.record.profile == "final"
     assert judge.judge_calls == 2
+
+
+def test_final_audit_revalidates_tampered_acceptance_evidence_before_reuse(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    judge = PassingJudge()
+    runner = RecordingRunner()
+    service = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        runner,
+        fingerprinter=lambda _project, _base: "e" * 64,
+    )
+    first = service.run(make_context(project))
+    assert first.record.status is AuditStatus.PASS
+    monkeypatch.setattr(
+        "scripts.judgment_receipt.verify_receipt",
+        lambda *_args, **_kwargs: (True, []),
+    )
+    (project / "judge_outputs/final_paper_checks.json").write_text(
+        '{"tampered":true}\n', encoding="utf-8"
+    )
+
+    second = service.run(make_context(project), compile_pdf=False)
+
+    assert second.record.reused is True
+    assert judge.judge_calls == 1
+    assert runner.labels.count("audit_paper_numbers") == 2
+
+
+def test_final_audit_rejects_content_mutation_during_judge(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    fingerprints = iter(("1" * 64, "2" * 64))
+    service = FinalAuditService(
+        root,
+        PassingJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: next(fingerprints),
+    )
+
+    outcome = service.run(make_context(project), reuse_pass=False)
+
+    assert outcome.record.status is AuditStatus.INDETERMINATE
+    assert outcome.record.decision == "SNAPSHOT_CHANGED_DURING_FINAL_AUDIT"
+    assert outcome.execution.error_class == "TRANSIENT_FINAL_AUDIT_MUTATION"
+
+
+def test_final_audit_passes_configured_page_limit_to_visual_gate(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing/demo"
+    project.mkdir(parents=True)
+    runner = RecordingRunner()
+    monkeypatch.setenv("FINAL_AUDIT_MAX_PAGES", "25")
+    service = FinalAuditService(
+        root,
+        PassingJudge(),
+        FakeValidator(),
+        runner,
+        fingerprinter=lambda _project, _base: "3" * 64,
+    )
+
+    outcome = service.run(make_context(project), reuse_pass=False)
+
+    assert outcome.record.status is AuditStatus.PASS
+    visual_args = next(
+        args for script, args in runner.calls if script.endswith("pdf_visual_gate.py")
+    )
+    assert visual_args[visual_args.index("--max-pages") + 1] == "25"
 
 
 def test_audit_cli_is_independent_command() -> None:

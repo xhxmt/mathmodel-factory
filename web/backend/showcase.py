@@ -36,6 +36,12 @@ def _showcase_pdf(settings: Settings, base_name: str) -> Path | None:
     if project is None:
         return None
 
+    from factory_core.delivery.release import resolve_current_release
+
+    current = resolve_current_release(settings.papers_dir, base_name)
+    if current is not None:
+        return current.paper
+
     packaged = settings.papers_dir / f"{base_name}_paper.pdf"
     candidates = [packaged, *sorted(project.glob("*_paper.pdf"))]
     for candidate in candidates:

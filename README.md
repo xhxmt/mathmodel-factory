@@ -203,7 +203,7 @@ python3 -m factory_core.cli audit ongoing/test_cumcm2024b
 - Step 13：运行隔离的数学预审；`PRECHECK_PASS` 只允许继续写摘要和润色，不代表最终质量 PASS。
 - Step 14：撰写摘要。
 - Step 15：引用、图表及排版润色；任何修改都会使 Step 13 的预提交结果失效。通过校验后形成 `CONTENT_READY` 内容边界。
-- Step 16：兼容工作流适配器调用独立审计模块；缓存未命中时编译最终 PDF、执行最终 Gate 2，并把结果绑定到内容快照。只有审计 PASS 或显式治理 override 才进入复制、打包、清理和归档。
+- Step 16：Native 与 Legacy 兼容适配器调用同一独立 Final Audit；依次完成最终编译、完整论文/溯源检查、视觉页数门禁、三角色 Judge、快照复核及双 receipt。只有审计 PASS 或管理员在 `web/auth.db` 中签发并绑定精确快照的 `OVERRIDDEN` 结果，才会在同文件系统 staging 中构建不可变 release，并以一次原子替换切换 `papers/<base>/current.json` 后归档。项目内 override JSON 没有授权能力。
 
 完整的详细步骤要求请参阅 `STEPS.md`。这些文件仍是产物与验证契约；项目的运行状态权威见下节。
 
@@ -214,6 +214,7 @@ python3 -m factory_core.cli audit ongoing/test_cumcm2024b
 - 当 `modeling_guide.md` 和遗留的 `analysis_guide.md` 同时存在时，以 `modeling_guide.md` 为准。
 - 已完成的项目将从 `ongoing/` 移至 `complete/`。
 - 独立审计模块同时负责阶段化确定性审计和最终发布审计。Step 13 只调用数学角色；最终 profile 才运行数学、执行和论文质量三角色 Judge、判决路由、指纹和 receipt。兼容文件继续投影到 `judge_outputs/`。`judge_outputs/final_submission.sha256` 绑定 packet、角色 prompts、聚合 / 调用实现、Judge 模型路由与 PDF 精确字节。审计本身不会写 `papers/`、打包、清理或归档；Step 16 消费获准的最终审计结果后才执行这些交付动作。
+- 交付权威是 `papers/releases/<base>/<snapshot>/` 与原子指针 `papers/<base>/current.json`；顶层同名 PDF/ZIP 仅为兼容副本。任何 staging、打包或校验失败都不会切换旧的 current release。
 - `complete/` 是历史交付目录，不等价于“符合当前最新契约”。使用 `python3 scripts/audit_complete_projects.py --write-manifests` 生成 `complete/_validation_index.json`，将项目分为 `CURRENT_PASS`、`LEGACY_DELIVERED` 和 `INVALID_OR_INCOMPLETE`。
 
 ## 迁移旧项目

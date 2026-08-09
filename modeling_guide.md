@@ -410,6 +410,18 @@ update discipline:
   stage feedback. On retry, read `evidence.checks` and its reports before
   editing. Fix the source artifact; do not hand-edit `AUDIT-*` ledger rows or
   treat a stage PASS as delivery approval.
+- `.factory/audits/latest.json` — only a current `final` record with verified
+  judgment and final-acceptance receipts can authorize delivery. The final
+  audit recompiles, reruns the full paper/provenance suite, checks rendered
+  pages, runs all three isolated Judge roles in enforce mode, and rejects any
+  content change during judging.
+- Final publication is immutable and pointer-based:
+  `papers/releases/<base>/<snapshot>/` contains the audited PDF, submission ZIP,
+  manifest and receipts; `papers/<base>/current.json` is the only authoritative
+  current version. Flat PDF/ZIP files are compatibility aliases.
+- Project files cannot grant a quality bypass. Only an administrator record in
+  `web/auth.db` may continue after Gate 2 or authorize one exact final snapshot;
+  the real verdict remains visible and no PASS may be fabricated.
 
 ## What you may NOT do
 

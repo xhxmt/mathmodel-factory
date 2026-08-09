@@ -1,5 +1,7 @@
 import json
 import zipfile
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 
 from test_evaluate_modeling_project_step8_5 import make_complete_project, write_file
@@ -11,7 +13,7 @@ def make_valid_zip(path: Path) -> None:
         zf.writestr("paper.pdf", b"pdf")
 
 
-def make_current_contract_project(project: Path) -> None:
+def make_current_contract_project(project: Path, *, overridden: bool = False) -> None:
     base = project.name
     root = project.parents[1]
     for name in ("reviewer_entry_map.md", "anchor_figure_plan.md"):
@@ -20,35 +22,126 @@ def make_current_contract_project(project: Path) -> None:
     write_file(project / "numbers_manifest.json", "{}\n")
     write_file(project / "results" / "p1" / "values.json", "{\"status\":\"OPTIMAL\",\"objective\":1.0}\n")
     write_file(project / f"{base}_paper.pdf", "pdf\n")
-    from scripts.submission_fingerprint import submission_fingerprint
+    write_file(
+        project / "judge_outputs/final_paper_checks.json",
+        '{"schema_version":"final-paper-checks-v1","checks":[],"hard_failures":[]}\n',
+    )
+    write_file(project / "judge_outputs/visual_gate.json", '{"status":"PASS"}\n')
+    write_file(
+        project / "judge_outputs/decision_route.json",
+        (
+            '{"effective_decision":"CONTINUE_TO_STEP16",'
+            '"quality_pass_fabricated":false}\n'
+            if overridden
+            else '{"effective_decision":"PASS","quality_pass_fabricated":false}\n'
+        ),
+    )
+    write_file(
+        project / "judge_outputs/judgment_receipt.json",
+        '{"status":"VALID"}\n',
+    )
+    if overridden:
+        write_file(
+            project / "judge_evaluation.md",
+            "VERDICT: REOPEN_REVISION_MODEL\n" + "\n".join(["judge"] * 30) + "\n",
+        )
+    from factory_core.audit.acceptance import build_final_acceptance_receipt
+    from factory_core.audit.domain import AuditSnapshot
+    from factory_core.delivery.release import ReleasePublisher
+    from scripts.submission_fingerprint import (
+        submission_fingerprint,
+        submission_fingerprint_payload,
+    )
 
+    snapshot_id = submission_fingerprint(project, base, policy_mode="enforce")
+    identity = submission_fingerprint_payload(project, base, policy_mode="enforce")
     write_file(
         project / "judge_outputs" / "final_submission.sha256",
-        submission_fingerprint(project, base) + "\n",
+        snapshot_id + "\n",
     )
-    snapshot_id = (project / "judge_outputs/final_submission.sha256").read_text(
-        encoding="utf-8"
-    ).strip()
+    snapshot = AuditSnapshot(
+        snapshot_id=snapshot_id,
+        base=base,
+        profile="final",
+        created_at=datetime.now(UTC).isoformat(),
+        identity=identity,
+    )
+    override_id = None
+    if overridden:
+        from factory_core.governance.overrides import SQLiteOverrideProvider
+        from web.backend.auth_store import AuthStore
+
+        store = AuthStore(root / "web/auth.db")
+        store.initialize()
+        store.bootstrap_admin("correct horse battery staple test only")
+        authorization = store.issue_delivery_override(
+            base_name=base,
+            scope="deliver_snapshot",
+            bound_snapshot_id=snapshot_id,
+            source_verdict="REOPEN_REVISION_MODEL",
+            reason="test exact snapshot authorization",
+            actor="admin",
+        )
+        override_id = authorization.override_id
+        provider = SQLiteOverrideProvider(root / "web/auth.db")
+        assert provider.consume(override_id) is True
+        write_file(
+            project / "judge_outputs/delivery_override_receipt.json",
+            json.dumps(
+                {
+                    "schema_version": "delivery-override-receipt-v1",
+                    "snapshot_id": snapshot_id,
+                    "base": base,
+                    "scope": "deliver_snapshot",
+                    "source_verdict": "REOPEN_REVISION_MODEL",
+                    "quality_pass_fabricated": False,
+                    "authorization": asdict(authorization),
+                }
+            )
+            + "\n",
+        )
+    build_final_acceptance_receipt(
+        project,
+        snapshot,
+        status="OVERRIDDEN" if overridden else "PASS",
+        override_receipt=(
+            "judge_outputs/delivery_override_receipt.json" if overridden else None
+        ),
+    )
     write_file(
         project / ".factory" / "audits" / "latest.json",
         json.dumps(
             {
                 "snapshot_id": snapshot_id,
-                "status": "PASS",
+                "base": base,
+                "status": "OVERRIDDEN" if overridden else "PASS",
                 "profile": "final",
-                "decision": "PASS",
-                "judge_completed": True,
+                "decision": "REOPEN_REVISION_MODEL" if overridden else "PASS",
+                "judge_completed": not overridden,
                 "delivery_allowed": True,
+                "override": overridden,
+                "evidence": {"override_id": override_id} if overridden else {},
             }
         )
         + "\n",
     )
     write_file(
         project / ".factory" / "audits" / snapshot_id / "snapshot.json",
-        json.dumps({"snapshot_id": snapshot_id}) + "\n",
+        json.dumps(snapshot.to_dict()) + "\n",
     )
     write_file(root / "method_library" / "demo.md", "# demo\n")
-    make_valid_zip(root / "papers" / f"{base}_submission.zip")
+
+    def package(output: Path) -> bool:
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.write(project / f"{base}_paper.pdf", f"{base}_paper.pdf")
+        return True
+
+    ReleasePublisher(root / "papers").publish(
+        project,
+        snapshot_id,
+        status="OVERRIDDEN" if overridden else "PASS",
+        package_builder=package,
+    )
 
 
 def test_delivery_manifest_records_contract_and_artifact_hashes(tmp_path, monkeypatch):
@@ -72,7 +165,7 @@ def test_delivery_manifest_records_contract_and_artifact_hashes(tmp_path, monkey
     manifest = delivery_contract.build_delivery_manifest(project, tmp_path, ev)
 
     assert manifest["contract_version"] == delivery_contract.CURRENT_CONTRACT_VERSION
-    assert manifest["contract_version"].endswith(".incremental_audit_v6")
+    assert manifest["contract_version"].endswith(".atomic_release_v7")
     assert manifest["status"] == "CURRENT_PASS"
     assert manifest["project"]["base"] == "demo"
     assert manifest["evaluation"]["passed"] is True
@@ -89,24 +182,10 @@ def test_delivery_manifest_records_contract_and_artifact_hashes(tmp_path, monkey
 def test_delivery_manifest_does_not_mark_gate2_override_as_current_pass(tmp_path, monkeypatch):
     project = tmp_path / "complete" / "demo_override"
     make_complete_project(project)
-    make_current_contract_project(project)
-    write_file(
-        project / "judge_evaluation.md",
-        "VERDICT: REOPEN_REVISION_MODEL\n" + "\n".join(["judge"] * 30) + "\n",
-    )
+    make_current_contract_project(project, overridden=True)
     write_file(
         project / "gate2_delivery_override.json",
         '{"enabled": true, "scope": "continue_to_step16", "reason": "user_requested"}\n',
-    )
-    audit_path = project / ".factory" / "audits" / "latest.json"
-    audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    audit["status"] = "OVERRIDDEN"
-    audit["decision"] = "REOPEN_REVISION_MODEL"
-    audit_path.write_text(json.dumps(audit) + "\n", encoding="utf-8")
-    write_file(
-        project / "judge_outputs" / "decision_route.json",
-        '{"effective_decision":"CONTINUE_TO_STEP16",'
-        '"quality_pass_fabricated":false}\n',
     )
 
     from scripts import delivery_contract

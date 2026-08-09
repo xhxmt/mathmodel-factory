@@ -661,9 +661,10 @@ class FactoryService:
         )
 
     def _write_delivery_manifest(self, project: Path) -> None:
-        papers_pdf = self.root / "papers" / f"{project.name}_paper.pdf"
-        submission_zip = self.root / "papers" / f"{project.name}_submission.zip"
-        if not papers_pdf.is_file() or not submission_zip.is_file():
+        from .delivery.release import resolve_current_release
+
+        release = resolve_current_release(self.root / "papers", project.name)
+        if release is None:
             return
         from scripts.delivery_contract import write_delivery_manifest
 

@@ -62,29 +62,20 @@ def test_step16_writes_delivery_manifest_after_quality_gate():
     assert text.index("Final delivery quality gate PASS") < text.index("delivery_manifest.json")
 
 
-def test_step16_rejudges_the_post_polish_submission_before_delivery():
+def test_step16_uses_shared_final_audit_and_atomic_release_before_delivery_checks():
     text = LEGACY_RUNNER.read_text(encoding="utf-8")
     step16 = text[text.index("run_step_16() {") : text.index("# ── Main step loop")]
 
-    assert "run_final_submission_judge" in step16
-    final_judge = text[
-        text.index("run_final_submission_judge() {") : text.index("run_step_14() {")
-    ]
-    judge_call = "run_step_13 || {"
-    assert final_judge.index("compile_final_submission_pdf") < final_judge.index(judge_call)
-    judge_failure = final_judge[
-        final_judge.index(judge_call) : final_judge.index("routed_decision=")
-    ]
-    assert 'rm -f "$(final_judge_in_progress_file)"' in judge_failure
-    assert "return 1" in judge_failure
-    assert step16.index("run_final_submission_judge") < step16.index("Delivering final PDF")
-    assert 'rm -f "$pdf"' in text
-    assert "no PDF will be judged or delivered" in text
-    assert 'cp "$PROJECT/${BASE}_paper.pdf" "$delivery_tmp"' in step16
-    assert 'cmp -s "$PROJECT/${BASE}_paper.pdf" "$FACTORY/papers/${BASE}_paper.pdf"' in step16
-    assert 'cp "$PROJECT/${BASE}_paper.pdf" "$FACTORY/papers/" 2>/dev/null || true' not in step16
-    assert "final_submission_hash" in text
-    assert 'gate2_passed_for_path "$PROJECT"' in text
+    audit = 'python3 -m factory_core.cli audit "$PROJECT"'
+    publish = 'scripts/publish_release.py" "$PROJECT" --root "$FACTORY"'
+    assert audit in step16
+    assert publish in step16
+    assert step16.index(audit) < step16.index(publish)
+    assert step16.index(publish) < step16.index("delivery_quality_gate")
+    assert "run_final_submission_judge" not in step16
+    assert 'cp "$PROJECT/${BASE}_paper.pdf"' not in step16
+    assert 'package_submission.py" "$PROJECT"' not in step16
+    assert "previous current release preserved" in step16
 
 
 def test_runner_recovers_a_persisted_gate2_reopen_before_step14():
@@ -653,11 +644,11 @@ def test_step16_cleans_before_final_judge_fingerprint_is_built():
     step16 = text[text.index("run_step_16() {") : text.index("# ── Main step loop")]
 
     cleanup = step16.index('cleanup_project_artifacts.py" "$PROJECT"')
-    hard_acceptance = step16.index('step16_hard_acceptance "$PROJECT"')
-    final_judge = step16.index("run_final_submission_judge")
+    final_audit = step16.index('python3 -m factory_core.cli audit "$PROJECT"')
+    publish = step16.index('scripts/publish_release.py" "$PROJECT"')
     delivery_gate = step16.index("delivery_quality_gate")
 
-    assert cleanup < hard_acceptance < final_judge < delivery_gate
+    assert cleanup < final_audit < publish < delivery_gate
     assert step16.count('cleanup_project_artifacts.py" "$PROJECT"') == 1
 
 

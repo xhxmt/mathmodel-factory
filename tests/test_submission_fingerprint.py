@@ -120,13 +120,12 @@ def test_final_judge_current_requires_the_same_nonempty_pdf(tmp_path: Path) -> N
         submission_fingerprint(project, "demo") + "\n",
     )
     assert final_judge_is_current(project, "demo") is False
-    # A bare hash is no longer a quality PASS.  This fixture explicitly models
-    # the documented delivery-override governance path.
+    # A bare hash and a project-local JSON are both non-authoritative.
     write_file(
         project / "gate2_delivery_override.json",
         '{"enabled": true, "scope": "continue_to_step16", "reason": "test"}\n',
     )
-    assert final_judge_is_current(project, "demo") is True
+    assert final_judge_is_current(project, "demo") is False
 
     write_file(project / "demo_paper.pdf", b"")
     assert final_judge_is_current(project, "demo") is False
@@ -165,6 +164,7 @@ def make_evaluator_factory(root: Path) -> None:
         "factory_core/registry.py",
         "factory_core/audit/domain.py",
         "factory_core/audit/service.py",
+        "factory_core/audit/acceptance.py",
         "factory_core/adapters/legacy.py",
         "factory_core/adapters/legacy_runner.sh",
         "factory_core/steps/catalog.py",
@@ -175,6 +175,7 @@ def make_evaluator_factory(root: Path) -> None:
         "scripts/llm_judge_call.py",
         "scripts/api_agent_run.py",
         "scripts/model_dispatch_config.py",
+        "scripts/verify_numbers.py",
         "prompts/judges/math_auditor.txt",
         "prompts/judges/execution_auditor.txt",
         "prompts/judges/paper_reviewer.txt",
@@ -227,10 +228,12 @@ def test_evaluator_contract_records_prompt_implementation_and_registry_selection
         "scripts/llm_judge_call.py",
         "factory_core/engine.py",
         "factory_core/audit/service.py",
+        "factory_core/audit/acceptance.py",
         "factory_core/steps/specialized.py",
         "factory_core/adapters/legacy.py",
         "web/model_config.json",
         "web/model_registry.json",
+        "scripts/verify_numbers.py",
     ],
 )
 def test_final_fingerprint_changes_when_evaluator_contract_changes(
@@ -261,5 +264,17 @@ def test_final_fingerprint_binds_runtime_judge_policy(
     before = submission_fingerprint(project, "demo")
 
     monkeypatch.setenv("JUDGE_POLICY_MODE", "enforce")
+
+    assert submission_fingerprint(project, "demo") != before
+
+
+def test_final_fingerprint_binds_final_paper_check_report(tmp_path: Path) -> None:
+    project = tmp_path / "demo"
+    make_submission(project)
+    report = project / "judge_outputs/final_paper_checks.json"
+    write_file(report, '{"hard_failures":[],"checks":[]}\n')
+    before = submission_fingerprint(project, "demo")
+
+    write_file(report, '{"hard_failures":["numbers"],"checks":[]}\n')
 
     assert submission_fingerprint(project, "demo") != before

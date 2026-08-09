@@ -6,6 +6,9 @@
 
 ### 新增
 
+- 新增不可变原子 release：每个最终快照发布到 `papers/releases/<base>/<snapshot>/`，包含审计 PDF、submission ZIP、manifest 和审计 receipts；全部校验完成后只原子替换 `papers/<base>/current.json`，失败保留旧 current，顶层 PDF/ZIP 仅为兼容副本。
+- Web 管理端与 CLI 新增交付 override 签发、查看和撤销；权威记录持久化在 `web/auth.db`，并区分 `continue_after_gate2` 与绑定精确 SHA-256 的 `deliver_snapshot`。
+- 新增 `web/backend_service_health.sh`，统一 full/backend-only 部署验收：验证 systemd MainPID、ControlGroup、全部 8000 listener 所有权及稳定窗口内 `NRestarts`，再接受 HTTP 结果。
 - 新增 `quality_contract.json` v4：按最大化/最小化方向硬验有效松弛界、预算阶梯、平台期语义和跨算法族对照工件；新增 canonical 派生物 manifest、生成辅助脚本及临时目录重生成/diff 门禁。
 - Solver 新增 content-addressed 两阶段 receipt：submission 绑定 runtime、代码、输入、参数摘要和 seeds，completion 绑定终态及声明输出哈希；native/Legacy 统一通过 `--status <jobid> --json` 返回 fail-closed `solver-job-evidence-v2`。
 - 新增 R0a exact-runtime 硬门能力校准：数学/执行角色必须同时覆盖 oracle-backed hard defect 与 neutral transform，并将每个 held-out packet 的 capability observation 与 K>=5 重复稳定性、evaluator/packet/condition hash 逐项绑定；报告失败关闭且不自动放权。
@@ -28,6 +31,8 @@
 
 ### 变更
 
+- Final Audit 统一为最终编译、完整 Step-10 paper/provenance suite、视觉/页数门禁、packet/fingerprint、enforce-mode 三角色 Judge、判决前后快照复核、judgment receipt 与 final acceptance receipt；PASS 复用也必须验证双 receipt 和当前快照。
+- Native 与 Legacy Step 16 统一消费同一个 Final Audit 和原子 release publisher；项目清理提前到最终快照构建前，`2026-08-09.atomic_release_v7` 成为当前交付合同。
 - 新项目 Step 4 使用 quality-contract v4；Step 5 必须显式声明 solver inputs/outputs/seeds，并由任务内 `FACTORY_SOLVER_JOB_ID` 写 provenance。Step 10 paper audit 新增确定性派生物硬门，旧 v1–v3 合同继续按原边界审计而不被静默升级。
 - Shadow cutover manifest 升级为 v2，只有 hash 绑定且 `hard_gate_ready=true` 的 R0a 报告才可能产生 cutover 建议；v1 继续输出诊断但永久 `cutover_ready=false`，所有放权仍需人工批准。
 - Step 13 缩为数学单角色预审，`PRECHECK_PASS` 只允许继续摘要与润色；完整数学/执行/论文三角色 Gate 2 仅在 Step 15 后的 `final` 审计执行。Step 15 明确为 `CONTENT_READY` 边界；Step 16 改为独立审计与交付之间的兼容适配器，只消费 `PASS` 或显式 `OVERRIDDEN` 审计结果，复制 PDF、submission 打包和清理不再属于审计职责。
@@ -73,9 +78,9 @@
   Step 13 预审明确忽略流程要求保留的摘要占位符，而 Step 16 最终复审仍将其视为阻断缺陷。
 - 原生 Codex backend 现在与兼容 runner 一致，在未显式指定模型时继承
   `CODEX_MODEL`，避免配置模型失败后的内置 Codex 重试静默切换模型。
-- 项目级 `gate2_delivery_override.json` 现在同时覆盖原生 Step 13/16 的评委判退与
-  评委基础设施失败：保留真实 verdict/错误证据且不生成虚假 PASS receipt，流程不再
-  回退并继续摘要、润色和交付，最终状态明确归类为 `GATE2_OVERRIDE_DELIVERED`。
+- 项目级 `gate2_delivery_override.json` 不再具有授权能力，只能作为请求或历史痕迹；
+  管理员数据库授权保留真实 verdict/错误证据且不生成虚假 PASS receipt，精确快照交付
+  授权在生成最终验收凭据后被消费。
 - Step 14 摘要提示不再硬编码“Gate 2 已 PASS”；override 交付必须读取并保留真实
   verdict 与未解决问题，避免后续 agent 把治理旁路误述为质量通过。
 - Worker lease 现在在 SQLite transition 内同时核对 PID 与 lease；连续 Step
@@ -213,6 +218,9 @@
 ## [2026-06-21] - 论文写作环节修复
 
 ### 修复
+
+- 修复 systemd 旧会话 listener 可用 HTTP 200 伪装部署成功的问题；部署必须证明端口进程属于正式 unit cgroup，且 MainPID/NRestarts 在稳定窗口内不变。unit 改用 control-group 停止语义、停止超时/SIGKILL 收尾和启动限流。
+- 修复 Final Audit 未完整重跑最终论文检查、项目文件可自授权、Legacy 交付仍先覆盖 PDF 再打 ZIP，以及 Native 审计后清理导致内容边界漂移的问题。
 - P0/P1 级别错误修复
 - 数值验证完整性提升
 

@@ -435,13 +435,31 @@ def evaluate(project: Path, root: Path) -> Evaluation:
 
     paper_tex = project / f"{base}_paper.tex"
     paper_pdf = project / f"{base}_paper.pdf"
-    papers_pdf = root / "papers" / f"{base}_paper.pdf"
-    submission_zip = root / "papers" / f"{base}_submission.zip"
+    from factory_core.delivery.release import resolve_current_release
+
+    release = resolve_current_release(root / "papers", base)
+    papers_pdf = (
+        release.paper if release is not None else root / "papers" / f"{base}_paper.pdf"
+    )
+    submission_zip = (
+        release.submission_zip
+        if release is not None
+        else root / "papers" / f"{base}_submission.zip"
+    )
     ev.add("paper_tex", paper_tex.is_file() and "ABSTRACT_PLACEHOLDER" not in read_text(paper_tex), "present without placeholder" if paper_tex.is_file() else "missing")
     ev.add("project_pdf", paper_pdf.is_file() and paper_pdf.stat().st_size > 0, str(paper_pdf))
     ev.add("papers_pdf", papers_pdf.is_file() and papers_pdf.stat().st_size > 0, str(papers_pdf))
     ok_zip, zip_detail = zip_ok(submission_zip)
     ev.add("submission_zip", ok_zip, zip_detail)
+    ev.add(
+        "atomic_release",
+        release is not None,
+        (
+            f"release_id={release.release_id}"
+            if release is not None
+            else "versioned release/current pointer missing"
+        ),
+    )
 
     return ev
 

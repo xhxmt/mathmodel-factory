@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,12 @@ from ..domain import (
     RecoveryDecision,
     StepError,
 )
+from ..governance.overrides import (
+    CONTINUE_AFTER_GATE2,
+    OverrideProvider,
+    default_override_provider,
+)
+from ..delivery.release import ReleasePublisher
 from .catalog import StepContract
 from .gates import prepare_human_gates
 from .prompt_step import PromptStep
@@ -250,6 +257,7 @@ class JudgeStep:
     dispatcher: ModelDispatcher
     validator: NativeArtifactValidator
     runner: CommandRunner
+    override_provider: OverrideProvider | None = None
 
     ROLE_PROMPTS = {
         "paper": "judges/paper_reviewer.txt",
@@ -305,6 +313,19 @@ class JudgeStep:
         if source_verdict == "FAIL":
             verdict = "REOPEN_REVISION_MODEL"
             self._write_precheck(project, verdict, source_verdict, role_result.metadata)
+            override = self._continuation_override(project)
+            if override is not None and self._record_delivery_override(
+                project, verdict, stage="precheck:math"
+            ):
+                return ExecutionResult.succeeded(
+                    judge_completed=False,
+                    precheck_completed=True,
+                    judge_verdict=verdict,
+                    reviewed_roles=["math"],
+                    gate2_delivery_override=True,
+                    gate2_override_id=override.override_id,
+                    **role_result.metadata,
+                )
             return ExecutionResult.succeeded(
                 resume_after_step=self.validator._gate2_resume(project, verdict),
                 judge_completed=False,
@@ -588,22 +609,20 @@ class JudgeStep:
             return []
         return [role for role in JudgeStep.ROLE_PROMPTS if role in declared]
 
-    @staticmethod
-    def _delivery_override_active(project: Path) -> bool:
-        path = project / "gate2_delivery_override.json"
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return False
-        return bool(
-            payload.get("enabled") is True
-            and payload.get("scope") == "continue_to_step16"
-            and str(payload.get("reason", "")).strip()
-        )
+    def _continuation_override(self, project: Path):
+        provider = self._override_provider()
+        return provider.active_override(project.name, CONTINUE_AFTER_GATE2)
 
-    @classmethod
+    def _override_provider(self) -> OverrideProvider:
+        return self.override_provider or default_override_provider(self.factory_root)
+
+    def _delivery_override_active(self, project: Path) -> bool:
+        """Compatibility name for the Step-13 continuation authorization."""
+
+        return self._continuation_override(project) is not None
+
     def _record_delivery_override(
-        cls,
+        self,
         project: Path,
         verdict: str,
         *,
@@ -612,7 +631,8 @@ class JudgeStep:
         returncode: int | None = None,
     ) -> bool:
         """Record an explicit continuation without changing the Gate 2 verdict."""
-        if not cls._delivery_override_active(project):
+        override = self._continuation_override(project)
+        if override is None:
             return False
         log_path = project / "logs" / "gate2_continuation_override.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -623,17 +643,18 @@ class JudgeStep:
             stream.write(
                 f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
                 f"Gate2 stage={stage} verdict={verdict or 'MISSING'};{failure} "
-                "user continuation override active; scope=continue_to_step16; "
+                f"administrator continuation override active; override_id={override.override_id}; "
+                "scope=continue_after_gate2; "
                 "quality PASS not fabricated.\n"
             )
         return True
 
-    @classmethod
     def _continue_after_failure(
-        cls, project: Path, stage: str, failure: ExecutionResult
+        self, project: Path, stage: str, failure: ExecutionResult
     ) -> ExecutionResult | None:
         verdict = _verdict(project / "judge_evaluation.md")
-        if not cls._record_delivery_override(
+        override = self._continuation_override(project)
+        if override is None or not self._record_delivery_override(
             project,
             verdict,
             stage=stage,
@@ -648,6 +669,7 @@ class JudgeStep:
             judge_error_class=failure.error_class,
             judge_returncode=failure.returncode,
             gate2_delivery_override=True,
+            gate2_override_id=override.override_id,
         )
 
     def _run_role(self, context, role: str, template: str) -> ExecutionResult:
@@ -781,6 +803,8 @@ class DeliveryStep:
     runner: CommandRunner
     fingerprinter: Callable[[Path, str], str] | None = None
     audit_service: object | None = None
+    override_provider: OverrideProvider | None = None
+    release_publisher: ReleasePublisher | None = None
 
     def prepare(self, context):
         return prepare_human_gates(context.project_dir, context.step_id)
@@ -788,6 +812,17 @@ class DeliveryStep:
     def execute(self, context) -> ExecutionResult:
         project = context.project_dir
         base = project.name
+        cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
+        if cleanup.is_file():
+            self.runner.python(
+                self.factory_root,
+                project,
+                "scripts/cleanup_project_artifacts.py",
+                [project],
+                label="delivery_cleanup",
+                timeout_seconds=300,
+                accepted=(0, 1),
+            )
         if self.audit_service is None:
             from ..audit.service import FinalAuditService
 
@@ -797,6 +832,7 @@ class DeliveryStep:
                 getattr(self.judge_step, "validator", self.validator),
                 self.runner,
                 self.fingerprinter,
+                self.override_provider,
             )
         else:
             audit_service = self.audit_service
@@ -812,40 +848,44 @@ class DeliveryStep:
                 audit_snapshot=outcome.snapshot.snapshot_id,
             )
 
-        pdf = project / f"{base}_paper.pdf"
         papers = self.factory_root / "papers"
-        papers.mkdir(parents=True, exist_ok=True)
-        published = papers / f"{base}_paper.pdf"
-        temporary = papers / f".{base}_paper.pdf.tmp"
-        shutil.copyfile(pdf, temporary)
-        temporary.replace(published)
-        package = self.runner.python(
-            self.factory_root,
-            project,
-            "scripts/package_submission.py",
-            [project, base, papers / f"{base}_submission.zip"],
-            label="package_submission",
-            timeout_seconds=600,
-        )
-        if not package.accepted:
-            return ExecutionResult.failed("PERMANENT_PACKAGING", returncode=package.returncode)
+        publisher = self.release_publisher or ReleasePublisher(papers)
 
-        cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
-        if cleanup.is_file():
-            self.runner.python(
+        def build_package(output: Path) -> bool:
+            package = self.runner.python(
                 self.factory_root,
                 project,
-                "scripts/cleanup_project_artifacts.py",
-                [project],
-                label="delivery_cleanup",
-                timeout_seconds=300,
-                accepted=(0, 1),
+                "scripts/package_submission.py",
+                [project, base, output],
+                label="package_submission",
+                timeout_seconds=600,
             )
+            return package.accepted
+
+        try:
+            release = publisher.publish(
+                project,
+                outcome.snapshot.snapshot_id,
+                status=outcome.record.status.value,
+                package_builder=build_package,
+            )
+        except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
+            return ExecutionResult.failed(
+                "PERMANENT_ATOMIC_DELIVERY",
+                returncode=2,
+                delivery_error=str(exc),
+                audit_snapshot=outcome.snapshot.snapshot_id,
+            )
+
         return ExecutionResult.succeeded(
             **audit.metadata,
             input_fingerprint=outcome.snapshot.snapshot_id,
-            published_pdf=str(published),
-            submission_zip=str(papers / f"{base}_submission.zip"),
+            release_id=release.release_id,
+            release_manifest=str(release.manifest),
+            release_pointer=str(release.pointer),
+            release_reused=release.reused,
+            published_pdf=str(release.paper),
+            submission_zip=str(release.submission_zip),
         )
 
     def validate(self, context):

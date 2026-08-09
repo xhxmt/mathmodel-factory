@@ -11,7 +11,11 @@ from typing import Callable
 from ..domain import PendingAction, ValidationResult
 from ..audit.ledger import has_unresolved_blocking
 from scripts.step8_5_gate import collect_step8_5_state
-from scripts.workflow_state import gate2_delivery_allowed, gate2_verdict, step16_ready
+from scripts.workflow_state import (
+    gate2_continuation_override,
+    gate2_verdict,
+    step16_ready,
+)
 
 
 def _text(path: Path) -> str:
@@ -274,7 +278,9 @@ class NativeArtifactValidator:
 
     def _step_13(self, project: Path):
         verdict = gate2_verdict(project)
-        if verdict in {"PASS", "PRECHECK_PASS"} or gate2_delivery_allowed(project):
+        if verdict in {"PASS", "PRECHECK_PASS"} or gate2_continuation_override(
+            project, self.factory_root
+        ):
             return True, "", ("judge_evaluation.md",), {}
         if verdict == "INDETERMINATE_REVIEW":
             missing, resume = self._missing_packet_sources(project)

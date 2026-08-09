@@ -91,6 +91,12 @@ export const AdminOps = {
   auditLog: () => api.get('/api/admin/audit-log').then((r) => (Array.isArray(r.data) ? r.data : [])),
 }
 
+export const AdminOverrides = {
+  list: () => api.get('/api/admin/delivery-overrides').then((r) => (Array.isArray(r.data) ? r.data : [])),
+  issue: (payload) => api.post('/api/admin/delivery-overrides', payload).then((r) => r.data),
+  revoke: (id) => api.post(`/api/admin/delivery-overrides/${encodeURIComponent(id)}/revoke`).then((r) => r.data),
+}
+
 export const AdminShowcase = {
   get: () => api.get('/api/admin/showcase').then((r) => r.data),
   replace: (audienceId, baseNames) => api.put(

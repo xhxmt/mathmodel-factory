@@ -12,11 +12,23 @@ from ..adapters.infrastructure.commands import CommandRunner
 from ..adapters.models.backends import build_model_backends
 from ..adapters.models.dispatcher import ModelDispatcher
 from ..domain import ExecutionResult, StepContext
+from ..governance.overrides import (
+    DELIVER_SNAPSHOT,
+    DeliveryOverride,
+    OverrideProvider,
+    default_override_provider,
+)
 from ..steps.catalog import contract_for
 from ..steps.prompting import PromptRenderer
 from ..steps.validators import NativeArtifactValidator, validator_for
 from .domain import AuditOutcome, AuditProfile, AuditRecord, AuditSnapshot, AuditStatus
 from .ledger import has_unresolved_blocking
+from .acceptance import (
+    RECEIPT_PATH as FINAL_ACCEPTANCE_RECEIPT_PATH,
+    build_final_acceptance_receipt,
+    verify_final_acceptance_receipt,
+)
+from .incremental import IncrementalAuditService, StageCheck
 from .persistence import atomic_write_json as _atomic_write_json
 from .persistence import utc_now as _utc_now
 
@@ -46,12 +58,16 @@ class FinalAuditService:
         validator: NativeArtifactValidator,
         runner: CommandRunner,
         fingerprinter: Fingerprinter | None = None,
+        override_provider: OverrideProvider | None = None,
     ) -> None:
         self.factory_root = factory_root.resolve()
         self.judge = judge
         self.validator = validator
         self.runner = runner
         self.fingerprinter = fingerprinter
+        self.override_provider = override_provider or default_override_provider(
+            self.factory_root
+        )
 
     def run(
         self,
@@ -96,17 +112,6 @@ class FinalAuditService:
                 returncode=2,
             )
 
-        acceptance = self._run_acceptance_checks(project)
-        if acceptance is not None:
-            return self._failure(
-                project,
-                decision="CONTENT_NOT_READY",
-                status=AuditStatus.FAIL,
-                error_class="PERMANENT_DELIVERY_ACCEPTANCE",
-                returncode=acceptance.returncode,
-                evidence={"failed_check": acceptance.metadata.get("check")},
-            )
-
         pdf = project / f"{base}_paper.pdf"
         packets_prepared = False
         ablate_judge = os.getenv("ABLATE_NO_JUDGE", "0").lower() in {
@@ -143,7 +148,6 @@ class FinalAuditService:
         # consumed by Step 16 without regenerating timestamp-bearing PDF bytes.
         if (
             reuse_pass
-            and not self._delivery_override_active(project)
             and pdf.is_file()
             and pdf.stat().st_size > 0
         ):
@@ -188,6 +192,20 @@ class FinalAuditService:
                     returncode=2,
                 )
 
+        acceptance_checks, acceptance = self._run_acceptance_checks(project)
+        if acceptance is not None:
+            return self._failure(
+                project,
+                decision="CONTENT_NOT_READY",
+                status=AuditStatus.FAIL,
+                error_class="PERMANENT_DELIVERY_ACCEPTANCE",
+                returncode=acceptance.returncode,
+                evidence={
+                    "failed_check": acceptance.metadata.get("check"),
+                    "paper_checks": acceptance_checks,
+                },
+            )
+
         visual = self._run_visual_gate(project, pdf)
         if visual is not None:
             return self._failure(
@@ -214,6 +232,20 @@ class FinalAuditService:
                     gate2_delivery_override=cached.override,
                 )
                 return AuditOutcome(execution, cached, snapshot)
+
+        delivery_override = self._delivery_override(project, snapshot.snapshot_id)
+        if delivery_override is not None:
+            return self._finish_judge_result(
+                project,
+                context,
+                ExecutionResult.succeeded(
+                    judge_completed=False,
+                    judge_verdict=delivery_override.source_verdict,
+                    gate2_delivery_override=True,
+                    gate2_override_id=delivery_override.override_id,
+                ),
+                snapshot=snapshot,
+            )
 
         if ablate_judge:
             return self._finish_ablation(
@@ -261,7 +293,8 @@ class FinalAuditService:
         snapshot: AuditSnapshot | None = None,
     ) -> AuditOutcome:
         snapshot = snapshot or self._snapshot(project)
-        if judge_result.returncode != 0:
+        override_record = self._delivery_override(project, snapshot.snapshot_id)
+        if judge_result.returncode != 0 and override_record is None:
             return self._failure(
                 project,
                 snapshot=snapshot,
@@ -276,8 +309,11 @@ class FinalAuditService:
             )
 
         resume_after = judge_result.metadata.get("resume_after_step")
-        override = self._delivery_override_active(project)
-        judge_completed = judge_result.metadata.get("judge_completed") is not False
+        override = override_record is not None
+        judge_completed = (
+            judge_result.returncode == 0
+            and judge_result.metadata.get("judge_completed") is not False
+        )
         if judge_completed:
             routed = self._run_decision_router(project)
             if routed is not None:
@@ -342,7 +378,21 @@ class FinalAuditService:
         if override and (decision != "PASS" or not judge_completed):
             self._record_override_decision(project, decision, judge_result.metadata)
 
-        snapshot = self._snapshot(project)
+        current_snapshot = self._snapshot(project)
+        if current_snapshot.snapshot_id != snapshot.snapshot_id:
+            return self._failure(
+                project,
+                snapshot=current_snapshot,
+                decision="SNAPSHOT_CHANGED_DURING_FINAL_AUDIT",
+                status=AuditStatus.INDETERMINATE,
+                error_class="TRANSIENT_FINAL_AUDIT_MUTATION",
+                returncode=75,
+                judge_completed=judge_completed,
+                evidence={
+                    "before_snapshot": snapshot.snapshot_id,
+                    "after_snapshot": current_snapshot.snapshot_id,
+                },
+            )
         if decision == "PASS" and judge_completed:
             receipt = self._build_and_verify_receipt(project, snapshot.snapshot_id)
             if receipt is not None:
@@ -365,6 +415,52 @@ class FinalAuditService:
             if decision == "PASS" and judge_completed
             else AuditStatus.OVERRIDDEN
         )
+        override_receipt = None
+        if status is AuditStatus.OVERRIDDEN:
+            if override_record is None:
+                return self._failure(
+                    project,
+                    snapshot=snapshot,
+                    decision=decision or "INDETERMINATE_REVIEW",
+                    status=AuditStatus.FAIL,
+                    error_class="PERMANENT_OVERRIDE_NOT_AUTHORIZED",
+                    returncode=2,
+                    judge_completed=judge_completed,
+                )
+            override_receipt = self._write_override_receipt(
+                project, snapshot, override_record, decision
+            )
+        try:
+            final_receipt = build_final_acceptance_receipt(
+                project,
+                snapshot,
+                status=status.value,
+                override_receipt=override_receipt,
+            )
+        except (OSError, ValueError) as exc:
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision=decision,
+                status=AuditStatus.INDETERMINATE,
+                error_class="PERMANENT_FINAL_ACCEPTANCE_RECEIPT",
+                returncode=2,
+                judge_completed=judge_completed,
+                evidence={"receipt_error": str(exc)},
+            )
+        if override_record is not None and not self.override_provider.consume(
+            override_record.override_id
+        ):
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision=decision,
+                status=AuditStatus.INDETERMINATE,
+                error_class="PERMANENT_OVERRIDE_CONSUMPTION",
+                returncode=2,
+                judge_completed=judge_completed,
+                evidence={"override_id": override_record.override_id},
+            )
         record = AuditRecord(
             snapshot_id=snapshot.snapshot_id,
             base=project.name,
@@ -375,7 +471,16 @@ class FinalAuditService:
             delivery_allowed=True,
             created_at=_utc_now(),
             override=override,
-            evidence={"judge": judge_result.metadata},
+            evidence={
+                "judge": judge_result.metadata,
+                "final_acceptance_receipt": str(FINAL_ACCEPTANCE_RECEIPT_PATH),
+                "final_acceptance_content_sha256": final_receipt.get(
+                    "content_sha256"
+                ),
+                "override_id": (
+                    override_record.override_id if override_record is not None else None
+                ),
+            },
         )
         record = self._persist(project, snapshot, record)
         execution = ExecutionResult.succeeded(
@@ -414,9 +519,31 @@ class FinalAuditService:
                 "snapshot_id": snapshot.snapshot_id,
             },
         )
+        self._record_override_decision(
+            project,
+            "ABLATE_NO_JUDGE",
+            {"judge_completed": False, "judge_failure_stage": "ablation"},
+        )
         (project / "judge_outputs/final_submission.sha256").write_text(
             snapshot.snapshot_id + "\n", encoding="ascii"
         )
+        try:
+            final_receipt = build_final_acceptance_receipt(
+                project,
+                snapshot,
+                status=AuditStatus.OVERRIDDEN.value,
+                override_receipt=str(marker.relative_to(project)),
+            )
+        except (OSError, ValueError) as exc:
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision="ABLATE_NO_JUDGE",
+                status=AuditStatus.INDETERMINATE,
+                error_class="PERMANENT_FINAL_ACCEPTANCE_RECEIPT",
+                returncode=2,
+                evidence={"receipt_error": str(exc)},
+            )
         record = AuditRecord(
             snapshot_id=snapshot.snapshot_id,
             base=project.name,
@@ -426,7 +553,13 @@ class FinalAuditService:
             judge_completed=False,
             delivery_allowed=True,
             created_at=_utc_now(),
-            evidence={"governance": "ABLATE_NO_JUDGE"},
+            evidence={
+                "governance": "ABLATE_NO_JUDGE",
+                "final_acceptance_receipt": str(FINAL_ACCEPTANCE_RECEIPT_PATH),
+                "final_acceptance_content_sha256": final_receipt.get(
+                    "content_sha256"
+                ),
+            },
         )
         record = self._persist(project, snapshot, record)
         return AuditOutcome(
@@ -442,47 +575,78 @@ class FinalAuditService:
             snapshot,
         )
 
-    def _run_acceptance_checks(self, project: Path) -> ExecutionResult | None:
-        checks = (
-            (
-                "scripts/verify_provenance.py",
-                [project],
-                "provenance_verification",
-                project / "provenance_verification.latest.txt",
-            ),
-            (
-                "scripts/verify_quality_contract.py",
-                [
-                    project,
-                    "--factory-root",
-                    self.factory_root,
-                    "--json-out",
-                    project / "quality_contract_verification.latest.json",
-                    "--text-out",
-                    project / "quality_contract_verification.latest.txt",
-                ],
-                "quality_contract_verification",
-                project / "logs/native_quality_contract.log",
-            ),
+    def _run_acceptance_checks(
+        self, project: Path
+    ) -> tuple[list[dict[str, object]], ExecutionResult | None]:
+        checks = IncrementalAuditService(
+            self.factory_root, runner=self.runner
+        ).paper_checks(project)
+        provenance_report = project / "provenance_verification.latest.txt"
+        provenance = self.runner.python(
+            self.factory_root,
+            project,
+            "scripts/verify_provenance.py",
+            [project],
+            label="audit_final_provenance",
+            timeout_seconds=600,
+            accepted=(0,),
+            log_path=provenance_report,
         )
-        for script, args, label, log_path in checks:
-            result = self.runner.python(
-                self.factory_root,
-                project,
-                script,
-                args,
-                label=label,
-                timeout_seconds=600,
-                accepted=(0,),
-                log_path=log_path,
+        checks.append(
+            StageCheck(
+                "provenance",
+                provenance.accepted,
+                "hard",
+                "PASS" if provenance.accepted else f"exit={provenance.returncode}",
+                str(provenance_report.relative_to(project)),
+                provenance.returncode,
+                provenance.timed_out,
             )
-            if not result.accepted:
-                return ExecutionResult.failed(
-                    "PERMANENT_DELIVERY_ACCEPTANCE",
-                    returncode=result.returncode,
-                    check=label,
+        )
+
+        evidence: list[dict[str, object]] = []
+        for check in checks:
+            value = check.to_dict()
+            report = value.get("report")
+            if isinstance(report, str) and report:
+                path = project / report
+                value["report_sha256"] = (
+                    self._sha256_file(path) if path.is_file() else None
                 )
-        return None
+            evidence.append(value)
+        _atomic_write_json(
+            project / "judge_outputs/final_paper_checks.json",
+            {
+                "schema_version": "final-paper-checks-v1",
+                "base": project.name,
+                "checks": evidence,
+                "hard_failures": [
+                    check.name
+                    for check in checks
+                    if check.severity == "hard" and not check.passed
+                ],
+                "warnings": [
+                    check.name
+                    for check in checks
+                    if check.severity == "warning" and not check.passed
+                ],
+            },
+        )
+        failed = next(
+            (
+                check
+                for check in checks
+                if check.severity == "hard" and not check.passed
+            ),
+            None,
+        )
+        if failed is None:
+            return evidence, None
+        return evidence, ExecutionResult.failed(
+            "PERMANENT_DELIVERY_ACCEPTANCE",
+            returncode=failed.returncode or 1,
+            check=failed.name,
+        )
 
     def _run_visual_gate(self, project: Path, pdf: Path) -> ExecutionResult | None:
         args: list[str | Path] = [
@@ -493,6 +657,9 @@ class FinalAuditService:
         tex_log = project / f"{project.name}_paper.log"
         if tex_log.is_file():
             args.extend(["--tex-log", tex_log])
+        max_pages = self._configured_max_pages(project)
+        if max_pages is not None:
+            args.extend(["--max-pages", str(max_pages)])
         result = self.runner.python(
             self.factory_root,
             project,
@@ -508,6 +675,32 @@ class FinalAuditService:
             )
         return None
 
+    @staticmethod
+    def _configured_max_pages(project: Path) -> int | None:
+        configured = os.getenv("FINAL_AUDIT_MAX_PAGES", "").strip()
+        if configured:
+            try:
+                value = int(configured)
+            except ValueError as exc:
+                raise ValueError("FINAL_AUDIT_MAX_PAGES must be a positive integer") from exc
+            if value <= 0:
+                raise ValueError("FINAL_AUDIT_MAX_PAGES must be a positive integer")
+            return value
+        path = project / "problem/deliverables.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        paper = payload.get("paper") if isinstance(payload, dict) else None
+        value = (
+            paper.get("max_pages")
+            if isinstance(paper, dict)
+            else payload.get("max_pages")
+            if isinstance(payload, dict)
+            else None
+        )
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
     def _run_decision_router(self, project: Path) -> ExecutionResult | None:
         result = self.runner.python(
             self.factory_root,
@@ -519,7 +712,7 @@ class FinalAuditService:
                 "--visual-gate",
                 project / "judge_outputs/visual_gate.json",
                 "--policy-mode",
-                os.getenv("JUDGE_POLICY_MODE", "shadow").lower(),
+                "enforce",
                 "--output",
                 project / "judge_outputs/decision_route.json",
             ],
@@ -583,8 +776,12 @@ class FinalAuditService:
                 submission_fingerprint_payload,
             )
 
-            identity = submission_fingerprint_payload(project, project.name)
-            snapshot_id = submission_fingerprint(project, project.name)
+            identity = submission_fingerprint_payload(
+                project, project.name, policy_mode="enforce"
+            )
+            snapshot_id = submission_fingerprint(
+                project, project.name, policy_mode="enforce"
+            )
         else:
             snapshot_id = self.fingerprinter(project, project.name)
             identity = {
@@ -751,6 +948,14 @@ class FinalAuditService:
             )
             if not valid:
                 return None
+            acceptance_valid, _acceptance_errors = verify_final_acceptance_receipt(
+                project,
+                snapshot,
+                expected_snapshot_id=snapshot.snapshot_id,
+                expected_status=AuditStatus.PASS.value,
+            )
+            if not acceptance_valid:
+                return None
         else:
             ablation = value.get("decision") == "ABLATE_NO_JUDGE"
             if ablation:
@@ -770,7 +975,9 @@ class FinalAuditService:
                     or marker.get("snapshot_id") != snapshot.snapshot_id
                 ):
                     return None
-            elif not override or not self._delivery_override_active(project):
+            elif not override or not self._consumed_delivery_override(
+                project, snapshot.snapshot_id, value
+            ):
                 return None
             if ablation:
                 route = None
@@ -788,6 +995,14 @@ class FinalAuditService:
                 or route.get("quality_pass_fabricated") is not False
             ):
                 return None
+            acceptance_valid, _acceptance_errors = verify_final_acceptance_receipt(
+                project,
+                snapshot,
+                expected_snapshot_id=snapshot.snapshot_id,
+                expected_status=AuditStatus.OVERRIDDEN.value,
+            )
+            if not acceptance_valid:
+                return None
         return AuditRecord(
             snapshot_id=snapshot.snapshot_id,
             base=project.name,
@@ -803,6 +1018,29 @@ class FinalAuditService:
             override=override,
             reused=True,
             evidence=dict(value.get("evidence") or {}),
+        )
+
+    def _consumed_delivery_override(
+        self,
+        project: Path,
+        snapshot_id: str,
+        audit_record: dict[str, object],
+    ) -> bool:
+        evidence = audit_record.get("evidence")
+        override_id = (
+            evidence.get("override_id") if isinstance(evidence, dict) else None
+        )
+        getter = getattr(self.override_provider, "get_override", None)
+        if not isinstance(override_id, str) or not callable(getter):
+            return False
+        record = getter(override_id)
+        return bool(
+            record is not None
+            and record.base_name == project.name
+            and record.scope == DELIVER_SNAPSHOT
+            and record.bound_snapshot_id == snapshot_id
+            and record.revoked_at is None
+            and record.consumed_at is not None
         )
 
     def _judge_failure_override(
@@ -826,11 +1064,56 @@ class FinalAuditService:
     def _unresolved_blocking(project: Path) -> bool:
         return has_unresolved_blocking(project / "audit_issue_ledger.md")
 
-    @staticmethod
-    def _delivery_override_active(project: Path) -> bool:
-        from scripts.workflow_state import gate2_delivery_override
+    def _delivery_override(
+        self, project: Path, snapshot_id: str
+    ) -> DeliveryOverride | None:
+        return self.override_provider.active_override(
+            project.name,
+            DELIVER_SNAPSHOT,
+            snapshot_id=snapshot_id,
+        )
 
-        return gate2_delivery_override(project)
+    def _delivery_override_active(
+        self, project: Path, snapshot_id: str | None = None
+    ) -> bool:
+        if snapshot_id is None:
+            try:
+                snapshot_id = (
+                    project / "judge_outputs/final_submission.sha256"
+                ).read_text(encoding="ascii").strip()
+            except OSError:
+                return False
+        return self._delivery_override(project, snapshot_id) is not None
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _write_override_receipt(
+        project: Path,
+        snapshot: AuditSnapshot,
+        override: DeliveryOverride,
+        decision: str,
+    ) -> str:
+        relative = "judge_outputs/delivery_override_receipt.json"
+        _atomic_write_json(
+            project / relative,
+            {
+                "schema_version": "delivery-override-receipt-v1",
+                "snapshot_id": snapshot.snapshot_id,
+                "base": project.name,
+                "scope": DELIVER_SNAPSHOT,
+                "source_verdict": decision or override.source_verdict,
+                "quality_pass_fabricated": False,
+                "authorization": override.to_dict(),
+            },
+        )
+        return relative
 
     @staticmethod
     def _decision(project: Path, *, prefer_new: bool = False) -> str:
@@ -874,6 +1157,7 @@ def build_final_audit_service(
     runner: CommandRunner | None = None,
     validator: NativeArtifactValidator | None = None,
     fingerprinter: Fingerprinter | None = None,
+    override_provider: OverrideProvider | None = None,
 ) -> FinalAuditService:
     root = Path(factory_root).resolve()
     renderer = renderer or PromptRenderer(root)
@@ -883,6 +1167,19 @@ def build_final_audit_service(
     from ..steps.specialized import JudgeStep
 
     judge = JudgeStep(
-        contract_for(13), root, renderer, dispatcher, validator, runner
+        contract_for(13),
+        root,
+        renderer,
+        dispatcher,
+        validator,
+        runner,
+        override_provider,
     )
-    return FinalAuditService(root, judge, validator, runner, fingerprinter)
+    return FinalAuditService(
+        root,
+        judge,
+        validator,
+        runner,
+        fingerprinter,
+        override_provider,
+    )

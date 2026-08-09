@@ -52,7 +52,9 @@ sudo ./web/deploy.sh
 6. 以服务用户运行 `npm ci` 和 `npm run build`；
 7. 将 `dist/` 同步到 `/var/www/tfisher.de/` 并设置静态文件权限；
 8. 重启 `paper-factory-api.service`；
-9. 重试本地 API 和 canonical HTTPS 首页，后端无法就绪时以非零状态失败。
+9. 确认 unit 为 `active/running`、`MainPID` 与所有 8000 listener 都属于
+   unit 的 `ControlGroup`，并在稳定窗口内保持 PID 与 `NRestarts` 不变；
+10. 再验证本地 API、canonical HTTPS 和前端指纹，任一不一致都以非零状态失败。
 
 只更新后端：
 
@@ -68,12 +70,15 @@ sudo ./web/deploy.sh backend-only
 ### 本地服务
 
 ```bash
-systemctl is-active paper-factory-api.service
+sudo ./web/backend_service_health.sh --verify
 systemctl is-active nginx.service
 curl -fsS http://127.0.0.1:8000/
 ```
 
-预期 API 响应是状态对象；不应在输出中出现 secret。若服务启动失败，先看：
+健康脚本输出 `MainPID|NRestarts|ControlGroup|listener PIDs`。单独看到
+`systemctl active` 或 HTTP 200 都不算成功：旧会话遗留的 rogue listener
+可能继续响应端口，必须证明所有 listener 都在正式 unit cgroup 内。预期 API
+响应是状态对象；不应在输出中出现 secret。若服务启动失败，先看：
 
 ```bash
 sudo journalctl -u paper-factory-api.service -n 100 --no-pager
@@ -102,6 +107,10 @@ sha256sum web/frontend/dist/index.html /var/www/tfisher.de/index.html
 
 两者一致只能证明当前文件内容一致；仍需结合 canonical URL 响应、systemd active 状态和发布时间判断 live 状态。
 
+完整部署必须同时满足：源码 `dist/index.html` 与生产文件指纹一致、canonical
+HTTPS 可访问、后端 listener 所有权正确且稳定。`backend-only` 不重发前端，
+但仍使用完全相同的后端 cgroup/PID/重启稳定性验收。
+
 ## 回滚
 
 回滚前先记录当前 commit、服务状态和前端指纹。优先回到已审查的 Git commit，再按标准部署流程构建和重启：
@@ -129,9 +138,15 @@ Secret 轮换、旧版本禁用、备份删除、停服和删除 worktree 都是
 ```bash
 systemctl status paper-factory-api.service --no-pager
 sudo journalctl -u paper-factory-api.service -n 200 --no-pager
+sudo ./web/backend_service_health.sh --verify
+sudo ss -H -ltnp 'sport = :8000'
 ```
 
-修复配置后重新执行预检；不要通过弱默认密码或自动生成 JWT 绕过启动校验。
+若 8000 listener 不属于 `paper-factory-api.service` 的 ControlGroup，先记录
+准确 PID、命令行和 cgroup，再停止对应的遗留会话进程；不要用 HTTP 200 掩盖
+正式 unit 启动失败。仓库 unit 使用 `KillMode=control-group`、停止超时和
+SIGKILL 收尾，并有启动限流，避免后续重启再次遗留子进程或无限抖动。修复配置后
+重新执行预检；不要通过弱默认密码或自动生成 JWT 绕过启动校验。
 
 ### 首页仍是旧版本
 

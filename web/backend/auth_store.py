@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,22 @@ class AuditLogRecord:
     metadata_json: str = ""
 
 
+@dataclass(frozen=True)
+class DeliveryOverrideRecord:
+    override_id: str
+    base_name: str
+    scope: str
+    bound_snapshot_id: str | None
+    source_verdict: str
+    reason: str
+    actor: str
+    issued_at: int
+    expires_at: int | None = None
+    revoked_at: int | None = None
+    revoked_by: str | None = None
+    consumed_at: int | None = None
+
+
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 
@@ -152,6 +169,29 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at INTEGER NOT NULL,
     metadata_json TEXT
 );
+
+CREATE TABLE IF NOT EXISTS delivery_overrides (
+    override_id TEXT PRIMARY KEY,
+    base_name TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK (scope IN ('continue_after_gate2', 'deliver_snapshot')),
+    bound_snapshot_id TEXT,
+    source_verdict TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    revoked_at INTEGER,
+    revoked_by TEXT,
+    consumed_at INTEGER,
+    CHECK (
+        (scope = 'continue_after_gate2' AND bound_snapshot_id IS NULL)
+        OR
+        (scope = 'deliver_snapshot' AND length(bound_snapshot_id) = 64)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_overrides_active
+ON delivery_overrides(base_name, scope, issued_at DESC);
 """
 
 
@@ -223,6 +263,23 @@ def row_to_audit(row: sqlite3.Row) -> AuditLogRecord:
         target_id=str(row["target_id"]),
         created_at=int(row["created_at"]),
         metadata_json=row["metadata_json"] or "",
+    )
+
+
+def row_to_delivery_override(row: sqlite3.Row) -> DeliveryOverrideRecord:
+    return DeliveryOverrideRecord(
+        override_id=str(row["override_id"]),
+        base_name=str(row["base_name"]),
+        scope=str(row["scope"]),
+        bound_snapshot_id=row["bound_snapshot_id"],
+        source_verdict=str(row["source_verdict"] or ""),
+        reason=str(row["reason"]),
+        actor=str(row["actor"]),
+        issued_at=int(row["issued_at"]),
+        expires_at=row["expires_at"],
+        revoked_at=row["revoked_at"],
+        revoked_by=row["revoked_by"],
+        consumed_at=row["consumed_at"],
     )
 
 
@@ -601,10 +658,154 @@ class AuthStore:
             rows = conn.execute("SELECT * FROM audit_log ORDER BY id").fetchall()
         return [row_to_audit(row) for row in rows]
 
+    def issue_delivery_override(
+        self,
+        *,
+        base_name: str,
+        scope: str,
+        source_verdict: str,
+        reason: str,
+        actor: str,
+        bound_snapshot_id: str | None = None,
+        expires_at: int | None = None,
+    ) -> DeliveryOverrideRecord:
+        from factory_core.governance.overrides import (
+            CONTINUE_AFTER_GATE2,
+            DELIVER_SNAPSHOT,
+            SHA256_RE,
+        )
+
+        base_name = normalize_username(base_name)
+        if scope not in {CONTINUE_AFTER_GATE2, DELIVER_SNAPSHOT}:
+            raise ValueError("invalid override scope")
+        reason = reason.strip()
+        if not reason:
+            raise ValueError("override reason is required")
+        source_verdict = source_verdict.strip() or "MISSING"
+        if scope == CONTINUE_AFTER_GATE2:
+            if bound_snapshot_id is not None:
+                raise ValueError("continuation override cannot bind a snapshot")
+        elif not isinstance(bound_snapshot_id, str) or not SHA256_RE.fullmatch(
+            bound_snapshot_id
+        ):
+            raise ValueError("delivery override requires a lowercase SHA-256 snapshot")
+        now = utc_now()
+        if expires_at is not None and expires_at <= now:
+            raise ValueError("override expiry must be in the future")
+        override_id = uuid.uuid4().hex
+        with self._connect() as conn:
+            self._require_admin_actor(conn, actor)
+            conn.execute(
+                """
+                INSERT INTO delivery_overrides (
+                    override_id, base_name, scope, bound_snapshot_id,
+                    source_verdict, reason, actor, issued_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    override_id,
+                    base_name,
+                    scope,
+                    bound_snapshot_id,
+                    source_verdict,
+                    reason,
+                    actor,
+                    now,
+                    expires_at,
+                ),
+            )
+            self._insert_audit(
+                conn,
+                actor,
+                "delivery_override.issue",
+                "project",
+                base_name,
+                {
+                    "override_id": override_id,
+                    "scope": scope,
+                    "bound_snapshot_id": bound_snapshot_id,
+                    "source_verdict": source_verdict,
+                    "expires_at": expires_at,
+                },
+            )
+        return self.require_delivery_override(override_id)
+
+    def revoke_delivery_override(
+        self, override_id: str, *, actor: str
+    ) -> DeliveryOverrideRecord:
+        now = utc_now()
+        with self._connect() as conn:
+            self._require_admin_actor(conn, actor)
+            cursor = conn.execute(
+                """
+                UPDATE delivery_overrides
+                SET revoked_at = ?, revoked_by = ?
+                WHERE override_id = ? AND revoked_at IS NULL AND consumed_at IS NULL
+                """,
+                (now, actor, override_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("override is missing or no longer active")
+            row = conn.execute(
+                "SELECT base_name, scope FROM delivery_overrides WHERE override_id = ?",
+                (override_id,),
+            ).fetchone()
+            self._insert_audit(
+                conn,
+                actor,
+                "delivery_override.revoke",
+                "project",
+                str(row["base_name"]),
+                {"override_id": override_id, "scope": row["scope"]},
+            )
+        return self.require_delivery_override(override_id)
+
+    def get_delivery_override(
+        self, override_id: str
+    ) -> DeliveryOverrideRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM delivery_overrides WHERE override_id = ?",
+                (override_id,),
+            ).fetchone()
+        return row_to_delivery_override(row) if row else None
+
+    def require_delivery_override(self, override_id: str) -> DeliveryOverrideRecord:
+        record = self.get_delivery_override(override_id)
+        if record is None:
+            raise ValueError("delivery override not found")
+        return record
+
+    def list_delivery_overrides(
+        self, base_name: str | None = None
+    ) -> list[DeliveryOverrideRecord]:
+        with self._connect() as conn:
+            if base_name is None:
+                rows = conn.execute(
+                    "SELECT * FROM delivery_overrides ORDER BY issued_at DESC, override_id DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM delivery_overrides
+                    WHERE base_name = ? ORDER BY issued_at DESC, override_id DESC
+                    """,
+                    (normalize_username(base_name),),
+                ).fetchall()
+        return [row_to_delivery_override(row) for row in rows]
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_file)
         conn.row_factory = sqlite3.Row
         return conn
+
+    @staticmethod
+    def _require_admin_actor(conn: sqlite3.Connection, actor: str) -> None:
+        row = conn.execute(
+            "SELECT role, status FROM users WHERE username = ?", (actor,)
+        ).fetchone()
+        if row is None or row["role"] != "admin" or row["status"] != "active":
+            raise ValueError("an active administrator must issue delivery overrides")
 
     @staticmethod
     def _normalize_showcase_audience(audience: str) -> str:

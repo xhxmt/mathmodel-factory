@@ -17,8 +17,8 @@ from scripts.judge_packet import packet_fingerprints
 from scripts.model_dispatch_config import get_model_entry, get_step_model_ids
 
 
-FINGERPRINT_VERSION = 6
-EVALUATOR_CONTRACT_VERSION = 5
+FINGERPRINT_VERSION = 7
+EVALUATOR_CONTRACT_VERSION = 6
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -91,7 +91,12 @@ def _versioned_file_record(root: Path, relative: str) -> dict[str, object]:
     }
 
 
-def evaluator_contract_payload(base: str, factory_root: Path | None = None) -> dict[str, object]:
+def evaluator_contract_payload(
+    base: str,
+    factory_root: Path | None = None,
+    *,
+    policy_mode: str | None = None,
+) -> dict[str, object]:
     """Return the exact Step-13 evaluator implementation and model selection.
 
     Final-judge cache validity depends on more than paper inputs: changing a
@@ -122,12 +127,21 @@ def evaluator_contract_payload(base: str, factory_root: Path | None = None) -> d
         "factory_core/audit/ledger.py",
         "factory_core/audit/persistence.py",
         "factory_core/audit/service.py",
+        "factory_core/audit/acceptance.py",
         "factory_core/adapters/legacy.py",
         "factory_core/adapters/legacy_runner.sh",
         "factory_core/steps/catalog.py",
         "factory_core/steps/specialized.py",
         "factory_core/steps/validators.py",
         "scripts/claim_graph.py",
+        "scripts/verify_numbers.py",
+        "scripts/verify_symbols.py",
+        "scripts/verify_deliverables.py",
+        "scripts/verify_derived_artifacts.py",
+        "scripts/verify_invariants.py",
+        "scripts/verify_spec_impl.py",
+        "scripts/verify_quality_contract.py",
+        "scripts/verify_provenance.py",
         "scripts/judge_packet.py",
         "scripts/objective_evidence.py",
         "scripts/build_objective_evidence.py",
@@ -176,7 +190,11 @@ def evaluator_contract_payload(base: str, factory_root: Path | None = None) -> d
             "registry": _versioned_file_record(root, "web/model_registry.json"),
         },
         "runtime_policy": {
-            "judge_policy_mode": os.getenv("JUDGE_POLICY_MODE", "shadow").lower(),
+            "judge_policy_mode": (
+                policy_mode
+                if policy_mode is not None
+                else os.getenv("JUDGE_POLICY_MODE", "shadow").lower()
+            ),
             "ablate_no_judge": os.getenv("ABLATE_NO_JUDGE", "0").lower()
             in {"1", "true", "yes", "on"},
         },
@@ -221,7 +239,12 @@ def _objective_evidence_record(project: Path) -> dict[str, object] | None:
     }
 
 
-def submission_fingerprint_payload(project: Path, base: str | None = None) -> dict[str, object]:
+def submission_fingerprint_payload(
+    project: Path,
+    base: str | None = None,
+    *,
+    policy_mode: str | None = None,
+) -> dict[str, object]:
     """Build the current, side-effect-free final-review identity payload."""
 
     project = project.resolve()
@@ -231,7 +254,25 @@ def submission_fingerprint_payload(project: Path, base: str | None = None) -> di
         "base": resolved_base,
         "judge_packet_fingerprints": packet_fingerprints(project, resolved_base),
         "objective_evidence": _objective_evidence_record(project),
-        "evaluator_contract": evaluator_contract_payload(resolved_base),
+        "evaluator_contract": evaluator_contract_payload(
+            resolved_base, policy_mode=policy_mode
+        ),
+        "final_acceptance_checks": (
+            _file_record(
+                project,
+                project / "judge_outputs" / "final_paper_checks.json",
+            )
+            if _contained_file(
+                project,
+                project / "judge_outputs" / "final_paper_checks.json",
+            )
+            else {
+                "path": "judge_outputs/final_paper_checks.json",
+                "exists": False,
+                "size": 0,
+                "sha256": None,
+            }
+        ),
         "submission_assets": [
             _file_record(project, path) for path in submission_files(project, resolved_base)
         ],
@@ -239,8 +280,13 @@ def submission_fingerprint_payload(project: Path, base: str | None = None) -> di
     }
 
 
-def submission_fingerprint(project: Path, base: str | None = None) -> str:
-    payload = submission_fingerprint_payload(project, base)
+def submission_fingerprint(
+    project: Path,
+    base: str | None = None,
+    *,
+    policy_mode: str | None = None,
+) -> str:
+    payload = submission_fingerprint_payload(project, base, policy_mode=policy_mode)
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -253,15 +299,22 @@ def final_judge_is_current(project: Path, base: str | None = None) -> bool:
     if not hash_file.is_file() or not _contained_file(project, pdf) or pdf.stat().st_size <= 0:
         return False
     expected = hash_file.read_text(encoding="utf-8", errors="replace").strip()
-    current = submission_fingerprint(project, resolved_base)
+    current = submission_fingerprint(project, resolved_base, policy_mode="enforce")
     if not expected or expected != current:
         return False
 
-    # Explicit governance paths (the no-judge ablation and a user-authored
-    # Gate-2 delivery override) intentionally bypass the quality receipt. They
-    # remain visible in delivery state and are never presented as a quality
-    # PASS; keeping this exception here preserves the experiment/override
-    # contract while normal deliveries stay receipt-bound.
+    from factory_core.audit.acceptance import verify_final_acceptance_receipt
+
+    acceptance_valid, _ = verify_final_acceptance_receipt(
+        project,
+        expected_snapshot_id=current,
+    )
+    if not acceptance_valid:
+        return False
+
+    # Explicit no-judge experiments remain visible as OVERRIDDEN and never
+    # become quality PASS. Administrator delivery overrides are validated by
+    # the snapshot-bound final-acceptance receipt, never by a project-local file.
     ablation = project / "judge_outputs" / "final_submission.ablation.json"
     if ablation.is_file():
         try:
@@ -270,14 +323,16 @@ def final_judge_is_current(project: Path, base: str | None = None) -> bool:
                 return True
         except (OSError, json.JSONDecodeError):
             pass
-    override = project / "gate2_delivery_override.json"
-    if override.is_file():
-        try:
-            value = json.loads(override.read_text(encoding="utf-8"))
-            if value.get("enabled") is True and value.get("scope") == "continue_to_step16":
-                return True
-        except (OSError, json.JSONDecodeError):
-            pass
+    try:
+        acceptance = json.loads(
+            (project / "judge_outputs/final_acceptance_receipt.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        if acceptance.get("status") == "OVERRIDDEN":
+            return True
+    except (OSError, json.JSONDecodeError):
+        return False
     from scripts.judgment_receipt import verify_receipt
 
     receipt_valid, _ = verify_receipt(

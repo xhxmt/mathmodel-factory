@@ -1,6 +1,8 @@
 [Unit]
 Description=Paper Factory Web Dashboard API
 After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -12,6 +14,9 @@ EnvironmentFile=/home/tfisher/paper_factory/web/.env
 ExecStart=/bin/bash -lc 'source /home/tfisher/paper_factory/scripts/load_secrets.sh; exec /home/tfisher/paper_factory/.venv/bin/uvicorn apps.web.backend.main:app --host 0.0.0.0 --port 8000'
 Restart=always
 RestartSec=10
+KillMode=control-group
+TimeoutStopSec=30s
+SendSIGKILL=yes
 StandardOutput=append:/home/tfisher/paper_factory/logs/api.log
 StandardError=append:/home/tfisher/paper_factory/logs/api.error.log
 

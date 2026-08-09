@@ -902,6 +902,11 @@ class IncrementalAuditService:
             snapshot,
         )
 
+    def paper_checks(self, project: str | Path) -> list[StageCheck]:
+        """Run the shared deterministic paper suite for a final submission."""
+
+        return self._paper_checks(Path(project).resolve())
+
     @staticmethod
     def _profile_root(project: Path, profile: AuditProfile) -> Path:
         return project / ".factory" / "audits" / "profiles" / profile.value

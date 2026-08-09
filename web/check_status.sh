@@ -1,29 +1,30 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Web 服务重启完成验证脚本
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=backend_service_health.sh
+source "$SCRIPT_DIR/backend_service_health.sh"
+FAILED=0
 
 echo "=========================================="
 echo "Paper Factory Web 服务状态检查"
 echo "=========================================="
 echo
 
-# 1. 检查后端服务
-echo "✓ 检查后端服务..."
-if systemctl is-active --quiet paper-factory-api.service; then
-    echo "  ✅ 后端服务运行正常 (paper-factory-api.service)"
-    PID=$(systemctl show paper-factory-api.service -p MainPID --value)
-    echo "  └─ PID: $PID"
+# 1/2. 统一验证 unit、listener cgroup、稳定窗口与 API
+echo "✓ 检查后端服务所有权与稳定性..."
+if SNAPSHOT="$(verify_backend_service_stable)"; then
+    IFS='|' read -r PID RESTARTS CONTROL_GROUP LISTENERS <<< "$SNAPSHOT"
+    echo "  ✅ 后端由 paper-factory-api.service 稳定持有"
+    echo "  ├─ MainPID: $PID"
+    echo "  ├─ Listener PID(s): $LISTENERS"
+    echo "  ├─ NRestarts: $RESTARTS"
+    echo "  └─ ControlGroup: $CONTROL_GROUP"
 else
-    echo "  ❌ 后端服务未运行"
-fi
-echo
-
-# 2. 检查 API 端点
-echo "✓ 检查 API 端点..."
-if curl -s http://localhost:8000/ | grep -q "Paper Factory"; then
-    echo "  ✅ API 端点响应正常"
-    echo "  └─ http://localhost:8000/"
-else
-    echo "  ❌ API 端点无响应"
+    echo "  ❌ 后端 unit/PID/cgroup/HTTP 验收失败"
+    FAILED=1
 fi
 echo
 
@@ -33,6 +34,7 @@ if systemctl is-active --quiet nginx.service; then
     echo "  ✅ Nginx 运行正常"
 else
     echo "  ❌ Nginx 未运行"
+    FAILED=1
 fi
 echo
 
@@ -104,3 +106,4 @@ echo
 echo "=========================================="
 echo "✅ 服务重启完成！"
 echo "=========================================="
+exit "$FAILED"

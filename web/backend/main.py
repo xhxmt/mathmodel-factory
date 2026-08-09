@@ -24,6 +24,8 @@ from .project_api import (
 )
 from .schemas import (
     AuditLogResponse,
+    DeliveryOverrideIssueRequest,
+    DeliveryOverrideResponse,
     LoginRequest,
     LoginResponse,
     OpsSecretsStatus,
@@ -116,6 +118,23 @@ def _audit_response(record) -> AuditLogResponse:
         target_id=record.target_id,
         created_at=record.created_at,
         metadata=metadata,
+    )
+
+
+def _delivery_override_response(record) -> DeliveryOverrideResponse:
+    return DeliveryOverrideResponse(
+        override_id=record.override_id,
+        base_name=record.base_name,
+        scope=record.scope,
+        bound_snapshot_id=record.bound_snapshot_id,
+        source_verdict=record.source_verdict,
+        reason=record.reason,
+        actor=record.actor,
+        issued_at=record.issued_at,
+        expires_at=record.expires_at,
+        revoked_at=record.revoked_at,
+        revoked_by=record.revoked_by,
+        consumed_at=record.consumed_at,
     )
 
 
@@ -341,6 +360,68 @@ async def list_admin_audit_log(current_user: UserInfo = Depends(get_current_user
     _require_admin(current_user)
     records = list(reversed(auth_store.list_audit_log()))[:200]
     return [_audit_response(record) for record in records]
+
+
+@app.get(
+    "/api/admin/delivery-overrides",
+    response_model=list[DeliveryOverrideResponse],
+)
+async def list_admin_delivery_overrides(
+    current_user: UserInfo = Depends(get_current_user(settings)),
+):
+    _require_admin(current_user)
+    return [
+        _delivery_override_response(record)
+        for record in auth_store.list_delivery_overrides()
+    ]
+
+
+@app.post(
+    "/api/admin/delivery-overrides",
+    response_model=DeliveryOverrideResponse,
+)
+async def issue_admin_delivery_override(
+    request: DeliveryOverrideIssueRequest,
+    current_user: UserInfo = Depends(get_current_user(settings)),
+):
+    _require_admin(current_user)
+    try:
+        record = auth_store.issue_delivery_override(
+            base_name=request.base_name,
+            scope=request.scope,
+            bound_snapshot_id=request.bound_snapshot_id,
+            source_verdict=request.source_verdict,
+            reason=request.reason,
+            actor=current_user.username,
+            expires_at=request.expires_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return _delivery_override_response(record)
+
+
+@app.post(
+    "/api/admin/delivery-overrides/{override_id}/revoke",
+    response_model=DeliveryOverrideResponse,
+)
+async def revoke_admin_delivery_override(
+    override_id: str,
+    current_user: UserInfo = Depends(get_current_user(settings)),
+):
+    _require_admin(current_user)
+    try:
+        record = auth_store.revoke_delivery_override(
+            override_id, actor=current_user.username
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    return _delivery_override_response(record)
 
 
 project_router = create_project_router(settings, ticket_store, manager)

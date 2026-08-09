@@ -160,6 +160,13 @@ revision；过期页面会收到 `409`，不会写入旧决策或启动 worker�
 - `PUT /api/admin/showcase/audiences/{audience_id}`
 - `GET /api/admin/ops/secrets`
 - `GET /api/admin/audit-log`
+- `GET|POST /api/admin/delivery-overrides`
+- `POST /api/admin/delivery-overrides/{override_id}/revoke`
+
+交付授权只由管理员签发并持久化到 `web/auth.db`。`continue_after_gate2`
+仅允许继续生成最终内容；`deliver_snapshot` 必须绑定精确的 64 位小写
+SHA-256，才能授权该 Final Audit 快照交付。项目目录中的
+`gate2_delivery_override.json` 不具备授权能力，真实 verdict 始终保留。
 
 其余项目详情、文件、日志、咨询、选择和模型配置接口均要求认证并执行项目 ACL 或管理员校验。
 
@@ -191,7 +198,7 @@ web/
   tests/test_web_frontend_runtime_helpers.py
 
 bash -n scripts/load_secrets.sh scripts/setup_secret_manager.sh \
-  web/backend/start.sh web/deploy.sh
+  web/backend/start.sh web/backend_service_health.sh web/deploy.sh
 
 cd web/frontend && npm run build
 ```
