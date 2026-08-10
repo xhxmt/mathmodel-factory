@@ -42,6 +42,11 @@ class CommandRunner:
             / "logs"
             / f"native_{label}_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.log"
         )
+        # Explicit report paths represent the latest verification result, not
+        # an append-only runtime log.  Reusing one must not mix stale project
+        # paths or verdicts into the next audit packet.
+        if log_path is not None:
+            target.unlink(missing_ok=True)
         result = self.supervisor.run(
             ProcessRequest(
                 argv=[str(value) for value in argv],

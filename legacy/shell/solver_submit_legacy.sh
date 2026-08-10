@@ -497,7 +497,7 @@ receipt_args=(
     --max-time "$EFFECTIVE_MAX_TIME"
     --requested-at "$REQUESTED_AT"
 )
-for value in "${EXTRA_ARRAY[@]}"; do receipt_args+=(--argv "$value"); done
+for value in "${EXTRA_ARRAY[@]}"; do receipt_args+=(--argv="$value"); done
 for value in "${INPUT_PATHS[@]}"; do receipt_args+=(--input "$value"); done
 for value in "${OUTPUT_PATHS[@]}"; do receipt_args+=(--output "$value"); done
 for value in "${SEED_VALUES[@]}"; do receipt_args+=(--seed "$value"); done

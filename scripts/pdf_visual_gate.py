@@ -231,13 +231,23 @@ def _analyze_stext(value: dict[str, Any]) -> tuple[list[Finding], dict[str, Any]
                 if isinstance(size, (int, float)) and size > 0:
                     minimum_font = min(minimum_font, float(size))
                     if size < 4.5:
+                        compact_text = re.sub(r"\s+", "", text)
+                        isolated_glyph = len(compact_text) <= 2
                         findings.append(
                             Finding(
-                                "UNREADABLY_SMALL_TEXT",
-                                "blocking",
+                                (
+                                    "VERY_SMALL_TEXT"
+                                    if isolated_glyph
+                                    else "UNREADABLY_SMALL_TEXT"
+                                ),
+                                "warning" if isolated_glyph else "blocking",
                                 f"text is rendered at {size:g}pt",
                                 page_number,
-                                {"text": text[:120], "font_size": size},
+                                {
+                                    "text": text[:120],
+                                    "font_size": size,
+                                    "isolated_glyph": isolated_glyph,
+                                },
                             )
                         )
                     elif size < 6.0:

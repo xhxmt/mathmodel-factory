@@ -5,7 +5,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from factory_core.adapters.infrastructure.commands import CommandResult
+from factory_core.adapters.infrastructure.commands import CommandResult, CommandRunner
 from factory_core.adapters.infrastructure.process import ProcessRequest, ProcessResult, ProcessSupervisor
 from factory_core.adapters.models.backends import ApiAgentBackend, CodexCliBackend, ModelRequest
 from factory_core.adapters.models.dispatcher import ModelDispatcher
@@ -77,6 +77,21 @@ def test_process_supervisor_structures_launch_failure(tmp_path):
     assert result.returncode == 127
     assert result.pid == 0
     assert result.metadata["launch_error"] == "FileNotFoundError"
+
+
+def test_command_runner_replaces_explicit_report_log(tmp_path):
+    report = tmp_path / "verification.latest.txt"
+    report.write_text("stale report\n", encoding="utf-8")
+
+    result = CommandRunner().run(
+        tmp_path,
+        [sys.executable, "-c", "print('fresh report')"],
+        label="verification",
+        log_path=report,
+    )
+
+    assert result.accepted is True
+    assert report.read_text(encoding="utf-8") == "fresh report\n"
 
 
 def test_native_codex_backend_honors_codex_model_for_builtin_fallback(monkeypatch, tmp_path):
@@ -451,6 +466,166 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
     assert (project / "judge_outputs/paper.md").read_text(
         encoding="utf-8"
     ).startswith("VERDICT: PASS\n")
+
+
+def test_native_judge_grounding_retry_includes_failure_and_packet_excerpt(
+    monkeypatch, tmp_path
+):
+    root = Path(__file__).resolve().parents[1]
+    project = tmp_path / "judge_fixture"
+    packet = project / "judge_packets/math"
+    outputs = project / "judge_outputs"
+    packet.mkdir(parents=True)
+    outputs.mkdir(parents=True)
+    chunk_id = "a" * 64
+    source = (
+        "unrelated line\n"
+        "三弹在共同 $0.05\\,\\mathrm{s}$ 复核网格上形成 $4.818$--$11.368\\,\\mathrm{s}$\n"
+        "的联合完全遮蔽窗口，采用值为 $6.550000\\,\\mathrm{s}$。\n"
+        "following line\n"
+    )
+    (packet / "context.txt").write_text(
+        f"packet preface\n\n----- FILE: paper.tex -----\n{source}",
+        encoding="utf-8",
+    )
+    (packet / "manifest.json").write_text(
+        json.dumps(
+            {
+                "role": "math",
+                "files": [
+                    {
+                        "path": "paper.tex",
+                        "status": "included",
+                        "chunk_id": chunk_id,
+                        "source_line_start": 100,
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    invalid_quote = (
+        "三弹在共同 $0.05\\,\\mathrm{s}$ 复核网格上形成 "
+        "$4.818$--$11.368\\,\\mathrm{s}$ 的联合完全遮蔽窗口，"
+        "采用值为 $6.550000\\,\\mathrm{s}$。"
+    )
+    (outputs / "math.md").write_text(
+        "VERDICT: PASS\n"
+        + json.dumps(
+            {
+                "schema_version": "judge-hard-role-v2",
+                "role": "math",
+                "verdict": "PASS",
+                "fatal_flaws": 0,
+                "evidence": [
+                    {
+                        "ref_id": "math-e6",
+                        "claim": "claim",
+                        "chunk_id": chunk_id,
+                        "quote": invalid_quote,
+                        "finding": "finding",
+                        "severity": "risk",
+                    }
+                ],
+                "limitations": ["limit"],
+                "conclusion": "conclusion",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (outputs / "math.grounding.json").write_text(
+        json.dumps(
+            {
+                "valid": False,
+                "errors": [
+                    {
+                        "ref_id": "math-e6",
+                        "code": "QUOTE_NOT_FOUND",
+                        "message": "quote occurrence count in chunk is 0",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (outputs / "aggregate.json").write_text(
+        '{"indeterminate_roles":["math"]}\n', encoding="utf-8"
+    )
+
+    class RetryValidator:
+        calls = 0
+
+        def validate(self, _context):
+            self.calls += 1
+            if self.calls <= 2:
+                return ValidationResult.invalid(
+                    "grounding failed",
+                    metadata={
+                        "normalized_verdict": "INFRA_RETRY",
+                        "error_class": "TRANSIENT_JUDGE_INFRASTRUCTURE",
+                    },
+                )
+            return ValidationResult.valid("judge")
+
+    class RetryRunner(FakeCommandRunner):
+        aggregate_calls = 0
+
+        def python(self, factory_root, project, script, args, *, label, **kwargs):
+            result = super().python(
+                factory_root, project, script, args, label=label, **kwargs
+            )
+            if script.endswith("aggregate_judges.py"):
+                self.aggregate_calls += 1
+                payload = (
+                    {"indeterminate_roles": ["math"]}
+                    if self.aggregate_calls <= 2
+                    else {"indeterminate_roles": []}
+                )
+                (Path(project) / "judge_outputs/aggregate.json").write_text(
+                    json.dumps(payload) + "\n", encoding="utf-8"
+                )
+            return result
+
+    contract = next(item for item in STEP_CONTRACTS if item.id == 13)
+    step = JudgeStep(
+        contract,
+        root,
+        PromptRenderer(root),
+        object(),
+        RetryValidator(),
+        RetryRunner(),
+    )
+    role_calls = []
+
+    def record_role(_context, role, _template, *, retry_instructions=""):
+        role_calls.append((role, retry_instructions))
+        return ExecutionResult.succeeded(role=role)
+
+    monkeypatch.setattr(step, "_run_role_with_retry", record_role)
+
+    result = step.execute_prepared(StepContext(project, project.name, 16, 1, 3600, 0))
+
+    assert result.returncode == 0
+    assert [role for role, _feedback in role_calls] == [
+        "paper",
+        "math",
+        "execution",
+        "math",
+        "math",
+    ]
+    retry_prompt = role_calls[-1][1]
+    assert "SYSTEM GROUNDING RETRY" in retry_prompt
+    assert "FAILED_REF: math-e6" in retry_prompt
+    assert "QUOTE_NOT_FOUND: quote occurrence count in chunk is 0" in retry_prompt
+    assert f"DECLARED_CHUNK_ID: {chunk_id}" in retry_prompt
+    assert "DECLARED_SOURCE: paper.tex" in retry_prompt
+    assert "VERBATIM_CANDIDATE_EXCERPT_LINES: 100-103" in retry_prompt
+    assert "三弹在共同 $0.05\\,\\mathrm{s}$ 复核网格上形成" in retry_prompt
+    assert "的联合完全遮蔽窗口，采用值为 $6.550000\\,\\mathrm{s}$。" in retry_prompt
 
 
 def test_native_judge_failure_continues_only_with_delivery_override(tmp_path):

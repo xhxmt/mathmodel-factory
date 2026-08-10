@@ -90,6 +90,27 @@ def test_fingerprint_recomputes_role_packets_instead_of_trusting_stale_manifests
     assert submission_fingerprint(project, "demo") != fingerprint_before
 
 
+def test_fingerprint_ignores_judge_runtime_logs_but_binds_solver_logs(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "demo"
+    make_submission(project)
+    before = submission_fingerprint(project, "demo")
+
+    write_file(
+        project / "logs/native_judge_execution_20260809.log",
+        "judge runtime output\n",
+    )
+    write_file(
+        project / "logs/native_receipt_build_20260809.log",
+        "receipt runtime output\n",
+    )
+    assert submission_fingerprint(project, "demo") == before
+
+    write_file(project / "logs/solver.log", "OPTIMAL\nobjective=2\n")
+    assert submission_fingerprint(project, "demo") != before
+
+
 def test_fingerprint_binds_objective_bundle_used_by_role_packets(tmp_path: Path) -> None:
     project = tmp_path / "demo"
     make_submission(project)

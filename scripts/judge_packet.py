@@ -115,7 +115,13 @@ def _is_model_code(relative: str) -> bool:
 def _is_execution_evidence(relative: str) -> bool:
     name = Path(relative).name
     if relative.startswith("logs/"):
-        return Path(relative).suffix.lower() == ".log" and not name.startswith("step_") and name != "runner.log"
+        return (
+            Path(relative).suffix.lower() == ".log"
+            and not name.startswith(
+                ("step_", "native_judge_", "native_receipt_")
+            )
+            and name != "runner.log"
+        )
     if relative.startswith("results/") and Path(relative).suffix.lower() in TEXT_SUFFIXES:
         return True
     if relative.startswith("models/") and Path(relative).suffix.lower() in TEXT_SUFFIXES:

@@ -59,6 +59,11 @@
 
 ### 修复
 
+- Final Audit 的 execution packet 不再纳入 `step_*`、`native_judge_*` 或 `native_receipt_*` 审计运行日志，避免 Judge 及 receipt 构建器写入自身日志并使刚通过的快照立即失效；solver 与模型执行日志仍参与证据指纹。
+- Final PDF 视觉门禁不再把 1–2 个字符的公式上下标按不可读正文阻断，而是保留为小字 warning；连续文本和数值低于 4.5pt 仍为 blocking。
+- Final Audit 的 Judge grounding 基础设施重试现在会把失败的 `ref_id`、错误原因、声明的 `chunk_id` 以及从不可变 packet 中提取的逐字候选原文反馈给对应角色，并在有界轮次内只重跑当前仍为 indeterminate 的角色，避免使用相同提示盲重试或在引用错误已收敛时过早永久失败；严格逐字匹配和三值判定保持不变。
+- `solver_submit.sh --args` 生成提交 receipt 时使用 `--argv=<value>` 传递作业参数，避免 `--only` 等短横线开头的 solver 参数被误解析为 receipt 工具自身选项而在启动前失败。
+- 显式指定的 `*.verification.latest.txt` 报告在每次运行前清除旧内容，避免历史项目路径或 verdict 被追加到当前 Final Audit packet，造成跨项目证据污染和误判。
 - Dev 测试依赖显式锁定 `httpx2`，避免 Starlette 1.3 `TestClient` 回退到已弃用的 `httpx` 兼容层后挂起；超大请求测试改为直接驱动 ASGI middleware，并确认 413 在 JSON 解析前返回。
 - 原生审计将科学判退与评委基础设施失败分流：Step 13 仅处理真实 math FAIL，
   最终审计再处理 math/execution FAIL；`INDETERMINATE_REVIEW`、格式/grounding/路由故障只重试当前角色，

@@ -51,6 +51,35 @@ def test_structured_text_detects_duplicate_overlay_and_tiny_text():
     assert metrics["minimum_font_pt"] == 4
 
 
+def test_structured_text_keeps_tiny_math_glyph_as_warning():
+    findings, metrics = _analyze_stext(
+        {
+            "pages": [
+                {
+                    "blocks": [
+                        {
+                            "type": "text",
+                            "lines": [
+                                {
+                                    "text": "s",
+                                    "bbox": {"x": 10, "y": 20, "w": 3, "h": 4},
+                                    "font": {"size": 4},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+
+    assert [(item.code, item.severity) for item in findings] == [
+        ("VERY_SMALL_TEXT", "warning")
+    ]
+    assert findings[0].evidence["isolated_glyph"] is True
+    assert metrics["minimum_font_pt"] == 4
+
+
 def test_bbox_parser_preserves_content_and_media_boxes():
     pages = _parse_bbox_xml(
         '<?xml version="1.0"?><document><page bbox="1 2 3 4" mediabox="0 0 10 20" /></document>'

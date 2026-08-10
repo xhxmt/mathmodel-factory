@@ -179,6 +179,8 @@ def test_execution_packet_includes_solver_logs_but_not_step_agent_logs(tmp_path)
     project.mkdir()
     _write(project, "logs/full_solver.log", "real solver stdout")
     _write(project, "logs/step_5_codex.log", "agent transcript")
+    _write(project, "logs/native_judge_execution_20260809.log", "judge runtime output")
+    _write(project, "logs/native_receipt_build_20260809.log", "receipt runtime output")
     _write(project, "models/m1/full_solve.log", "model-owned solver stdout")
 
     manifests = build_packets(project, base_name="demo")
@@ -187,6 +189,8 @@ def test_execution_packet_includes_solver_logs_but_not_step_agent_logs(tmp_path)
     assert "logs/full_solver.log" in paths
     assert "models/m1/full_solve.log" in paths
     assert "logs/step_5_codex.log" not in paths
+    assert "logs/native_judge_execution_20260809.log" not in paths
+    assert "logs/native_receipt_build_20260809.log" not in paths
     assert "models/m1/full_solve.log" not in {
         item["path"] for item in manifests["math"]["files"]
     }
