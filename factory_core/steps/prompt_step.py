@@ -41,6 +41,7 @@ class PromptStep:
                 prompt=prompt,
                 timeout_seconds=context.timeout_seconds,
                 hang_timeout_seconds=self.contract.hang_timeout_seconds,
+                deadline_epoch=context.deadline_epoch,
             ),
             step_key=context.step_id,
             defaults=self.contract.default_models,

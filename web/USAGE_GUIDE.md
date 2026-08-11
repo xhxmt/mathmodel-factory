@@ -69,10 +69,14 @@ Dashboard 不再把每个运行都当作一张独立题目卡。后端根据项�
 
 项目工作台提供：
 
-- 当前步骤、状态和诊断摘要；
+- 默认 8 阶段时间线，并可切换到 17 Step 高级视图或展开阶段内部步骤；
+- 比赛截止、内容冻结和交付冻结倒计时，以及基于最近三步耗时的完成时间与余量预测；
+- 固定在顶部的行动中心，集中显示人工决策、时间风险、Solver 失败、审计事项与交付阻塞；
 - checkpoint、日志、文件和渲染预览；
 - 人工咨询请求与回答；
-- Step 3 方案选择；
+- Step 3 主线选择、内容冻结和 delivery-freeze 回退授权；
+- canonical results、方法决策、Solver receipts、阶段审计与三角色状态组成的证据驾驶舱；
+- 失败关闭的交付清单，以及绑定原子 current release 的论文 PDF 和 submission ZIP；
 - 按权限开放的暂停、恢复和终止动作。
 
 `checkpoint.md` 仅用于显示，不是工作流权威状态。需要判断真实步骤时，在仓库根目录运行：
@@ -91,9 +95,9 @@ Dashboard 不再把每个运行都当作一张独立题目卡。后端根据项�
 
 咨询 gate 采用退出并等待恢复的方式，不在后台持锁阻塞。回答前应核对项目、gate 和当前状态，避免把旧请求提交到新运行。
 
-## Step 3 方案选择
+## 三类人工决策
 
-启用 `selection/config.json` 后，项目会在 Step 3 前等待 PRIMARY/AUXILIARY 选择。Web 与 CLI 是并行入口。
+新 `contest_core_v1` 项目会无条件在 Step 3 前等待 PRIMARY/AUXILIARY 选择；未迁移 Legacy 项目继续使用 `selection/config.json` opt-in。Web 会展示候选小样证据、主要风险和预计耗时，理由必填，并明确提示决策写入 SQLite 后不可覆盖。Web 与 CLI 是并行入口。
 
 CLI 示例：
 
@@ -113,7 +117,13 @@ python3 scripts/selection_gate.py approve-content-freeze ongoing/<base_name> \
 ```
 
 T−2h delivery freeze 后若 Final Audit 要求回退，必须另行明确批准
-`delivery_freeze_override`，系统不会自动重开实质性工作。
+`delivery_freeze_override`。Web 会显示回退 Step、快照失效和时间风险，并要求填写强制回退理由；系统不会自动重开实质性工作。
+
+## 证据与交付
+
+“证据”页用于快速判断结论能否被机器证据支持，不显示奖级预测或 `/100` 自动评分。PRIMARY/AUXILIARY、canonical headline、Solver receipt 数量、四类审计和 Math/Execution/Paper 状态分别展示；点击文件可进入产物查看器。
+
+“交付”页不以 `complete/` 或某个 PDF 文件存在作为成功依据。只有 Final Audit 允许交付且 `papers/<base>/current.json` 指向完整、哈希可验证的原子 release 时才显示“可以提交”。PDF 和 submission ZIP 下载同样读取该 current release；没有有效 release 时按钮禁用并失败关闭。
 
 ## 用户和项目审批
 

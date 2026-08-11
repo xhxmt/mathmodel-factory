@@ -40,7 +40,18 @@ def prepare_human_gates(project: Path, step_id: int) -> PrepareResult:
             str(request.relative_to(project)),
             reason=f"consultation gate {gate} is awaiting input",
         )
-    if step_id == 3 and prepare_step3(project, None) == PENDING_EXIT:
+    contest_required = False
+    if step_id in {3, 16}:
+        from ..storage import SQLiteStateStore
+
+        contest_store = SQLiteStateStore(project)
+        contest_required = (
+            contest_store.exists and contest_store.contest_policy() is not None
+        )
+    if (
+        step_id == 3
+        and prepare_step3(project, None, required=contest_required) == PENDING_EXIT
+    ):
         options = project / "selection" / "step3_options.json"
         return PrepareResult.awaiting(
             PendingAction(type="step3_selection", gate="step3"),

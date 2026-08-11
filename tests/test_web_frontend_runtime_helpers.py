@@ -617,7 +617,7 @@ const tabs = workspaceTabs({
   diagnostics: { status: { reason_code: 'runner_failed' } },
   cloudEnabled: true,
 })
-assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'logs', 'artifacts', 'solver', 'consultation', 'diagnostics', 'cloud'])
+assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'logs', 'artifacts', 'evidence', 'consultation', 'delivery', 'solver', 'diagnostics', 'cloud'])
 assert.equal(tabs.find((t) => t.key === 'diagnostics').attention, true)
 assert.equal(workspaceTabs({}).some((t) => t.key === 'consultation'), false)
 assert.equal(workspaceTabs({ selectionPending: true }).find((t) => t.key === 'selection').attention, true)
@@ -648,12 +648,91 @@ assert.deepEqual(buildCloudTaskPanel(
     assert result.returncode == 0, result.stderr
 
 
+def test_contest_workspace_helpers_cover_phases_timing_and_persistent_actions():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+import {
+  CONTEST_PHASES,
+  buildWorkspaceActions,
+  phaseForStep,
+  timingPresentation,
+} from './web/frontend/src/lib/workspaceUi.js'
+import { normalizeContestDashboard } from './web/frontend/src/lib/contracts.js'
+
+assert.equal(CONTEST_PHASES.length, 8)
+assert.deepEqual(CONTEST_PHASES.map((p) => p.steps), [
+  [0, 1], [2, 3], [4, 5], [6, 7], [8, '8_5', 9], [10], [11, 12, 13, 14, 15], [16],
+])
+assert.equal(phaseForStep(16).id, 8)
+assert.equal(phaseForStep('8_5').id, 5)
+
+const timing = timingPresentation({
+  configured: true,
+  risk_level: 'critical',
+  mode: 'repair_only',
+  mode_label: '预计超时',
+  content_slack_seconds: -5400,
+  recent_step_average_seconds: 1800,
+  projected_content_finish_at: 1700000000,
+})
+assert.equal(timing.label, '立即收口')
+assert.equal(timing.mode, 'repair_only')
+assert.equal(timing.average, '30m')
+assert.equal(timing.slack, '超出 1h 30m')
+
+const actions = buildWorkspaceActions({ actions: [
+  { id: 'clock', severity: 'warning', title: 'Clock' },
+  { id: 'gate', severity: 'critical', title: 'Gate' },
+] }, { open_issues: 2 })
+assert.deepEqual(actions.map((item) => item.id), ['gate', 'audit-issues', 'clock'])
+
+const dashboard = normalizeContestDashboard({
+  current_step: '7',
+  timing: { configured: 1, risk_level: 'warning', remaining_seconds: '90' },
+  delivery: { ready: 0, checks: null, blocking_count: '2' },
+  evidence: { canonical: { available: 1 }, solver: { total: '3', failed: '1' } },
+})
+assert.equal(dashboard.current_step, 7)
+assert.equal(dashboard.timing.remaining_seconds, 90)
+assert.equal(dashboard.delivery.blocking_count, 2)
+assert.deepEqual(dashboard.delivery.checks, [])
+assert.equal(dashboard.evidence.solver.failed, 1)
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_human_gate_ui_has_three_gate_specific_contracts_and_required_reason():
+    selection = Path("web/frontend/src/components/SelectionPanel.vue").read_text(encoding="utf-8")
+
+    assert "Human Gate 1" in selection
+    assert "Human Gate 2" in selection
+    assert "delivery_freeze_override" in selection
+    assert "append-only SQLite" in selection
+    assert "reason.value.trim().length < 8" in selection
+    assert "resume_after_step" in selection
+
+
 def test_frontend_contracts_include_selection_fields():
     text = Path("web/frontend/src/lib/contracts.js").read_text(encoding="utf-8")
 
     assert "selection_pending" in text
     assert "selection_gate" in text
     assert "selection_deadline" in text
+    assert "contest_phase" in text
+    assert "remaining_seconds" in text
+
+
+def test_workspace_displays_contest_phase_and_deadline_clock():
+    workspace = (REPO_ROOT / "web/frontend/src/components/ProjectWorkspace.vue").read_text(
+        encoding="utf-8"
+    )
+
+    assert "contestPhaseLabel" in workspace
+    assert "contestClockLabel" in workspace
+    assert "内容冻结" in workspace
 
 
 def test_frontend_api_exposes_selection_helpers():

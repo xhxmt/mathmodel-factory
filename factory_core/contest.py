@@ -24,9 +24,19 @@ class ContestPolicy:
     @classmethod
     def default(cls, *, started_at: int) -> "ContestPolicy":
         deadline = int(started_at) + CONTEST_DURATION_SECONDS
+        return cls.for_deadline(started_at=started_at, deadline_at=deadline)
+
+    @classmethod
+    def for_deadline(
+        cls, *, started_at: int, deadline_at: int
+    ) -> "ContestPolicy":
+        started = int(started_at)
+        deadline = int(deadline_at)
+        if deadline <= started:
+            raise ValueError("contest deadline must be after project creation")
         return cls(
             profile="contest_core_v1",
-            contest_started_at=int(started_at),
+            contest_started_at=started,
             contest_deadline_at=deadline,
             content_freeze_at=deadline - DELIVERY_RESERVE_SECONDS,
             delivery_freeze_at=deadline - DELIVERY_FREEZE_SECONDS,

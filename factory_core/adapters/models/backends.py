@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ...domain import ExecutionResult
+from ...deadline import cap_timeout, deadline_scope
 from ...registry import ModelBackendRegistry
 from ..infrastructure.process import ProcessRequest, ProcessSupervisor
 
@@ -31,6 +32,7 @@ class ModelRequest:
     workdir: Path | None = None
     isolated: bool = False
     final_response_file: Path | None = None
+    deadline_epoch: int | None = None
 
 
 class _ProcessModelBackend:
@@ -41,6 +43,9 @@ class _ProcessModelBackend:
         self.supervisor = supervisor or ProcessSupervisor()
 
     def _run(self, request: ModelRequest, argv: list[str], label: str) -> ExecutionResult:
+        with deadline_scope(request.deadline_epoch):
+            timeout_seconds = cap_timeout(request.timeout_seconds)
+        request = replace(request, timeout_seconds=timeout_seconds)
         logs = request.project_dir / "logs"
         stamp = time.strftime("%Y%m%d_%H%M%S")
         log = logs / f"step_{request.step_id}_{label}_{stamp}_{os.getpid()}.log"
@@ -48,7 +53,7 @@ class _ProcessModelBackend:
             ProcessRequest(
                 argv=argv,
                 cwd=request.workdir or request.project_dir,
-                timeout_seconds=request.timeout_seconds,
+                timeout_seconds=timeout_seconds,
                 stdout_path=log,
                 env={**os.environ, **request.env},
             )

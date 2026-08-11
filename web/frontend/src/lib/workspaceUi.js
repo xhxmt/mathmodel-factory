@@ -38,6 +38,8 @@ export function workspaceTabs({ consultationPending = false, selectionPending = 
     { key: 'pipeline', label: '流水线', icon: 'layers' },
     { key: 'logs', label: '日志', icon: 'terminal' },
     { key: 'artifacts', label: '产物', icon: 'folder' },
+    { key: 'evidence', label: '证据', icon: 'shield' },
+    { key: 'delivery', label: '交付', icon: 'package' },
     { key: 'solver', label: '求解任务', icon: 'cpu' },
     { key: 'diagnostics', label: '诊断', icon: 'alert-triangle', attention: hasDiagnostics },
     { key: 'cloud', label: '云端', icon: 'zap', attention: cloudEnabled },
@@ -46,9 +48,81 @@ export function workspaceTabs({ consultationPending = false, selectionPending = 
     tabs.splice(5, 0, { key: 'consultation', label: '咨询', icon: 'message-square', attention: true })
   }
   if (selectionPending) {
-    tabs.splice(5, 0, { key: 'selection', label: '选方案', icon: 'git-branch', attention: true })
+    tabs.splice(7, 0, { key: 'selection', label: '人工决策', icon: 'git-branch', attention: true })
   }
   return tabs
+}
+
+export const CONTEST_PHASES = [
+  { id: 1, key: 'problem_understanding', label: '题意与数据', steps: [0, 1] },
+  { id: 2, key: 'model_tournament', label: '模型竞赛', steps: [2, 3], humanGate: 'step3' },
+  { id: 3, key: 'model_and_solve', label: '建模与求解', steps: [4, 5] },
+  { id: 4, key: 'validation', label: '结果验证', steps: [6, 7] },
+  { id: 5, key: 'paper_construction', label: '论文构建', steps: [8, '8_5', 9] },
+  { id: 6, key: 'deterministic_paper_audit', label: '确定性审计', steps: [10] },
+  { id: 7, key: 'review_and_revision', label: '审稿与修订', steps: [11, 12, 13, 14, 15], humanGate: 'content_freeze' },
+  { id: 8, key: 'final_audit_and_delivery', label: '最终交付', steps: [16] },
+]
+
+export function phaseForStep(step) {
+  const key = step === '8_5' ? '8_5' : Number(step)
+  return CONTEST_PHASES.find((phase) => phase.steps.includes(key)) || CONTEST_PHASES[0]
+}
+
+export function formatDuration(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0))
+  const hours = Math.floor(value / 3600)
+  const minutes = Math.floor((value % 3600) / 60)
+  if (hours) return `${hours}h ${String(minutes).padStart(2, '0')}m`
+  return `${minutes}m`
+}
+
+export function timingPresentation(timing = {}) {
+  const level = String(timing.risk_level || 'unconfigured')
+  const labels = {
+    safe: '余量充足',
+    guarded: '进入收敛',
+    warning: '余量不足',
+    critical: '立即收口',
+    expired: '比赛已截止',
+    unconfigured: '未配置比赛时钟',
+  }
+  return {
+    level,
+    label: labels[level] || labels.unconfigured,
+    mode: String(timing.mode || 'legacy'),
+    modeLabel: String(timing.mode_label || labels.unconfigured),
+    recommendation: String(timing.recommendation || ''),
+    average: timing.recent_step_average_seconds ? formatDuration(timing.recent_step_average_seconds) : '待积累',
+    slack: timing.configured
+      ? `${Number(timing.content_slack_seconds || 0) < 0 ? '超出 ' : ''}${formatDuration(Math.abs(Number(timing.content_slack_seconds || 0)))}`
+      : '—',
+    projectedAt: timing.projected_content_finish_at ? new Date(Number(timing.projected_content_finish_at) * 1000).toLocaleString('zh-CN', { hour12: false }) : '—',
+  }
+}
+
+const ACTION_PRIORITY = { expired: 0, critical: 1, warning: 2, guarded: 3, info: 4 }
+
+export function buildWorkspaceActions(dashboard = {}, stepsData = {}) {
+  const actions = (Array.isArray(dashboard?.actions) ? dashboard.actions : []).map((item) => ({
+    ...item,
+    severity: String(item?.severity || 'info'),
+  }))
+  const openIssues = Number(stepsData?.open_issues || 0)
+  if (openIssues > 0) {
+    actions.push({
+      id: 'audit-issues',
+      severity: 'warning',
+      title: '审计事项待处理',
+      summary: `${openIssues} 项未解决事项`,
+      tab: 'pipeline',
+      file: 'audit_issue_ledger.md',
+    })
+  }
+  const seen = new Set()
+  return actions
+    .filter((item) => item.id && !seen.has(item.id) && seen.add(item.id))
+    .sort((a, b) => (ACTION_PRIORITY[a.severity] ?? 9) - (ACTION_PRIORITY[b.severity] ?? 9) || String(a.id).localeCompare(String(b.id)))
 }
 
 const PRIORITY_PATTERNS = [

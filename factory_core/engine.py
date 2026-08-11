@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from .contest import ContestDeadlineExceeded, ContestPolicy, effective_timeout
+from .deadline import deadline_scope, ensure_deadline
 from .domain import (
     InvalidTransition,
     PendingAction,
@@ -175,8 +176,14 @@ class FactoryEngine:
                 attempt=attempt,
                 timeout_seconds=timeout_seconds,
                 revision=state.revision,
+                deadline_epoch=self._contest_deadline(definition),
             )
-            prepared = definition.lifecycle.prepare(preview_context)
+            try:
+                with deadline_scope(preview_context.deadline_epoch):
+                    prepared = definition.lifecycle.prepare(preview_context)
+                    ensure_deadline(now=self.store.now_epoch())
+            except ContestDeadlineExceeded as exc:
+                return self._deadline_failure(state, definition, exc, lease=lease)
             if prepared.pending_action is not None:
                 return self._await_action(
                     state,
@@ -221,7 +228,12 @@ class FactoryEngine:
             context = self._context(
                 state, definition, timeout_seconds=timeout_seconds
             )
-            result = definition.lifecycle.execute(context)
+            try:
+                with deadline_scope(context.deadline_epoch):
+                    result = definition.lifecycle.execute(context)
+                    ensure_deadline(now=self.store.now_epoch())
+            except ContestDeadlineExceeded as exc:
+                return self._deadline_failure(state, definition, exc, lease=lease)
             state = self._refresh_owned_state(lease, active_step=definition.id)
             if result.metadata.get("killed"):
                 return self._owned_transition(
@@ -306,7 +318,12 @@ class FactoryEngine:
                     payload={"source_step": definition.id, **result.metadata},
                 )
                 continue
-            validation = definition.lifecycle.validate(context)
+            try:
+                with deadline_scope(context.deadline_epoch):
+                    validation = definition.lifecycle.validate(context)
+                    ensure_deadline(now=self.store.now_epoch())
+            except ContestDeadlineExceeded as exc:
+                return self._deadline_failure(state, definition, exc, lease=lease)
             state = self._refresh_owned_state(lease, active_step=definition.id)
             if validation.pending_action is not None:
                 return self._await_action(
@@ -446,11 +463,26 @@ class FactoryEngine:
         if state.active_step is None:
             return state
         definition = self.registry.get(state.active_step)
-        context = self._context(state, definition)
-        decision = definition.lifecycle.recover(
-            context,
-            StepError(error_class="INTERRUPTED", reason="runner interrupted"),
-        )
+        try:
+            timeout_seconds = self._contest_timeout(definition)
+            context = self._context(
+                state, definition, timeout_seconds=timeout_seconds
+            )
+            with deadline_scope(context.deadline_epoch):
+                decision = definition.lifecycle.recover(
+                    context,
+                    StepError(error_class="INTERRUPTED", reason="runner interrupted"),
+                )
+                ensure_deadline(now=self.store.now_epoch())
+        except ContestDeadlineExceeded as exc:
+            return self._deadline_failure(
+                state,
+                definition,
+                exc,
+                expected_runner_pid=expected_runner_pid,
+                expected_runner_lease_id=expected_runner_lease_id,
+                enforce_lease=enforce_lease,
+            )
         if decision.disposition is RecoveryDisposition.REOPEN:
             if not self._reopen_allowed(definition):
                 return self._transition(
@@ -803,6 +835,60 @@ class FactoryEngine:
                 else timeout_seconds
             ),
             revision=state.revision,
+            deadline_epoch=self._contest_deadline(definition),
+        )
+
+    def _contest_deadline(self, definition: StepDefinition) -> int | None:
+        payload = self.store.contest_policy()
+        if payload is None:
+            return None
+        policy = ContestPolicy.from_dict(payload)
+        return (
+            policy.contest_deadline_at
+            if definition.id == 16
+            else policy.content_freeze_at
+        )
+
+    def _deadline_failure(
+        self,
+        state: WorkflowState,
+        definition: StepDefinition,
+        exc: ContestDeadlineExceeded,
+        *,
+        lease: str | None = None,
+        expected_runner_pid: int | None = None,
+        expected_runner_lease_id: str | None = None,
+        enforce_lease: bool = False,
+    ) -> WorkflowState:
+        changes = {
+            "status": WorkflowStatus.FAILED,
+            "runner_pid": None,
+            "runner_lease_id": None,
+            "heartbeat_at": None,
+        }
+        payload = {
+            "error_class": "PERMANENT_CONTEST_DEADLINE",
+            "reason": str(exc),
+            "step": definition.id,
+        }
+        if lease is not None:
+            return self._owned_transition(
+                state,
+                lease,
+                event_type="CONTEST_DEADLINE_EXHAUSTED",
+                changes=changes,
+                payload=payload,
+            )
+        return self._transition(
+            expected_revision=state.revision,
+            event_type="CONTEST_DEADLINE_EXHAUSTED",
+            changes=changes,
+            payload=payload,
+            **self._lease_expectations(
+                expected_runner_pid,
+                expected_runner_lease_id,
+                enforce_lease,
+            ),
         )
 
     def _contest_timeout(

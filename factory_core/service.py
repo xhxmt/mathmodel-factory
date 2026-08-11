@@ -183,6 +183,7 @@ class FactoryService:
         *,
         consult: bool = False,
         start: bool = False,
+        contest_deadline_at: int | None = None,
     ) -> tuple[WorkflowState, WorkerHandle | None]:
         if not BASE_NAME_RE.fullmatch(base_name):
             raise ValueError("base_name must contain only letters, numbers, '_' or '-'")
@@ -191,6 +192,15 @@ class FactoryService:
         project = ongoing / base_name
         if project.exists() or (complete / base_name).exists():
             raise FileExistsError(f"project already exists: {base_name}")
+        started_at = int(time.time())
+        contest_policy = (
+            ContestPolicy.default(started_at=started_at)
+            if contest_deadline_at is None
+            else ContestPolicy.for_deadline(
+                started_at=started_at,
+                deadline_at=int(contest_deadline_at),
+            )
+        )
         directories = (
             "style", "bib", "figures", "tables", "do/archive", "logs",
             "replication", "replication/temp", "data/raw", "data/intermediate",
@@ -222,7 +232,6 @@ class FactoryService:
             consultation = project / "consultation"
             consultation.mkdir(parents=True, exist_ok=True)
             (consultation / "enabled").touch()
-        contest_policy = ContestPolicy.default(started_at=int(time.time()))
         state = SQLiteStateStore(project).initialize(
             project_id=base_name,
             project_type="modeling",

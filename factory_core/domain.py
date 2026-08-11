@@ -247,3 +247,4 @@ class StepContext:
     attempt: int
     timeout_seconds: int
     revision: int
+    deadline_epoch: int | None = None

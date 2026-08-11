@@ -104,6 +104,10 @@ def create_ws_router(settings: Settings, ticket_store, manager: ConnectionManage
                 )
         except WebSocketDisconnect:
             manager.disconnect(websocket)
+        except RuntimeError as exc:
+            manager.disconnect(websocket)
+            if 'once a close message has been sent' not in str(exc):
+                raise
         except Exception:
             manager.disconnect(websocket)
             raise

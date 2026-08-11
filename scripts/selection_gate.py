@@ -54,8 +54,10 @@ def _resume(project: Path) -> None:
     )
 
 
-def prepare_step3(project: Path, now_epoch: int | None) -> int:
-    if not selection_service.selection_enabled(project, "step3"):
+def prepare_step3(
+    project: Path, now_epoch: int | None, *, required: bool = False
+) -> int:
+    if not required and not selection_service.selection_enabled(project, "step3"):
         return 0
     if _decision_exists(project, "step3"):
         return 0

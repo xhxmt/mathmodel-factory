@@ -151,6 +151,7 @@ class NewProjectRequest(BaseModel):
     problem_path: str
     no_start: bool = False
     consult: bool = False
+    contest_deadline_at: int | None = None
 
     @field_validator("base_name")
     @classmethod
@@ -167,6 +168,7 @@ class ProjectRequestCreate(BaseModel):
     problem_path: str
     no_start: bool = False
     consult: bool = False
+    contest_deadline_at: int | None = None
 
     @field_validator("base_name")
     @classmethod
@@ -189,6 +191,7 @@ class ProjectRequestResponse(BaseModel):
     problem_path: str
     no_start: bool = False
     consult: bool = False
+    contest_deadline_at: int | None = None
     status: str
     created_at: int
     decided_at: int | None = None
@@ -292,6 +295,7 @@ class SelectionDecisionRequest(BaseModel):
     selected_option_id: str
     selected_aux_id: str = ""
     reason: str = ""
+    confirmations: list[str] = []
     expected_revision: int | None = None
 
 

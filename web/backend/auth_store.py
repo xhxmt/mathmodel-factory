@@ -64,6 +64,7 @@ class ProjectRequestRecord:
     consult: bool
     status: str
     created_at: int
+    contest_deadline_at: int | None = None
     decided_at: int | None = None
     decided_by: str | None = None
     decision_note: str | None = None
@@ -124,6 +125,7 @@ CREATE TABLE IF NOT EXISTS project_requests (
     problem_path TEXT NOT NULL,
     no_start INTEGER NOT NULL DEFAULT 0,
     consult INTEGER NOT NULL DEFAULT 0,
+    contest_deadline_at INTEGER,
     status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'failed')),
     created_at INTEGER NOT NULL,
     decided_at INTEGER,
@@ -242,6 +244,7 @@ def row_to_project_request(row: sqlite3.Row) -> ProjectRequestRecord:
         problem_path=str(row["problem_path"]),
         no_start=bool(row["no_start"]),
         consult=bool(row["consult"]),
+        contest_deadline_at=row["contest_deadline_at"],
         status=str(row["status"]),
         created_at=int(row["created_at"]),
         decided_at=row["decided_at"],
@@ -291,6 +294,14 @@ class AuthStore:
         self.db_file.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(project_requests)")
+            }
+            if "contest_deadline_at" not in columns:
+                conn.execute(
+                    "ALTER TABLE project_requests ADD COLUMN contest_deadline_at INTEGER"
+                )
 
     def bootstrap_admin(self, admin_password: str) -> StoredUser:
         self.initialize()
@@ -429,6 +440,7 @@ class AuthStore:
         problem_path: str,
         no_start: bool,
         consult: bool,
+        contest_deadline_at: int | None = None,
         existing_project_names: set[str],
     ) -> ProjectRequestRecord:
         base_name = normalize_username(base_name)
@@ -439,10 +451,19 @@ class AuthStore:
             cursor = conn.execute(
                 """
                 INSERT INTO project_requests (
-                    requester, base_name, problem_path, no_start, consult, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                    requester, base_name, problem_path, no_start, consult,
+                    contest_deadline_at, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
                 """,
-                (requester, base_name, problem_path, int(no_start), int(consult), now),
+                (
+                    requester,
+                    base_name,
+                    problem_path,
+                    int(no_start),
+                    int(consult),
+                    contest_deadline_at,
+                    now,
+                ),
             )
             request_id = int(cursor.lastrowid)
             self._insert_audit(

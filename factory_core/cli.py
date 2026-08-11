@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import sys
+from datetime import datetime
 from dataclasses import asdict
 from pathlib import Path
 
@@ -27,6 +28,21 @@ from scripts.solver_job_receipt import (
 CODE_ROOT = Path(__file__).resolve().parents[1]
 ROOT = Path(os.environ.get("FACTORY", CODE_ROOT)).resolve()
 LEGACY_RUNNER = CODE_ROOT / "factory_core" / "adapters" / "legacy_runner.sh"
+
+
+def _deadline_epoch(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                "deadline must be epoch seconds or timezone-aware ISO-8601"
+            ) from exc
+        if parsed.tzinfo is None:
+            raise argparse.ArgumentTypeError("ISO-8601 deadline must include a timezone")
+        return int(parsed.timestamp())
 
 
 def _engine(project: Path) -> FactoryEngine:
@@ -180,6 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("research_question")
     create.add_argument("--consult", action="store_true")
     create.add_argument("--start", action="store_true")
+    create.add_argument("--contest-deadline", type=_deadline_epoch)
 
     start = sub.add_parser("start")
     start.add_argument("project_dir")
@@ -298,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.research_question,
                 consult=args.consult,
                 start=args.start,
+                contest_deadline_at=args.contest_deadline,
             )
             payload = runtime_payload(state)
             payload["worker_pid"] = worker_handle.pid if worker_handle else None

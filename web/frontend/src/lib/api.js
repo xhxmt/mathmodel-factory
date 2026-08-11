@@ -4,6 +4,7 @@ import {
   normalizeArtifact,
   normalizeAuthUser,
   normalizeCloudConfig,
+  normalizeContestDashboard,
   normalizeProjectRequest,
   normalizeProjectStatus,
   normalizeShowcasePaper,
@@ -110,6 +111,7 @@ export const Projects = {
   list: () => api.get('/api/projects').then((r) => (Array.isArray(r.data) ? r.data.map(normalizeProjectStatus) : [])),
   status: (b) => api.get(`/api/projects/${b}/status`).then((r) => normalizeProjectStatus(r.data)),
   diagnostics: (b) => api.get(`/api/projects/${b}/diagnostics`).then((r) => r.data),
+  contestDashboard: (b) => api.get(`/api/projects/${b}/contest-dashboard`).then((r) => normalizeContestDashboard(r.data)),
   checkpoint: (b) => api.get(`/api/projects/${b}/checkpoint`).then((r) => r.data),
   logs: (b, lines = 250, signal) => api.get(`/api/projects/${b}/logs`, { params: { lines }, signal }).then((r) => r.data),
   steps: (b, signal) => api.get(`/api/projects/${b}/steps`, { signal }).then((r) => normalizeStepsPayload(r.data)),
@@ -134,6 +136,7 @@ export const Projects = {
   create: (payload) => api.post('/api/projects/new', payload).then((r) => r.data),
   rawUrl: (b, path) => `/api/projects/${b}/raw?path=${encodeURIComponent(path)}`,
   paperUrl: (b, download = false) => `/api/projects/${b}/paper${download ? '?download=1' : ''}`,
+  submissionUrl: (b) => `/api/projects/${b}/submission`,
 }
 
 export const Showcase = {

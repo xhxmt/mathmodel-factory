@@ -45,6 +45,12 @@
           <p v-if="method === 'path'" class="hint">服务器上题目文件的完整路径</p>
         </div>
 
+        <div class="fg">
+          <label class="fg-lbl label">官方提交截止时间 <span class="req">*</span></label>
+          <input v-model="form.contest_deadline_local" class="field mono" type="datetime-local" required :disabled="loading" />
+          <p class="hint">以浏览器本地时区填写；系统据此计算内容冻结和最终交付预算。</p>
+        </div>
+
         <label class="chk"><input type="checkbox" v-model="form.no_start" :disabled="loading" /><span>仅创建，不自动开始</span></label>
         <label class="chk"><input type="checkbox" v-model="form.consult" :disabled="loading" /><span>启用人工咨询（关键决策点暂停等待人工）</span></label>
 
@@ -66,6 +72,12 @@
 import Icon from './Icon.vue'
 import api, { Projects, ProjectRequests, formatBytes } from '../lib/api.js'
 
+function defaultDeadlineLocal() {
+  const date = new Date(Date.now() + 74 * 60 * 60 * 1000)
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000)
+  return local.toISOString().slice(0, 16)
+}
+
 export default {
   name: 'NewProjectModal',
   components: { Icon },
@@ -75,7 +87,7 @@ export default {
   emits: ['close', 'project-created', 'project-requested'],
   data() {
     return {
-      form: { base_name: '', problem_path: '', no_start: false, consult: false },
+      form: { base_name: '', problem_path: '', no_start: false, consult: false, contest_deadline_local: defaultDeadlineLocal() },
       method: 'file', file: null, progress: 0, drag: false, modalDrag: false, loading: false, error: '',
     }
   },
@@ -110,7 +122,18 @@ export default {
         } else if (!this.form.problem_path) {
           this.error = '请输入文件路径'; this.loading = false; return
         }
-        const result = this.isAdmin ? await Projects.create(this.form) : await ProjectRequests.create(this.form)
+        const deadline = new Date(this.form.contest_deadline_local)
+        if (!Number.isFinite(deadline.getTime()) || deadline.getTime() <= Date.now()) {
+          this.error = '官方截止时间必须晚于当前时间'; this.loading = false; return
+        }
+        const payload = {
+          base_name: this.form.base_name,
+          problem_path: this.form.problem_path,
+          no_start: this.form.no_start,
+          consult: this.form.consult,
+          contest_deadline_at: Math.floor(deadline.getTime() / 1000),
+        }
+        const result = this.isAdmin ? await Projects.create(payload) : await ProjectRequests.create(payload)
         this.$emit(this.isAdmin ? 'project-created' : 'project-requested', result)
         this.$emit('close')
       } catch (err) {

@@ -27,6 +27,8 @@ from ..governance.overrides import (
     default_override_provider,
 )
 from ..delivery.release import ReleasePublisher
+from ..contest import ContestDeadlineExceeded
+from ..deadline import ensure_deadline
 from .catalog import StepContract
 from .gates import prepare_human_gates
 from .prompt_step import PromptStep
@@ -125,6 +127,7 @@ class ParallelProposalStep:
                     prompt=proposal,
                     timeout_seconds=min(context.timeout_seconds, 18_000),
                     hang_timeout_seconds=self.contract.hang_timeout_seconds,
+                    deadline_epoch=context.deadline_epoch,
                 ),
                 step_key=2,
                 defaults=("claude", "codex") if last_stream else ("codex", "claude"),
@@ -149,6 +152,7 @@ class ParallelProposalStep:
                     prompt=critic,
                     timeout_seconds=min(context.timeout_seconds, 7_200),
                     hang_timeout_seconds=self.contract.hang_timeout_seconds,
+                    deadline_epoch=context.deadline_epoch,
                 ),
                 step_key=2,
                 defaults=("codex", "claude"),
@@ -234,6 +238,7 @@ class PaperDraftStep:
                     prompt=prompt,
                     timeout_seconds=min(context.timeout_seconds, 7_200),
                     hang_timeout_seconds=1_800,
+                    deadline_epoch=context.deadline_epoch,
                 ),
                 step_key="8_5",
                 defaults=("claude", "codex"),
@@ -906,6 +911,7 @@ class JudgeStep:
                 effective_prompt_file=snapshot,
                 isolated=True,
                 final_response_file=final_response,
+                deadline_epoch=context.deadline_epoch,
             ),
             step_key=13,
             defaults=self.contract.default_models,
@@ -1068,7 +1074,10 @@ class DeliveryStep:
                 outcome.snapshot.snapshot_id,
                 status=outcome.record.status.value,
                 package_builder=build_package,
+                deadline_check=ensure_deadline,
             )
+        except ContestDeadlineExceeded:
+            raise
         except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
             return ExecutionResult.failed(
                 "PERMANENT_ATOMIC_DELIVERY",

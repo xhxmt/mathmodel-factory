@@ -53,6 +53,8 @@ def test_build_step3_options_ranks_validated_streams_and_writes_files(tmp_path):
     assert payload["deadline_epoch"] == 2800
     assert [item["id"] for item in payload["options"]] == ["m1", "m2"]
     assert payload["options"][0]["scores"]["correctness"] >= payload["options"][1]["scores"]["correctness"]
+    assert payload["options"][0]["demo_runtime_seconds"] == 12
+    assert "小样 12.0s" in payload["options"][0]["estimated_time"]
     assert (project / "selection" / "step3_options.json").is_file()
     assert (project / "selection" / "step3_request.md").is_file()
 
@@ -87,6 +89,7 @@ def test_write_selection_decision_records_json_and_step3_human_review(tmp_path):
         selected_aux_id="m1",
         source="human",
         reason="Prefer heuristic contrast.",
+        confirmations=["evidence_reviewed"],
         now_epoch=1200,
     )
 
@@ -94,6 +97,8 @@ def test_write_selection_decision_records_json_and_step3_human_review(tmp_path):
     review = (project / "human_review.md").read_text(encoding="utf-8")
     assert decision["selected_option_id"] == "m2"
     assert saved["selected_aux_id"] == "m1"
+    assert saved["candidate_evidence"] == ["m2_spec.md", "m2_critique.md", "m2_demo_result.json"]
+    assert saved["confirmations"] == ["evidence_reviewed"]
     assert "## Step 3 decision:" in review
     assert "PRIMARY: m2" in review
     assert "AUXILIARY: m1" in review

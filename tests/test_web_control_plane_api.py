@@ -176,10 +176,12 @@ def test_main_module_exposes_runtime_api_surface():
         "get_checkpoint",
         "get_recent_logs",
         "get_project_steps",
+        "get_contest_dashboard",
         "get_files",
         "get_file_content",
         "get_raw_file",
         "get_paper",
+        "get_submission",
         "get_consultation",
         "submit_consultation_answer",
         "get_modeling_directions",
@@ -701,6 +703,28 @@ def test_non_owner_project_file_returns_404(tmp_path):
     assert excinfo.value.detail == "PROJECT_NOT_FOUND"
 
 
+def test_contest_dashboard_and_submission_download_follow_project_acl(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    _make_project(tmp_path, "owned")
+    _make_project(tmp_path, "other")
+    mod.auth_store.grant_project_owner("owned", "alice", actor="admin")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+
+    dashboard = asyncio.run(mod.get_contest_dashboard("owned", current_user=alice))
+    assert dashboard["schema_version"] == "contest-dashboard-v1"
+    assert dashboard["base_name"] == "owned"
+
+    with pytest.raises(mod.HTTPException) as dashboard_error:
+        asyncio.run(mod.get_contest_dashboard("other", current_user=alice))
+    assert dashboard_error.value.status_code == 404
+
+    with pytest.raises(mod.HTTPException) as submission_error:
+        asyncio.run(mod.get_submission("owned", current_user=alice))
+    assert submission_error.value.status_code == 404
+    assert submission_error.value.detail == "Verified submission package not found"
+
+
 def test_admin_can_see_all_projects(tmp_path):
     mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
     _install_auth_store(mod)
@@ -1054,3 +1078,21 @@ def test_websocket_filters_status_update_projects_by_ticket_user(tmp_path):
     status_messages = [msg for msg in websocket.sent if msg.get("type") == "status_update"]
     assert status_messages
     assert [item["base_name"] for item in status_messages[0]["projects"]] == ["owned"]
+
+
+def test_websocket_client_close_does_not_log_runtime_failure(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    _install_auth_store(mod)
+    ticket = mod.ticket_store.issue({"sub": "admin", "role": "admin", "status": "active"})
+
+    class ClosedWebSocket(RecordingWebSocket):
+        async def send_json(self, payload):
+            del payload
+            raise RuntimeError('Cannot call "send" once a close message has been sent.')
+
+    websocket = ClosedWebSocket(ticket)
+
+    asyncio.run(mod.websocket_endpoint(websocket))
+
+    assert websocket.accepted is True
+    assert mod.manager.connections() == []

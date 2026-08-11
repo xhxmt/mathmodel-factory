@@ -18,6 +18,7 @@ from .auth import get_current_user
 from .auth_store import AuthStore, ProjectNameConflict
 from .config import Settings
 from .consultation_service import write_consultation_answer
+from .contest_dashboard import build_contest_dashboard
 from .diagnostics_service import build_project_diagnostics, summarize_project_diagnostics
 from .modeling_direction_service import (
     build_modeling_directions,
@@ -25,6 +26,7 @@ from .modeling_direction_service import (
 )
 from .project_actions import ActionResult, run_action
 from factory_core.domain import FactoryCoreError
+from factory_core.delivery.release import resolve_current_release
 from factory_core.service import FactoryService
 from factory_core.storage import SQLiteStateStore
 from .selection_service import SelectionError, read_selection_request, write_selection_decision
@@ -765,6 +767,7 @@ def _project_request_response(record) -> ProjectRequestResponse:
         problem_path=record.problem_path,
         no_start=record.no_start,
         consult=record.consult,
+        contest_deadline_at=record.contest_deadline_at,
         status=record.status,
         created_at=record.created_at,
         decided_at=record.decided_at,
@@ -787,11 +790,16 @@ def existing_project_names(settings: Settings) -> set[str]:
 
 def run_project_launcher(settings: Settings, request: ProjectRequestCreate | NewProjectRequest):
     try:
+        create_options = {
+            "consult": request.consult,
+            "start": not request.no_start,
+        }
+        if request.contest_deadline_at is not None:
+            create_options["contest_deadline_at"] = request.contest_deadline_at
         state, worker = FactoryService(settings.factory_root).create_project(
             request.base_name,
             str(Path(request.problem_path).resolve()),
-            consult=request.consult,
-            start=not request.no_start,
+            **create_options,
         )
         output = {
             "project": state.project_id,
@@ -926,6 +934,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                 problem_path=str(problem_path),
                 no_start=request.no_start,
                 consult=request.consult,
+                contest_deadline_at=request.contest_deadline_at,
                 existing_project_names=existing_project_names(settings),
             )
         except ProjectNameConflict as exc:
@@ -955,6 +964,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
             problem_path=record.problem_path,
             no_start=record.no_start,
             consult=record.consult,
+            contest_deadline_at=record.contest_deadline_at,
         )
         result = run_project_launcher(settings, launcher_payload)
         if result.returncode != 0:
@@ -1066,6 +1076,15 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         project = _resolve_project(settings, base_name)
         return get_steps(settings, project, base_name)
 
+    @router.get("/api/projects/{base_name}/contest-dashboard")
+    async def get_contest_dashboard(
+        base_name: str,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        return build_contest_dashboard(project, settings.papers_dir)
+
     @router.get("/api/projects/{base_name}/files")
     async def get_files(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
         require_project_access(settings, current_user, base_name)
@@ -1103,10 +1122,27 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
     ):
         require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
-        paper = _find_paper(settings, project, base_name)
+        release = resolve_current_release(settings.papers_dir, base_name)
+        paper = release.paper if release is not None else _find_paper(settings, project, base_name)
         if not paper:
             raise HTTPException(status_code=404, detail="Paper PDF not found")
         return FileResponse(str(paper), media_type="application/pdf", filename=paper.name if download else None)
+
+    @router.get("/api/projects/{base_name}/submission")
+    async def get_submission(
+        base_name: str,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        require_project_access(settings, current_user, base_name)
+        _resolve_project(settings, base_name)
+        release = resolve_current_release(settings.papers_dir, base_name)
+        if release is None:
+            raise HTTPException(status_code=404, detail="Verified submission package not found")
+        return FileResponse(
+            str(release.submission_zip),
+            media_type="application/zip",
+            filename=f"{base_name}_submission.zip",
+        )
 
     @router.get("/api/projects/{base_name}/consultation")
     async def get_consultation(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
@@ -1220,6 +1256,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                 selected_aux_id=decision.selected_aux_id.strip(),
                 source="human",
                 reason=decision.reason.strip() or f"Selected by {current_user.username}",
+                confirmations=list(decision.confirmations),
             )
 
         try:

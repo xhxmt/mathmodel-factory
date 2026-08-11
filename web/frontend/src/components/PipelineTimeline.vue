@@ -4,9 +4,13 @@
     <div class="pl-head">
       <div class="pl-title">
         <Icon name="layers" :size="15" />
-        <span class="label">流水线 · PIPELINE</span>
+        <span class="label">比赛流程 · CONTEST CORE</span>
       </div>
       <div class="pl-meta">
+        <div class="view-toggle" aria-label="流程显示模式">
+          <button :class="{ on: viewMode === 'phase' }" @click="viewMode = 'phase'">8 阶段</button>
+          <button :class="{ on: viewMode === 'step' }" @click="viewMode = 'step'">17 Step · 高级</button>
+        </div>
         <span class="mono tnum step-counter">
           STEP {{ String(Math.max(0, displayStep)).padStart(2, '0') }} / 16
         </span>
@@ -68,8 +72,38 @@
       <div v-else class="issue-empty">待办明细未返回，请查看完整台账。</div>
     </section>
 
-    <!-- track -->
-    <div class="track-scroll">
+    <!-- contest phase track (default) -->
+    <div v-if="viewMode === 'phase'" class="phase-wrap">
+      <div class="phase-track">
+        <button
+          v-for="phase in phaseTimeline"
+          :key="phase.id"
+          class="phase-node"
+          :class="[`phase-${phase.state}`, { selected: expandedPhase === phase.id }]"
+          @click="selectPhase(phase)"
+        >
+          <span class="phase-id mono">{{ phase.id }}</span>
+          <span class="phase-copy"><strong>{{ phase.label }}</strong><small>STEP {{ phase.range }}</small></span>
+          <Icon v-if="phase.humanGate" name="user" :size="11" />
+        </button>
+      </div>
+      <div class="phase-drill">
+        <span class="drill-label">阶段 {{ expandedPhase }} 内部步骤</span>
+        <div class="drill-steps">
+          <button
+            v-for="s in phaseSteps"
+            :key="s.key || s.index"
+            :class="['drill-step', `st-${state(s)}`, { selected: stepId(s) === selectedIndex }]"
+            @click="select(stepId(s))"
+          >
+            <b class="mono">{{ s.key === '8_5' ? '8.5' : s.index }}</b><span>{{ s.name }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- all internal steps (advanced) -->
+    <div v-else class="track-scroll">
       <div class="track">
         <div
           v-for="s in timelineSteps"
@@ -170,6 +204,7 @@
 import Icon from './Icon.vue'
 import { STEPS, EDITORIAL_GATE_STEP, stepStatus, VERDICT_LABEL, stepModelMeta, stepConfigKey } from '../lib/steps.js'
 import { renderMarkdown } from '../lib/markdown.js'
+import { CONTEST_PHASES, phaseForStep } from '../lib/workspaceUi.js'
 
 export default {
   name: 'PipelineTimeline',
@@ -183,7 +218,14 @@ export default {
   },
   emits: ['open-file', 'open-paper', 'assign', 'manage-models'],
   data() {
-    return { selectedIndex: this.defaultIndex(), userPicked: false, issuesOpen: false }
+    const selectedIndex = this.defaultIndex()
+    return {
+      selectedIndex,
+      userPicked: false,
+      issuesOpen: false,
+      viewMode: 'phase',
+      expandedPhase: phaseForStep(selectedIndex).id,
+    }
   },
   computed: {
     displayStep() { return this.currentStep },
@@ -195,6 +237,24 @@ export default {
     paperAvailable() { return !!this.stepsData?.paper_available },
     timelineSteps() {
       return [...STEPS.slice(0, 9), EDITORIAL_GATE_STEP, ...STEPS.slice(9)]
+    },
+    phaseTimeline() {
+      return CONTEST_PHASES.map((phase) => {
+        const states = phase.steps.map((id) => {
+          const step = this.timelineSteps.find((item) => this.stepId(item) === id)
+          return step ? this.state(step) : 'pending'
+        })
+        const state = states.includes('attention') ? 'attention'
+          : states.includes('live') ? 'live'
+            : states.every((item) => item === 'done') ? 'done' : 'pending'
+        const numeric = phase.steps.filter((item) => item !== '8_5').map(Number)
+        const range = numeric.length === 1 ? String(numeric[0]) : `${Math.min(...numeric)}–${Math.max(...numeric)}`
+        return { ...phase, state, range }
+      })
+    },
+    phaseSteps() {
+      const phase = CONTEST_PHASES.find((item) => item.id === this.expandedPhase) || CONTEST_PHASES[0]
+      return phase.steps.map((id) => this.timelineSteps.find((step) => this.stepId(step) === id)).filter(Boolean)
     },
     sel() { return this.timelineSteps.find((s) => this.stepId(s) === this.selectedIndex) || this.timelineSteps[0] },
     selArtifacts() {
@@ -214,7 +274,12 @@ export default {
     },
   },
   watch: {
-    currentStep() { if (!this.userPicked) this.selectedIndex = this.defaultIndex() },
+    currentStep() {
+      if (!this.userPicked) {
+        this.selectedIndex = this.defaultIndex()
+        this.expandedPhase = phaseForStep(this.selectedIndex).id
+      }
+    },
     stepsData() { if (!this.userPicked) this.selectedIndex = this.defaultIndex() },
   },
   methods: {
@@ -232,6 +297,14 @@ export default {
       return Math.min(16, Math.max(0, c + 1))
     },
     select(i) { this.selectedIndex = i; this.userPicked = true },
+    selectPhase(phase) {
+      this.expandedPhase = phase.id
+      const firstLive = phase.steps.find((id) => {
+        const step = this.timelineSteps.find((item) => this.stepId(item) === id)
+        return step && ['live', 'attention'].includes(this.state(step))
+      })
+      this.select(firstLive ?? phase.steps[0])
+    },
     emitAssign(field, val) {
       const cur = { primary: this.selAssign.primary || '', fallback: this.selAssign.fallback || '' }
       cur[field] = val
@@ -288,6 +361,9 @@ export default {
 }
 .pl-title { display: flex; align-items: center; gap: 8px; color: var(--ink-2); }
 .pl-meta { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.view-toggle { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); }
+.view-toggle button { padding: 5px 8px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--ink-3); font: 600 10px var(--sans); cursor: pointer; }
+.view-toggle button.on { background: var(--live-dim); color: var(--live); }
 .step-counter { font-size: 12px; color: var(--ink-2); letter-spacing: 0.08em; }
 .issue-toggle { cursor: pointer; }
 .issue-toggle:hover { border-color: var(--amber); }
@@ -314,6 +390,26 @@ export default {
 .issue-empty { padding: 16px 0; color: var(--ink-3); font-size: 12px; }
 
 /* ---- track ---- */
+.phase-wrap { min-width: 0; }
+.phase-track { display: grid; grid-template-columns: repeat(8, minmax(105px, 1fr)); gap: 7px; overflow-x: auto; padding: 3px 1px 8px; }
+.phase-node { min-height: 66px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 9px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); color: var(--ink-2); text-align: left; cursor: pointer; }
+.phase-node:hover, .phase-node.selected { border-color: var(--live); color: var(--ink); }
+.phase-id { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; }
+.phase-copy { min-width: 0; }
+.phase-copy strong, .phase-copy small { display: block; }
+.phase-copy strong { font-size: 10.5px; line-height: 1.25; }
+.phase-copy small { margin-top: 3px; color: var(--ink-3); font: 8.5px var(--mono); }
+.phase-done { color: var(--ok); background: var(--ok-dim); }
+.phase-live { color: var(--live); background: var(--live-dim); }
+.phase-attention { color: var(--amber); background: var(--amber-dim); border-color: var(--amber); }
+.phase-drill { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
+.drill-label { color: var(--ink-3); font-size: 9.5px; }
+.drill-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.drill-step { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); color: var(--ink-2); font: 10px var(--sans); cursor: pointer; }
+.drill-step.selected { outline: 1px solid var(--ink); }
+.drill-step.st-done { color: var(--ok); }
+.drill-step.st-live { color: var(--live); }
+.drill-step.st-attention { color: var(--amber); }
 .track-scroll { width: 100%; max-width: 100%; overflow-x: auto; padding: 4px 2px 2px; margin: 0 -4px; }
 .track { display: flex; min-width: 640px; }
 .col {

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from .process import ProcessRequest, ProcessSupervisor
+from ...deadline import cap_timeout
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class CommandRunner:
         env: dict[str, str] | None = None,
         log_path: Path | None = None,
     ) -> CommandResult:
+        timeout_seconds = cap_timeout(timeout_seconds)
         target = log_path or (
             project
             / "logs"

@@ -221,3 +221,39 @@ def test_alias_sync_failure_does_not_switch_the_current_pointer(
     current = resolve_current_release(tmp_path / "papers", "demo")
     assert current is not None
     assert current.release_id == first_id
+
+
+def test_deadline_expiry_before_pointer_switch_leaves_current_release_unchanged(
+    tmp_path: Path,
+) -> None:
+    first_id = "1" * 64
+    second_id = "2" * 64
+    project = _project(tmp_path, "demo", first_id)
+    publisher = ReleasePublisher(tmp_path / "papers")
+    publisher.publish(
+        project,
+        first_id,
+        status="PASS",
+        package_builder=_package(project, "demo"),
+    )
+    _write_approved_audit(project, second_id)
+    checks = 0
+
+    def deadline_check() -> None:
+        nonlocal checks
+        checks += 1
+        if checks >= 4:
+            raise RuntimeError("contest deadline reached")
+
+    with pytest.raises(RuntimeError, match="contest deadline"):
+        publisher.publish(
+            project,
+            second_id,
+            status="PASS",
+            package_builder=_package(project, "demo"),
+            deadline_check=deadline_check,
+        )
+
+    current = resolve_current_release(tmp_path / "papers", "demo")
+    assert current is not None
+    assert current.release_id == first_id

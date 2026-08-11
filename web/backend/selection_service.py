@@ -126,6 +126,13 @@ def _build_option(project_path: Path, stream_id: str) -> dict[str, Any] | None:
     spec_text = _read_text(project_path / f"{stream_id}_spec.md")
     family = _method_family(spec_text)
     scores = _score_stream(project_path, stream_id)
+    demo = _load_json(project_path / f"{stream_id}_demo_result.json", {})
+    try:
+        demo_runtime_seconds = max(
+            0.0, float(demo.get("runtime_sec") or demo.get("runtime_seconds") or 0)
+        )
+    except (TypeError, ValueError):
+        demo_runtime_seconds = 0.0
     composite = (
         scores["correctness"] * 10_000
         + scores["feasibility"] * 100
@@ -141,6 +148,13 @@ def _build_option(project_path: Path, stream_id: str) -> dict[str, Any] | None:
         "scores": scores,
         "composite_score": composite,
         "summary": f"{stream_id} uses {family} as a validated modeling stream.",
+        "demo_status": str(demo.get("status") or demo.get("solver_status") or "").upper(),
+        "demo_runtime_seconds": demo_runtime_seconds,
+        "estimated_time": (
+            f"小样 {demo_runtime_seconds:.1f}s；正式求解需按规模另估"
+            if demo_runtime_seconds
+            else "正式求解耗时待估"
+        ),
         "why_high_ranked": [
             f"Demo status: {_demo_status(project_path / f'{stream_id}_demo_result.json') or 'unknown'}.",
             "Critique verdict: VALIDATED.",
@@ -253,6 +267,7 @@ def write_selection_decision(
     selected_aux_id: str = "",
     source: str,
     reason: str,
+    confirmations: list[str] | None = None,
     now_epoch: int | None = None,
 ) -> dict[str, Any]:
     if gate not in {"step3", "content_freeze", "delivery_freeze_override"}:
@@ -280,7 +295,10 @@ def write_selection_decision(
         "selected_auxiliary": aux,
         "selected_by": source,
         "selected_at": now,
-        "candidate_evidence": list(selected.get("evidence") or []),
+        "candidate_evidence": list(
+            selected.get("evidence") or selected.get("evidence_files") or []
+        ),
+        "confirmations": [str(item) for item in (confirmations or []) if str(item)],
     }
     try:
         from factory_core.storage import SQLiteStateStore

@@ -167,7 +167,10 @@ class ReleasePublisher:
         *,
         status: str,
         package_builder: Callable[[Path], bool],
+        deadline_check: Callable[[], None] | None = None,
     ) -> ReleaseResult:
+        check = deadline_check or (lambda: None)
+        check()
         project = project.resolve()
         base = project.name
         if not SHA256_RE.fullmatch(snapshot_id):
@@ -184,6 +187,7 @@ class ReleasePublisher:
         lock_path = control_dir / ".publish.lock"
         with lock_path.open("a+", encoding="ascii") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            check()
             existing = self._existing_release(base, snapshot_id)
             if existing is not None:
                 existing_status = json.loads(
@@ -193,7 +197,9 @@ class ReleasePublisher:
                     raise ValueError(
                         "immutable release exists with a different audit status"
                     )
+                check()
                 self._sync_legacy_aliases(base, existing)
+                check()
                 self._write_pointer(base, existing)
                 return existing
 
@@ -204,6 +210,7 @@ class ReleasePublisher:
                 shutil.copyfile(project_pdf, staging / "paper.pdf")
                 if not package_builder(staging / "submission.zip"):
                     raise RuntimeError("submission packaging failed")
+                check()
                 self._validate_zip(staging / "submission.zip", project_pdf, base)
                 sources = self._validate_sources(project, snapshot_id, status)
                 if _sha256(staging / "paper.pdf") != _sha256(project_pdf):
@@ -242,7 +249,9 @@ class ReleasePublisher:
                 result = self._result(base, snapshot_id, reused=False)
                 if result is None:
                     raise RuntimeError("committed release failed integrity verification")
+                check()
                 self._sync_legacy_aliases(base, result)
+                check()
                 self._write_pointer(base, result)
                 return result
             finally:

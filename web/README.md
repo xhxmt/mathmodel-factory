@@ -1,6 +1,6 @@
 # Paper Factory Web Dashboard
 
-本目录提供 Modeling Factory 的 Web 控制面。它负责公开论文展厅、用户与项目审批、项目运行监控、日志/文件查看、人工咨询和 Step 3 方案选择。对 engine 项目，创建、控制与云策略直接调用 `FactoryService`；未迁移项目才进入显式兼容路径。
+本目录提供 Modeling Factory 的 Web 控制面。它负责公开论文展厅、用户与项目审批、比赛阶段与时钟监控、日志/文件查看、三类人工决策、证据汇总和原子交付下载。对 engine 项目，创建、控制与云策略直接调用 `FactoryService`；未迁移项目才进入显式兼容路径。
 
 当前文档分工：
 
@@ -20,7 +20,11 @@
 - 管理员可直接创建项目，并管理用户、项目申请、完成论文展示权限、Secret Manager 元数据状态和审计日志。
 - Dashboard 将题目内容相同的多次运行按 canonical SHA-256 身份聚合为一个“题目归档”。这只是展示层分组，不移动或改名 `ongoing/`、`complete/` 中的目录。
 - 进行中的运行可暂停、恢复或终止；完成归档保持只读。
-- 人工咨询和 Step 3 方法选择可在 Web 中完成。CLI 路径始终保留，见下文。
+- 项目工作区默认显示 8 个比赛阶段，可下钻到 17 Step；最近三步平均耗时用于预测内容完成时间和 content-freeze slack。Legacy 项目没有比赛 policy 时明确显示“未配置”，不虚构倒计时。
+- 顶部行动中心持续聚合 Human Gate、deadline 风险、Solver 失败、未解决审计事项和交付阻塞。
+- `step3`、`content_freeze`、`delivery_freeze_override` 三类人工决策可在 Web 中完成，均携带当前 revision 并写入 append-only SQLite；CLI 路径始终保留。
+- 证据驾驶舱汇总 canonical results、PRIMARY/AUXILIARY、Solver jobs/receipts、model/results/paper/final audits 与三角色状态。
+- 交付就绪中心按红黄绿列出 PDF、canonical results、附件、内容冻结、确定性检查、视觉页数、三角色、最终快照和原子 release；PDF/ZIP 只从已验证的 current release 下载。
 
 ## 本地启动
 
@@ -91,7 +95,7 @@ cd /home/tfisher/paper_factory/web
 管理员创建项目等价于 CLI 命令：
 
 ```bash
-python3 -m factory_core.cli create <base_name> "/abs/path/to/problem.pdf" [--consult] [--start]
+python3 -m factory_core.cli create <base_name> "/abs/path/to/problem.pdf" [--consult] [--start] [--contest-deadline <epoch-or-ISO8601>]
 ```
 
 稳定的生产 ASGI 入口是 `apps.web.backend.main:app`；
@@ -113,7 +117,7 @@ python3 -m factory_core.cli create <base_name> "/abs/path/to/problem.pdf" [--con
 
 ## 人工选择：Web 与 CLI 并行
 
-启用 `selection/config.json` 后，运行器会在 Step 3 前等待选择。可以在 Web 中提交，也可以在仓库根目录运行：
+新 `contest_core_v1` 项目会无条件在 Step 3 前等待选择；仅 Legacy 项目继续使用 `selection/config.json` opt-in。可以在 Web 中提交，也可以在仓库根目录运行：
 
 ```bash
 python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
@@ -158,6 +162,8 @@ revision；过期页面会收到 `409`，不会写入旧决策或启动 worker�
 - `POST /api/admin/project-requests/{request_id}/approve`
 - `POST /api/admin/project-requests/{request_id}/reject`
 - `POST /api/projects/{base_name}/action`
+- `GET /api/projects/{base_name}/contest-dashboard`
+- `GET /api/projects/{base_name}/submission`（仅验证过的 current release ZIP）
 
 管理员：
 

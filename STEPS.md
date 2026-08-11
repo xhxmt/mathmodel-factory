@@ -21,10 +21,10 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 - Run each step in a fresh agent context (no continuation across steps).
 - Follow `modeling_guide.md` in the project directory for solver invocation, project layout, math notation, LaTeX section list, figure palette, code reproducibility, and table formatting. If both `modeling_guide.md` and the legacy `analysis_guide.md` are present, **modeling_guide.md wins**.
 - Project layout: `problem/` (题目原文 + 解析产物), `data/{raw,intermediate,final}/`, `models/<id>/` (按候选建模流分子目录), `scripts/`, `figures/`, `tables/`, `results/<subproblem>/`, `logs/`, `paper/` (LaTeX source).
-- Update `checkpoint.md` after every verified step.
+- Native runner projects derive `checkpoint.md` from committed SQLite state after each transition. Agents must not edit it to advance workflow state or treat it as authoritative; frozen Legacy projects retain their compatibility behavior.
 - `audit_issue_ledger.md` is created at Step 4 and is the cross-step issue tracker. Audit, review, revision, and final-review steps must update statuses in place rather than silently dropping concerns. Issues tagged `PROTECTED` (creative claims worth defending) MUST NOT be deleted or downgraded by later steps.
 - All numerical results in the paper must trace back to a logged solver run in `logs/` or `results/`.
-- Time budget for the entire workflow: 74 hours (CUMCM 国赛 standard, 周四 18:00 → 周日 20:00) is a scheduler-enforced deadline for new projects. SQLite records `contest_started_at`, `contest_deadline_at`, `content_freeze_at` (T−6h), `delivery_freeze_at` (T−2h), and a six-hour delivery reserve. Before every attempt, the effective timeout is the smaller of the Step timeout and the remaining phase budget. Steps 0–15 cannot cross content freeze; Step 16 may use the reserve up to the contest deadline. Retry delays fail closed when they no longer fit.
+- Time budget for the entire workflow defaults to 74 hours, but an explicitly supplied official competition deadline is authoritative. SQLite records `contest_started_at`, `contest_deadline_at`, `content_freeze_at` (T−6h), `delivery_freeze_at` (T−2h), and a six-hour delivery reserve. The shared lifecycle deadline caps model, command, audit, recovery, packaging, and publication work; Steps 0–15 cannot complete after content freeze, and Step 16 cannot switch the current release after the final deadline. Retry delays fail closed when they no longer fit.
 - Never stop at a plan or scaffold if the step requires concrete outputs on disk.
 
 ## Contest Core v1

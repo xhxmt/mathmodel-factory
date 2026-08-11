@@ -343,6 +343,16 @@ SHA-256 identity so the frontend can group multiple runs into one problem
 archive. This grouping does not move or rename project directories:
 `ongoing/` and `complete/` remain authoritative storage.
 
+The authenticated project workspace uses `contest-dashboard-v1` from
+`GET /api/projects/{base}/contest-dashboard` for the eight-phase view, timing
+forecast, persistent action center, evidence cockpit, and delivery-readiness
+checks. It must show Legacy projects as unconfigured instead of inventing a
+contest clock. Human Gate submissions remain revision-checked and SQLite
+append-only. `GET /api/projects/{base}/submission` resolves and verifies the
+atomic current release before serving a ZIP; it must never trust a flat alias
+or an arbitrary project path. Both endpoints enforce the same `project_acl` as
+other internal project details.
+
 Production secrets are loaded from GCP Secret Manager by
 `scripts/load_secrets.sh`. `JWT_SECRET` (at least 32 characters) and a strong
 `ADMIN_PASSWORD` are mandatory; startup rejects missing or weak values. Never

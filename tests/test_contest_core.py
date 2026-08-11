@@ -27,6 +27,7 @@ from web.backend.selection_service import (
     write_selection_decision,
 )
 from scripts.selection_gate import approve_content_freeze
+from tests.test_selection_service import seed_step2_streams
 
 
 class SuccessfulLifecycle:
@@ -55,12 +56,34 @@ class ReopenLifecycle(SuccessfulLifecycle):
         return ExecutionResult.succeeded(resume_after_step=12)
 
 
+class ClockAdvancingLifecycle(SuccessfulLifecycle):
+    def __init__(self, clock_state: dict[str, int], finished_at: int) -> None:
+        super().__init__()
+        self.clock_state = clock_state
+        self.finished_at = finished_at
+
+    def execute(self, context):
+        self.clock_state["now"] = self.finished_at
+        return ExecutionResult.succeeded()
+
+
 def test_default_contest_policy_reserves_six_hours_for_delivery():
     policy = ContestPolicy.default(started_at=1_000)
 
     assert policy.contest_deadline_at == 1_000 + CONTEST_DURATION_SECONDS
     assert policy.content_freeze_at == policy.contest_deadline_at - DELIVERY_RESERVE_SECONDS
     assert policy.delivery_freeze_at == policy.contest_deadline_at - 2 * 3_600
+
+
+def test_official_deadline_is_authoritative_instead_of_project_creation_time():
+    policy = ContestPolicy.for_deadline(started_at=10_000, deadline_at=200_000)
+
+    assert policy.contest_started_at == 10_000
+    assert policy.contest_deadline_at == 200_000
+    assert policy.content_freeze_at == 200_000 - DELIVERY_RESERVE_SECONDS
+
+    with pytest.raises(ValueError, match="after project creation"):
+        ContestPolicy.for_deadline(started_at=10_000, deadline_at=10_000)
 
 
 def test_effective_timeout_uses_content_freeze_before_delivery_and_deadline_for_delivery():
@@ -180,6 +203,32 @@ def test_engine_fails_closed_when_global_budget_is_exhausted(tmp_path):
     assert store.events()[-1].payload["error_class"] == "PERMANENT_CONTEST_DEADLINE"
 
 
+def test_engine_rejects_step_that_finishes_after_content_freeze(tmp_path):
+    policy = ContestPolicy.default(started_at=1_000)
+    clock_state = {"now": policy.content_freeze_at - 10}
+    store = SQLiteStateStore(tmp_path, clock=lambda: clock_state["now"])
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        contest_policy=policy.to_dict(),
+    )
+    registry = StepRegistry()
+    registry.register(
+        StepDefinition(
+            id=15,
+            name="polish",
+            timeout_seconds=600,
+            max_attempts=1,
+            step=ClockAdvancingLifecycle(clock_state, policy.content_freeze_at + 1),
+        )
+    )
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert state.status is WorkflowStatus.FAILED
+    assert store.events()[-1].type == "CONTEST_DEADLINE_EXHAUSTED"
+
+
 def test_delivery_prepare_requires_sqlite_backed_content_freeze_decision(tmp_path):
     policy = ContestPolicy.default(started_at=1_000)
     store = SQLiteStateStore(tmp_path, clock=lambda: 2_000)
@@ -213,6 +262,22 @@ def test_delivery_prepare_requires_sqlite_backed_content_freeze_decision(tmp_pat
     assert prepare_human_gates(tmp_path, 16).ready is True
 
 
+def test_contest_core_requires_step3_human_gate_without_opt_in_config(tmp_path):
+    seed_step2_streams(tmp_path)
+    (tmp_path / "selection/config.json").unlink()
+    policy = ContestPolicy.default(started_at=1_000)
+    SQLiteStateStore(tmp_path, clock=lambda: 2_000).initialize(
+        project_id="demo",
+        project_type="modeling",
+        contest_policy=policy.to_dict(),
+    )
+
+    pending = prepare_human_gates(tmp_path, 3)
+
+    assert pending.pending_action is not None
+    assert pending.pending_action.gate == "step3"
+
+
 def test_factory_service_creates_contest_core_policy_for_new_projects(tmp_path):
     service = FactoryService(tmp_path)
 
@@ -230,6 +295,32 @@ def test_factory_service_creates_contest_core_policy_for_new_projects(tmp_path):
             now_epoch=1,
             no_resume=True,
         )
+
+
+def test_factory_service_accepts_official_contest_deadline(tmp_path):
+    official_deadline = int(__import__("time").time()) + 48 * 3_600
+
+    FactoryService(tmp_path).create_project(
+        "official",
+        "question",
+        start=False,
+        contest_deadline_at=official_deadline,
+    )
+
+    policy = SQLiteStateStore(tmp_path / "ongoing/official").contest_policy()
+    assert policy["contest_deadline_at"] == official_deadline
+
+
+def test_factory_service_rejects_invalid_deadline_without_partial_project(tmp_path):
+    with pytest.raises(ValueError, match="after project creation"):
+        FactoryService(tmp_path).create_project(
+            "invalid-deadline",
+            "question",
+            start=False,
+            contest_deadline_at=1,
+        )
+
+    assert not (tmp_path / "ongoing/invalid-deadline").exists()
 
 
 def test_delivery_freeze_blocks_automatic_reopen_without_human_override(tmp_path):

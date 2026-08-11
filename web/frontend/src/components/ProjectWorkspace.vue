@@ -69,12 +69,18 @@
       </button>
     </nav>
 
+    <ActionCenter :actions="workspaceActions" @navigate="onWorkspaceAction" />
+
     <div class="ws-scroll">
       <div v-if="activeTab === 'overview'" class="overview rise">
         <div class="overview-grid">
           <button class="ov-card panel" @click="activeTab = 'pipeline'">
             <span class="ov-l label">当前阶段</span>
-            <span class="ov-v mono">{{ stepLabel }}</span>
+            <span class="ov-v mono">{{ contestPhaseLabel }}</span>
+          </button>
+          <button class="ov-card panel" @click="activeTab = 'pipeline'">
+            <span class="ov-l label">比赛时钟</span>
+            <span class="ov-v mono">{{ contestClockLabel }}</span>
           </button>
           <button class="ov-card panel" @click="activeTab = project.selection_pending ? 'selection' : project.consultation_pending ? 'consultation' : 'diagnostics'">
             <span class="ov-l label">人工/诊断</span>
@@ -89,6 +95,7 @@
             <span class="ov-v mono">{{ cloudEnabled ? '已启用' : '未启用' }}</span>
           </button>
         </div>
+        <ContestTimingPanel :timing="contestDashboard?.timing || {}" />
         <DiagnosticsCard
           v-if="diagnostics && diagnostics.status && diagnostics.status.reason_code"
           class="rise"
@@ -109,6 +116,7 @@
           class="rise"
           :base="project.base_name"
           :revision="project.revision"
+          @open-file="requestFile"
           @changed="onSelectionChanged"
         />
         <ModelingDirectionPanel
@@ -177,7 +185,25 @@
         class="rise"
         :base="project.base_name"
         :revision="project.revision"
+        @open-file="requestFile"
         @changed="onSelectionChanged"
+      />
+
+      <EvidenceCockpit
+        v-else-if="activeTab === 'evidence'"
+        class="tab-panel rise"
+        :evidence="contestDashboard?.evidence || {}"
+        :audits="contestDashboard?.audits || []"
+        @open-file="requestFile"
+        @navigate="activeTab = $event"
+      />
+
+      <DeliveryReadinessPanel
+        v-else-if="activeTab === 'delivery'"
+        class="tab-panel rise"
+        :base="project.base_name"
+        :delivery="contestDashboard?.delivery || {}"
+        @open-file="requestFile"
       />
 
       <SolverJobPanel
@@ -215,14 +241,16 @@
 </template>
 
 <script>
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from './Icon.vue'
+import ActionCenter from './ActionCenter.vue'
+import ContestTimingPanel from './ContestTimingPanel.vue'
 import ModelingDirectionPanel from './ModelingDirectionPanel.vue'
 import SelectionPanel from './SelectionPanel.vue'
 import { relativeTime } from '../lib/api.js'
 import { stepByIndex, stepConfigKey } from '../lib/steps.js'
-import { workspaceTabs } from '../lib/workspaceUi.js'
+import { buildWorkspaceActions, workspaceTabs } from '../lib/workspaceUi.js'
 import { useToasts } from '../composables/useToasts.js'
 import { useModels } from '../composables/useModels.js'
 import { statusLabel as mapStatusLabel } from '../lib/status.js'
@@ -230,11 +258,14 @@ import { useProjectCloudConfig } from '../composables/useProjectCloudConfig.js'
 import { useProjectDiagnostics } from '../composables/useProjectDiagnostics.js'
 import { useProjectPolling } from '../composables/useProjectPolling.js'
 import { useProjectSteps } from '../composables/useProjectSteps.js'
+import { useContestDashboard } from '../composables/useContestDashboard.js'
 import { useRealtime } from '../composables/useRealtime.js'
 
 // Heavy sub-views are lazy so each tab's code (and KaTeX, via markdown.js used by
 // PipelineTimeline/ArtifactBrowser/ConsultationPanel) loads on demand.
-const TabFallback = { template: '<div class="tab-fallback"><div class="spinner"></div></div>' }
+const TabFallback = {
+  render: () => h('div', { class: 'tab-fallback' }, [h('div', { class: 'spinner' })]),
+}
 const asyncOpts = { loadingComponent: TabFallback, delay: 120 }
 const PipelineTimeline = defineAsyncComponent({ loader: () => import('./PipelineTimeline.vue'), ...asyncOpts })
 const LogConsole = defineAsyncComponent({ loader: () => import('./LogConsole.vue'), ...asyncOpts })
@@ -245,10 +276,12 @@ const DiagnosticsCard = defineAsyncComponent({ loader: () => import('./Diagnosti
 const ModelManager = defineAsyncComponent({ loader: () => import('./ModelManager.vue'), ...asyncOpts })
 const CloudAcceleratorDialog = defineAsyncComponent({ loader: () => import('./CloudAcceleratorDialog.vue'), ...asyncOpts })
 const CloudTaskPanel = defineAsyncComponent({ loader: () => import('./CloudTaskPanel.vue'), ...asyncOpts })
+const EvidenceCockpit = defineAsyncComponent({ loader: () => import('./EvidenceCockpit.vue'), ...asyncOpts })
+const DeliveryReadinessPanel = defineAsyncComponent({ loader: () => import('./DeliveryReadinessPanel.vue'), ...asyncOpts })
 
 export default {
   name: 'ProjectWorkspace',
-  components: { Icon, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel },
+  components: { Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel },
   props: {
     project: { type: Object, required: true },
     isAdmin: { type: Boolean, default: false },
@@ -261,6 +294,7 @@ export default {
     const { wsConnected } = useRealtime()
     const { models, load: loadModels, saveConfig } = useModels()
     const { stepsData, loading, fetchSteps: fetchProjectSteps, resetSteps, stopSteps } = useProjectSteps()
+    const { contestDashboard, contestDashboardLoading, fetchContestDashboard, resetContestDashboard } = useContestDashboard()
     const { diagnostics, diagnosticsLoading, fetchDiagnostics: fetchProjectDiagnostics, resetDiagnostics } = useProjectDiagnostics()
     const { startPolling, stopPolling } = useProjectPolling({ intervalMs: 8000, backoffIntervalMs: 30000 })
     const {
@@ -282,6 +316,7 @@ export default {
     const showCloudDialog = ref(false)
     const cloudEstimate = ref({ local: 8, cloud: 2 })
     const lastStep = ref(null)
+    const clockNow = ref(Math.floor(Date.now() / 1000))
 
     const statusLabel = computed(() => mapStatusLabel(props.project.status))
     const modelRegistry = computed(() => models.value?.registry || [])
@@ -302,6 +337,7 @@ export default {
       diagnostics: diagnostics.value,
       cloudEnabled: cloudEnabled.value,
     }))
+    const workspaceActions = computed(() => buildWorkspaceActions(contestDashboard.value, stepsData.value))
     const stepLabel = computed(() => {
       const current = props.project.current_step
       const gate = stepsData.value?.editorial_gate
@@ -309,6 +345,37 @@ export default {
       if (current === 8 && gate && !gate.ready) return 'STEP 8.5 / 16 · 阅卷入口设计'
       const active = stepByIndex(Math.min(16, current + 1))
       return `STEP ${Math.max(0, current + 1)} / 16 · ${active ? active.name : ''}`
+    })
+    const phaseNames = {
+      problem_understanding: '题意与数据',
+      model_tournament: '模型竞赛',
+      model_and_solve: '建模与求解',
+      validation: '结果验证',
+      paper_construction: '论文构建',
+      deterministic_paper_audit: '确定性论文审计',
+      review_and_revision: '审稿与修订',
+      final_audit_and_delivery: '最终审计与交付',
+    }
+    const contestPhaseLabel = computed(() => {
+      const phase = props.project.contest_phase
+      if (!phase) return stepLabel.value
+      return `阶段 ${phase.id} / 8 · ${phaseNames[phase.name] || phase.name}`
+    })
+    function formatRemaining(seconds) {
+      const value = Math.max(0, Number(seconds) || 0)
+      const hours = Math.floor(value / 3600)
+      const minutes = Math.floor((value % 3600) / 60)
+      return `${hours}h ${String(minutes).padStart(2, '0')}m`
+    }
+    const contestClockLabel = computed(() => {
+      const deadline = Number(props.project.contest_deadline_at || 0)
+      const contentFreeze = Number(props.project.content_freeze_at || 0)
+      const deliveryFreeze = Number(props.project.delivery_freeze_at || 0)
+      if (!deadline) return '未配置'
+      if (clockNow.value < contentFreeze) return `距内容冻结 ${formatRemaining(contentFreeze - clockNow.value)}`
+      if (clockNow.value < deliveryFreeze) return `最终审计期 · 距提交 ${formatRemaining(deadline - clockNow.value)}`
+      if (clockNow.value < deadline) return `交付冻结 · 距提交 ${formatRemaining(deadline - clockNow.value)}`
+      return '比赛截止时间已到'
     })
 
     function fetchSteps() {
@@ -323,11 +390,16 @@ export default {
       return fetchProjectCloudConfig(props.project.base_name)
     }
 
+    function fetchDashboard() {
+      return fetchContestDashboard(props.project.base_name)
+    }
+
     function refresh() {
       Promise.allSettled([
         fetchSteps(),
         fetchDiagnostics(),
         fetchCloudConfig(),
+        fetchDashboard(),
       ])
       emit('refresh')
     }
@@ -363,7 +435,17 @@ export default {
       emit('refresh')
       fetchSteps()
       fetchDiagnostics()
+      fetchDashboard()
       activeTab.value = 'overview'
+    }
+
+    function onWorkspaceAction(action) {
+      if (action?.file) {
+        requestFile({ path: action.file, name: action.file.split('/').pop(), type: 'markdown' })
+        return
+      }
+      if (action?.tab && tabs.value.some((tab) => tab.key === action.tab)) activeTab.value = action.tab
+      else activeTab.value = 'overview'
     }
 
     function onEsc(event) {
@@ -459,13 +541,16 @@ export default {
     watch(() => props.project.base_name, () => {
       resetSteps()
       resetDiagnostics()
+      resetContestDashboard()
       fetchSteps()
       fetchDiagnostics()
       fetchCloudConfig()
+      fetchDashboard()
     })
     watch(() => props.project.current_step, (newStep) => {
       fetchSteps()
       fetchDiagnostics()
+      fetchDashboard()
       checkCloudAccelerator(newStep)
     })
     watch(() => props.project.consultation_pending, (pending) => {
@@ -478,7 +563,7 @@ export default {
     }, { immediate: true })
 
     // ---- tab deep-linking: keep activeTab and route.query.tab in sync ----
-    const VALID_TABS = new Set(['overview', 'pipeline', 'logs', 'artifacts', 'solver', 'diagnostics', 'consultation', 'selection', 'cloud'])
+    const VALID_TABS = new Set(['overview', 'pipeline', 'logs', 'artifacts', 'evidence', 'delivery', 'solver', 'diagnostics', 'consultation', 'selection', 'cloud'])
     let syncingTab = false
     // URL -> tab. Only act when the URL explicitly carries a valid tab, so an
     // absent ?tab leaves the consultation auto-jump / default 'overview' intact.
@@ -500,15 +585,18 @@ export default {
       router.replace({ query }).catch(() => {}).finally(() => { syncingTab = false })
     })
 
+    let contestClockTimer = null
     onMounted(() => {
       fetchSteps()
       fetchDiagnostics()
       fetchCloudConfig()
+      fetchDashboard()
       loadModels().catch(() => {})
       startPolling(
         () => {
           fetchSteps()
           fetchDiagnostics()
+          fetchDashboard()
         },
         {
           shouldRun: () => props.project.is_running,
@@ -517,21 +605,29 @@ export default {
           onVisible: () => {
             fetchSteps()
             fetchDiagnostics()
+            fetchDashboard()
           },
         },
       )
       window.addEventListener('keydown', onEsc)
       lastStep.value = props.project.current_step
+      contestClockTimer = window.setInterval(() => {
+        clockNow.value = Math.floor(Date.now() / 1000)
+      }, 30000)
     })
 
     onBeforeUnmount(() => {
       stopPolling()
       if (cloudDialogTimer) clearTimeout(cloudDialogTimer)
+      if (contestClockTimer) clearInterval(contestClockTimer)
       window.removeEventListener('keydown', onEsc)
     })
 
     return {
       stepsData,
+      contestDashboard,
+      contestDashboardLoading,
+      workspaceActions,
       activeTab,
       tabs,
       loading,
@@ -554,10 +650,13 @@ export default {
       dotClass,
       canResume,
       stepLabel,
+      contestPhaseLabel,
+      contestClockLabel,
       rel: relativeTime,
       fetchSteps,
       fetchDiagnostics,
       fetchCloudConfig,
+      fetchDashboard,
       toggleCloudAcceleration,
       refresh,
       act,
@@ -566,6 +665,7 @@ export default {
       onAnswered,
       onModelingDirectionChanged,
       onSelectionChanged,
+      onWorkspaceAction,
       onDiagnosticsAction,
       onAssign,
       checkCloudAccelerator,

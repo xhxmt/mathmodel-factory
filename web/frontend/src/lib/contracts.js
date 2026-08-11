@@ -152,6 +152,60 @@ export function normalizeStepsPayload(raw = {}) {
   }
 }
 
+export function normalizeContestDashboard(raw = {}) {
+  const timing = raw.timing && typeof raw.timing === 'object' ? raw.timing : {}
+  const delivery = raw.delivery && typeof raw.delivery === 'object' ? raw.delivery : {}
+  const evidence = raw.evidence && typeof raw.evidence === 'object' ? raw.evidence : {}
+  const canonical = evidence.canonical && typeof evidence.canonical === 'object' ? evidence.canonical : {}
+  const solver = evidence.solver && typeof evidence.solver === 'object' ? evidence.solver : {}
+  return {
+    schema_version: String(raw.schema_version || 'contest-dashboard-v1'),
+    base_name: String(raw.base_name || ''),
+    current_step: numberOr(raw.current_step, -1),
+    timing: {
+      ...timing,
+      configured: Boolean(timing.configured),
+      remaining_seconds: Math.max(0, numberOr(timing.remaining_seconds, 0)),
+      recent_step_average_seconds: Math.max(0, numberOr(timing.recent_step_average_seconds, 0)),
+      projected_content_finish_at: numberOr(timing.projected_content_finish_at, 0),
+      content_slack_seconds: numberOr(timing.content_slack_seconds, 0),
+      recent_steps: Array.isArray(timing.recent_steps) ? timing.recent_steps : [],
+      risk_level: String(timing.risk_level || 'unconfigured'),
+      mode: String(timing.mode || 'legacy'),
+      mode_label: String(timing.mode_label || '未配置比赛时钟'),
+      recommendation: String(timing.recommendation || ''),
+    },
+    gates: raw.gates && typeof raw.gates === 'object' ? raw.gates : {},
+    audits: Array.isArray(raw.audits) ? raw.audits : [],
+    evidence: {
+      ...evidence,
+      canonical: {
+        ...canonical,
+        available: Boolean(canonical.available),
+        items: Array.isArray(canonical.items) ? canonical.items : [],
+      },
+      solver: {
+        ...solver,
+        total: Math.max(0, numberOr(solver.total, 0)),
+        receipt_ready: Math.max(0, numberOr(solver.receipt_ready, 0)),
+        failed: Math.max(0, numberOr(solver.failed, 0)),
+        status_counts: solver.status_counts && typeof solver.status_counts === 'object' ? solver.status_counts : {},
+      },
+      role_statuses: evidence.role_statuses && typeof evidence.role_statuses === 'object' ? evidence.role_statuses : {},
+    },
+    delivery: {
+      ...delivery,
+      ready: Boolean(delivery.ready),
+      checks: Array.isArray(delivery.checks) ? delivery.checks : [],
+      blocking_count: Math.max(0, numberOr(delivery.blocking_count, 0)),
+      pending_count: Math.max(0, numberOr(delivery.pending_count, 0)),
+      release: delivery.release && typeof delivery.release === 'object' ? delivery.release : {},
+      attachments: Array.isArray(delivery.attachments) ? delivery.attachments : [],
+    },
+    actions: Array.isArray(raw.actions) ? raw.actions : [],
+  }
+}
+
 /** @returns {CloudConfig} */
 export function normalizeCloudConfig(raw = {}) {
   return {

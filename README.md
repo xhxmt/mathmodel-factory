@@ -25,6 +25,9 @@ cd web
 - **注册与审批**：用户注册后处于 pending，管理员审批用户和项目申请；普通用户只能看到自己的 ACL 项目。
 - **题目归档**：按项目内题目内容的规范化 SHA-256 标识聚合同题多次运行，同时保留 `ongoing/` / `complete/` 的真实目录状态。
 - **实时监控**：WebSocket 自动推送项目状态、诊断、日志与阻塞原因。
+- **比赛控制台**：默认用 8 个比赛阶段展示 Step 0–16，可下钻到 17 Step 高级视图；时间卡根据最近三步耗时预测内容冻结余量。
+- **行动与人工节点**：顶部行动中心聚合人工 Gate、deadline、求解失败、审计事项和交付阻塞；三类人工决策分别显示适用证据、确认项、风险与不可变 revision。
+- **证据与交付**：证据驾驶舱汇总 canonical results、PRIMARY/AUXILIARY、Solver receipts、阶段审计和三角色状态；交付中心只从 Final Audit 与原子 current release 提供 PDF/ZIP。
 - **求解证据**：在项目工作区查看本地/云端 Solver 作业、终态、耗时与两阶段 receipt 完整性。
 - **项目控制**：在权限范围内暂停、恢复或终止运行。
 - **人工咨询与选择**：处理咨询请求；交互式项目可启用 Step 3 `PRIMARY/AUXILIARY` 选择门，CLI 路径仍然保留。
@@ -88,7 +91,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 当前 `main` 分支的近期变更集中在核心编排、Web 控制面、评测治理与仓库治理：
 
-- 新项目使用 `factory_core.FactoryEngine` 和 `contest_core_v1`，状态、事件、74 小时 deadline、T−6h content freeze、T−2h delivery freeze 及人工决策保存在项目内 schema-v5 `.factory/state.db`。
+- 新项目使用 `factory_core.FactoryEngine` 和 `contest_core_v1`；未显式配置时默认 74 小时，CLI/Web 可写入官方提交 deadline 作为权威时间。状态、事件、T−6h content freeze、T−2h delivery freeze 及人工决策保存在项目内 schema-v5 `.factory/state.db`。
 - `run_paper.sh` 已降级为兼容启动器；原生 Step 0-16 不再调用冻结 Bash，冻结实现只服务未迁移或显式回滚的项目。
 - CLI、Web 和本地/Cloud Run 求解器通过同一 `FactoryService`、revision 与事件合同运行；云执行仍受全局 quarantine 限制。
 - Python、Web backend、Cloud 镜像和前端构建均有锁文件，运行时启动脚本不再动态安装依赖。
@@ -96,6 +99,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 - SQLite 用户库、bcrypt 密码、注册/审批、项目申请与项目 ACL 已成为现役权限模型。
 - Secret Manager 是生产敏感值来源，弱默认管理员密码或缺失 JWT Secret 会阻止后端启动。
 - Solver Jobs 面板通过项目 ACL 展示作业状态和 `solver-job-evidence-v2` receipt，不授予额外文件或控制权限。
+- Web 项目工作区已收敛为比赛控制台：8 阶段默认视图、时间风险预测、持久行动中心、三类 Human Gate、证据驾驶舱和失败关闭的交付就绪清单均使用项目 ACL。
 - Selector 的 R0a/R0b/R3 与人工放权校验器已进入主线，但尚无真实冻结 holdout、shadow cohort 或生产授权。
 - 当前 Web 使用、部署和历史报告的所有权已重新收敛，避免旧文档继续充当现役 runbook。
 
@@ -116,13 +120,20 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 ./launch_agents.sh resume test_cumcm2024b
 ```
 
+需要以官方截止时间为权威时间时，可直接使用 Native CLI（支持 epoch 秒或带时区 ISO-8601）：
+
+```bash
+python3 -m factory_core.cli create test_cumcm2024b \
+  "/absolute/path/to/problem.pdf" --contest-deadline "2026-09-13T20:00:00+08:00"
+```
+
 调试时可在前台运行：
 
 ```bash
 ./launch_agents.sh run test_cumcm2024b
 ```
 
-若项目启用了 `selection/config.json`，Step 3 前会生成 `selection/step3_request.md` 并暂停。可在终端中查看候选后选择：
+所有新 `contest_core_v1` 项目都会在 Step 3 前生成选择请求并暂停；旧项目仍保留 `selection/config.json` 的 opt-in 行为。可在终端中查看候选后选择：
 
 ```bash
 python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
