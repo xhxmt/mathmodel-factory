@@ -61,6 +61,7 @@
 
 ### 修复
 
+- Web 审计事项解析在找到首张 issue 表后会于表尾停止，避免把后续增量审计表的 `Severity` 列误读为 `Status`，从而在已完成 Final Audit 的项目行动中心虚报未解决事项。
 - Final Audit 的 execution packet 不再纳入 `step_*`、`native_judge_*` 或 `native_receipt_*` 审计运行日志，避免 Judge 及 receipt 构建器写入自身日志并使刚通过的快照立即失效；solver 与模型执行日志仍参与证据指纹。
 - Final PDF 视觉门禁不再把 1–2 个字符的公式上下标按不可读正文阻断，而是保留为小字 warning；连续文本和数值低于 4.5pt 仍为 blocking。
 - Final Audit 的 Judge grounding 基础设施重试现在会把失败的 `ref_id`、错误原因、声明的 `chunk_id` 以及从不可变 packet 中提取的逐字候选原文反馈给对应角色，并在有界轮次内只重跑当前仍为 indeterminate 的角色，避免使用相同提示盲重试或在引用错误已收敛时过早永久失败；严格逐字匹配和三值判定保持不变。

@@ -226,16 +226,19 @@ def _parse_open_issue_items(content: str) -> list[dict[str, Any]]:
             continue
 
         items: list[dict[str, Any]] = []
+        table_started = False
         for row_line in lines[header_index + 1 :]:
             if "|" not in row_line:
-                if items:
+                if table_started:
                     break
                 continue
             cells = _split_markdown_table_row(row_line)
             if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+                table_started = True
                 continue
             if len(cells) < len(header):
                 continue
+            table_started = True
 
             status_value = cells[columns["status"]]
             if _issue_status(status_value) not in OPEN_ISSUE_STATUSES:

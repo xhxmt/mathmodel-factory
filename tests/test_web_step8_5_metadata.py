@@ -149,6 +149,31 @@ def test_get_steps_counts_only_open_status_column_values(tmp_path):
     ]
 
 
+def test_get_steps_does_not_parse_later_markdown_table_with_first_table_columns(tmp_path):
+    mod = load_app_module()
+
+    write_file(
+        tmp_path / "audit_issue_ledger.md",
+        """# Audit issues
+
+| ID | Step | Severity | Status | Location | Issue | Required action |
+|---|---:|---|---|---|---|---|
+| B1 | 11 | BLOCKING | RESOLVED | abstract | Placeholder fixed | Done |
+
+## Incremental audit findings
+
+| Issue ID | First Raised In | Category | Severity | Blocking Until | Status | Notes |
+|---|---|---|---|---|---|---|
+| AUDIT-PAPER | audit:paper | paper | BLOCKING | Step 16 | RESOLVED | PASS |
+""",
+    )
+
+    data = mod.get_steps(tmp_path, "demo")
+
+    assert data["open_issues"] == 0
+    assert data["open_issue_items"] == []
+
+
 def test_get_steps_supports_legacy_severity_in_status_column(tmp_path):
     mod = load_app_module()
 
