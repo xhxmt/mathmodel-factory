@@ -6,6 +6,7 @@ import re
 import tempfile
 from pathlib import Path
 
+from .contest import phase_for_step
 from .domain import WorkflowState, WorkflowStatus
 
 
@@ -76,8 +77,14 @@ def _markers(project: Path, state: WorkflowState) -> None:
         pid_path.unlink(missing_ok=True)
 
 
-def runtime_payload(state: WorkflowState) -> dict:
+def runtime_payload(
+    state: WorkflowState,
+    *,
+    contest_policy: dict | None = None,
+    now_epoch: int | None = None,
+) -> dict:
     current_step = state.active_step if state.active_step is not None else max(0, state.last_completed_step)
+    phase = phase_for_step(min(current_step, 16))
     action = state.pending_action or {}
     display = {
         WorkflowStatus.READY: "就绪",
@@ -93,7 +100,7 @@ def runtime_payload(state: WorkflowState) -> dict:
         WorkflowStatus.INTERRUPTED: "已中断",
     }[state.status]
     return {
-        "version": 3,
+        "version": 4,
         "state": state.status.value,
         "current_step": current_step,
         "current_action": action.get("type") or (
@@ -123,6 +130,20 @@ def runtime_payload(state: WorkflowState) -> dict:
         "runtime_generation": state.runtime_generation,
         "last_completed_step": state.last_completed_step,
         "pending_action": state.pending_action,
+        "contest_profile": contest_policy.get("profile") if contest_policy else None,
+        "contest_phase": {
+            "id": phase.id,
+            "name": phase.name,
+            "human_gate": phase.human_gate,
+        },
+        "contest_started_at": contest_policy.get("contest_started_at") if contest_policy else None,
+        "contest_deadline_at": contest_policy.get("contest_deadline_at") if contest_policy else None,
+        "content_freeze_at": contest_policy.get("content_freeze_at") if contest_policy else None,
+        "delivery_freeze_at": contest_policy.get("delivery_freeze_at") if contest_policy else None,
+        "delivery_reserve_seconds": contest_policy.get("delivery_reserve_seconds") if contest_policy else None,
+        "remaining_seconds": max(
+            0, int(contest_policy["contest_deadline_at"]) - int(now_epoch)
+        ) if contest_policy and now_epoch is not None else None,
     }
 
 
@@ -131,7 +152,25 @@ def write_compatibility_projections(project_dir: str | Path, state: WorkflowStat
     _checkpoint(project, state)
     _heartbeat(project, state)
     _markers(project, state)
+    contest_policy = None
+    now_epoch = None
+    try:
+        from .storage import SQLiteStateStore
+
+        store = SQLiteStateStore(project)
+        contest_policy = store.contest_policy()
+        now_epoch = store.now_epoch()
+    except (OSError, RuntimeError):
+        pass
     _atomic_text(
         project / "diagnostics" / "status.json",
-        json.dumps(runtime_payload(state), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            runtime_payload(
+                state,
+                contest_policy=contest_policy,
+                now_epoch=now_epoch,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
     )

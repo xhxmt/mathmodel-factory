@@ -120,6 +120,14 @@ python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
   --primary m2 --aux m1 --reason "Prefer the verified primary stream"
 ```
 
+决策以项目 SQLite 为权威，JSON/Markdown 仅为界面与 Agent 投影。Step 16
+前还会出现 `content_freeze` 人工节点；CLI 可运行：
+
+```bash
+python3 scripts/selection_gate.py approve-content-freeze ongoing/<base_name> \
+  --reason "Conclusions, abstract and figures reviewed"
+```
+
 调试时可加 `--no-resume`。Web 提交选择或咨询回答时携带当前 project
 revision；过期页面会收到 `409`，不会写入旧决策或启动 worker。成功提交
 会解析 gate 并启动统一 Python worker。CLI 路径是现役合同，不能被 Web

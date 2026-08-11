@@ -84,11 +84,11 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 这些运行输出会被 Git 自动忽略。
 
-## 最新更新（2026-08-08）
+## 最新更新（2026-08-11）
 
 当前 `main` 分支的近期变更集中在核心编排、Web 控制面、评测治理与仓库治理：
 
-- 新项目使用 `factory_core.FactoryEngine`，状态与事件保存在项目内 `.factory/state.db`。
+- 新项目使用 `factory_core.FactoryEngine` 和 `contest_core_v1`，状态、事件、74 小时 deadline、T−6h content freeze、T−2h delivery freeze 及人工决策保存在项目内 schema-v5 `.factory/state.db`。
 - `run_paper.sh` 已降级为兼容启动器；原生 Step 0-16 不再调用冻结 Bash，冻结实现只服务未迁移或显式回滚的项目。
 - CLI、Web 和本地/Cloud Run 求解器通过同一 `FactoryService`、revision 与事件合同运行；云执行仍受全局 quarantine 限制。
 - Python、Web backend、Cloud 镜像和前端构建均有锁文件，运行时启动脚本不再动态安装依赖。
@@ -129,7 +129,17 @@ python3 scripts/selection_gate.py select-step3 ongoing/test_cumcm2024b \
   --primary m2 --aux m1 --reason "Prefer heuristic contrast"
 ```
 
-该命令会写入 `selection/step3_decision.json` 和 `human_review.md`，并默认恢复项目运行；调试时可加 `--no-resume`。
+该命令把结构化决策写入 SQLite，并生成 `selection/step3_decision.json` 和 `human_review.md` 投影，默认恢复项目运行；调试时可加 `--no-resume`。
+
+Step 16 前必须完成第二个人工节点，检查主结论、摘要与核心图表后冻结内容：
+
+```bash
+python3 scripts/selection_gate.py approve-content-freeze \
+  ongoing/test_cumcm2024b --reason "Conclusions, abstract and figures reviewed"
+```
+
+正常工作流在 T−6h 后只保留 Final Audit 与交付；T−2h 后若审计要求回退，
+还必须通过 Web 或 `approve-delivery-freeze-override --reason ...` 明确授权。
 
 检查状态：
 

@@ -87,3 +87,10 @@ source scripts/load_secrets.sh
 python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
   --primary m2 --aux m1 --reason "Selected after reviewing verified streams"
 ```
+
+Step 16 前用相同 Web 选择面板确认 `content_freeze`，或运行：
+
+```bash
+python3 scripts/selection_gate.py approve-content-freeze ongoing/<base_name> \
+  --reason "Final human review complete"
+```

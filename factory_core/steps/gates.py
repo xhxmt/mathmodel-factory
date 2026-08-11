@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ..domain import PendingAction, PrepareResult
 from scripts.selection_gate import PENDING_EXIT, prepare_step3
+from web.backend.selection_service import build_content_freeze_options
 
 
 def _consult_enabled(project: Path, gate: str) -> bool:
@@ -46,6 +47,23 @@ def prepare_human_gates(project: Path, step_id: int) -> PrepareResult:
             str(options.relative_to(project)),
             reason="Step 3 selection is awaiting input",
         )
+    if step_id == 16:
+        from ..storage import SQLiteStateStore
+
+        store = SQLiteStateStore(project)
+        if store.exists and store.contest_policy() is not None:
+            if store.decision("content_freeze") is None:
+                options = project / "selection" / "content_freeze_options.json"
+                if not options.is_file():
+                    build_content_freeze_options(project)
+                return PrepareResult.awaiting(
+                    PendingAction(
+                        type="content_freeze_selection",
+                        gate="content_freeze",
+                    ),
+                    str(options.relative_to(project)),
+                    reason="content freeze approval is awaiting human review",
+                )
     dynamic = project / "consultation" / "REQUEST.md"
     if dynamic.is_file() and _consult_enabled(project, "dynamic") and not _consult_ready(project, "dynamic"):
         return PrepareResult.awaiting(

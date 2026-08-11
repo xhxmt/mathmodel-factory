@@ -21,6 +21,7 @@ from .domain import (
     WorkflowState,
     WorkflowStatus,
 )
+from .contest import ContestPolicy
 from .engine import FactoryEngine
 from .migration import LegacyInspector, MigrationReport, apply_migration
 from .projections import runtime_payload, write_compatibility_projections
@@ -221,10 +222,12 @@ class FactoryService:
             consultation = project / "consultation"
             consultation.mkdir(parents=True, exist_ok=True)
             (consultation / "enabled").touch()
+        contest_policy = ContestPolicy.default(started_at=int(time.time()))
         state = SQLiteStateStore(project).initialize(
             project_id=base_name,
             project_type="modeling",
             runtime_generation="native_v2",
+            contest_policy=contest_policy.to_dict(),
         )
         write_compatibility_projections(project, state)
         worker = self.start(project) if start else None
@@ -234,7 +237,13 @@ class FactoryService:
         return SQLiteStateStore(self.resolve_project(project)).load()
 
     def status(self, project: str | Path) -> dict[str, Any]:
-        return runtime_payload(self.inspect(project))
+        resolved = self.resolve_project(project)
+        store = SQLiteStateStore(resolved)
+        return runtime_payload(
+            store.load(),
+            contest_policy=store.contest_policy(),
+            now_epoch=store.now_epoch(),
+        )
 
     def start(
         self,
@@ -640,8 +649,13 @@ class FactoryService:
         gate = str(pending.get("gate") or "")
         action_type = pending.get("type")
         ready = False
-        if action_type == "step3_selection":
-            ready = (project / "selection" / f"{gate or 'step3'}_decision.json").is_file()
+        if action_type and action_type.endswith("selection"):
+            store = SQLiteStateStore(project)
+            ready = store.decision(gate or "step3") is not None
+            if not ready and store.contest_policy() is None:
+                ready = (
+                    project / "selection" / f"{gate or 'step3'}_decision.json"
+                ).is_file()
         elif action_type == "human_consultation":
             review = project / "human_review.md"
             if review.is_file():

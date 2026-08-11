@@ -142,6 +142,20 @@ class SQLiteStateStore:
                 result_refs_json TEXT NOT NULL,
                 failure_json TEXT
             );
+            CREATE TABLE IF NOT EXISTS contest_policy (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                profile TEXT NOT NULL,
+                contest_started_at INTEGER NOT NULL,
+                contest_deadline_at INTEGER NOT NULL,
+                content_freeze_at INTEGER NOT NULL,
+                delivery_freeze_at INTEGER NOT NULL,
+                delivery_reserve_seconds INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS workflow_decisions (
+                gate TEXT PRIMARY KEY,
+                decided_at INTEGER NOT NULL,
+                decision_json TEXT NOT NULL
+            );
             CREATE TRIGGER IF NOT EXISTS events_append_only_update
             BEFORE UPDATE ON events
             BEGIN
@@ -151,6 +165,16 @@ class SQLiteStateStore:
             BEFORE DELETE ON events
             BEGIN
                 SELECT RAISE(ABORT, 'workflow events are append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_update
+            BEFORE UPDATE ON workflow_decisions
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decisions are append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_delete
+            BEFORE DELETE ON workflow_decisions
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decisions are append-only');
             END;
             """
         )
@@ -177,7 +201,7 @@ class SQLiteStateStore:
         current = int(row[0])
         if current == SCHEMA_VERSION:
             return
-        if current not in {1, 2, 3}:
+        if current not in {1, 2, 3, 4}:
             raise RuntimeError(
                 f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}"
             )
@@ -221,6 +245,46 @@ class SQLiteStateStore:
                 result_refs_json TEXT NOT NULL,
                 failure_json TEXT
             )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS contest_policy (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                profile TEXT NOT NULL,
+                contest_started_at INTEGER NOT NULL,
+                contest_deadline_at INTEGER NOT NULL,
+                content_freeze_at INTEGER NOT NULL,
+                delivery_freeze_at INTEGER NOT NULL,
+                delivery_reserve_seconds INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_decisions (
+                gate TEXT PRIMARY KEY,
+                decided_at INTEGER NOT NULL,
+                decision_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_update
+            BEFORE UPDATE ON workflow_decisions
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decisions are append-only');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_delete
+            BEFORE DELETE ON workflow_decisions
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decisions are append-only');
+            END
             """
         )
         solver_columns = {
@@ -268,6 +332,7 @@ class SQLiteStateStore:
         imported: bool = False,
         import_payload: dict[str, Any] | None = None,
         runtime_generation: str = "native_v2",
+        contest_policy: dict[str, Any] | None = None,
     ) -> WorkflowState:
         now = int(self._clock())
         scope = self.project_dir.parent.name if self.project_dir.parent.name in {"ongoing", "complete"} else "external"
@@ -307,6 +372,23 @@ class SQLiteStateStore:
                     now,
                 ),
             )
+            if contest_policy is not None:
+                connection.execute(
+                    """
+                    INSERT INTO contest_policy(
+                        singleton, profile, contest_started_at, contest_deadline_at,
+                        content_freeze_at, delivery_freeze_at, delivery_reserve_seconds
+                    ) VALUES (1, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(contest_policy["profile"]),
+                        int(contest_policy["contest_started_at"]),
+                        int(contest_policy["contest_deadline_at"]),
+                        int(contest_policy["content_freeze_at"]),
+                        int(contest_policy["delivery_freeze_at"]),
+                        int(contest_policy["delivery_reserve_seconds"]),
+                    ),
+                )
             event_type = "PROJECT_IMPORTED" if imported else "PROJECT_CREATED"
             payload = _redact(import_payload or {})
             connection.execute(
@@ -328,6 +410,63 @@ class SQLiteStateStore:
         if row is None:
             raise StateNotInitialized(f"workflow state is not initialized: {self.path}")
         return self._state_from_row(row)
+
+    def now_epoch(self) -> int:
+        return int(self._clock())
+
+    def contest_policy(self) -> dict[str, Any] | None:
+        if not self.path.is_file():
+            return None
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM contest_policy WHERE singleton = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "profile": row["profile"],
+            "contest_started_at": row["contest_started_at"],
+            "contest_deadline_at": row["contest_deadline_at"],
+            "content_freeze_at": row["content_freeze_at"],
+            "delivery_freeze_at": row["delivery_freeze_at"],
+            "delivery_reserve_seconds": row["delivery_reserve_seconds"],
+        }
+
+    def decision(self, gate: str) -> dict[str, Any] | None:
+        if not self.path.is_file():
+            return None
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            row = connection.execute(
+                "SELECT decision_json FROM workflow_decisions WHERE gate = ?",
+                (str(gate),),
+            ).fetchone()
+        return json.loads(row["decision_json"]) if row is not None else None
+
+    def record_decision(self, gate: str, decision: dict[str, Any]) -> dict[str, Any]:
+        gate = str(gate).strip()
+        if not gate:
+            raise ValueError("decision gate is required")
+        safe = _redact(decision)
+        encoded = json.dumps(safe, ensure_ascii=True, sort_keys=True)
+        decided_at = int(safe.get("selected_at") or safe.get("decided_epoch") or self._clock())
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            prior = connection.execute(
+                "SELECT decision_json FROM workflow_decisions WHERE gate = ?",
+                (gate,),
+            ).fetchone()
+            if prior is not None:
+                if prior["decision_json"] != encoded:
+                    raise ValueError(f"immutable workflow decision already exists for {gate}")
+                return json.loads(prior["decision_json"])
+            connection.execute(
+                "INSERT INTO workflow_decisions(gate, decided_at, decision_json) VALUES (?, ?, ?)",
+                (gate, decided_at, encoded),
+            )
+        return safe
 
     def transition(
         self,

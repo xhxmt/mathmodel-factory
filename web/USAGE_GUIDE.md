@@ -103,7 +103,17 @@ python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
   --primary m2 --aux m1 --reason "Prefer the verified stream"
 ```
 
-默认会写入 `selection/step3_decision.json`、同步 `human_review.md` 并启动 worker 恢复项目；调试时可加 `--no-resume`。Web 选择请求使用 project revision 防止旧页面覆盖较新的控制操作。
+默认会把结构化决策写入项目 SQLite，生成 `selection/step3_decision.json` 与 `human_review.md` 投影，并启动 worker 恢复项目；调试时可加 `--no-resume`。Web 选择请求使用 project revision 防止旧页面覆盖较新的控制操作。
+
+Step 16 前必须通过 Web 或 CLI 确认内容冻结：
+
+```bash
+python3 scripts/selection_gate.py approve-content-freeze ongoing/<base_name> \
+  --reason "Conclusions, abstract and figures reviewed"
+```
+
+T−2h delivery freeze 后若 Final Audit 要求回退，必须另行明确批准
+`delivery_freeze_override`，系统不会自动重开实质性工作。
 
 ## 用户和项目审批
 

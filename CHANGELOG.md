@@ -6,6 +6,7 @@
 
 ### 新增
 
+- 新增 `contest_core_v1`：新建 Native 项目在 schema-v5 SQLite 中持久化 74 小时 deadline、T−6h content freeze、T−2h delivery freeze 和六小时终端交付保留；每次 Step 与 retry 重新计算剩余预算，耗尽后失败关闭。内部 Step 0–16 映射为八个比赛阶段，Step 3 与交付前内容冻结成为两个 SQLite 权威人工节点，冻结后回退需额外人工 override；Solver/Final Audit receipts 与 snapshot hashes 明确保留为不可变机器证据，而 checkpoint、选择 Markdown 和 Web 状态仅为可重建投影。
 - 新增不可变原子 release：每个最终快照发布到 `papers/releases/<base>/<snapshot>/`，包含审计 PDF、submission ZIP、manifest 和审计 receipts；全部校验完成后只原子替换 `papers/<base>/current.json`，失败保留旧 current，顶层 PDF/ZIP 仅为兼容副本。
 - Web 管理端与 CLI 新增交付 override 签发、查看和撤销；权威记录持久化在 `web/auth.db`，并区分 `continue_after_gate2` 与绑定精确 SHA-256 的 `deliver_snapshot`。
 - 新增 `web/backend_service_health.sh`，统一 full/backend-only 部署验收：验证 systemd MainPID、ControlGroup、全部 8000 listener 所有权及稳定窗口内 `NRestarts`，再接受 HTTP 结果。

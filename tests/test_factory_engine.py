@@ -174,6 +174,24 @@ def test_engine_persists_pending_action_and_stops_dispatch(tmp_path):
     assert resolved.revision > initial.revision
 
 
+def test_engine_rejects_resolution_for_a_different_pending_gate(tmp_path):
+    handler = FakeHandler([ExecutionResult.succeeded()])
+    validator = FakeValidator(
+        [ValidationResult.awaiting(PendingAction(type="step3_selection", gate="step3"))]
+    )
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling")
+    engine = FactoryEngine(tmp_path, store=store, registry=registry_for(handler, validator))
+    awaiting = engine.run()
+
+    with pytest.raises(InvalidTransition, match="cannot be resolved"):
+        engine.resolve_action(
+            {"gate": "content_freeze"}, expected_revision=awaiting.revision
+        )
+
+    assert store.load().pending_action["gate"] == "step3"
+
+
 def test_recovery_promotes_valid_artifacts_after_interrupted_step(tmp_path):
     handler = FakeHandler([])
     validator = FakeValidator([ValidationResult.valid()])

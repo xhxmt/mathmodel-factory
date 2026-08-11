@@ -8,8 +8,10 @@ import warnings
 from pathlib import Path
 from typing import Callable
 
+from .contest import ContestDeadlineExceeded, ContestPolicy, effective_timeout
 from .domain import (
     InvalidTransition,
+    PendingAction,
     RecoveryDisposition,
     RevisionConflict,
     RunnerBusy,
@@ -147,12 +149,31 @@ class FactoryEngine:
                     payload={"reason": "max_steps"},
                 )
             attempt = state.attempt + 1 if state.active_step == definition.id else 1
+            try:
+                timeout_seconds = self._contest_timeout(definition)
+            except ContestDeadlineExceeded as exc:
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="CONTEST_DEADLINE_EXHAUSTED",
+                    changes={
+                        "status": WorkflowStatus.FAILED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "error_class": "PERMANENT_CONTEST_DEADLINE",
+                        "reason": str(exc),
+                        "step": definition.id,
+                    },
+                )
             preview_context = StepContext(
                 project_dir=self.project_dir,
                 project_id=state.project_id,
                 step_id=definition.id,
                 attempt=attempt,
-                timeout_seconds=definition.timeout_seconds,
+                timeout_seconds=timeout_seconds,
                 revision=state.revision,
             )
             prepared = definition.lifecycle.prepare(preview_context)
@@ -191,9 +212,15 @@ class FactoryEngine:
                     "attempt": attempt,
                     "heartbeat_at": int(time.time()),
                 },
-                payload={"step_name": definition.name},
+                payload={
+                    "step_name": definition.name,
+                    "configured_timeout_seconds": definition.timeout_seconds,
+                    "effective_timeout_seconds": timeout_seconds,
+                },
             )
-            context = self._context(state, definition)
+            context = self._context(
+                state, definition, timeout_seconds=timeout_seconds
+            )
             result = definition.lifecycle.execute(context)
             state = self._refresh_owned_state(lease, active_step=definition.id)
             if result.metadata.get("killed"):
@@ -211,6 +238,43 @@ class FactoryEngine:
                 )
             resume_after = result.metadata.get("resume_after_step")
             if resume_after is not None:
+                policy_payload = self.store.contest_policy()
+                if (
+                    definition.id == 16
+                    and policy_payload is not None
+                    and self.store.now_epoch()
+                    >= int(policy_payload["delivery_freeze_at"])
+                    and self.store.decision("delivery_freeze_override") is None
+                ):
+                    from web.backend.selection_service import (
+                        build_delivery_freeze_override_options,
+                    )
+
+                    build_delivery_freeze_override_options(
+                        self.project_dir,
+                        resume_after_step=int(resume_after),
+                        now_epoch=self.store.now_epoch(),
+                    )
+                    return self._await_action(
+                        state,
+                        PendingAction(
+                            type="delivery_freeze_override_selection",
+                            gate="delivery_freeze_override",
+                            metadata={"resume_after_step": int(resume_after)},
+                        ).to_dict(),
+                        reason=(
+                            "delivery freeze requires human override before "
+                            "reopening substantive work"
+                        ),
+                        evidence=(
+                            str(
+                                self.project_dir.joinpath(
+                                    "selection/delivery_freeze_override_options.json"
+                                ).relative_to(self.project_dir)
+                            ),
+                        ),
+                        lease=lease,
+                    )
                 if not self._reopen_allowed(definition):
                     return self._owned_transition(
                         state,
@@ -327,6 +391,36 @@ class FactoryEngine:
                         "returncode": result.returncode,
                     },
                 )
+            retry_delay = self._retry_delay(attempt)
+            try:
+                retry_budget = self._contest_timeout(
+                    definition, step_timeout=retry_delay
+                )
+            except ContestDeadlineExceeded as exc:
+                retry_budget = 0
+                budget_reason = str(exc)
+            else:
+                budget_reason = "insufficient time for retry delay"
+            if retry_budget < retry_delay:
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="CONTEST_DEADLINE_EXHAUSTED",
+                    changes={
+                        "status": WorkflowStatus.FAILED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        **failure_metadata,
+                        "error_class": "PERMANENT_CONTEST_DEADLINE",
+                        "reason": budget_reason,
+                        "step": definition.id,
+                        "required_retry_delay_seconds": retry_delay,
+                        "remaining_budget_seconds": retry_budget,
+                    },
+                )
             state = self._owned_transition(
                 state,
                 lease,
@@ -336,10 +430,10 @@ class FactoryEngine:
                     **failure_metadata,
                     "error_class": error_class,
                     "reason": validation.reason,
-                    "delay_seconds": self._retry_delay(attempt),
+                    "delay_seconds": retry_delay,
                 },
             )
-            self._sleep(self._retry_delay(attempt))
+            self._sleep(retry_delay)
 
     def recover(
         self,
@@ -543,6 +637,12 @@ class FactoryEngine:
         state = self.store.load()
         if state.pending_action is None:
             raise InvalidTransition("project has no pending action")
+        pending_gate = str(state.pending_action.get("gate") or "")
+        resolution_gate = str(resolution.get("gate") or "")
+        if pending_gate and resolution_gate and pending_gate != resolution_gate:
+            raise InvalidTransition(
+                f"pending gate {pending_gate} cannot be resolved as {resolution_gate}"
+            )
         return self._transition(
             expected_revision=expected_revision,
             event_type="ACTION_RESOLVED",
@@ -685,14 +785,41 @@ class FactoryEngine:
             "expected_runner_lease_id": runner_lease_id,
         }
 
-    def _context(self, state: WorkflowState, definition: StepDefinition) -> StepContext:
+    def _context(
+        self,
+        state: WorkflowState,
+        definition: StepDefinition,
+        *,
+        timeout_seconds: int | None = None,
+    ) -> StepContext:
         return StepContext(
             project_dir=self.project_dir,
             project_id=state.project_id,
             step_id=definition.id,
             attempt=state.attempt,
-            timeout_seconds=definition.timeout_seconds,
+            timeout_seconds=(
+                definition.timeout_seconds
+                if timeout_seconds is None
+                else timeout_seconds
+            ),
             revision=state.revision,
+        )
+
+    def _contest_timeout(
+        self,
+        definition: StepDefinition,
+        *,
+        step_timeout: int | None = None,
+    ) -> int:
+        payload = self.store.contest_policy()
+        configured = definition.timeout_seconds if step_timeout is None else step_timeout
+        if payload is None:
+            return configured
+        return effective_timeout(
+            ContestPolicy.from_dict(payload),
+            step_id=definition.id,
+            step_timeout=configured,
+            now=self.store.now_epoch(),
         )
 
     @staticmethod

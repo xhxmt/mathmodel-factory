@@ -26,6 +26,7 @@ from .modeling_direction_service import (
 from .project_actions import ActionResult, run_action
 from factory_core.domain import FactoryCoreError
 from factory_core.service import FactoryService
+from factory_core.storage import SQLiteStateStore
 from .selection_service import SelectionError, read_selection_request, write_selection_decision
 from .schemas import (
     ConsultationAnswer,
@@ -460,6 +461,12 @@ def _runtime_to_project_status(runtime: dict[str, Any], project: Path | None = N
         revision=runtime.get("revision"),
         last_completed_step=runtime.get("last_completed_step"),
         pending_action=runtime.get("pending_action"),
+        contest_profile=runtime.get("contest_profile"),
+        contest_phase=runtime.get("contest_phase"),
+        contest_deadline_at=runtime.get("contest_deadline_at"),
+        content_freeze_at=runtime.get("content_freeze_at"),
+        delivery_freeze_at=runtime.get("delivery_freeze_at"),
+        remaining_seconds=runtime.get("remaining_seconds"),
         reason_code=runtime.get("reason_code", ""),
         reason_summary=runtime.get("reason_summary", ""),
         suggested_actions=list(runtime.get("suggested_actions", [])),
@@ -1187,7 +1194,10 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
     async def get_selection(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
         require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
-        payload = read_selection_request(project, "step3")
+        store = SQLiteStateStore(project)
+        pending = store.load().pending_action or {} if store.exists else {}
+        gate = str(pending.get("gate") or "step3")
+        payload = read_selection_request(project, gate)
         if not payload.get("gate") and not payload.get("options"):
             raise HTTPException(status_code=404, detail="No selection request")
         return payload

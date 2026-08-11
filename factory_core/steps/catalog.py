@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from ..contest import CONTEST_PHASES, phase_for_step
+
 
 @dataclass(frozen=True)
 class StepContract:
@@ -34,7 +36,7 @@ STEP_CONTRACTS: tuple[StepContract, ...] = (
     StepContract(13, "judge_gate", None, 10_800, 1_800, 2, ("deepseek-chat",), "judge", 1),
     StepContract(14, "abstract", "step14_abstract.txt", 7_200, 1_800, 5, ("claude", "codex")),
     StepContract(15, "polish", "step15_polish.txt", 10_800, 3_600, 5, ("codex", "claude")),
-    StepContract(16, "delivery", None, 3_600, 1_800, 1, (), "delivery", 1),
+    StepContract(16, "delivery", None, 21_600, 1_800, 1, (), "delivery", 1),
 )
 
 _BY_ID = {contract.id: contract for contract in STEP_CONTRACTS}
@@ -49,7 +51,15 @@ def contract_for(step_id: int) -> StepContract:
 
 def catalog_payload() -> dict[str, Any]:
     return {
-        "schema_version": "factory-step-catalog-v1",
+        "schema_version": "factory-step-catalog-v2",
         "runtime_generation": "native_v2",
-        "steps": [asdict(contract) for contract in STEP_CONTRACTS],
+        "contest_profile": "contest_core_v1",
+        "phases": [asdict(phase) for phase in CONTEST_PHASES],
+        "steps": [
+            {
+                **asdict(contract),
+                "contest_phase": phase_for_step(contract.id).id,
+            }
+            for contract in STEP_CONTRACTS
+        ],
     }

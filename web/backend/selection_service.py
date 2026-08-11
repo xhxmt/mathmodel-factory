@@ -223,7 +223,21 @@ def render_step3_request(payload: dict[str, Any]) -> str:
 
 def read_selection_request(project_path: Path, gate: str = "step3") -> dict[str, Any]:
     options = _load_json(project_path / "selection" / f"{gate}_options.json", {})
-    decision = _load_json(project_path / "selection" / f"{gate}_decision.json", None)
+    decision = None
+    sqlite_authoritative = False
+    try:
+        from factory_core.storage import SQLiteStateStore
+
+        store = SQLiteStateStore(project_path)
+        if store.exists:
+            sqlite_authoritative = store.contest_policy() is not None
+            decision = store.decision(gate)
+    except (OSError, RuntimeError):
+        decision = None
+    if decision is None and not sqlite_authoritative:
+        decision = _load_json(
+            project_path / "selection" / f"{gate}_decision.json", None
+        )
     if not isinstance(options, dict):
         options = {}
     options["decision"] = decision if isinstance(decision, dict) else None
@@ -241,7 +255,7 @@ def write_selection_decision(
     reason: str,
     now_epoch: int | None = None,
 ) -> dict[str, Any]:
-    if gate != "step3":
+    if gate not in {"step3", "content_freeze", "delivery_freeze_override"}:
         raise SelectionError(f"Unsupported selection gate: {gate}")
     payload = read_selection_request(project_path, gate)
     options = payload.get("options") or []
@@ -262,10 +276,119 @@ def write_selection_decision(
         "decided_epoch": now,
         "reason": reason,
         "mirrored_to_human_review": True,
+        "selected_primary": selected_option_id,
+        "selected_auxiliary": aux,
+        "selected_by": source,
+        "selected_at": now,
+        "candidate_evidence": list(selected.get("evidence") or []),
     }
-    _write_json_atomic(project_path / "selection" / "step3_decision.json", decision)
-    mirror_step3_decision_to_human_review(project_path, selected, aux, decision)
+    try:
+        from factory_core.storage import SQLiteStateStore
+
+        store = SQLiteStateStore(project_path)
+        if store.exists:
+            store.record_decision(gate, decision)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise SelectionError(f"Could not persist structured decision: {exc}") from exc
+    _write_json_atomic(project_path / "selection" / f"{gate}_decision.json", decision)
+    if gate == "step3":
+        mirror_step3_decision_to_human_review(project_path, selected, aux, decision)
+    else:
+        mirror_release_gate_decision(project_path, decision)
     return decision
+
+
+def build_content_freeze_options(
+    project_path: Path, *, now_epoch: int | None = None
+) -> dict[str, Any]:
+    now = int(time.time()) if now_epoch is None else int(now_epoch)
+    payload = {
+        "schema_version": "1.0",
+        "available": True,
+        "gate": "content_freeze",
+        "created_epoch": now,
+        "default_option_id": "approve_content_freeze",
+        "default_aux_id": "NONE",
+        "options": [
+            {
+                "id": "approve_content_freeze",
+                "title": "Approve content freeze",
+                "family": "human_release_gate",
+                "recommended_aux": "NONE",
+                "evidence": ["paper.tex", "figures", "tables"],
+            }
+        ],
+        "message": (
+            "Review the main conclusions, abstract, and core figures before "
+            "freezing content for Final Audit."
+        ),
+    }
+    _write_json_atomic(
+        project_path / "selection" / "content_freeze_options.json", payload
+    )
+    _write_text_atomic(
+        project_path / "selection" / "content_freeze_request.md",
+        "# Content freeze approval\n\n"
+        "Review the main conclusions, abstract, and core figures. Approve only "
+        "when the paper is ready for deterministic Final Audit and delivery.\n",
+    )
+    return payload
+
+
+def build_delivery_freeze_override_options(
+    project_path: Path,
+    *,
+    resume_after_step: int,
+    now_epoch: int | None = None,
+) -> dict[str, Any]:
+    now = int(time.time()) if now_epoch is None else int(now_epoch)
+    payload = {
+        "schema_version": "1.0",
+        "available": True,
+        "gate": "delivery_freeze_override",
+        "created_epoch": now,
+        "default_option_id": "approve_delivery_reopen",
+        "default_aux_id": "NONE",
+        "resume_after_step": int(resume_after_step),
+        "options": [
+            {
+                "id": "approve_delivery_reopen",
+                "title": "Approve post-freeze reopen",
+                "family": "human_release_override",
+                "recommended_aux": "NONE",
+                "evidence": ["final_audit", "judge_outputs"],
+            }
+        ],
+        "message": "A Final Audit result requests substantive changes after delivery freeze.",
+    }
+    _write_json_atomic(
+        project_path / "selection" / "delivery_freeze_override_options.json",
+        payload,
+    )
+    return payload
+
+
+def mirror_release_gate_decision(
+    project_path: Path, decision: dict[str, Any]
+) -> None:
+    human_review = project_path / "human_review.md"
+    existing = _read_text(human_review)
+    gate = str(decision.get("gate") or "release_gate")
+    heading = f"## {gate.replace('_', ' ').title()} decision:"
+    section = (
+        f"{heading}\n\n"
+        "STATUS: READY\n"
+        f"SOURCE: {decision.get('source', '')}\n"
+        f"DECIDED_AT: {decision.get('decided_epoch', '')}\n"
+        f"Reason: {decision.get('reason', '')}\n"
+    )
+    pattern = re.compile(rf"^{re.escape(heading)}\n.*?(?=^## |\Z)", re.M | re.S)
+    if pattern.search(existing):
+        updated = pattern.sub(section, existing).rstrip() + "\n"
+    else:
+        prefix = existing.rstrip()
+        updated = f"{prefix}\n\n{section}" if prefix else f"# 人工审核与介入记录\n\n{section}"
+    _write_text_atomic(human_review, updated)
 
 
 def mirror_step3_decision_to_human_review(

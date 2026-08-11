@@ -19,6 +19,12 @@
  * @property {boolean} selection_pending
  * @property {string|null} selection_gate
  * @property {number|null} selection_deadline
+ * @property {string|null} contest_profile
+ * @property {Object|null} contest_phase
+ * @property {number|null} contest_deadline_at
+ * @property {number|null} content_freeze_at
+ * @property {number|null} delivery_freeze_at
+ * @property {number|null} remaining_seconds
  * @property {string|null} last_updated
  */
 
@@ -88,6 +94,12 @@ export function normalizeProjectStatus(raw = {}) {
     selection_pending: Boolean(raw.selection_pending),
     selection_gate: stringOrNull(raw.selection_gate),
     selection_deadline: raw.selection_deadline === undefined || raw.selection_deadline === null || raw.selection_deadline === '' ? null : numberOr(raw.selection_deadline, null),
+    contest_profile: stringOrNull(raw.contest_profile),
+    contest_phase: raw.contest_phase && typeof raw.contest_phase === 'object' ? raw.contest_phase : null,
+    contest_deadline_at: raw.contest_deadline_at == null ? null : numberOr(raw.contest_deadline_at, null),
+    content_freeze_at: raw.content_freeze_at == null ? null : numberOr(raw.content_freeze_at, null),
+    delivery_freeze_at: raw.delivery_freeze_at == null ? null : numberOr(raw.delivery_freeze_at, null),
+    remaining_seconds: raw.remaining_seconds == null ? null : numberOr(raw.remaining_seconds, null),
     last_updated: stringOrNull(raw.last_updated),
   }
 }

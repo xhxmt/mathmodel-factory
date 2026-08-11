@@ -6,7 +6,7 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 
 - Factory root: this repository
 - Project directories: `ongoing/{base}/` while running, `complete/{base}/` after delivery
-- Workflow state: new and explicitly migrated `native_v2` projects use schema-v4 `.factory/state.db` as the authoritative versioned state/event store. Step artifacts remain authoritative validation evidence. Unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
+- Workflow state: new and explicitly migrated `native_v2` projects use schema-v5 `.factory/state.db` as the authoritative versioned state/event store. New projects also persist the `contest_core_v1` clock and human decisions there. Step artifacts remain authoritative validation evidence. Unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
 - Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi). Submit with `--type`, `--max-time`, repeated `--input` / `--output` / `--seed`; inspect immutable two-stage evidence with `--status <jobid> --json`.
 - MinerU PDF → Markdown converter: `../../scripts/mineru_parse.py` (requires `MINERU_TOKEN` in repo `.env`)
 - Method library: `../../method_library/` with `index.json` as the
@@ -24,8 +24,30 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 - Update `checkpoint.md` after every verified step.
 - `audit_issue_ledger.md` is created at Step 4 and is the cross-step issue tracker. Audit, review, revision, and final-review steps must update statuses in place rather than silently dropping concerns. Issues tagged `PROTECTED` (creative claims worth defending) MUST NOT be deleted or downgraded by later steps.
 - All numerical results in the paper must trace back to a logged solver run in `logs/` or `results/`.
-- Time budget for the entire workflow: target 74 hours (CUMCM 国赛 standard, 周四 18:00 → 周日 20:00). Each step's prompt carries a time-budget recommendation derived from `problem/feasibility_constraints.md`.
+- Time budget for the entire workflow: 74 hours (CUMCM 国赛 standard, 周四 18:00 → 周日 20:00) is a scheduler-enforced deadline for new projects. SQLite records `contest_started_at`, `contest_deadline_at`, `content_freeze_at` (T−6h), `delivery_freeze_at` (T−2h), and a six-hour delivery reserve. Before every attempt, the effective timeout is the smaller of the Step timeout and the remaining phase budget. Steps 0–15 cannot cross content freeze; Step 16 may use the reserve up to the contest deadline. Retry delays fail closed when they no longer fit.
 - Never stop at a plan or scaffold if the step requires concrete outputs on disk.
+
+## Contest Core v1
+
+The 17 internal Step contracts remain stable for validators and recovery, while
+the competition-facing workflow is grouped into eight phases:
+
+1. Problem Understanding (Steps 0–1)
+2. Model Tournament (Steps 2–3; Human Gate 1)
+3. Model & Solve (Steps 4–5)
+4. Validation (Steps 6–7; use problem-type-specific evidence)
+5. Paper Construction (Steps 8–9)
+6. Deterministic Paper Audit (Step 10)
+7. Review & Revision (Steps 11–15; Human Gate 2 and content freeze)
+8. Final Audit & Delivery (Step 16)
+
+The artifact contract has three layers. Business truth includes problem/model
+contracts, structured selection decisions, canonical results, `paper.tex`, and
+the issue ledger. Immutable machine evidence includes solver/audit receipts,
+snapshot hashes, fingerprints, and final acceptance receipts. Files such as
+`checkpoint.md`, `chosen_method.md`, `solve_log.md`, verification summaries,
+and Web status are rebuildable projections. Never replace a receipt with Agent
+self-reporting, and never use a projection to overwrite SQLite truth.
 
 ## Setup (step −1 → 0)
 
@@ -284,6 +306,13 @@ judge artifacts, but does not publish, package, clean, archive, or mutate the
 workflow database.
 
 ### Step 16: Final Compile + Judge + Appendix + Package
+
+Before Step 16 executes, new `contest_core_v1` projects require Human Gate 2:
+review the main conclusions, abstract, and core figures, then record the
+`content_freeze` decision in SQLite (Web or
+`scripts/selection_gate.py approve-content-freeze`). After T−2h, an audit-driven
+reopen additionally requires an explicit `delivery_freeze_override`; the engine
+will not silently return to substantive modeling or paper work.
 
 Step 16 is the workflow compatibility adapter between the independent audit
 subsystem and delivery. It invokes or reuses the audit for the current content

@@ -17,6 +17,13 @@ active Step, attempt, pending action, runner lease/PID, storage scope, and
 timestamps. Database triggers reject event updates and deletes. Event payloads
 redact secret-, token-, password-, credential-, and API-key-shaped fields.
 
+Schema v5 also stores an optional `contest_policy` and append-only
+`workflow_decisions`. New projects receive `contest_core_v1`: a 74-hour final
+deadline, T−6h content freeze, T−2h delivery freeze, and six-hour delivery
+reserve. Existing projects upgraded without a policy remain unbounded. Step 3,
+content freeze, and post-freeze reopen decisions are authoritative in SQLite;
+their JSON/Markdown forms are projections.
+
 Step outputs remain validation evidence. `checkpoint.md`, `.heartbeat`,
 `.paused`, `.killed`, `.runner.pid`, and `diagnostics/status.json` are generated
 compatibility projections for migrated projects. Web and CLI readers must not
@@ -47,6 +54,12 @@ cannot mutate scheduler state. The catalog registers Step 0-16 metadata;
 specialized implementations own parallel proposals, the Step 6 precheck, the
 Step 8.5 gate, isolated judging, and final compile/judge/package delivery.
 
+Before each attempt, the engine caps the Step timeout against the remaining
+contest boundary. Steps 0–15 cannot cross content freeze; Step 16 can use the
+terminal reserve but cannot cross the final deadline. Retry delays are budgeted
+the same way and fail closed when they do not fit. The catalog exposes eight
+contest-facing phases while retaining all 17 internal Step contracts.
+
 Only one live runner lease is allowed per project. A second start or resume is
 rejected whenever the recorded PID is live, regardless of snapshot status. A
 Worker keeps the project `RUNNING` between successful Steps; `READY` means that
@@ -63,8 +76,9 @@ adapter fast-forward decisions. A durable reopen marker produces
 the same budget. Invalid artifacts retry the same Step. Recovery does not
 compare file modification times.
 
-Pending Step 3 selections and consultations are stored in `pending_action`.
-Their JSON/Markdown files are evidence; resume is rejected until the evidence
+Pending human selections and consultations are stored in `pending_action`.
+Structured selection decisions are stored in SQLite; JSON/Markdown files are
+rebuildable projections. Resume is rejected until the decision
 resolves the pending action through an engine transaction. The CLI, Web API,
 and compatibility launchers all call `FactoryService`; Web authentication and
 ACL checks remain outside that service. A normal resume uses

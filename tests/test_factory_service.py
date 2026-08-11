@@ -96,8 +96,15 @@ def test_service_resolves_ready_selection_before_resume(tmp_path):
             "pending_action": {"type": "step3_selection", "gate": "step3"},
         },
     )
-    (project / "selection").mkdir()
-    (project / "selection/step3_decision.json").write_text("{}\n", encoding="utf-8")
+    store.record_decision(
+        "step3",
+        {
+            "gate": "step3",
+            "selected_primary": "m1",
+            "selected_by": "human",
+            "selected_at": 1,
+        },
+    )
 
     resumed = service.resume(project, expected_revision=waiting.revision)
 
@@ -119,8 +126,15 @@ def test_service_rejects_stale_revision_before_resolving_pending_action(tmp_path
             "pending_action": {"type": "step3_selection", "gate": "step3"},
         },
     )
-    (project / "selection").mkdir()
-    (project / "selection/step3_decision.json").write_text("{}\n", encoding="utf-8")
+    store.record_decision(
+        "step3",
+        {
+            "gate": "step3",
+            "selected_primary": "m1",
+            "selected_by": "human",
+            "selected_at": 1,
+        },
+    )
 
     with pytest.raises(RevisionConflict):
         service.resume(project, expected_revision=waiting.revision - 1)
@@ -297,8 +311,15 @@ def test_resume_and_start_resolves_selection_before_worker_launch(tmp_path):
             "pending_action": {"type": "step3_selection", "gate": "step3"},
         },
     )
-    (project / "selection").mkdir()
-    (project / "selection/step3_decision.json").write_text("{}\n", encoding="utf-8")
+    store.record_decision(
+        "step3",
+        {
+            "gate": "step3",
+            "selected_primary": "m1",
+            "selected_by": "human",
+            "selected_at": 1,
+        },
+    )
 
     running, _ = service.resume_and_start(
         project, expected_revision=waiting.revision

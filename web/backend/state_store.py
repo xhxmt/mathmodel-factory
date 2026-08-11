@@ -139,6 +139,12 @@ def _from_snapshot(project_path: Path, base_name: str, snapshot: dict) -> dict:
         "reason_summary": snapshot.get("reason_summary", ""),
         "suggested_actions": list(snapshot.get("suggested_actions", [])),
         "evidence": list(snapshot.get("evidence", [])),
+        "contest_profile": snapshot.get("contest_profile"),
+        "contest_phase": snapshot.get("contest_phase"),
+        "contest_deadline_at": snapshot.get("contest_deadline_at"),
+        "content_freeze_at": snapshot.get("content_freeze_at"),
+        "delivery_freeze_at": snapshot.get("delivery_freeze_at"),
+        "remaining_seconds": snapshot.get("remaining_seconds"),
     }
 
 
@@ -222,7 +228,11 @@ def read_runtime_status(project_path: str | Path, base_name: str) -> dict:
     workflow_store = SQLiteStateStore(project)
     if workflow_store.exists and workflow_store.load().control_mode == "engine":
         state = workflow_store.load()
-        snapshot = runtime_payload(state)
+        snapshot = runtime_payload(
+            state,
+            contest_policy=workflow_store.contest_policy(),
+            now_epoch=workflow_store.now_epoch(),
+        )
         payload = _from_snapshot(project, base_name, snapshot)
         action = state.pending_action or {}
         payload["status"] = state.status.value

@@ -78,7 +78,7 @@ declared-output hashes; it does not prove optimality.
 `launch_agents.sh` is a compatibility CLI that forwards new engine projects to
 `FactoryService` and uses the thin `run_paper.sh` compatibility launcher for
 foreground execution. New projects initialize `.factory/state.db` and run
-through the native Step 0-16 registry. Existing projects remain on the frozen
+through the native Step 0-16 registry under `contest_core_v1`. Existing projects remain on the frozen
 Legacy Runner until an explicit, conflict-free migration report is applied.
 
 `factory_core/` owns revisioned state transitions, append-only events, retry
@@ -87,6 +87,13 @@ application commands, and solver jobs. Native Steps implement
 `prepare/execute/validate/recover` and do not invoke the frozen Bash runner.
 The historical implementation lives at `factory_core/adapters/legacy_runner.sh`
 for unmigrated and explicitly rolled-back projects only.
+
+New projects persist a 74-hour contest policy in schema-v5 SQLite. Steps 0–15
+are capped at T−6h content freeze; Step 16 owns the six-hour terminal reserve
+and is capped at the final deadline. T−2h is delivery freeze: any audit-driven
+substantive reopen requires a separate human override. Retry sleeps are also
+budget checked. Historical/migrated projects without a contest-policy row stay
+unbounded for compatibility; do not synthesize an expired deadline for them.
 
 The Legacy Adapter still snapshots itself under `logs/runner_snapshots/` so an
 active Step is insulated from edits. Do not add new scheduling, retry, recovery,
@@ -103,6 +110,14 @@ Artifacts defined by `STEPS.md` remain validation evidence. Recovery calls the
 registered Step validator: valid artifacts promote the interrupted Step;
 invalid artifacts retry it. File modification times do not determine the
 authoritative state.
+
+Artifact authority is three-layered. Authored problem/model contracts,
+structured decisions, canonical results, `paper.tex`, and the issue ledger are
+business truth. Solver/audit receipts, hashes, fingerprints, and final
+acceptance are immutable machine evidence. Checkpoint, method summaries, solve
+logs, verification summaries, and Web status are rebuildable projections.
+Step-3 and content-freeze decisions are read from SQLite first; their JSON and
+Markdown forms are projections.
 
 Native failure events preserve execution and validation metadata such as the
 failed check, role, backend, report, and missing artifact paths. A model process
@@ -216,7 +231,7 @@ See `STEPS.md` for exact outputs and line/file gates. In short:
 - Setup / Step 0: parse a competition problem into `problem/`.
 - Step 1: background research, candidate methods, viability gate.
 - Step 2: parallel modeling proposals, demo solves, critic verdicts.
-- Step 3: method selection, with `human_review.md` override support.
+- Step 3: Human Gate 1 selects PRIMARY/AUXILIARY from validated demo solves; SQLite is authoritative and `human_review.md` is a projection.
 - Step 4: full model construction, symbol table, assumption ledger, runnable code, then the `model` audit profile.
 - Step 5: full solve through `solver_submit.sh`, then the Step-5 `results` audit checkpoint.
 - Step 6: sensitivity and robustness, then the Step-6 `results` audit checkpoint.
@@ -229,7 +244,7 @@ See `STEPS.md` for exact outputs and line/file gates. In short:
 - Step 13: isolated math-only precheck; `PRECHECK_PASS` allows progress but never delivery.
 - Step 14: abstract replacement.
 - Step 15: citation audit, table/prose polish, de-robotification; these edits make the Step-13 precheck non-final and produce the `CONTENT_READY` boundary.
-- Step 16: consume the independent final-audit result. On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. The Step then copies, packages, cleans, and moves to `complete/`; audit alone performs none of those delivery mutations.
+- Step 16: require Human Gate 2 (`content_freeze`) before execution, then consume the independent final-audit result. On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. The Step then copies, packages, cleans, and moves to `complete/`; audit alone performs none of those delivery mutations.
 
 Step 13 precheck verdict tokens are `PRECHECK_PASS`,
 `REOPEN_REVISION_MODEL`, and `INDETERMINATE_REVIEW`. Final-audit Gate 2 verdict

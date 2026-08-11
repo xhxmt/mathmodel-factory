@@ -22,7 +22,7 @@
 
 ## 核心契约
 
-- [STEPS.md](STEPS.md)：当前 16 步数学建模工作流及质量门禁。
+- [STEPS.md](STEPS.md)：当前 `contest_core_v1` 八阶段（内部 Step 0–16）数学建模工作流、全局时限及质量门禁。
 - [modeling_guide.md](modeling_guide.md)：项目结构、求解器、结果复现、LaTeX 和图表规范。
 - [AGENTS.md](AGENTS.md)：Codex 与通用 coding agent 的精简入口和安全边界。
 - [CLAUDE.md](CLAUDE.md)：详细仓库架构、工作流和编辑约定。

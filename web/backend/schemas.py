@@ -223,6 +223,12 @@ class ProjectStatus(BaseModel):
     revision: int | None = None
     last_completed_step: int | None = None
     pending_action: dict | None = None
+    contest_profile: str | None = None
+    contest_phase: dict | None = None
+    contest_deadline_at: int | None = None
+    content_freeze_at: int | None = None
+    delivery_freeze_at: int | None = None
+    remaining_seconds: int | None = None
     reason_code: str = ""
     reason_summary: str = ""
     suggested_actions: list[str] = []

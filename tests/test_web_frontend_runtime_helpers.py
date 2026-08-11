@@ -173,6 +173,12 @@ assert.deepEqual(normalizeProjectStatus({ base_name: 'demo', is_running: 1 }), {
   selection_pending: false,
   selection_gate: null,
   selection_deadline: null,
+  contest_profile: null,
+  contest_phase: null,
+  contest_deadline_at: null,
+  content_freeze_at: null,
+  delivery_freeze_at: null,
+  remaining_seconds: null,
   last_updated: null,
 })
 

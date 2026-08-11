@@ -5,6 +5,26 @@ competition projects inside the modeling-factory workflow. It plays the
 same role that `analysis_guide.md` plays for the original Paper Factory:
 every step prompt is expected to read it before writing code or prose.
 
+## Contest-core operating contract
+
+New projects run under a scheduler-enforced 74-hour clock. Finish exploration
+and all authored content by T−6h, reserve the terminal six hours for content
+freeze, deterministic checks, Final Audit, compilation, attachment inspection,
+and atomic delivery, and treat T−2h as delivery freeze. After delivery freeze,
+substantive reopening requires explicit human approval.
+
+Validation must fit the problem type. Always perform sensitivity/robustness and
+an independent recomputation where meaningful. Optimization problems add
+direction-correct bounds, budget ladders, plateau semantics, and cross-algorithm
+checks; prediction problems add cross-validation, residual diagnostics, and
+generalization error; simulation problems add step/grid/sample convergence.
+Do not manufacture optimization bounds for a non-optimization problem.
+
+Keep three artifact layers distinct: authored business truth; immutable machine
+evidence such as solver/audit receipts and snapshot hashes; and rebuildable
+Markdown/Web projections. Fix the source of a projection and regenerate it.
+Never hand-edit a receipt or treat Agent narration as execution evidence.
+
 ## Solver Execution
 
 This factory does not use Slurm. It provides `solver_submit.sh` to
