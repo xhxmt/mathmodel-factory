@@ -99,6 +99,14 @@ assert.deepEqual(parseRealtimeMessage('{"type":"status_update"}'), { type: 'stat
 assert.equal(parseRealtimeMessage('not-json'), null)
 assert.equal(statusLabel('failed'), '失败')
 assert.equal(relativeTime('2020-01-02T03:04:05+00:00'), '2020-01-02')
+
+const originalNow = Date.now
+Date.now = () => 1_786_280_283_000
+assert.equal(relativeTime(1_786_280_283), '0s 前')
+assert.equal(relativeTime(1_786_280_223_000), '1m 前')
+assert.equal(relativeTime('1786280283'), '0s 前')
+assert.equal(relativeTime('not-a-date'), 'not-a-date')
+Date.now = originalNow
 """
     )
 

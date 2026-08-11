@@ -61,6 +61,7 @@
 
 ### 修复
 
+- Web 相对时间格式化同时接受 Unix 秒级/毫秒级时间戳、数字字符串和日期字符串，避免 Solver Jobs 返回整数 `requested_at` 时触发渲染异常并使“求解任务”页整体空白；窄屏任务行改用三行自适应布局，完整保留状态、耗时、时间与 receipt 入口。
 - Web 八阶段流程下钻区提高标题对比度，并为已完成、运行中和待处理步骤使用与状态底色匹配的前景色，避免步骤文字与实心状态背景同色而不可读。
 - Web 审计事项解析在找到首张 issue 表后会于表尾停止，避免把后续增量审计表的 `Severity` 列误读为 `Status`，从而在已完成 Final Audit 的项目行动中心虚报未解决事项。
 - Final Audit 的 execution packet 不再纳入 `step_*`、`native_judge_*` 或 `native_receipt_*` 审计运行日志，避免 Judge 及 receipt 构建器写入自身日志并使刚通过的快照立即失效；solver 与模型执行日志仍参与证据指纹。

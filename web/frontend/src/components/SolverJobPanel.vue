@@ -662,4 +662,66 @@ export default {
   background: var(--accent-dim);
   border-color: var(--accent-line);
 }
+
+@media (max-width: 640px) {
+  .sp-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    gap: 0.5rem 0.625rem;
+    padding: 0.75rem;
+  }
+
+  .sp-jobid {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sp-runtime-badge {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .sp-backend-dot {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: center;
+  }
+
+  .sp-status {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .sp-duration {
+    grid-column: 2 / span 2;
+    grid-row: 2;
+  }
+
+  .sp-age {
+    grid-column: 1;
+    grid-row: 3;
+    margin-left: 0;
+  }
+
+  .sp-receipt-icon {
+    grid-column: 3;
+    grid-row: 3;
+    justify-self: center;
+  }
+
+  .sp-expand-icon {
+    grid-column: 4;
+    grid-row: 1 / span 3;
+    align-self: center;
+  }
+
+  .sp-detail-section {
+    overflow-x: auto;
+  }
+}
 </style>

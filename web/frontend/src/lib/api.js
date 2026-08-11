@@ -196,16 +196,29 @@ export const SolverJobs = {
 
 // ---- formatters ----
 export function relativeTime(ts) {
-  if (!ts) return '—'
-  const time = new Date(ts.replace(' ', 'T'))
-  if (isNaN(time)) return ts
+  if (ts == null || ts === '') return '—'
+
+  const raw = typeof ts === 'string' ? ts.trim() : ts
+  const numeric = typeof raw === 'number'
+    ? raw
+    : typeof raw === 'string' && /^-?\d+(?:\.\d+)?$/.test(raw)
+      ? Number(raw)
+      : null
+  const time = numeric == null
+    ? new Date(String(raw).replace(' ', 'T'))
+    : new Date(Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric)
+
+  if (Number.isNaN(time.getTime())) return String(ts)
   const diff = Math.floor((Date.now() - time.getTime()) / 1000)
   if (diff < 0) return '刚刚'
   if (diff < 60) return `${diff}s 前`
   if (diff < 3600) return `${Math.floor(diff / 60)}m 前`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h 前`
   if (diff < 604800) return `${Math.floor(diff / 86400)}d 前`
-  return ts.split(/[ T]/)[0]
+  const year = time.getFullYear()
+  const month = String(time.getMonth() + 1).padStart(2, '0')
+  const day = String(time.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 export function formatBytes(n) {
