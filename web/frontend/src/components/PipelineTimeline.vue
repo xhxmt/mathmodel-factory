@@ -403,13 +403,12 @@ export default {
 .phase-live { color: var(--live); background: var(--live-dim); }
 .phase-attention { color: var(--amber); background: var(--amber-dim); border-color: var(--amber); }
 .phase-drill { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
-.drill-label { color: var(--ink-3); font-size: 9.5px; }
+.drill-label { color: var(--ink-2); font-size: 9.5px; font-weight: 600; }
 .drill-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .drill-step { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); color: var(--ink-2); font: 10px var(--sans); cursor: pointer; }
 .drill-step.selected { outline: 1px solid var(--ink); }
-.drill-step.st-done { color: var(--ok); }
-.drill-step.st-live { color: var(--live); }
-.drill-step.st-attention { color: var(--amber); }
+.drill-step.st-done, .drill-step.st-live { color: var(--accent-ink); }
+.drill-step.st-attention { color: var(--amber-ink); }
 .track-scroll { width: 100%; max-width: 100%; overflow-x: auto; padding: 4px 2px 2px; margin: 0 -4px; }
 .track { display: flex; min-width: 640px; }
 .col {

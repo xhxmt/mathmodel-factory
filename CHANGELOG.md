@@ -61,6 +61,7 @@
 
 ### 修复
 
+- Web 八阶段流程下钻区提高标题对比度，并为已完成、运行中和待处理步骤使用与状态底色匹配的前景色，避免步骤文字与实心状态背景同色而不可读。
 - Web 审计事项解析在找到首张 issue 表后会于表尾停止，避免把后续增量审计表的 `Severity` 列误读为 `Status`，从而在已完成 Final Audit 的项目行动中心虚报未解决事项。
 - Final Audit 的 execution packet 不再纳入 `step_*`、`native_judge_*` 或 `native_receipt_*` 审计运行日志，避免 Judge 及 receipt 构建器写入自身日志并使刚通过的快照立即失效；solver 与模型执行日志仍参与证据指纹。
 - Final PDF 视觉门禁不再把 1–2 个字符的公式上下标按不可读正文阻断，而是保留为小字 warning；连续文本和数值低于 4.5pt 仍为 blocking。
