@@ -20,7 +20,7 @@
 - 管理员可直接创建项目，并管理用户、项目申请、完成论文展示权限、Secret Manager 元数据状态和审计日志。
 - Dashboard 将题目内容相同的多次运行按 canonical SHA-256 身份聚合为一个“题目归档”。这只是展示层分组，不移动或改名 `ongoing/`、`complete/` 中的目录。
 - 进行中的运行可暂停、恢复或终止；完成归档保持只读。
-- 项目工作区默认显示 8 个比赛阶段，可下钻到 17 Step；最近三步平均耗时用于预测内容完成时间和 content-freeze slack。Legacy 项目没有比赛 policy 时明确显示“未配置”，不虚构倒计时。
+- 项目工作区默认显示 8 个比赛阶段，可下钻到 Step 0–16，并在高级诊断区显示持久 Stage/subtask/source Step 调度位置；最近三步平均耗时用于预测内容完成时间和 content-freeze slack。Legacy 项目没有比赛 policy 时明确显示“未配置”，不虚构倒计时。
 - 顶部行动中心持续聚合 Human Gate、deadline 风险、Solver 失败、未解决审计事项和交付阻塞。
 - `step3`、`content_freeze`、`delivery_freeze_override` 三类人工决策可在 Web 中完成，均携带当前 revision 并写入 append-only SQLite；CLI 路径始终保留。
 - 证据驾驶舱汇总 canonical results、PRIMARY/AUXILIARY、Solver jobs/receipts、model/results/paper/final audits 与三角色状态。

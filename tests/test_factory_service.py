@@ -9,6 +9,7 @@ from factory_core.projections import write_compatibility_projections
 from factory_core.service import FactoryService, WorkerHandle
 from factory_core.storage import SQLiteStateStore
 from factory_core.registry import StepRegistry
+from factory_core.stages import STEP_SCHEDULER_GENERATION
 from web.backend import project_actions
 
 
@@ -45,11 +46,70 @@ def test_service_creates_native_project_and_consultation_projection(tmp_path):
     project = tmp_path / "ongoing" / "demo"
     assert worker is None
     assert state.runtime_generation == "native_v2"
+    assert state.scheduler_generation == "stage_v1"
+    assert state.stage_catalog_version == "factory-stage-catalog-v1"
     assert state.status is WorkflowStatus.READY
     assert (project / "consultation/enabled").is_file()
     assert "Research question**: /tmp/problem.pdf" in (
         project / "checkpoint.md"
     ).read_text(encoding="utf-8")
+
+
+def test_existing_native_project_requires_explicit_atomic_scheduler_migration(tmp_path):
+    project = tmp_path / "ongoing" / "old-native"
+    project.mkdir(parents=True)
+    store = SQLiteStateStore(project)
+    old = store.initialize(
+        project_id="old-native",
+        project_type="modeling",
+        last_completed_step=8,
+        scheduler_generation=STEP_SCHEDULER_GENERATION,
+    )
+    service = FactoryService(tmp_path)
+
+    migrated = service.activate_stage_scheduler(
+        project, expected_revision=old.revision
+    )
+
+    assert migrated.scheduler_generation == "stage_v1"
+    assert migrated.last_completed_stage == 5
+    assert migrated.active_stage is None
+    assert len(store.stage_checkpoints()) == 9
+    assert store.events()[-1].type == "STAGE_SCHEDULER_ACTIVATED"
+
+    rolled_back = service.rollback_stage_scheduler(
+        project, expected_revision=migrated.revision
+    )
+    assert rolled_back.scheduler_generation == "step_v2"
+    assert rolled_back.stage_catalog_version is None
+    assert store.events()[-1].type == "STAGE_SCHEDULER_ROLLED_BACK"
+
+
+def test_legacy_rollback_cannot_bypass_unresolved_stage_dirty_flags(tmp_path):
+    service = FactoryService(tmp_path)
+    state, _worker = service.create_project("demo", "question", start=False)
+    store = SQLiteStateStore(tmp_path / "ongoing" / "demo")
+    dirty = store.transition(
+        expected_revision=state.revision,
+        event_type="DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            {
+                "flag": "RESULT_DIRTY",
+                "owner_stage": 4,
+                "cause_artifact": "results/canonical_results.json",
+                "baseline_fingerprint": "a" * 64,
+                "current_fingerprint": "b" * 64,
+                "classifier_contract_sha256": "c" * 64,
+            }
+        ],
+    )
+
+    with pytest.raises(InvalidTransition, match="semantic dirty flags"):
+        service.rollback_migration("demo")
+
+    assert store.load().revision == dirty.revision
+    assert store.load().scheduler_generation == "stage_v1"
 
 
 def test_service_and_web_action_share_revision_and_event_contract(tmp_path):

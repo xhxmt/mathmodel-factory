@@ -94,6 +94,10 @@
             <span class="ov-l label">云端</span>
             <span class="ov-v mono">{{ cloudEnabled ? '已启用' : '未启用' }}</span>
           </button>
+          <button v-if="project.active_stage" class="ov-card panel" @click="activeTab = 'diagnostics'">
+            <span class="ov-l label">调度位置</span>
+            <span class="ov-v mono">{{ schedulerLabel }}</span>
+          </button>
         </div>
         <ContestTimingPanel :timing="contestDashboard?.timing || {}" />
         <DiagnosticsCard
@@ -360,6 +364,12 @@ export default {
       const phase = props.project.contest_phase
       if (!phase) return stepLabel.value
       return `阶段 ${phase.id} / 8 · ${phaseNames[phase.name] || phase.name}`
+    })
+    const schedulerLabel = computed(() => {
+      if (!props.project.active_stage) return '未激活'
+      const name = props.project.active_stage_name || `Stage ${props.project.active_stage}`
+      const subtask = props.project.active_subtask || `Step ${props.project.source_step_id ?? props.project.current_step}`
+      return `Stage ${props.project.active_stage} / 10 · ${name} · ${subtask}`
     })
     function formatRemaining(seconds) {
       const value = Math.max(0, Number(seconds) || 0)
@@ -651,6 +661,7 @@ export default {
       canResume,
       stepLabel,
       contestPhaseLabel,
+      schedulerLabel,
       contestClockLabel,
       rel: relativeTime,
       fetchSteps,

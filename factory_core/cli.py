@@ -17,6 +17,7 @@ from .migration import MigrationReport
 from .projections import runtime_payload, write_compatibility_projections
 from .storage import SQLiteStateStore
 from .service import FactoryService, wait_for_worker_ready
+from .stages import STAGE_SCHEDULER_GENERATION, STEP_SCHEDULER_GENERATION
 from scripts.solver_job_receipt import (
     ReceiptError,
     bind_event_stream,
@@ -277,8 +278,19 @@ def build_parser() -> argparse.ArgumentParser:
         default="native_v2",
         choices=["native_v2", "legacy_adapter"],
     )
+    apply.add_argument(
+        "--scheduler-generation",
+        default=STAGE_SCHEDULER_GENERATION,
+        choices=[STAGE_SCHEDULER_GENERATION, STEP_SCHEDULER_GENERATION],
+    )
     rollback = migrate_sub.add_parser("rollback")
     rollback.add_argument("project_dir")
+    scheduler_activate = migrate_sub.add_parser("scheduler-activate")
+    scheduler_activate.add_argument("project_dir")
+    scheduler_activate.add_argument("--expected-revision", type=int)
+    scheduler_rollback = migrate_sub.add_parser("scheduler-rollback")
+    scheduler_rollback.add_argument("project_dir")
+    scheduler_rollback.add_argument("--expected-revision", type=int)
     return parser
 
 
@@ -301,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
                 project_id=project.name,
                 project_type=args.project_type,
                 runtime_generation="native_v2",
+                scheduler_generation=STAGE_SCHEDULER_GENERATION,
             )
             write_compatibility_projections(project, state)
             print(_state_json(project))
@@ -481,6 +494,20 @@ def main(argv: list[str] | None = None) -> int:
             updated = service.rollback_migration(project)
             print(json.dumps(runtime_payload(updated), ensure_ascii=False, sort_keys=True))
             return 0
+        if args.migration_command == "scheduler-activate":
+            assert project is not None
+            updated = service.activate_stage_scheduler(
+                project, expected_revision=args.expected_revision
+            )
+            print(json.dumps(runtime_payload(updated), ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.migration_command == "scheduler-rollback":
+            assert project is not None
+            updated = service.rollback_stage_scheduler(
+                project, expected_revision=args.expected_revision
+            )
+            print(json.dumps(runtime_payload(updated), ensure_ascii=False, sort_keys=True))
+            return 0
         report = MigrationReport.from_json(Path(args.report).read_text(encoding="utf-8"))
         assert project is not None
         state = service.apply_migration(
@@ -488,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
             report,
             expected_digest=args.digest,
             runtime_generation=args.runtime_generation,
+            scheduler_generation=args.scheduler_generation,
         )
         write_compatibility_projections(project, state)
         print(_state_json(project))

@@ -29,6 +29,13 @@ from .steps import build_native_registry
 from .adapters.solvers import SolverRequest, build_solver_backends
 from .registry import SolverBackendRegistry
 from .storage import SQLiteStateStore
+from .stages import (
+    STAGE_CATALOG_VERSION,
+    STAGE_SCHEDULER_GENERATION,
+    STEP_SCHEDULER_GENERATION,
+    initial_stage_checkpoints,
+    projected_stage_cursor,
+)
 from scripts.solver_job_receipt import (
     ReceiptError,
     build_completion_receipt,
@@ -236,6 +243,7 @@ class FactoryService:
             project_id=base_name,
             project_type="modeling",
             runtime_generation="native_v2",
+            scheduler_generation=STAGE_SCHEDULER_GENERATION,
             contest_policy=contest_policy.to_dict(),
         )
         write_compatibility_projections(project, state)
@@ -425,6 +433,7 @@ class FactoryService:
         *,
         expected_digest: str,
         runtime_generation: str = "native_v2",
+        scheduler_generation: str = STAGE_SCHEDULER_GENERATION,
     ) -> WorkflowState:
         resolved = self.resolve_project(project)
         state = apply_migration(
@@ -432,6 +441,7 @@ class FactoryService:
             report,
             expected_digest=expected_digest,
             runtime_generation=runtime_generation,
+            scheduler_generation=scheduler_generation,
         )
         write_compatibility_projections(resolved, state)
         return state
@@ -440,6 +450,123 @@ class FactoryService:
         engine = self.engine(project)
         state = engine.get_state()
         return engine.deactivate(expected_revision=state.revision)
+
+    def activate_stage_scheduler(
+        self,
+        project: str | Path,
+        *,
+        expected_revision: int | None = None,
+    ) -> WorkflowState:
+        resolved = self.resolve_project(project)
+        store = SQLiteStateStore(resolved)
+        state = store.load()
+        self._assert_expected_revision(state, expected_revision)
+        if state.scheduler_generation == STAGE_SCHEDULER_GENERATION:
+            return state
+        if state.scheduler_generation != STEP_SCHEDULER_GENERATION:
+            raise InvalidTransition(
+                f"unsupported scheduler generation: {state.scheduler_generation}"
+            )
+        if state.control_mode != "engine" or state.runtime_generation != "native_v2":
+            raise InvalidTransition("only native engine projects can activate Stage scheduling")
+        if state.runner_pid is not None or state.status in {
+            WorkflowStatus.RUNNING,
+            WorkflowStatus.RETRYING,
+            WorkflowStatus.ARCHIVING,
+        }:
+            raise InvalidTransition("cannot change scheduler generation while a runner is active")
+        if state.active_step is not None and state.attempt > 0:
+            raise InvalidTransition(
+                "recover the interrupted Step before activating Stage scheduling"
+            )
+        cursor = projected_stage_cursor(state)
+        pending = state.pending_action is not None
+        active_stage = cursor["active_stage"] if pending else None
+        active_subtask = cursor["active_subtask"] if pending else None
+        source_step_id = cursor["source_step_id"] if pending else None
+        active_step = source_step_id if pending else None
+        seeds = []
+        for checkpoint in initial_stage_checkpoints(state.last_completed_step):
+            seeds.append(
+                {
+                    **checkpoint,
+                    "receipt": {
+                        "schema_version": "factory-stage-checkpoint-v1",
+                        "source": "explicit_scheduler_migration",
+                        **checkpoint,
+                    },
+                }
+            )
+        updated = store.transition(
+            expected_revision=state.revision,
+            event_type="STAGE_SCHEDULER_ACTIVATED",
+            changes={
+                "scheduler_generation": STAGE_SCHEDULER_GENERATION,
+                "stage_catalog_version": STAGE_CATALOG_VERSION,
+                "last_completed_stage": cursor["last_completed_stage"],
+                "active_stage": active_stage,
+                "active_subtask": active_subtask,
+                "source_step_id": source_step_id,
+                "active_step": active_step,
+                "attempt": 0,
+            },
+            payload={
+                "from_scheduler_generation": STEP_SCHEDULER_GENERATION,
+                "to_scheduler_generation": STAGE_SCHEDULER_GENERATION,
+                "stage_catalog_version": STAGE_CATALOG_VERSION,
+                "seeded_checkpoints": len(seeds),
+            },
+            stage_checkpoint_seed=seeds,
+            replace_stage_checkpoints=True,
+        )
+        write_compatibility_projections(resolved, updated)
+        return updated
+
+    def rollback_stage_scheduler(
+        self,
+        project: str | Path,
+        *,
+        expected_revision: int | None = None,
+    ) -> WorkflowState:
+        resolved = self.resolve_project(project)
+        store = SQLiteStateStore(resolved)
+        state = store.load()
+        self._assert_expected_revision(state, expected_revision)
+        if state.scheduler_generation == STEP_SCHEDULER_GENERATION:
+            return state
+        if state.runner_pid is not None or state.status in {
+            WorkflowStatus.RUNNING,
+            WorkflowStatus.RETRYING,
+            WorkflowStatus.ARCHIVING,
+        }:
+            raise InvalidTransition("cannot roll back Stage scheduling while a runner is active")
+        if state.attempt > 0:
+            raise InvalidTransition(
+                "cannot roll back a Stage subtask after its execution attempt started"
+            )
+        if store.dirty_flags():
+            raise InvalidTransition(
+                "cannot roll back while Stage-owned semantic dirty flags are unresolved"
+            )
+        updated = store.transition(
+            expected_revision=state.revision,
+            event_type="STAGE_SCHEDULER_ROLLED_BACK",
+            changes={
+                "scheduler_generation": STEP_SCHEDULER_GENERATION,
+                "stage_catalog_version": None,
+                "active_stage": None,
+                "active_subtask": None,
+                "source_step_id": state.active_step,
+            },
+            payload={
+                "from_scheduler_generation": STAGE_SCHEDULER_GENERATION,
+                "to_scheduler_generation": STEP_SCHEDULER_GENERATION,
+                "compatibility_step": state.active_step,
+            },
+            subtask_baseline=None,
+        )
+        write_compatibility_projections(resolved, updated)
+        return updated
 
     def configure_solver_policy(
         self,

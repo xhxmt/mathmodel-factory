@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import subprocess
 import sys
@@ -113,6 +114,23 @@ def _verification_fresh(project: Path, report: Path) -> bool:
     return all(path.stat().st_mtime <= report_mtime for path in results.rglob("*") if path.is_file())
 
 
+def _binding_fingerprint(project: Path, paths: list[Path]) -> str:
+    records = []
+    for path in sorted(set(paths), key=lambda item: item.relative_to(project).as_posix()):
+        if not path.is_file() or path.is_symlink():
+            continue
+        records.append(
+            {
+                "path": path.relative_to(project).as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    encoded = json.dumps(
+        records, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _unresolved_blocking(project: Path) -> bool:
     return has_unresolved_blocking(project / "audit_issue_ledger.md")
 
@@ -155,6 +173,14 @@ def _incremental_gate(
         "audit_snapshot": outcome.snapshot.snapshot_id,
         "audit_warnings": outcome.record.evidence.get("warnings", []),
     }
+    for key in (
+        "draft_content_fingerprint",
+        "paper_audit_input_fingerprint",
+        "checker_contract_sha256",
+    ):
+        value = outcome.record.evidence.get(key)
+        if value is not None:
+            metadata[key] = value
     if not valid:
         metadata["error_class"] = outcome.execution.error_class
         metadata["returncode"] = outcome.record.returncode
@@ -244,7 +270,28 @@ class NativeArtifactValidator:
         return ok, "Step 6 sensitivity artifacts invalid", ("sensitivity_report.md",), {}
 
     def _step_7(self, project: Path):
-        return _has(project, "evaluation.md", 30), "Step 7 evaluation is incomplete", ("evaluation.md",), {}
+        evaluation = project / "evaluation.md"
+        ok = _has(project, "evaluation.md", 30)
+        inputs = [
+            project / "sensitivity_report.md",
+            project / "results/canonical_results.json",
+            project / "results/invariants.json",
+        ]
+        for pattern in (
+            "figures/sensitivity_*",
+            "*robustness*",
+            "results/**/*robustness*",
+        ):
+            inputs.extend(path for path in project.glob(pattern) if path.is_file())
+        metadata = (
+            {
+                "evaluation_input_fingerprint": _binding_fingerprint(project, inputs),
+                "evaluation_fingerprint": _binding_fingerprint(project, [evaluation]),
+            }
+            if ok
+            else {}
+        )
+        return ok, "Step 7 evaluation is incomplete", ("evaluation.md",), metadata
 
     def _step_8(self, project: Path):
         figures = [p for p in (project / "figures").iterdir() if p.suffix.lower() in {".pdf", ".png"}] if (project / "figures").is_dir() else []

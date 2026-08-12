@@ -225,6 +225,13 @@ class ProjectStatus(BaseModel):
     selection_deadline: int | None = None
     revision: int | None = None
     last_completed_step: int | None = None
+    scheduler_generation: str | None = None
+    stage_catalog_version: str | None = None
+    last_completed_stage: int | None = None
+    active_stage: int | None = None
+    active_stage_name: str | None = None
+    active_subtask: str | None = None
+    source_step_id: int | None = None
     pending_action: dict | None = None
     contest_profile: str | None = None
     contest_phase: dict | None = None

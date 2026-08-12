@@ -17,6 +17,13 @@ from .domain import (
     WorkflowState,
     WorkflowStatus,
 )
+from .stages import (
+    STAGE_CATALOG_VERSION,
+    STAGE_SCHEDULER_GENERATION,
+    STEP_SCHEDULER_GENERATION,
+    completed_stage_for_step,
+    initial_stage_checkpoints,
+)
 
 
 _UNSET = object()
@@ -28,9 +35,15 @@ _SENSITIVE_KEY = re.compile(
 _MUTABLE_COLUMNS = {
     "control_mode",
     "runtime_generation",
+    "scheduler_generation",
+    "stage_catalog_version",
     "status",
     "last_completed_step",
     "active_step",
+    "last_completed_stage",
+    "active_stage",
+    "active_subtask",
+    "source_step_id",
     "attempt",
     "pending_action",
     "runner_pid",
@@ -96,9 +109,15 @@ class SQLiteStateStore:
                 project_type TEXT NOT NULL,
                 control_mode TEXT NOT NULL,
                 runtime_generation TEXT NOT NULL,
+                scheduler_generation TEXT NOT NULL,
+                stage_catalog_version TEXT,
                 status TEXT NOT NULL,
                 last_completed_step INTEGER NOT NULL,
                 active_step INTEGER,
+                last_completed_stage INTEGER NOT NULL,
+                active_stage INTEGER,
+                active_subtask TEXT,
+                source_step_id INTEGER,
                 attempt INTEGER NOT NULL,
                 revision INTEGER NOT NULL,
                 pending_action_json TEXT,
@@ -156,6 +175,44 @@ class SQLiteStateStore:
                 decided_at INTEGER NOT NULL,
                 decision_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS stage_cursor_inputs (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                stage_id INTEGER NOT NULL,
+                subtask TEXT NOT NULL,
+                source_step_id INTEGER NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                baseline_json TEXT NOT NULL,
+                selected_revision INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS stage_checkpoints (
+                stage_id INTEGER NOT NULL,
+                subtask TEXT NOT NULL,
+                source_step_id INTEGER NOT NULL,
+                completed_step_id INTEGER,
+                input_fingerprint TEXT NOT NULL,
+                output_fingerprint TEXT NOT NULL,
+                completed_revision INTEGER NOT NULL,
+                receipt_json TEXT NOT NULL,
+                PRIMARY KEY(stage_id, subtask)
+            );
+            CREATE TABLE IF NOT EXISTS dirty_flags (
+                flag TEXT PRIMARY KEY,
+                owner_stage INTEGER NOT NULL,
+                cause_revision INTEGER NOT NULL,
+                cause_artifact TEXT NOT NULL,
+                baseline_fingerprint TEXT NOT NULL,
+                current_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS dirty_flag_clear_receipts (
+                revision INTEGER NOT NULL,
+                flag TEXT NOT NULL,
+                owner_stage INTEGER NOT NULL,
+                cleared_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                PRIMARY KEY(revision, flag)
+            );
             CREATE TRIGGER IF NOT EXISTS events_append_only_update
             BEFORE UPDATE ON events
             BEGIN
@@ -175,6 +232,16 @@ class SQLiteStateStore:
             BEFORE DELETE ON workflow_decisions
             BEGIN
                 SELECT RAISE(ABORT, 'workflow decisions are append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_update
+            BEFORE UPDATE ON dirty_flag_clear_receipts
+            BEGIN
+                SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_delete
+            BEFORE DELETE ON dirty_flag_clear_receipts
+            BEGIN
+                SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
             END;
             """
         )
@@ -201,7 +268,7 @@ class SQLiteStateStore:
         current = int(row[0])
         if current == SCHEMA_VERSION:
             return
-        if current not in {1, 2, 3, 4}:
+        if current not in {1, 2, 3, 4, 5}:
             raise RuntimeError(
                 f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}"
             )
@@ -215,6 +282,26 @@ class SQLiteStateStore:
                 "ALTER TABLE project_state ADD COLUMN runtime_generation TEXT NOT NULL "
                 "DEFAULT 'legacy_adapter'"
             )
+        if "scheduler_generation" not in columns:
+            connection.execute(
+                "ALTER TABLE project_state ADD COLUMN scheduler_generation TEXT NOT NULL "
+                f"DEFAULT '{STEP_SCHEDULER_GENERATION}'"
+            )
+        if "stage_catalog_version" not in columns:
+            connection.execute(
+                "ALTER TABLE project_state ADD COLUMN stage_catalog_version TEXT"
+            )
+        if "last_completed_stage" not in columns:
+            connection.execute(
+                "ALTER TABLE project_state ADD COLUMN last_completed_stage INTEGER NOT NULL "
+                "DEFAULT 0"
+            )
+        if "active_stage" not in columns:
+            connection.execute("ALTER TABLE project_state ADD COLUMN active_stage INTEGER")
+        if "active_subtask" not in columns:
+            connection.execute("ALTER TABLE project_state ADD COLUMN active_subtask TEXT")
+        if "source_step_id" not in columns:
+            connection.execute("ALTER TABLE project_state ADD COLUMN source_step_id INTEGER")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS project_config (
@@ -271,6 +358,60 @@ class SQLiteStateStore:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS stage_cursor_inputs (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                stage_id INTEGER NOT NULL,
+                subtask TEXT NOT NULL,
+                source_step_id INTEGER NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                baseline_json TEXT NOT NULL,
+                selected_revision INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stage_checkpoints (
+                stage_id INTEGER NOT NULL,
+                subtask TEXT NOT NULL,
+                source_step_id INTEGER NOT NULL,
+                completed_step_id INTEGER,
+                input_fingerprint TEXT NOT NULL,
+                output_fingerprint TEXT NOT NULL,
+                completed_revision INTEGER NOT NULL,
+                receipt_json TEXT NOT NULL,
+                PRIMARY KEY(stage_id, subtask)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dirty_flags (
+                flag TEXT PRIMARY KEY,
+                owner_stage INTEGER NOT NULL,
+                cause_revision INTEGER NOT NULL,
+                cause_artifact TEXT NOT NULL,
+                baseline_fingerprint TEXT NOT NULL,
+                current_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dirty_flag_clear_receipts (
+                revision INTEGER NOT NULL,
+                flag TEXT NOT NULL,
+                owner_stage INTEGER NOT NULL,
+                cleared_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                PRIMARY KEY(revision, flag)
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_update
             BEFORE UPDATE ON workflow_decisions
             BEGIN
@@ -287,6 +428,43 @@ class SQLiteStateStore:
             END
             """
         )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_update
+            BEFORE UPDATE ON dirty_flag_clear_receipts
+            BEGIN
+                SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_delete
+            BEFORE DELETE ON dirty_flag_clear_receipts
+            BEGIN
+                SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
+            END
+            """
+        )
+        rows = connection.execute(
+            "SELECT singleton, last_completed_step, scheduler_generation "
+            "FROM project_state"
+        ).fetchall()
+        for state_row in rows:
+            if state_row["scheduler_generation"] == STAGE_SCHEDULER_GENERATION:
+                stage_version = STAGE_CATALOG_VERSION
+            else:
+                stage_version = None
+            connection.execute(
+                "UPDATE project_state SET last_completed_stage=?, "
+                "stage_catalog_version=COALESCE(stage_catalog_version, ?) "
+                "WHERE singleton=?",
+                (
+                    completed_stage_for_step(state_row["last_completed_step"]),
+                    stage_version,
+                    state_row["singleton"],
+                ),
+            )
         solver_columns = {
             column[1]
             for column in connection.execute("PRAGMA table_info(solver_jobs)").fetchall()
@@ -332,8 +510,26 @@ class SQLiteStateStore:
         imported: bool = False,
         import_payload: dict[str, Any] | None = None,
         runtime_generation: str = "native_v2",
+        scheduler_generation: str = STEP_SCHEDULER_GENERATION,
+        stage_catalog_version: str | None = None,
         contest_policy: dict[str, Any] | None = None,
     ) -> WorkflowState:
+        if scheduler_generation not in {
+            STEP_SCHEDULER_GENERATION,
+            STAGE_SCHEDULER_GENERATION,
+        }:
+            raise ValueError(
+                f"unsupported scheduler generation: {scheduler_generation}"
+            )
+        if (
+            scheduler_generation == STAGE_SCHEDULER_GENERATION
+            and runtime_generation != "native_v2"
+        ):
+            raise ValueError("Stage scheduling requires the native_v2 runtime")
+        if scheduler_generation == STAGE_SCHEDULER_GENERATION:
+            stage_catalog_version = stage_catalog_version or STAGE_CATALOG_VERSION
+        elif stage_catalog_version is not None:
+            raise ValueError("Step scheduler projects cannot own a Stage catalog version")
         now = int(self._clock())
         scope = self.project_dir.parent.name if self.project_dir.parent.name in {"ongoing", "complete"} else "external"
         with self._session() as connection:
@@ -349,19 +545,29 @@ class SQLiteStateStore:
                 """
                 INSERT INTO project_state(
                     singleton, schema_version, project_id, project_type, control_mode,
-                    runtime_generation,
-                    status, last_completed_step, active_step, attempt, revision,
+                    runtime_generation, scheduler_generation, stage_catalog_version,
+                    status, last_completed_step, active_step, last_completed_stage,
+                    active_stage, active_subtask, source_step_id, attempt, revision,
                     pending_action_json, runner_pid, runner_lease_id, heartbeat_at,
                     storage_scope, created_at, updated_at, last_event_at
-                ) VALUES (1, ?, ?, ?, 'engine', ?, ?, ?, ?, 0, 1, ?, NULL, NULL, NULL, ?, ?, ?, ?)
+                ) VALUES (
+                    1, ?, ?, ?, 'engine', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1,
+                    ?, NULL, NULL, NULL, ?, ?, ?, ?
+                )
                 """,
                 (
                     SCHEMA_VERSION,
                     project_id,
                     project_type,
                     runtime_generation,
+                    scheduler_generation,
+                    stage_catalog_version,
                     status.value,
                     last_completed_step,
+                    active_step,
+                    completed_stage_for_step(last_completed_step),
+                    None,
+                    None,
                     active_step,
                     json.dumps(_redact(pending_action), ensure_ascii=True, sort_keys=True)
                     if pending_action is not None
@@ -372,6 +578,29 @@ class SQLiteStateStore:
                     now,
                 ),
             )
+            if scheduler_generation == STAGE_SCHEDULER_GENERATION:
+                for checkpoint in initial_stage_checkpoints(last_completed_step):
+                    receipt = {
+                        "schema_version": "factory-stage-checkpoint-v1",
+                        "source": "compatibility_cursor_seed",
+                        **checkpoint,
+                    }
+                    connection.execute(
+                        """
+                        INSERT INTO stage_checkpoints(
+                            stage_id, subtask, source_step_id, completed_step_id,
+                            input_fingerprint, output_fingerprint,
+                            completed_revision, receipt_json
+                        ) VALUES (?, ?, ?, ?, 'MIGRATION_SEED', 'MIGRATION_SEED', 1, ?)
+                        """,
+                        (
+                            checkpoint["stage_id"],
+                            checkpoint["subtask"],
+                            checkpoint["source_step_id"],
+                            checkpoint["completed_step_id"],
+                            json.dumps(receipt, ensure_ascii=True, sort_keys=True),
+                        ),
+                    )
             if contest_policy is not None:
                 connection.execute(
                     """
@@ -477,6 +706,14 @@ class SQLiteStateStore:
         payload: dict[str, Any] | None = None,
         expected_runner_pid: int | None | object = _UNSET,
         expected_runner_lease_id: str | None | object = _UNSET,
+        subtask_baseline: dict[str, Any] | None | object = _UNSET,
+        stage_checkpoint: dict[str, Any] | None = None,
+        stage_checkpoint_seed: list[dict[str, Any]] | None = None,
+        dirty_changes: list[dict[str, Any]] | None = None,
+        clear_dirty_stage: dict[str, Any] | None = None,
+        invalidate_checkpoints_after_step: int | None = None,
+        replace_stage_checkpoints: bool = False,
+        event_step: int | None | object = _UNSET,
     ) -> WorkflowState:
         changes = dict(changes or {})
         unknown = set(changes) - _MUTABLE_COLUMNS
@@ -523,7 +760,171 @@ class SQLiteStateStore:
                 f"UPDATE project_state SET {assignments} WHERE singleton = 1",
                 tuple(values.values()),
             )
-            effective_step = changes.get("active_step", row["active_step"])
+            if subtask_baseline is not _UNSET:
+                if subtask_baseline is None:
+                    connection.execute(
+                        "DELETE FROM stage_cursor_inputs WHERE singleton = 1"
+                    )
+                else:
+                    baseline = dict(subtask_baseline)
+                    manifest = baseline.get("manifest")
+                    if not isinstance(manifest, dict):
+                        raise ValueError("subtask baseline manifest must be a mapping")
+                    connection.execute(
+                        """
+                        INSERT INTO stage_cursor_inputs(
+                            singleton, stage_id, subtask, source_step_id,
+                            input_fingerprint, baseline_json, selected_revision
+                        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(singleton) DO UPDATE SET
+                            stage_id=excluded.stage_id,
+                            subtask=excluded.subtask,
+                            source_step_id=excluded.source_step_id,
+                            input_fingerprint=excluded.input_fingerprint,
+                            baseline_json=excluded.baseline_json,
+                            selected_revision=excluded.selected_revision
+                        """,
+                        (
+                            int(baseline["stage_id"]),
+                            str(baseline["subtask"]),
+                            int(baseline["source_step_id"]),
+                            str(baseline["input_fingerprint"]),
+                            json.dumps(manifest, ensure_ascii=True, sort_keys=True),
+                            revision,
+                        ),
+                    )
+            if replace_stage_checkpoints:
+                connection.execute("DELETE FROM stage_checkpoints")
+            if invalidate_checkpoints_after_step is not None:
+                connection.execute(
+                    "DELETE FROM stage_checkpoints WHERE source_step_id > ? "
+                    "OR (completed_step_id IS NULL AND source_step_id >= ?)",
+                    (
+                        int(invalidate_checkpoints_after_step),
+                        int(invalidate_checkpoints_after_step),
+                    ),
+                )
+            if stage_checkpoint is not None:
+                checkpoint = dict(stage_checkpoint)
+                receipt = _redact(dict(checkpoint.get("receipt") or {}))
+                connection.execute(
+                    """
+                    INSERT INTO stage_checkpoints(
+                        stage_id, subtask, source_step_id, completed_step_id,
+                        input_fingerprint, output_fingerprint,
+                        completed_revision, receipt_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(stage_id, subtask) DO UPDATE SET
+                        source_step_id=excluded.source_step_id,
+                        completed_step_id=excluded.completed_step_id,
+                        input_fingerprint=excluded.input_fingerprint,
+                        output_fingerprint=excluded.output_fingerprint,
+                        completed_revision=excluded.completed_revision,
+                        receipt_json=excluded.receipt_json
+                    """,
+                    (
+                        int(checkpoint["stage_id"]),
+                        str(checkpoint["subtask"]),
+                        int(checkpoint["source_step_id"]),
+                        checkpoint.get("completed_step_id"),
+                        str(checkpoint["input_fingerprint"]),
+                        str(checkpoint["output_fingerprint"]),
+                        revision,
+                        json.dumps(receipt, ensure_ascii=True, sort_keys=True),
+                    ),
+                )
+            for checkpoint in stage_checkpoint_seed or []:
+                receipt = _redact(dict(checkpoint.get("receipt") or {}))
+                connection.execute(
+                    """
+                    INSERT INTO stage_checkpoints(
+                        stage_id, subtask, source_step_id, completed_step_id,
+                        input_fingerprint, output_fingerprint,
+                        completed_revision, receipt_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(stage_id, subtask) DO NOTHING
+                    """,
+                    (
+                        int(checkpoint["stage_id"]),
+                        str(checkpoint["subtask"]),
+                        int(checkpoint["source_step_id"]),
+                        checkpoint.get("completed_step_id"),
+                        str(checkpoint.get("input_fingerprint") or "MIGRATION_SEED"),
+                        str(checkpoint.get("output_fingerprint") or "MIGRATION_SEED"),
+                        revision,
+                        json.dumps(receipt, ensure_ascii=True, sort_keys=True),
+                    ),
+                )
+            for dirty in dirty_changes or []:
+                connection.execute(
+                    """
+                    INSERT INTO dirty_flags(
+                        flag, owner_stage, cause_revision, cause_artifact,
+                        baseline_fingerprint, current_fingerprint,
+                        classifier_contract_sha256
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(flag) DO UPDATE SET
+                        owner_stage=excluded.owner_stage,
+                        cause_revision=excluded.cause_revision,
+                        cause_artifact=excluded.cause_artifact,
+                        baseline_fingerprint=excluded.baseline_fingerprint,
+                        current_fingerprint=excluded.current_fingerprint,
+                        classifier_contract_sha256=excluded.classifier_contract_sha256
+                    """,
+                    (
+                        str(dirty["flag"]),
+                        int(dirty["owner_stage"]),
+                        revision,
+                        str(dirty["cause_artifact"]),
+                        str(dirty["baseline_fingerprint"]),
+                        str(dirty["current_fingerprint"]),
+                        str(dirty["classifier_contract_sha256"]),
+                    ),
+                )
+            if clear_dirty_stage is not None:
+                clear = dict(clear_dirty_stage)
+                owner_stage = int(clear["owner_stage"])
+                rows_to_clear = connection.execute(
+                    "SELECT * FROM dirty_flags WHERE owner_stage = ? ORDER BY flag",
+                    (owner_stage,),
+                ).fetchall()
+                for dirty_row in rows_to_clear:
+                    receipt = {
+                        "schema_version": "factory-dirty-clear-receipt-v1",
+                        "flag": dirty_row["flag"],
+                        "owner_stage": owner_stage,
+                        "cause_revision": dirty_row["cause_revision"],
+                        "cause_artifact": dirty_row["cause_artifact"],
+                        "cleared_fingerprint": str(clear["cleared_fingerprint"]),
+                        "classifier_contract_sha256": str(
+                            clear["classifier_contract_sha256"]
+                        ),
+                        "success_receipt": _redact(clear.get("success_receipt") or {}),
+                    }
+                    connection.execute(
+                        """
+                        INSERT INTO dirty_flag_clear_receipts(
+                            revision, flag, owner_stage, cleared_fingerprint,
+                            classifier_contract_sha256, receipt_json
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            revision,
+                            dirty_row["flag"],
+                            owner_stage,
+                            str(clear["cleared_fingerprint"]),
+                            str(clear["classifier_contract_sha256"]),
+                            json.dumps(receipt, ensure_ascii=True, sort_keys=True),
+                        ),
+                    )
+                connection.execute(
+                    "DELETE FROM dirty_flags WHERE owner_stage = ?", (owner_stage,)
+                )
+            effective_step = (
+                changes.get("active_step", row["active_step"])
+                if event_step is _UNSET
+                else event_step
+            )
             effective_attempt = int(changes.get("attempt", row["attempt"]))
             safe_payload = _redact(payload or {})
             connection.execute(
@@ -558,6 +959,83 @@ class SQLiteStateStore:
                 attempt=row["attempt"],
                 payload=json.loads(row["payload_json"]),
             )
+            for row in rows
+        ]
+
+    def completed_stage_subtasks(self) -> set[tuple[int, str]]:
+        if not self.path.is_file():
+            return set()
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            rows = connection.execute(
+                "SELECT stage_id, subtask FROM stage_checkpoints"
+            ).fetchall()
+        return {(int(row["stage_id"]), str(row["subtask"])) for row in rows}
+
+    def stage_checkpoints(self) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            rows = connection.execute(
+                "SELECT * FROM stage_checkpoints ORDER BY stage_id, completed_revision"
+            ).fetchall()
+        return [
+            {
+                "stage_id": row["stage_id"],
+                "subtask": row["subtask"],
+                "source_step_id": row["source_step_id"],
+                "completed_step_id": row["completed_step_id"],
+                "input_fingerprint": row["input_fingerprint"],
+                "output_fingerprint": row["output_fingerprint"],
+                "completed_revision": row["completed_revision"],
+                "receipt": json.loads(row["receipt_json"]),
+            }
+            for row in rows
+        ]
+
+    def stage_cursor_input(self) -> dict[str, Any] | None:
+        if not self.path.is_file():
+            return None
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM stage_cursor_inputs WHERE singleton = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "stage_id": row["stage_id"],
+            "subtask": row["subtask"],
+            "source_step_id": row["source_step_id"],
+            "input_fingerprint": row["input_fingerprint"],
+            "manifest": json.loads(row["baseline_json"]),
+            "selected_revision": row["selected_revision"],
+        }
+
+    def dirty_flags(self) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            rows = connection.execute(
+                "SELECT * FROM dirty_flags ORDER BY flag"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def dirty_clear_receipts(self) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            rows = connection.execute(
+                "SELECT * FROM dirty_flag_clear_receipts ORDER BY revision, flag"
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "receipt": json.loads(row["receipt_json"]),
+            }
             for row in rows
         ]
 
@@ -902,9 +1380,15 @@ class SQLiteStateStore:
             project_type=row["project_type"],
             control_mode=row["control_mode"],
             runtime_generation=row["runtime_generation"],
+            scheduler_generation=row["scheduler_generation"],
+            stage_catalog_version=row["stage_catalog_version"],
             status=WorkflowStatus(row["status"]),
             last_completed_step=row["last_completed_step"],
             active_step=row["active_step"],
+            last_completed_stage=row["last_completed_stage"],
+            active_stage=row["active_stage"],
+            active_subtask=row["active_subtask"],
+            source_step_id=row["source_step_id"],
             attempt=row["attempt"],
             revision=row["revision"],
             pending_action=pending,

@@ -270,6 +270,11 @@ def test_paper_audit_runs_deterministic_derived_artifact_gate(tmp_path: Path) ->
 
     assert outcome.record.status is AuditStatus.PASS
     assert "audit_paper_derived_artifacts" in runner.calls
+    assert len(outcome.record.evidence["draft_content_fingerprint"]) == 64
+    assert outcome.record.evidence["paper_audit_input_fingerprint"] == (
+        outcome.snapshot.snapshot_id
+    )
+    assert len(outcome.record.evidence["checker_contract_sha256"]) == 64
 
 
 def test_model_audit_accepts_quality_contract_v4(tmp_path: Path) -> None:

@@ -5,11 +5,20 @@ import shutil
 import time
 import uuid
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from .contest import ContestDeadlineExceeded, ContestPolicy, effective_timeout
 from .deadline import deadline_scope, ensure_deadline
+from .dirty import (
+    DirtyFlag,
+    capture_artifact_manifest,
+    classifier_contract_sha256,
+    classify_manifest_changes,
+    manifest_fingerprint,
+    semantic_flags,
+)
 from .domain import (
     InvalidTransition,
     PendingAction,
@@ -25,6 +34,25 @@ from .domain import (
 )
 from .registry import StepDefinition, StepRegistry
 from .storage import SQLiteStateStore
+from .stages import (
+    STAGE_CATALOG_VERSION,
+    STAGE_SCHEDULER_GENERATION,
+    STEP_SCHEDULER_GENERATION,
+    completed_stage_for_step,
+    next_stage_subtask,
+    stage_for_id,
+    subtask_for_key,
+)
+
+
+@dataclass(frozen=True)
+class ScheduledStageTask:
+    stage_id: int
+    stage_name: str
+    subtask: str
+    source_step_id: int
+    checkpoint_step_id: int | None
+    definition: StepDefinition
 
 
 class FactoryEngine:
@@ -48,6 +76,18 @@ class FactoryEngine:
 
     def run(self, *, max_steps: int | None = None) -> WorkflowState:
         state = self.store.load()
+        if state.scheduler_generation not in {
+            STEP_SCHEDULER_GENERATION,
+            STAGE_SCHEDULER_GENERATION,
+        }:
+            raise InvalidTransition(
+                f"unsupported scheduler generation: {state.scheduler_generation}"
+            )
+        stage_mode = state.scheduler_generation == STAGE_SCHEDULER_GENERATION
+        if stage_mode and state.stage_catalog_version != STAGE_CATALOG_VERSION:
+            raise InvalidTransition(
+                "Stage scheduler project has an unsupported Stage catalog version"
+            )
         runner_is_live = state.runner_pid is not None and self._pid_is_live(
             state.runner_pid
         )
@@ -88,7 +128,7 @@ class FactoryEngine:
                 payload={"reason": "active run has no recorded runner"},
             )
 
-        if state.active_step is not None:
+        if state.active_step is not None and (not stage_mode or state.attempt > 0):
             enforce_recovery_lease = state.runner_pid == os.getpid()
             state = self.recover(
                 expected_runner_pid=state.runner_pid,
@@ -121,7 +161,12 @@ class FactoryEngine:
         )
         completed_this_run = 0
         while True:
-            definition = self.registry.next_after(state.last_completed_step)
+            stage_task: ScheduledStageTask | None = None
+            if stage_mode:
+                state, stage_task = self._select_stage_task(state, lease)
+                definition = stage_task.definition if stage_task is not None else None
+            else:
+                definition = self.registry.next_after(state.last_completed_step)
             if definition is None:
                 return self._owned_transition(
                     state,
@@ -130,11 +175,16 @@ class FactoryEngine:
                     changes={
                         "status": WorkflowStatus.COMPLETED,
                         "active_step": None,
+                        "active_stage": None,
+                        "active_subtask": None,
+                        "source_step_id": None,
+                        "last_completed_stage": 10 if stage_mode else state.last_completed_stage,
                         "attempt": 0,
                         "runner_pid": None,
                         "runner_lease_id": None,
                         "heartbeat_at": None,
                     },
+                    subtask_baseline=None,
                 )
             if max_steps is not None and completed_this_run >= max_steps:
                 return self._owned_transition(
@@ -150,6 +200,24 @@ class FactoryEngine:
                     payload={"reason": "max_steps"},
                 )
             attempt = state.attempt + 1 if state.active_step == definition.id else 1
+            if stage_mode and state.attempt >= definition.max_attempts:
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="STEP_FAILED",
+                    changes={
+                        "status": WorkflowStatus.FAILED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "error_class": "PERMANENT_ATTEMPT_BUDGET_EXHAUSTED",
+                        "stage": stage_task.stage_id,
+                        "subtask": stage_task.subtask,
+                        "source_step": stage_task.source_step_id,
+                    },
+                )
             try:
                 timeout_seconds = self._contest_timeout(definition)
             except ContestDeadlineExceeded as exc:
@@ -223,6 +291,16 @@ class FactoryEngine:
                     "step_name": definition.name,
                     "configured_timeout_seconds": definition.timeout_seconds,
                     "effective_timeout_seconds": timeout_seconds,
+                    **(
+                        {
+                            "stage": stage_task.stage_id,
+                            "stage_name": stage_task.stage_name,
+                            "subtask": stage_task.subtask,
+                            "source_step": stage_task.source_step_id,
+                        }
+                        if stage_task is not None
+                        else {}
+                    ),
                 },
             )
             context = self._context(
@@ -305,17 +383,42 @@ class FactoryEngine:
                         },
                     )
                 resume_after = self._validated_resume_target(resume_after, definition.id)
+                reopen_changes = {
+                    "status": WorkflowStatus.RUNNING,
+                    "last_completed_step": resume_after,
+                    "active_step": None,
+                    "attempt": 0,
+                }
+                reopen_kwargs = {}
+                if stage_task is not None:
+                    reopen_changes.update(
+                        last_completed_stage=completed_stage_for_step(resume_after),
+                        active_stage=None,
+                        active_subtask=None,
+                        source_step_id=None,
+                    )
+                    reopen_kwargs = {
+                        "invalidate_checkpoints_after_step": resume_after,
+                        "subtask_baseline": None,
+                    }
                 state = self._owned_transition(
                     state,
                     lease,
                     event_type="STEP_REOPENED",
-                    changes={
-                        "status": WorkflowStatus.RUNNING,
-                        "last_completed_step": resume_after,
-                        "active_step": None,
-                        "attempt": 0,
+                    changes=reopen_changes,
+                    payload={
+                        "source_step": definition.id,
+                        **(
+                            {
+                                "stage": stage_task.stage_id,
+                                "subtask": stage_task.subtask,
+                            }
+                            if stage_task is not None
+                            else {}
+                        ),
+                        **result.metadata,
                     },
-                    payload={"source_step": definition.id, **result.metadata},
+                    **reopen_kwargs,
                 )
                 continue
             try:
@@ -357,6 +460,30 @@ class FactoryEngine:
                     raise InvalidTransition(
                         f"step {definition.id} cannot complete through earlier step {completed_step}"
                     )
+                if stage_task is not None:
+                    if (
+                        stage_task.checkpoint_step_id is not None
+                        and completed_step != stage_task.checkpoint_step_id
+                    ):
+                        raise InvalidTransition(
+                            "Stage scheduler subtasks cannot fast-forward the Step cursor"
+                        )
+                    state = self._complete_stage_task(
+                        state,
+                        lease,
+                        stage_task,
+                        validation=validation,
+                        result=result,
+                    )
+                    if self.store.events()[-1].type == "STEP_SUCCEEDED":
+                        completed_this_run += 1
+                    if state.status in {
+                        WorkflowStatus.FAILED,
+                        WorkflowStatus.AWAITING_SELECTION,
+                        WorkflowStatus.AWAITING_CONSULTATION,
+                    }:
+                        return state
+                    continue
                 state = self._owned_transition(
                     state,
                     lease,
@@ -452,6 +579,505 @@ class FactoryEngine:
             )
             self._sleep(retry_delay)
 
+    def _select_stage_task(
+        self, state: WorkflowState, lease: str
+    ) -> tuple[WorkflowState, ScheduledStageTask | None]:
+        state = self._invalidate_stale_stage_receipts(state, lease)
+        completed = self.store.completed_stage_subtasks()
+        selected = None
+        if state.active_subtask is not None:
+            stage, subtask = subtask_for_key(state.active_subtask)
+            if state.active_stage != stage.id:
+                raise InvalidTransition(
+                    "persisted Stage and subtask do not belong to the same catalog entry"
+                )
+            selected = (stage, subtask)
+        else:
+            selected = next_stage_subtask(completed_subtasks=completed)
+        if selected is None:
+            return state, None
+        stage, subtask = selected
+        if subtask.key in {"reviewer_entry_gate", "content_freeze_guard"}:
+            definition = self.registry.stage_subtask(subtask.key)
+        elif subtask.conditional:
+            if semantic_flags(self.store.dirty_flags()):
+                definition = self.registry.get(subtask.source_step_id)
+            else:
+                definition = self.registry.stage_subtask(
+                    "conditional_math_preflight_skip"
+                )
+        else:
+            definition = self.registry.get(subtask.source_step_id)
+        task = ScheduledStageTask(
+            stage_id=stage.id,
+            stage_name=stage.name,
+            subtask=subtask.key,
+            source_step_id=subtask.source_step_id,
+            checkpoint_step_id=subtask.checkpoint_step_id,
+            definition=definition,
+        )
+        baseline = self.store.stage_cursor_input()
+        baseline_matches = (
+            baseline is not None
+            and int(baseline["stage_id"]) == stage.id
+            and str(baseline["subtask"]) == subtask.key
+            and int(baseline["source_step_id"]) == subtask.source_step_id
+        )
+        cursor_matches = (
+            state.active_stage == stage.id
+            and state.active_subtask == subtask.key
+            and state.source_step_id == subtask.source_step_id
+            and state.active_step == subtask.source_step_id
+        )
+        if cursor_matches and baseline_matches:
+            return state, task
+        manifest = capture_artifact_manifest(self.project_dir)
+        state = self._owned_transition(
+            state,
+            lease,
+            event_type="STAGE_SUBTASK_SELECTED",
+            changes={
+                "status": WorkflowStatus.RUNNING,
+                "active_stage": stage.id,
+                "active_subtask": subtask.key,
+                "source_step_id": subtask.source_step_id,
+                "active_step": subtask.source_step_id,
+                "attempt": 0,
+            },
+            payload={
+                "stage": stage.id,
+                "stage_name": stage.name,
+                "subtask": subtask.key,
+                "source_step": subtask.source_step_id,
+                "checkpoint_step": subtask.checkpoint_step_id,
+                "stage_catalog_version": STAGE_CATALOG_VERSION,
+            },
+            subtask_baseline={
+                "stage_id": stage.id,
+                "subtask": subtask.key,
+                "source_step_id": subtask.source_step_id,
+                "input_fingerprint": manifest_fingerprint(manifest),
+                "manifest": manifest,
+            },
+            event_step=subtask.source_step_id,
+        )
+        return state, task
+
+    def _invalidate_stale_stage_receipts(
+        self, state: WorkflowState, lease: str
+    ) -> WorkflowState:
+        checkpoints = {
+            (int(item["stage_id"]), str(item["subtask"])): item
+            for item in self.store.stage_checkpoints()
+        }
+        reviewer = checkpoints.get((6, "reviewer_entry_gate"))
+        if reviewer is not None:
+            from scripts.step8_5_gate import collect_step8_5_state
+
+            current = collect_step8_5_state(self.project_dir)
+            bound = reviewer.get("receipt", {}).get("validation", {}).get("step8_5")
+            reviewer_current = (
+                isinstance(bound, dict)
+                and current.get("ready") is True
+                and bound.get("input_fingerprint") == current.get("input_fingerprint")
+                and bound.get("artifact_fingerprint")
+                == current.get("artifact_fingerprint")
+            )
+            if not reviewer_current:
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="STAGE_CHECKPOINT_INVALIDATED",
+                    changes={
+                        "status": WorkflowStatus.RUNNING,
+                        "last_completed_step": min(state.last_completed_step, 8),
+                        "last_completed_stage": min(state.last_completed_stage, 5),
+                        "active_step": None,
+                        "active_stage": None,
+                        "active_subtask": None,
+                        "source_step_id": None,
+                        "attempt": 0,
+                    },
+                    payload={
+                        "stage": 6,
+                        "subtask": "reviewer_entry_gate",
+                        "reason": "reviewer-entry fingerprint changed",
+                    },
+                    invalidate_checkpoints_after_step=8,
+                    subtask_baseline=None,
+                    event_step=8,
+                )
+
+        conditional = checkpoints.get((8, "conditional_math_preflight"))
+        stage9_checkpoints = [
+            item for (stage_id, _subtask), item in checkpoints.items() if stage_id == 9
+        ]
+        current_classifier = classifier_contract_sha256()
+        classifier_stale = any(
+            item.get("receipt", {}).get("classifier_contract_sha256")
+            != current_classifier
+            for item in stage9_checkpoints
+        )
+        result_metadata = (
+            conditional.get("receipt", {}).get("result", {})
+            if conditional is not None
+            else {}
+        )
+        if classifier_stale or (
+            result_metadata.get("conditional_math_preflight") == "skipped"
+            and not stage9_checkpoints
+        ):
+            definition = self.registry.stage_subtask(
+                "conditional_math_preflight_skip"
+            )
+            context = StepContext(
+                project_dir=self.project_dir,
+                project_id=state.project_id,
+                step_id=13,
+                attempt=1,
+                timeout_seconds=definition.timeout_seconds,
+                revision=state.revision,
+                deadline_epoch=None,
+            )
+            validation = definition.lifecycle.validate(context)
+            if classifier_stale or not validation.is_valid:
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="STAGE_CHECKPOINT_INVALIDATED",
+                    changes={
+                        "status": WorkflowStatus.RUNNING,
+                        "last_completed_step": min(state.last_completed_step, 12),
+                        "last_completed_stage": min(state.last_completed_stage, 7),
+                        "active_step": None,
+                        "active_stage": None,
+                        "active_subtask": None,
+                        "source_step_id": None,
+                        "attempt": 0,
+                    },
+                    payload={
+                        "stage": 8,
+                        "subtask": "conditional_math_preflight",
+                        "reason": (
+                            "dirty-classifier contract changed"
+                            if classifier_stale
+                            else "conditional math-preflight skip receipt is stale"
+                        ),
+                    },
+                    invalidate_checkpoints_after_step=12,
+                    subtask_baseline=None,
+                    event_step=13,
+                )
+        return state
+
+    def _complete_stage_task(
+        self,
+        state: WorkflowState,
+        lease: str | None,
+        task: ScheduledStageTask,
+        *,
+        validation,
+        result,
+    ) -> WorkflowState:
+        baseline = self.store.stage_cursor_input()
+        after = capture_artifact_manifest(self.project_dir)
+        output_fingerprint = manifest_fingerprint(after)
+        if baseline is None or (
+            int(baseline["stage_id"]) != task.stage_id
+            or str(baseline["subtask"]) != task.subtask
+        ):
+            before: dict[str, str] = {}
+            dirty_changes = [
+                {
+                    "flag": DirtyFlag.MATH.value,
+                    "owner_stage": 8,
+                    "cause_artifact": "MISSING_STAGE_INPUT_BASELINE",
+                    "baseline_fingerprint": "MISSING",
+                    "current_fingerprint": output_fingerprint,
+                    "classifier_contract_sha256": classifier_contract_sha256(),
+                },
+                {
+                    "flag": DirtyFlag.RESULT.value,
+                    "owner_stage": 4,
+                    "cause_artifact": "MISSING_STAGE_INPUT_BASELINE",
+                    "baseline_fingerprint": "MISSING",
+                    "current_fingerprint": output_fingerprint,
+                    "classifier_contract_sha256": classifier_contract_sha256(),
+                },
+            ]
+            input_fingerprint = "MISSING"
+        else:
+            before = dict(baseline["manifest"])
+            input_fingerprint = str(baseline["input_fingerprint"])
+            dirty_changes = [
+                {
+                    **change.to_dict(),
+                    "classifier_contract_sha256": classifier_contract_sha256(),
+                }
+                for change in classify_manifest_changes(before, after)
+            ]
+
+        new_flags = {str(item["flag"]) for item in dirty_changes}
+        protected_deleted = [
+            item["cause_artifact"]
+            for item in dirty_changes
+            if str(item["cause_artifact"]).startswith("@protected:")
+            and item["current_fingerprint"] == "MISSING"
+        ]
+        if protected_deleted:
+            return self._stage_transition(
+                state,
+                lease,
+                event_type="STEP_FAILED",
+                changes={
+                    "status": WorkflowStatus.FAILED,
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={
+                    "error_class": "PERMANENT_PROTECTED_ITEM_DELETED",
+                    "stage": task.stage_id,
+                    "subtask": task.subtask,
+                    "protected_items": protected_deleted,
+                },
+                dirty_changes=dirty_changes,
+                event_step=task.source_step_id,
+            )
+        semantic_reopen_target: int | None = None
+        semantic_reason = ""
+        if task.stage_id > 3 and DirtyFlag.MODEL.value in new_flags:
+            semantic_reopen_target = 3
+            semantic_reason = f"Stage {task.stage_id} changed the model contract"
+        elif task.stage_id > 4 and DirtyFlag.RESULT.value in new_flags:
+            semantic_reopen_target = 4
+            semantic_reason = f"Stage {task.stage_id} changed canonical result semantics"
+        elif task.stage_id > 6 and DirtyFlag.VISUAL.value in new_flags:
+            semantic_reopen_target = 7
+            semantic_reason = f"Stage {task.stage_id} changed reviewer-entry visuals"
+        elif task.stage_id > 8 and DirtyFlag.MATH.value in new_flags:
+            semantic_reopen_target = 10
+            semantic_reason = f"Stage {task.stage_id} changed paper mathematics"
+        elif task.stage_id > 9 and new_flags & {
+            DirtyFlag.PROSE.value,
+            DirtyFlag.CITATION.value,
+            DirtyFlag.FORMAT.value,
+        }:
+            semantic_reopen_target = 13
+            semantic_reason = "FINALIZE changed final-prose-owned content"
+
+        if semantic_reopen_target is not None:
+            if not self._stage_semantic_reopen_allowed(task.stage_id):
+                return self._stage_transition(
+                    state,
+                    lease,
+                    event_type="STEP_FAILED",
+                    changes={
+                        "status": WorkflowStatus.FAILED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "error_class": "PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED",
+                        "stage": task.stage_id,
+                        "subtask": task.subtask,
+                        "resume_after_step": semantic_reopen_target,
+                        "reason": semantic_reason,
+                    },
+                    dirty_changes=dirty_changes,
+                    event_step=task.source_step_id,
+                )
+            return self._stage_transition(
+                state,
+                lease,
+                event_type="STAGE_SEMANTIC_REOPENED",
+                changes={
+                    "status": WorkflowStatus.RUNNING,
+                    "last_completed_step": semantic_reopen_target,
+                    "last_completed_stage": completed_stage_for_step(
+                        semantic_reopen_target
+                    ),
+                    "active_step": None,
+                    "active_stage": None,
+                    "active_subtask": None,
+                    "source_step_id": None,
+                    "attempt": 0,
+                },
+                payload={
+                    "source_step": task.source_step_id,
+                    "stage": task.stage_id,
+                    "subtask": task.subtask,
+                    "resume_after_step": semantic_reopen_target,
+                    "reason": semantic_reason,
+                    "dirty_flags": sorted(new_flags),
+                },
+                dirty_changes=dirty_changes,
+                invalidate_checkpoints_after_step=semantic_reopen_target,
+                subtask_baseline=None,
+                event_step=task.source_step_id,
+            )
+
+        if task.stage_id == 8 and task.checkpoint_step_id == 13:
+            from .audit.ledger import has_unresolved_critical
+
+            if has_unresolved_critical(self.project_dir / "audit_issue_ledger.md"):
+                if not self._reopen_allowed(self.registry.get(13)):
+                    return self._stage_transition(
+                        state,
+                        lease,
+                        event_type="STEP_FAILED",
+                        changes={
+                            "status": WorkflowStatus.FAILED,
+                            "runner_pid": None,
+                            "runner_lease_id": None,
+                            "heartbeat_at": None,
+                        },
+                        payload={
+                            "error_class": "PERMANENT_REVIEW_LOOP_EXHAUSTED",
+                            "stage": 8,
+                            "subtask": task.subtask,
+                            "reason": "unresolved BLOCKING or MAJOR issue remains",
+                        },
+                        dirty_changes=dirty_changes,
+                        event_step=task.source_step_id,
+                    )
+                return self._stage_transition(
+                    state,
+                    lease,
+                    event_type="STEP_REOPENED",
+                    changes={
+                        "status": WorkflowStatus.RUNNING,
+                        "last_completed_step": 10,
+                        "last_completed_stage": 7,
+                        "active_step": None,
+                        "active_stage": None,
+                        "active_subtask": None,
+                        "source_step_id": None,
+                        "attempt": 0,
+                    },
+                    payload={
+                        "source_step": 13,
+                        "stage": 8,
+                        "subtask": task.subtask,
+                        "resume_after_step": 10,
+                        "reason": "unresolved BLOCKING or MAJOR issue remains",
+                    },
+                    dirty_changes=dirty_changes,
+                    invalidate_checkpoints_after_step=10,
+                    subtask_baseline=None,
+                    event_step=task.source_step_id,
+                )
+
+        completed = self.store.completed_stage_subtasks()
+        completed.add((task.stage_id, task.subtask))
+        next_selected = next_stage_subtask(completed_subtasks=completed)
+        stage_completed = next_selected is None or next_selected[0].id != task.stage_id
+        next_baseline = None
+        changes = {
+            "status": WorkflowStatus.RUNNING,
+            "last_completed_step": (
+                task.checkpoint_step_id
+                if task.checkpoint_step_id is not None
+                else state.last_completed_step
+            ),
+            "last_completed_stage": (
+                task.stage_id if stage_completed else state.last_completed_stage
+            ),
+            "attempt": 0,
+        }
+        if next_selected is None:
+            changes.update(
+                active_step=None,
+                active_stage=None,
+                active_subtask=None,
+                source_step_id=None,
+            )
+        else:
+            next_stage, next_subtask = next_selected
+            changes.update(
+                active_step=next_subtask.source_step_id,
+                active_stage=next_stage.id,
+                active_subtask=next_subtask.key,
+                source_step_id=next_subtask.source_step_id,
+            )
+            next_baseline = {
+                "stage_id": next_stage.id,
+                "subtask": next_subtask.key,
+                "source_step_id": next_subtask.source_step_id,
+                "input_fingerprint": output_fingerprint,
+                "manifest": after,
+            }
+        validation_metadata = dict(validation.metadata)
+        if task.subtask == "reviewer_entry_gate":
+            from scripts.step8_5_gate import collect_step8_5_state
+
+            validation_metadata["step8_5"] = collect_step8_5_state(
+                self.project_dir
+            )
+        checkpoint_receipt = {
+            "schema_version": "factory-stage-checkpoint-v1",
+            "stage": task.stage_id,
+            "stage_name": task.stage_name,
+            "subtask": task.subtask,
+            "source_step_id": task.source_step_id,
+            "completed_step_id": task.checkpoint_step_id,
+            "input_fingerprint": input_fingerprint,
+            "output_fingerprint": output_fingerprint,
+            "classifier_contract_sha256": classifier_contract_sha256(),
+            "evidence": list(validation.evidence),
+            "validation": validation_metadata,
+            "result": result.metadata,
+        }
+        clear = None
+        if stage_completed:
+            clear = {
+                "owner_stage": task.stage_id,
+                "cleared_fingerprint": output_fingerprint,
+                "classifier_contract_sha256": classifier_contract_sha256(),
+                "success_receipt": checkpoint_receipt,
+            }
+        return self._stage_transition(
+            state,
+            lease,
+            event_type="STEP_SUCCEEDED",
+            changes=changes,
+            payload={
+                "stage": task.stage_id,
+                "stage_name": task.stage_name,
+                "subtask": task.subtask,
+                "source_step": task.source_step_id,
+                "stage_completed": stage_completed,
+                "input_fingerprint": input_fingerprint,
+                "output_fingerprint": output_fingerprint,
+                "dirty_flags": sorted(new_flags),
+                "evidence": validation.evidence,
+                **result.metadata,
+            },
+            stage_checkpoint={
+                "stage_id": task.stage_id,
+                "subtask": task.subtask,
+                "source_step_id": task.source_step_id,
+                "completed_step_id": task.checkpoint_step_id,
+                "input_fingerprint": input_fingerprint,
+                "output_fingerprint": output_fingerprint,
+                "receipt": checkpoint_receipt,
+            },
+            dirty_changes=dirty_changes,
+            clear_dirty_stage=clear,
+            subtask_baseline=next_baseline,
+            event_step=task.source_step_id,
+        )
+
+    def _stage_semantic_reopen_allowed(self, stage_id: int) -> bool:
+        count = sum(
+            1
+            for event in self.store.events()
+            if event.type == "STAGE_SEMANTIC_REOPENED"
+            and int(event.payload.get("stage", -1)) == int(stage_id)
+        )
+        return count < 2
+
     def recover(
         self,
         *,
@@ -462,7 +1088,33 @@ class FactoryEngine:
         state = self.store.load()
         if state.active_step is None:
             return state
-        definition = self.registry.get(state.active_step)
+        stage_task: ScheduledStageTask | None = None
+        if state.scheduler_generation == STAGE_SCHEDULER_GENERATION:
+            if state.active_stage is None or state.active_subtask is None:
+                raise InvalidTransition(
+                    "Stage scheduler recovery requires an atomic Stage/subtask cursor"
+                )
+            stage, subtask = subtask_for_key(state.active_subtask)
+            if stage.id != state.active_stage or subtask.source_step_id != state.active_step:
+                raise InvalidTransition("Stage recovery cursor is internally inconsistent")
+            if subtask.key in {"reviewer_entry_gate", "content_freeze_guard"}:
+                definition = self.registry.stage_subtask(subtask.key)
+            elif subtask.conditional and not semantic_flags(self.store.dirty_flags()):
+                definition = self.registry.stage_subtask(
+                    "conditional_math_preflight_skip"
+                )
+            else:
+                definition = self.registry.get(subtask.source_step_id)
+            stage_task = ScheduledStageTask(
+                stage.id,
+                stage.name,
+                subtask.key,
+                subtask.source_step_id,
+                subtask.checkpoint_step_id,
+                definition,
+            )
+        else:
+            definition = self.registry.get(state.active_step)
         try:
             timeout_seconds = self._contest_timeout(definition)
             context = self._context(
@@ -516,6 +1168,13 @@ class FactoryEngine:
                 "runner_lease_id": None,
                 "heartbeat_at": None,
             }
+            if stage_task is not None:
+                changes.update(
+                    last_completed_stage=completed_stage_for_step(resume_after),
+                    active_stage=None,
+                    active_subtask=None,
+                    source_step_id=None,
+                )
             decision_name = "resume_from_reopen"
         elif decision.disposition is RecoveryDisposition.AWAIT:
             if decision.pending_action is None:
@@ -540,6 +1199,44 @@ class FactoryEngine:
                 raise InvalidTransition(
                     f"step {definition.id} cannot recover through earlier step {completed_step}"
                 )
+            if stage_task is not None:
+                recovered = self._complete_stage_task(
+                    state,
+                    state.runner_lease_id if enforce_lease else None,
+                    stage_task,
+                    validation=type(
+                        "RecoveredValidation",
+                        (),
+                        {"evidence": decision.evidence},
+                    )(),
+                    result=type(
+                        "RecoveredResult",
+                        (),
+                        {"metadata": {"recovered": True, **decision.metadata}},
+                    )(),
+                )
+                if recovered.status is WorkflowStatus.RUNNING:
+                    return self._transition(
+                        expected_revision=recovered.revision,
+                        event_type="RECOVERY_DECIDED",
+                        changes={
+                            "status": WorkflowStatus.READY,
+                            "runner_pid": None,
+                            "runner_lease_id": None,
+                            "heartbeat_at": None,
+                        },
+                        payload={
+                            "decision": "promote_valid_stage_subtask",
+                            "source": "recovery",
+                            "source_step": definition.id,
+                            "stage": stage_task.stage_id,
+                            "subtask": stage_task.subtask,
+                            "reason": decision.reason,
+                            "evidence": decision.evidence,
+                            **decision.metadata,
+                        },
+                    )
+                return recovered
             changes = {
                 "status": WorkflowStatus.READY,
                 "last_completed_step": completed_step,
@@ -571,6 +1268,12 @@ class FactoryEngine:
             if decision.disposition is RecoveryDisposition.REOPEN
             else "RECOVERY_DECIDED"
         )
+        stage_recovery_kwargs = {}
+        if stage_task is not None and decision.disposition is RecoveryDisposition.REOPEN:
+            stage_recovery_kwargs = {
+                "invalidate_checkpoints_after_step": changes["last_completed_step"],
+                "subtask_baseline": None,
+            }
         return self._transition(
             expected_revision=state.revision,
             event_type=event_type,
@@ -588,6 +1291,7 @@ class FactoryEngine:
                 expected_runner_lease_id,
                 enforce_lease,
             ),
+            **stage_recovery_kwargs,
         )
 
     def _await_action(
@@ -648,13 +1352,17 @@ class FactoryEngine:
             state.status is WorkflowStatus.INTERRUPTED
             and state.active_step is not None
         )
+        preserve_stage_subtask = (
+            state.scheduler_generation == STAGE_SCHEDULER_GENERATION
+            and state.active_subtask is not None
+        )
         changes = {
             "status": WorkflowStatus.READY,
             "runner_pid": None,
             "runner_lease_id": None,
             "heartbeat_at": None,
         }
-        if not preserve_interrupted_step:
+        if not preserve_interrupted_step and not preserve_stage_subtask:
             changes.update(active_step=None, attempt=0)
         return self._transition(
             expected_revision=expected_revision,
@@ -702,12 +1410,24 @@ class FactoryEngine:
             state.runner_pid is not None and self._pid_is_live(state.runner_pid)
         ):
             raise InvalidTransition("cannot deactivate an active engine runner")
+        if (
+            state.scheduler_generation == STAGE_SCHEDULER_GENERATION
+            and self.store.dirty_flags()
+        ):
+            raise InvalidTransition(
+                "cannot deactivate Stage scheduling while semantic dirty flags are unresolved"
+            )
         return self._transition(
             expected_revision=expected_revision,
             event_type="ENGINE_DEACTIVATED",
             changes={
                 "control_mode": "legacy",
                 "runtime_generation": "legacy_adapter",
+                "scheduler_generation": STEP_SCHEDULER_GENERATION,
+                "stage_catalog_version": None,
+                "active_stage": None,
+                "active_subtask": None,
+                "source_step_id": state.active_step,
             },
         )
 
@@ -789,6 +1509,19 @@ class FactoryEngine:
                 )
             except RevisionConflict:
                 state = self._refresh_owned_state(lease)
+
+    def _stage_transition(
+        self,
+        state: WorkflowState,
+        lease: str | None,
+        **kwargs,
+    ) -> WorkflowState:
+        if lease is not None:
+            return self._owned_transition(state, lease, **kwargs)
+        return self._transition(
+            expected_revision=state.revision,
+            **kwargs,
+        )
 
     def _refresh_owned_state(
         self, lease: str, *, active_step: int | None = None

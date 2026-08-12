@@ -47,9 +47,10 @@ def _cells(line: str) -> list[str]:
     ]
 
 
-def has_unresolved_blocking(path: Path) -> bool:
+def has_unresolved_severity(path: Path, severities: set[str]) -> bool:
     if not path.is_file():
         return False
+    targets = {str(value).upper() for value in severities}
     header: dict[str, int] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if "|" not in line:
@@ -68,13 +69,21 @@ def has_unresolved_blocking(path: Path) -> bool:
                 status = cells[header["status"]].upper()
             except IndexError:
                 continue
-            if severity == "BLOCKING" and status not in RESOLVED_STATUSES:
+            if severity in targets and status not in RESOLVED_STATUSES:
                 return True
             continue
         normalized = {cell.upper() for cell in cells}
-        if "BLOCKING" in normalized and not (normalized & RESOLVED_STATUSES):
+        if normalized & targets and not (normalized & RESOLVED_STATUSES):
             return True
     return False
+
+
+def has_unresolved_blocking(path: Path) -> bool:
+    return has_unresolved_severity(path, {"BLOCKING"})
+
+
+def has_unresolved_critical(path: Path) -> bool:
+    return has_unresolved_severity(path, {"BLOCKING", "MAJOR"})
 
 
 def sync_incremental_findings(path: Path, findings: list[LedgerFinding]) -> None:

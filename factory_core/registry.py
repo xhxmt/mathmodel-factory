@@ -102,6 +102,7 @@ class StepDefinition:
 class StepRegistry:
     def __init__(self) -> None:
         self._steps: dict[int, StepDefinition] = {}
+        self._stage_subtasks: dict[str, StepDefinition] = {}
 
     def register(self, definition: StepDefinition) -> None:
         if definition.id in self._steps:
@@ -119,6 +120,20 @@ class StepRegistry:
             if step_id > completed_step:
                 return self._steps[step_id]
         return None
+
+    def register_stage_subtask(self, key: str, definition: StepDefinition) -> None:
+        normalized = str(key).strip()
+        if not normalized:
+            raise ValueError("Stage subtask key is required")
+        if normalized in self._stage_subtasks:
+            raise ValueError(f"Stage subtask {normalized!r} is already registered")
+        self._stage_subtasks[normalized] = definition
+
+    def stage_subtask(self, key: str) -> StepDefinition:
+        try:
+            return self._stage_subtasks[str(key)]
+        except KeyError as exc:
+            raise KeyError(f"Stage subtask {key!r} is not registered") from exc
 
     def __iter__(self):
         return iter(self._steps[step_id] for step_id in sorted(self._steps))

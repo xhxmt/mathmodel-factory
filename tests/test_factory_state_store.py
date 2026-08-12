@@ -290,3 +290,64 @@ def test_v3_database_adds_independent_solver_job_revision(tmp_path):
         connection.close()
     assert state.schema_version == SCHEMA_VERSION
     assert "job_revision" in columns
+
+
+def test_v5_database_upgrades_to_step_scheduler_without_rewriting_events(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    created = store.initialize(project_id="v5", project_type="modeling")
+    connection = sqlite3.connect(store.path)
+    try:
+        connection.executescript(
+            """
+            ALTER TABLE project_state RENAME TO project_state_v6;
+            CREATE TABLE project_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                schema_version INTEGER NOT NULL,
+                project_id TEXT NOT NULL,
+                project_type TEXT NOT NULL,
+                control_mode TEXT NOT NULL,
+                runtime_generation TEXT NOT NULL,
+                status TEXT NOT NULL,
+                last_completed_step INTEGER NOT NULL,
+                active_step INTEGER,
+                attempt INTEGER NOT NULL,
+                revision INTEGER NOT NULL,
+                pending_action_json TEXT,
+                runner_pid INTEGER,
+                runner_lease_id TEXT,
+                heartbeat_at INTEGER,
+                storage_scope TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_event_at INTEGER NOT NULL
+            );
+            INSERT INTO project_state(
+                singleton, schema_version, project_id, project_type, control_mode,
+                runtime_generation, status, last_completed_step, active_step,
+                attempt, revision, pending_action_json, runner_pid,
+                runner_lease_id, heartbeat_at, storage_scope, created_at,
+                updated_at, last_event_at
+            )
+            SELECT
+                singleton, 5, project_id, project_type, control_mode,
+                runtime_generation, status, 7, NULL, attempt, revision,
+                pending_action_json, runner_pid, runner_lease_id, heartbeat_at,
+                storage_scope, created_at, updated_at, last_event_at
+            FROM project_state_v6;
+            DROP TABLE project_state_v6;
+            UPDATE schema_info SET schema_version = 5 WHERE singleton = 1;
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    state = store.load()
+
+    assert state.scheduler_generation == "step_v2"
+    assert state.stage_catalog_version is None
+    assert state.last_completed_step == 7
+    assert state.last_completed_stage == 5
+    assert [(event.revision, event.type) for event in store.events()] == [
+        (created.revision, "PROJECT_CREATED")
+    ]

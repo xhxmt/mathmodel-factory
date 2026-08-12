@@ -4,9 +4,10 @@ This file gives coding-agent guidance for this repository.
 
 ## What This Is
 
-This checkout is a local Modeling Factory: a Python orchestrator with a frozen Bash step adapter that
-takes a math-modeling competition problem and drives a multi-agent 16-step
-workflow to produce a finished paper PDF and supporting artifacts.
+This checkout is a local Modeling Factory: a Python orchestrator with a frozen
+Bash compatibility adapter that takes a math-modeling competition problem
+through 10 persistent scheduler Stages while retaining 17 Step contracts
+(Step 0–16), producing a finished paper PDF and supporting artifacts.
 
 The active domain is CUMCM / MCM / ICM style applied mathematical modeling, not
 the original economics/sociology Paper Factory. Legacy social-science prompts
@@ -82,13 +83,21 @@ through the native Step 0-16 registry under `contest_core_v1`. Existing projects
 Legacy Runner until an explicit, conflict-free migration report is applied.
 
 `factory_core/` owns revisioned state transitions, append-only events, retry
-budgets, recovery decisions, pending actions, Step/backend registration,
+budgets, recovery decisions, pending actions, Stage/Step/backend registration,
 application commands, and solver jobs. Native Steps implement
 `prepare/execute/validate/recover` and do not invoke the frozen Bash runner.
 The historical implementation lives at `factory_core/adapters/legacy_runner.sh`
 for unmigrated and explicitly rolled-back projects only.
 
-New projects persist a 74-hour contest policy in schema-v5 SQLite. Steps 0–15
+The active scheduler contract is documented in
+`docs/architecture/STAGE_SIMPLIFICATION_PLAN.md`: eight user-facing contest
+phases, ten persistent scheduler Stages, and the existing Step 0-16 contracts
+retained as validation and compatibility boundaries. New projects default to
+`stage_v1`; old native `step_v2` projects switch only through explicit scheduler
+activation and may explicitly roll back while stopped and semantically clean.
+Do not delete, renumber, or merge the Step contracts.
+
+New projects persist a 74-hour contest policy in schema-v6 SQLite. Steps 0–15
 are capped at T−6h content freeze; Step 16 owns the six-hour terminal reserve
 and is capped at the final deadline. T−2h is delivery freeze: any audit-driven
 substantive reopen requires a separate human override. Retry sleeps are also

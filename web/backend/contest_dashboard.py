@@ -9,6 +9,7 @@ from typing import Any
 from factory_core.contest import phase_for_step
 from factory_core.delivery.release import resolve_current_release
 from factory_core.storage import SQLiteStateStore
+from factory_core.stages import projected_stage_cursor
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -228,9 +229,10 @@ def build_contest_dashboard(
     now = int(time.time()) if now_epoch is None else int(now_epoch)
     store = SQLiteStateStore(project)
     state = store.load() if store.exists else None
+    stage_cursor = projected_stage_cursor(state) if state is not None else None
     current_step = (
-        state.active_step
-        if state is not None and state.active_step is not None
+        stage_cursor["source_step_id"]
+        if stage_cursor is not None and stage_cursor["source_step_id"] is not None
         else max(0, state.last_completed_step) if state is not None else 0
     )
     timing = _timing(store, current_step=current_step, now_epoch=now) if state else {
@@ -349,6 +351,7 @@ def build_contest_dashboard(
         "schema_version": "contest-dashboard-v1",
         "base_name": project.name,
         "current_step": current_step,
+        "workflow_cursor": stage_cursor,
         "timing": timing,
         "gates": {
             "step3": store.decision("step3") if state else None,

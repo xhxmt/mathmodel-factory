@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class FactoryCoreError(RuntimeError):
@@ -61,9 +61,15 @@ class WorkflowState:
     project_type: str
     control_mode: str
     runtime_generation: str
+    scheduler_generation: str
+    stage_catalog_version: str | None
     status: WorkflowStatus
     last_completed_step: int
     active_step: int | None
+    last_completed_stage: int
+    active_stage: int | None
+    active_subtask: str | None
+    source_step_id: int | None
     attempt: int
     revision: int
     pending_action: dict[str, Any] | None

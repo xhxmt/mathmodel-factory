@@ -10,6 +10,7 @@ from typing import Callable
 
 from .domain import MigrationConflict, WorkflowState, WorkflowStatus
 from .storage import SQLiteStateStore
+from .stages import STAGE_SCHEDULER_GENERATION
 
 
 _CHECKPOINT_RE = re.compile(r"Last completed step\*{0,2}\s*[:：]\s*(-?\d+)")
@@ -187,8 +188,14 @@ def apply_migration(
     *,
     expected_digest: str,
     runtime_generation: str = "native_v2",
+    scheduler_generation: str = STAGE_SCHEDULER_GENERATION,
 ) -> WorkflowState:
     project = Path(project_dir).resolve()
+    if (
+        scheduler_generation == STAGE_SCHEDULER_GENERATION
+        and runtime_generation != "native_v2"
+    ):
+        raise MigrationConflict("Stage scheduling requires the native_v2 runtime")
     if expected_digest != report.digest:
         raise MigrationConflict("migration report approval digest does not match")
     if str(project) != report.project_dir:
@@ -237,6 +244,7 @@ def apply_migration(
                 "warnings": report.warnings,
             },
             runtime_generation=runtime_generation,
+            scheduler_generation=scheduler_generation,
         )
     finally:
         lock_info.unlink(missing_ok=True)

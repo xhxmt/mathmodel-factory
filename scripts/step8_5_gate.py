@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -21,6 +22,21 @@ FRESHNESS_INPUTS = (
     "sensitivity_report.md",
     "model.md",
 )
+
+
+def _fingerprint(project: Path, paths: list[Path]) -> str:
+    records = []
+    for path in sorted(paths, key=lambda item: item.relative_to(project).as_posix()):
+        records.append(
+            {
+                "path": path.relative_to(project).as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    encoded = json.dumps(
+        records, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def collect_step8_5_state(project_dir: str | Path) -> dict:
@@ -57,8 +73,12 @@ def collect_step8_5_state(project_dir: str | Path) -> dict:
     else:
         status = "invalid"
     effective_verdict = "STALE" if status == "stale" else verdict
+    artifact_paths = [path for path in files.values() if path.is_file()]
+    input_fingerprint = _fingerprint(project, existing_inputs)
+    artifact_fingerprint = _fingerprint(project, artifact_paths)
 
     return {
+        "schema_version": "reviewer-entry-gate-state-v2",
         "status": status,
         "verdict": verdict,
         "effective_verdict": effective_verdict,
@@ -68,6 +88,8 @@ def collect_step8_5_state(project_dir: str | Path) -> dict:
         "stale_inputs": stale_inputs,
         "files": {name: str(path) for name, path in files.items()},
         "present": present,
+        "input_fingerprint": input_fingerprint,
+        "artifact_fingerprint": artifact_fingerprint,
     }
 
 

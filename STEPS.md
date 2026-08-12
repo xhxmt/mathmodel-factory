@@ -6,7 +6,7 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 
 - Factory root: this repository
 - Project directories: `ongoing/{base}/` while running, `complete/{base}/` after delivery
-- Workflow state: new and explicitly migrated `native_v2` projects use schema-v5 `.factory/state.db` as the authoritative versioned state/event store. New projects also persist the `contest_core_v1` clock and human decisions there. Step artifacts remain authoritative validation evidence. Unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
+- Workflow state: new and explicitly migrated `native_v2` projects use schema-v6 `.factory/state.db` as the authoritative versioned state/event store. New projects default to the versioned 10-Stage scheduler (`stage_v1`) and also persist the `contest_core_v1` clock and human decisions there. Step artifacts remain authoritative validation evidence. Older native projects retain `step_v2` until an explicit scheduler activation; unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
 - Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi). Submit with `--type`, `--max-time`, repeated `--input` / `--output` / `--seed`; inspect immutable two-stage evidence with `--status <jobid> --json`.
 - MinerU PDF → Markdown converter: `../../scripts/mineru_parse.py` (requires `MINERU_TOKEN` in repo `.env`)
 - Method library: `../../method_library/` with `index.json` as the
@@ -40,6 +40,15 @@ the competition-facing workflow is grouped into eight phases:
 6. Deterministic Paper Audit (Step 10)
 7. Review & Revision (Steps 11–15; Human Gate 2 and content freeze)
 8. Final Audit & Delivery (Step 16)
+
+This is the stable user-facing and validation contract. New projects are
+scheduled and recovered through ten persistent Stages, while Step 0–16 remain
+the artifact, validator, budget, evidence, and compatibility contracts. Do not
+delete or renumber Step 0–16, and do not treat the eight user-facing phases as
+scheduler or recovery boundaries. The Stage mapping, dirty-flag routing,
+conditional Step 13, migration/rollback contract, and remaining operational
+acceptance item are documented in
+[`docs/architecture/STAGE_SIMPLIFICATION_PLAN.md`](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md).
 
 The artifact contract has three layers. Business truth includes problem/model
 contracts, structured selection decisions, canonical results, `paper.tex`, and
@@ -185,7 +194,11 @@ Produce:
 - `anchor_figure_plan.md`
 - `entry_gate.md` — first verdict line must be `VERDICT: PASS`; `VERDICT: REVISE`, missing artifacts, or malformed verdicts block Step 9.
 
-This is an editorial gate inserted between Step 8 and Step 9. It does not renumber the main 16-step workflow. Its job is to align abstract skeleton, visual anchors, and section-opening paragraphs before paper drafting begins.
+This is the non-integer completion subtask of Stage 6 between Step 8 and Step 9.
+It does not become a workflow-state Step ID or renumber Step 0–16. Its job is to
+align abstract skeleton, visual anchors, and section-opening paragraphs before
+paper drafting begins; its input/artifact fingerprint is persisted and a stale
+gate reopens `REVIEWER_ENTRY`.
 
 ### Step 9: Paper Draft
 
@@ -241,9 +254,12 @@ Produce:
 
 ### Step 13: Preliminary Mathematical Audit
 
-Step 13 is no longer a second full three-role Judge. It deterministically builds
-all role packets as a capability/completeness preflight, then invokes only the
-isolated math role against `judge_packets/math/`. It produces:
+Step 13 is the conditional exit subtask of Stage 8 and remains an integer Step
+contract for validation and `step_v2` compatibility. When a machine-owned
+`MODEL_DIRTY`, `MATH_DIRTY`, or `RESULT_DIRTY` flag is present, it
+deterministically builds all role packets as a capability/completeness preflight,
+then invokes only the isolated math role against `judge_packets/math/`. It
+produces:
 
 - `judge_outputs/math.md` — strict math role envelope;
 - `judge_outputs/precheck.json` — `judge-precheck-v1` metadata declaring
@@ -255,6 +271,13 @@ isolated math role against `judge_packets/math/`. It produces:
     the existing scientific repair budget;
   - `VERDICT: INDETERMINATE_REVIEW` — packet, model, schema, or grounding
     uncertainty; retry Step 13 without consuming the scientific reopen budget.
+
+When none of those three semantic dirty flags is present, `stage_v1` does not
+invoke the math Agent. It writes a
+`SKIPPED_NO_MATH_SEMANTIC_CHANGE` receipt bound to the current authored-artifact
+fingerprint, checker contract, dirty-classifier contract, and
+`delivery_allowed: false`. An unknown change fails closed as math/result dirty;
+the old `step_v2` scheduler continues to execute the Step 13 lifecycle directly.
 
 Execution consistency has already been checked by the Step-5/6 `results`
 profile, and paper/result traceability by the Step-10 `paper` profile. The full
@@ -297,7 +320,11 @@ Single-step polish bundle (formerly three separate steps in the social-science v
 - **Internal traces removal**: `m1`/`m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache` → rewrite to paper-readable model/validation language (required submission files like `result*.xlsx` may remain)
 - **Risk phrasing rewrite**: "脆弱"/"翻转"/"风险暴露"/"乐观上界" → "抽样加密验证"/"步长收敛性"/"独立算法复核"/"稳定性检验"
 
-Any Step 14 / Step 15 change invalidates the Step-13 precheck snapshot. Do not treat `PRECHECK_PASS` as the delivered-paper verdict.
+Step 14 / Step 15 changes to model, mathematics, canonical results, source
+mapping, or core numerical claims set semantic dirty state, reopen the owning
+Stage, and force Step 13 again. Pure prose/citation/format changes may retain a
+valid classifier-bound skip/precheck checkpoint, but never authorize delivery.
+Do not treat `PRECHECK_PASS` or a skip receipt as the delivered-paper verdict.
 
 After Step 15 validation, the project is `CONTENT_READY`: its content may be
 audited independently with `python3 -m factory_core.cli audit <project>`. That
@@ -319,6 +346,11 @@ subsystem and delivery. It invokes or reuses the audit for the current content
 snapshot, then performs delivery mutations only when the result is `PASS` or an
 administrator-issued, exact-snapshot `deliver_snapshot` authorization produces
 an `OVERRIDDEN` audit result. Native and Legacy adapters use this same path.
+Stage 10 runs cleanup before building the canonical authored final-input
+manifest. From `FINAL_SNAPSHOT_CREATED` until the atomic current-pointer switch,
+that manifest is rechecked at audit and publisher boundaries; any mutation
+records `FINALIZATION_ABORTED_SNAPSHOT_CHANGED`, reopens the owning Stage, and
+forbids reuse of the old audit/acceptance receipt.
 
 Produce:
 - a freshly compiled `{base}_paper.pdf` (via `../../compile_paper.sh`); compilation failure is fatal and may not fall back to an older PDF

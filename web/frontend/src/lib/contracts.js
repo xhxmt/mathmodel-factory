@@ -10,6 +10,13 @@
  * @property {number} current_step
  * @property {number|null} revision
  * @property {number|null} last_completed_step
+ * @property {string|null} scheduler_generation
+ * @property {string|null} stage_catalog_version
+ * @property {number|null} last_completed_stage
+ * @property {number|null} active_stage
+ * @property {string|null} active_stage_name
+ * @property {string|null} active_subtask
+ * @property {number|null} source_step_id
  * @property {Object|null} pending_action
  * @property {number} progress_percent
  * @property {boolean} is_running
@@ -85,6 +92,13 @@ export function normalizeProjectStatus(raw = {}) {
     current_step: numberOr(raw.current_step, -1),
     revision: raw.revision == null ? null : numberOr(raw.revision, null),
     last_completed_step: raw.last_completed_step == null ? null : numberOr(raw.last_completed_step, null),
+    scheduler_generation: stringOrNull(raw.scheduler_generation),
+    stage_catalog_version: stringOrNull(raw.stage_catalog_version),
+    last_completed_stage: raw.last_completed_stage == null ? null : numberOr(raw.last_completed_stage, null),
+    active_stage: raw.active_stage == null ? null : numberOr(raw.active_stage, null),
+    active_stage_name: stringOrNull(raw.active_stage_name),
+    active_subtask: stringOrNull(raw.active_subtask),
+    source_step_id: raw.source_step_id == null ? null : numberOr(raw.source_step_id, null),
     pending_action: raw.pending_action && typeof raw.pending_action === 'object' ? raw.pending_action : null,
     progress_percent: numberOr(raw.progress_percent, 0),
     is_running: Boolean(raw.is_running),

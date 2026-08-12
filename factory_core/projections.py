@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .contest import phase_for_step
 from .domain import WorkflowState, WorkflowStatus
+from .stages import projected_stage_cursor
 
 
 _STEP_RE = re.compile(r"(Last completed step\*{0,2}\s*[:：]\s*)-?\d+")
@@ -39,17 +40,22 @@ def _checkpoint(project: Path, state: WorkflowState) -> None:
 
 def _heartbeat(project: Path, state: WorkflowState) -> None:
     path = project / ".heartbeat"
+    source_step = (
+        state.source_step_id
+        if state.source_step_id is not None
+        else state.active_step
+    )
     if state.status is WorkflowStatus.RUNNING:
-        step = state.active_step if state.active_step is not None else state.last_completed_step
+        step = source_step if source_step is not None else state.last_completed_step
         content = f"ACTIVE:{step} {state.updated_at}\n"
     elif state.status is WorkflowStatus.RETRYING:
-        content = f"RETRYING:{state.active_step} {state.updated_at}\n"
+        content = f"RETRYING:{source_step} {state.updated_at}\n"
     elif state.status is WorkflowStatus.AWAITING_SELECTION:
-        content = f"AWAITING_SELECTION:{state.active_step} {state.updated_at}\n"
+        content = f"AWAITING_SELECTION:{source_step} {state.updated_at}\n"
     elif state.status is WorkflowStatus.AWAITING_CONSULTATION:
-        content = f"CONSULT:{state.active_step} {state.updated_at}\n"
+        content = f"CONSULT:{source_step} {state.updated_at}\n"
     elif state.status is WorkflowStatus.FAILED:
-        content = f"STUCK:{state.active_step} {state.updated_at}\n"
+        content = f"STUCK:{source_step} {state.updated_at}\n"
     elif state.status is WorkflowStatus.KILLED:
         content = f"KILLED:{state.active_step or 0} {state.updated_at}\n"
     elif state.status is WorkflowStatus.COMPLETED:
@@ -83,7 +89,12 @@ def runtime_payload(
     contest_policy: dict | None = None,
     now_epoch: int | None = None,
 ) -> dict:
-    current_step = state.active_step if state.active_step is not None else max(0, state.last_completed_step)
+    stage_cursor = projected_stage_cursor(state)
+    current_step = (
+        stage_cursor["source_step_id"]
+        if stage_cursor["source_step_id"] is not None
+        else max(0, state.last_completed_step)
+    )
     phase = phase_for_step(min(current_step, 16))
     action = state.pending_action or {}
     display = {
@@ -100,7 +111,7 @@ def runtime_payload(
         WorkflowStatus.INTERRUPTED: "已中断",
     }[state.status]
     return {
-        "version": 4,
+        "version": 5,
         "state": state.status.value,
         "current_step": current_step,
         "current_action": action.get("type") or (
@@ -128,6 +139,13 @@ def runtime_payload(
         ],
         "revision": state.revision,
         "runtime_generation": state.runtime_generation,
+        "scheduler_generation": state.scheduler_generation,
+        "stage_catalog_version": stage_cursor["stage_catalog_version"],
+        "last_completed_stage": stage_cursor["last_completed_stage"],
+        "active_stage": stage_cursor["active_stage"],
+        "active_stage_name": stage_cursor["active_stage_name"],
+        "active_subtask": stage_cursor["active_subtask"],
+        "source_step_id": stage_cursor["source_step_id"],
         "last_completed_step": state.last_completed_step,
         "pending_action": state.pending_action,
         "contest_profile": contest_policy.get("profile") if contest_policy else None,

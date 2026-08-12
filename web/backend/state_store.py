@@ -145,6 +145,13 @@ def _from_snapshot(project_path: Path, base_name: str, snapshot: dict) -> dict:
         "content_freeze_at": snapshot.get("content_freeze_at"),
         "delivery_freeze_at": snapshot.get("delivery_freeze_at"),
         "remaining_seconds": snapshot.get("remaining_seconds"),
+        "scheduler_generation": snapshot.get("scheduler_generation"),
+        "stage_catalog_version": snapshot.get("stage_catalog_version"),
+        "last_completed_stage": snapshot.get("last_completed_stage"),
+        "active_stage": snapshot.get("active_stage"),
+        "active_stage_name": snapshot.get("active_stage_name"),
+        "active_subtask": snapshot.get("active_subtask"),
+        "source_step_id": snapshot.get("source_step_id"),
     }
 
 

@@ -161,6 +161,19 @@ class IncrementalAuditService:
                 profile, checkpoint_step, hard_failures
             ),
         }
+        if profile is AuditProfile.PAPER:
+            inputs = snapshot.identity.get("inputs", {})
+            checker_contract = snapshot.identity.get("checker_contract", {})
+            paper_inputs = {
+                path: digest
+                for path, digest in inputs.items()
+                if path.endswith("_paper.tex") or path == "paper/paper.tex"
+            }
+            evidence.update(
+                draft_content_fingerprint=self._canonical_hash(paper_inputs),
+                paper_audit_input_fingerprint=snapshot.snapshot_id,
+                checker_contract_sha256=self._canonical_hash(checker_contract),
+            )
         record = AuditRecord(
             snapshot_id=snapshot.snapshot_id,
             base=project.name,
@@ -733,6 +746,13 @@ class IncrementalAuditService:
         return sorted(set(selected))
 
     @staticmethod
+    def _canonical_hash(value: object) -> str:
+        encoded = json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
     def _sha256(path: Path) -> str:
         try:
             return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -789,6 +809,18 @@ class IncrementalAuditService:
             or value.get("judge_completed") is not False
         ):
             return None
+        if profile is AuditProfile.PAPER:
+            evidence = value.get("evidence")
+            if not isinstance(evidence, dict) or any(
+                not isinstance(evidence.get(key), str)
+                or len(str(evidence.get(key))) != 64
+                for key in (
+                    "draft_content_fingerprint",
+                    "paper_audit_input_fingerprint",
+                    "checker_contract_sha256",
+                )
+            ):
+                return None
         return AuditRecord(
             snapshot_id=snapshot.snapshot_id,
             base=project.name,

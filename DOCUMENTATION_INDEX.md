@@ -9,6 +9,7 @@
 | 了解项目与快速开始 | [README.md](README.md) |
 | 查看当前工作流契约 | [STEPS.md](STEPS.md) |
 | 查看编排状态、迁移与恢复契约 | [docs/architecture/ORCHESTRATION_ENGINE.md](docs/architecture/ORCHESTRATION_ENGINE.md) |
+| 查看当前 10-Stage 编排合同与实施状态 | [docs/architecture/STAGE_SIMPLIFICATION_PLAN.md](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md) |
 | 查看源码、运行数据和兼容边界 | [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md) |
 | 编写模型、代码和论文 | [modeling_guide.md](modeling_guide.md) |
 | 检查建模口径 | [docs/guides/MODELING_CHECKLIST.md](docs/guides/MODELING_CHECKLIST.md) |
@@ -22,12 +23,13 @@
 
 ## 核心契约
 
-- [STEPS.md](STEPS.md)：当前 `contest_core_v1` 八阶段（内部 Step 0–16）数学建模工作流、全局时限及质量门禁。
+- [STEPS.md](STEPS.md)：当前 `contest_core_v1` 八阶段展示、10 Stage 调度和内部 Step 0–16 验证合同、全局时限及质量门禁。
 - [modeling_guide.md](modeling_guide.md)：项目结构、求解器、结果复现、LaTeX 和图表规范。
 - [AGENTS.md](AGENTS.md)：Codex 与通用 coding agent 的精简入口和安全边界。
 - [CLAUDE.md](CLAUDE.md)：详细仓库架构、工作流和编辑约定。
 - [CHANGELOG.md](CHANGELOG.md)：主要功能与工作流变更记录。
 - [docs/architecture/ORCHESTRATION_ENGINE.md](docs/architecture/ORCHESTRATION_ENGINE.md)：Python 引擎、SQLite 状态、Legacy 迁移和恢复契约。
+- [docs/architecture/STAGE_SIMPLIFICATION_PLAN.md](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md)：当前 10 Stage 映射、Step 0–16 验证/兼容边界、dirty flag、迁移/回滚合同及验收状态。
 - [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md)：核心、应用、部署、评测、历史资产和运行数据的所有权。
 - [docs/architecture/compatibility-removal.md](docs/architecture/compatibility-removal.md)：兼容入口的可观察移除条件；本轮不删除这些入口。
 - [docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md](docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md)：本轮旧 worktree 的恢复、取舍与合并依据（历史快照）。
@@ -98,4 +100,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料。
 
-**最后更新：2026-08-08**
+**最后更新：2026-08-12**

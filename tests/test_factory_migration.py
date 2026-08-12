@@ -35,6 +35,22 @@ def test_migration_requires_matching_inspection_report(tmp_path):
     assert not (project / ".runner.lock.info").exists()
 
 
+def test_migration_rejects_stage_scheduler_with_legacy_runtime(tmp_path):
+    project = tmp_path / "ongoing" / "demo"
+    write_project(project)
+    report = LegacyInspector(infer_step=fake_infer).inspect(project)
+
+    with pytest.raises(MigrationConflict, match="requires the native_v2 runtime"):
+        apply_migration(
+            project,
+            report,
+            expected_digest=report.digest,
+            runtime_generation="legacy_adapter",
+        )
+
+    assert not SQLiteStateStore(project).exists
+
+
 def test_migration_rejects_checkpoint_conflict(tmp_path):
     project = tmp_path / "ongoing" / "demo"
     write_project(project, checkpoint=1, inferred=2)

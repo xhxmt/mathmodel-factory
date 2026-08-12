@@ -20,6 +20,14 @@ from ..domain import (
     PrepareResult,
     RecoveryDecision,
     StepError,
+    ValidationResult,
+)
+from ..dirty import (
+    DIRTY_CLASSIFIER_SCHEMA,
+    capture_artifact_manifest,
+    classifier_contract_sha256,
+    manifest_fingerprint,
+    semantic_flags,
 )
 from ..governance.overrides import (
     CONTINUE_AFTER_GATE2,
@@ -29,11 +37,18 @@ from ..governance.overrides import (
 from ..delivery.release import ReleasePublisher
 from ..contest import ContestDeadlineExceeded
 from ..deadline import ensure_deadline
+from ..finalization import (
+    FinalizationSnapshotChanged,
+    build_final_input_manifest,
+    reopen_after_for_changed_paths,
+    verify_final_input_snapshot,
+)
 from .catalog import StepContract
 from .gates import prepare_human_gates
 from .prompt_step import PromptStep
 from .prompting import PromptRenderer
 from .validators import NativeArtifactValidator
+from scripts.step8_5_gate import collect_step8_5_state
 
 
 _VERDICT_RE = re.compile(r"^VERDICT:\s*(\S+)", re.MULTILINE)
@@ -254,6 +269,201 @@ class PaperDraftStep:
 
     def recover(self, context, error):
         return self.prompt_step.recover(context, error)
+
+
+@dataclass
+class ReviewerEntryGateStep:
+    """The non-integer Step 8.5 completion gate inside Stage 6."""
+
+    renderer: PromptRenderer
+    dispatcher: ModelDispatcher
+
+    def prepare(self, context):
+        return PrepareResult.prepared(
+            "visualization_log.md",
+            "reviewer_entry_map.md",
+            "anchor_figure_plan.md",
+            "entry_gate.md",
+        )
+
+    def execute(self, context) -> ExecutionResult:
+        gate = collect_step8_5_state(context.project_dir)
+        if gate.get("ready"):
+            return ExecutionResult.succeeded(step8_5_reused=True)
+        prompt = self.renderer.render(
+            "step8_5_reviewer_entry.txt",
+            context.project_dir,
+            step_key="8_5",
+        )
+        return self.dispatcher.execute(
+            ModelRequest(
+                project_dir=context.project_dir,
+                step_id=8,
+                attempt=context.attempt,
+                prompt=prompt,
+                timeout_seconds=min(context.timeout_seconds, 7_200),
+                hang_timeout_seconds=1_800,
+                deadline_epoch=context.deadline_epoch,
+            ),
+            step_key="8_5",
+            defaults=("claude", "codex"),
+        )
+
+    def validate(self, context):
+        gate = collect_step8_5_state(context.project_dir)
+        evidence = (
+            "reviewer_entry_map.md",
+            "anchor_figure_plan.md",
+            "entry_gate.md",
+        )
+        if gate.get("ready"):
+            return ValidationResult.valid(*evidence, metadata={"step8_5": gate})
+        return ValidationResult.invalid(
+            f"Step 8.5 reviewer-entry gate is not ready: {gate.get('reason')}",
+            *evidence,
+            metadata={"error_class": "TRANSIENT_STEP8_5_GATE", "step8_5": gate},
+        )
+
+    def recover(self, context, error):
+        return RecoveryDecision.from_validation(
+            self.validate(context), active_step=context.step_id
+        )
+
+
+@dataclass
+class ContentFreezeGuardStep:
+    """Human Gate 2 between CONTENT_READY and delivery execution."""
+
+    def prepare(self, context):
+        return prepare_human_gates(context.project_dir, 16)
+
+    def execute(self, context):
+        return ExecutionResult.succeeded(content_freeze_guard=True)
+
+    def validate(self, context):
+        from ..storage import SQLiteStateStore
+
+        store = SQLiteStateStore(context.project_dir)
+        if not store.exists or store.contest_policy() is None:
+            return ValidationResult.valid(metadata={"content_freeze_required": False})
+        if store.decision("content_freeze") is not None:
+            return ValidationResult.valid(
+                metadata={"content_freeze_required": True, "content_freeze": "approved"}
+            )
+        return ValidationResult.awaiting(
+            prepare_human_gates(context.project_dir, 16).pending_action
+        )
+
+    def recover(self, context, error):
+        return RecoveryDecision.from_validation(
+            self.validate(context), active_step=context.step_id
+        )
+
+
+def conditional_preflight_checker_sha256(factory_root: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    for relative in (
+        "factory_core/steps/specialized.py",
+        "factory_core/steps/validators.py",
+        "scripts/judge_packet.py",
+        "prompts/judges/math_auditor.txt",
+    ):
+        path = factory_root / relative
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes() if path.is_file() else b"MISSING")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+@dataclass
+class ConditionalMathPreflightSkipStep:
+    """Write and verify the evidence required to skip Step 13 safely."""
+
+    factory_root: Path
+
+    @staticmethod
+    def _receipt_path(project: Path) -> Path:
+        return project / ".factory" / "receipts" / "conditional_math_preflight.json"
+
+    def prepare(self, context):
+        return PrepareResult.prepared()
+
+    def execute(self, context) -> ExecutionResult:
+        from ..storage import SQLiteStateStore
+
+        flags = SQLiteStateStore(context.project_dir).dirty_flags()
+        if semantic_flags(flags):
+            return ExecutionResult.failed(
+                "PERMANENT_DIRTY_PREFLIGHT_SKIP",
+                returncode=2,
+                dirty_flags=sorted(item["flag"] for item in flags),
+            )
+        fingerprint = manifest_fingerprint(
+            capture_artifact_manifest(context.project_dir)
+        )
+        receipt = {
+            "schema_version": "conditional-math-preflight-v1",
+            "status": "SKIPPED_NO_MATH_SEMANTIC_CHANGE",
+            "based_on_fingerprint": fingerprint,
+            "dirty_flags": sorted(item["flag"] for item in flags),
+            "step_contract": 13,
+            "checker_contract_sha256": conditional_preflight_checker_sha256(
+                self.factory_root
+            ),
+            "classifier_schema": DIRTY_CLASSIFIER_SCHEMA,
+            "classifier_contract_sha256": classifier_contract_sha256(),
+            "delivery_allowed": False,
+        }
+        path = self._receipt_path(context.project_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return ExecutionResult.succeeded(
+            conditional_math_preflight="skipped",
+            conditional_math_preflight_receipt=str(
+                path.relative_to(context.project_dir)
+            ),
+        )
+
+    def validate(self, context):
+        path = self._receipt_path(context.project_dir)
+        try:
+            receipt = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return ValidationResult.invalid(
+                "conditional math-preflight skip receipt is missing or invalid",
+                str(path.relative_to(context.project_dir)),
+            )
+        current = manifest_fingerprint(capture_artifact_manifest(context.project_dir))
+        valid = (
+            receipt.get("status") == "SKIPPED_NO_MATH_SEMANTIC_CHANGE"
+            and receipt.get("based_on_fingerprint") == current
+            and receipt.get("checker_contract_sha256")
+            == conditional_preflight_checker_sha256(self.factory_root)
+            and receipt.get("classifier_contract_sha256")
+            == classifier_contract_sha256()
+            and receipt.get("delivery_allowed") is False
+        )
+        if valid:
+            return ValidationResult.valid(
+                str(path.relative_to(context.project_dir)),
+                metadata={"conditional_math_preflight": "skipped"},
+            )
+        return ValidationResult.invalid(
+            "conditional math-preflight skip receipt is stale",
+            str(path.relative_to(context.project_dir)),
+            metadata={"error_class": "PERMANENT_DIRTY_PREFLIGHT_SKIP"},
+        )
+
+    def recover(self, context, error):
+        return RecoveryDecision.from_validation(
+            self.validate(context), active_step=context.step_id
+        )
 
 
 @dataclass
@@ -1029,6 +1239,21 @@ class DeliveryStep:
                 timeout_seconds=300,
                 accepted=(0, 1),
             )
+        final_input = build_final_input_manifest(project)
+        self._record_finalization_event(
+            project,
+            "FINAL_SNAPSHOT_CREATED",
+            {
+                "schema_version": "factory-final-snapshot-event-v1",
+                "input_fingerprint": final_input.fingerprint,
+                "manifest": str(final_input.manifest_path.relative_to(project)),
+                "source_step": 16,
+            },
+        )
+
+        def finalization_guard() -> None:
+            ensure_deadline()
+            verify_final_input_snapshot(project, final_input)
         if self.audit_service is None:
             from ..audit.service import FinalAuditService
 
@@ -1044,6 +1269,33 @@ class DeliveryStep:
             audit_service = self.audit_service
         outcome = audit_service.run(context)
         audit = outcome.execution
+        try:
+            finalization_guard()
+        except FinalizationSnapshotChanged as exc:
+            return self._snapshot_changed_result(project, final_input.fingerprint, exc)
+        if (
+            audit.error_class == "TRANSIENT_FINAL_AUDIT_MUTATION"
+            or audit.metadata.get("final_decision")
+            == "SNAPSHOT_CHANGED_DURING_FINAL_AUDIT"
+        ):
+            self._record_finalization_event(
+                project,
+                "FINALIZATION_ABORTED_SNAPSHOT_CHANGED",
+                {
+                    "schema_version": "factory-finalization-abort-v1",
+                    "input_fingerprint": final_input.fingerprint,
+                    "audit_snapshot": audit.metadata.get("audit_snapshot"),
+                    "mutation_scope": "derived_final_audit_input",
+                    "resume_after_step": 15,
+                },
+            )
+            return ExecutionResult.succeeded(
+                resume_after_step=15,
+                finalization_aborted=True,
+                error_class="TRANSIENT_FINALIZATION_SNAPSHOT_CHANGED",
+                final_input_fingerprint=final_input.fingerprint,
+                audit_snapshot=audit.metadata.get("audit_snapshot"),
+            )
         if audit.returncode != 0 or audit.metadata.get("resume_after_step") is not None:
             return audit
         if not outcome.record.delivery_allowed:
@@ -1074,10 +1326,12 @@ class DeliveryStep:
                 outcome.snapshot.snapshot_id,
                 status=outcome.record.status.value,
                 package_builder=build_package,
-                deadline_check=ensure_deadline,
+                deadline_check=finalization_guard,
             )
         except ContestDeadlineExceeded:
             raise
+        except FinalizationSnapshotChanged as exc:
+            return self._snapshot_changed_result(project, final_input.fingerprint, exc)
         except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
             return ExecutionResult.failed(
                 "PERMANENT_ATOMIC_DELIVERY",
@@ -1095,6 +1349,53 @@ class DeliveryStep:
             release_reused=release.reused,
             published_pdf=str(release.paper),
             submission_zip=str(release.submission_zip),
+            final_input_fingerprint=final_input.fingerprint,
+            final_input_manifest=str(final_input.manifest_path.relative_to(project)),
+        )
+
+    @staticmethod
+    def _record_finalization_event(
+        project: Path, event_type: str, payload: dict[str, object]
+    ) -> None:
+        from ..storage import SQLiteStateStore
+
+        store = SQLiteStateStore(project)
+        if not store.exists:
+            return
+        state = store.load()
+        store.transition(
+            expected_revision=state.revision,
+            expected_runner_pid=state.runner_pid,
+            expected_runner_lease_id=state.runner_lease_id,
+            event_type=event_type,
+            changes={},
+            payload=payload,
+            event_step=16,
+        )
+
+    def _snapshot_changed_result(
+        self,
+        project: Path,
+        fingerprint: str,
+        exc: FinalizationSnapshotChanged,
+    ) -> ExecutionResult:
+        resume_after = reopen_after_for_changed_paths(exc.changed_paths)
+        self._record_finalization_event(
+            project,
+            "FINALIZATION_ABORTED_SNAPSHOT_CHANGED",
+            {
+                "schema_version": "factory-finalization-abort-v1",
+                "input_fingerprint": fingerprint,
+                "changed_paths": exc.changed_paths,
+                "resume_after_step": resume_after,
+            },
+        )
+        return ExecutionResult.succeeded(
+            resume_after_step=resume_after,
+            finalization_aborted=True,
+            error_class="TRANSIENT_FINALIZATION_SNAPSHOT_CHANGED",
+            changed_paths=exc.changed_paths,
+            final_input_fingerprint=fingerprint,
         )
 
     def validate(self, context):

@@ -12,17 +12,19 @@ state in `.factory/state.db`. Each transition uses one SQLite transaction to:
 2. append an immutable event;
 3. update the project snapshot and increment `revision`.
 
-The snapshot records project identity, control mode, status, completed and
-active Step, attempt, pending action, runner lease/PID, storage scope, and
+The snapshot records project identity, control mode, scheduler/catalog
+generation, completed and active Stage/subtask/source Step, the compatibility
+Step cursor, attempt, pending action, runner lease/PID, storage scope, and
 timestamps. Database triggers reject event updates and deletes. Event payloads
 redact secret-, token-, password-, credential-, and API-key-shaped fields.
 
-Schema v5 also stores an optional `contest_policy` and append-only
-`workflow_decisions`. New projects receive `contest_core_v1`: a 74-hour final
-deadline, T−6h content freeze, T−2h delivery freeze, and six-hour delivery
-reserve. Existing projects upgraded without a policy remain unbounded. Step 3,
-content freeze, and post-freeze reopen decisions are authoritative in SQLite;
-their JSON/Markdown forms are projections.
+Schema v6 also stores Stage checkpoints and input baselines, machine-owned
+semantic dirty flags and clear receipts, an optional `contest_policy`, and
+append-only `workflow_decisions`. New projects receive `contest_core_v1`: a
+74-hour final deadline, T−6h content freeze, T−2h delivery freeze, and six-hour
+delivery reserve. Existing projects upgraded without a policy remain
+unbounded. Step 3, content freeze, and post-freeze reopen decisions are
+authoritative in SQLite; their JSON/Markdown forms are projections.
 
 Step outputs remain validation evidence. `checkpoint.md`, `.heartbeat`,
 `.paused`, `.killed`, `.runner.pid`, and `diagnostics/status.json` are generated
@@ -36,7 +38,7 @@ projects route to `FactoryService`/`FactoryEngine`; unmigrated or explicitly
 rolled-back projects use the frozen Legacy Runner/adapter. Rollback changes both
 `control_mode` and `runtime_generation`, and `FactoryService` treats legacy
 control mode as authoritative, so CLI and Web cannot select different runtimes.
-The native Step 0-16 registry never calls `legacy_runner.sh`.
+The native Stage/Step registry never calls `legacy_runner.sh`.
 
 Every native Step implements one lifecycle:
 
@@ -50,9 +52,11 @@ class Step(Protocol):
 
 `FactoryEngine` owns generic dispatch, retry budgets, reopen budgets, recovery,
 pending-action transitions, and archiving. Steps return structured outcomes and
-cannot mutate scheduler state. The catalog registers Step 0-16 metadata;
+cannot mutate scheduler state. The Stage catalog maps every Step 0-16 contract
+exactly once and adds non-integer reviewer-entry and content-freeze subtasks;
 specialized implementations own parallel proposals, the Step 6 precheck, the
-Step 8.5 gate, isolated judging, and final compile/judge/package delivery.
+Step 8.5 gate, conditional Step 13, isolated judging, and final
+compile/judge/package delivery.
 
 Before each attempt, the engine caps the Step timeout against the remaining
 contest boundary. Steps 0–15 cannot cross content freeze; Step 16 can use the
@@ -60,20 +64,37 @@ terminal reserve but cannot cross the final deadline. Retry delays are budgeted
 the same way and fail closed when they do not fit. The catalog exposes eight
 contest-facing phases while retaining all 17 internal Step contracts.
 
+New projects use `stage_v1`: ten persistent Stages are the scheduling,
+checkpoint, retry, and recovery boundary, while every Step remains a validator,
+budget, evidence, and compatibility boundary. `active_stage`,
+`active_subtask`, `source_step_id`, the Step compatibility cursor, the event,
+the input baseline, and any completion checkpoint commit in one revision.
+Step 13 runs for MODEL/MATH/RESULT dirty state and otherwise writes a
+checker/classifier-bound skip receipt. Draft and audit share a Stage but retain
+separate lifecycles and fingerprint domains, so a writing Agent cannot
+self-authorize audit PASS. See
+[`STAGE_SIMPLIFICATION_PLAN.md`](STAGE_SIMPLIFICATION_PLAN.md).
+
+Existing schema-v5 native projects upgrade in place as `step_v2`; they receive
+a read-only Stage projection until an operator explicitly activates `stage_v1`.
+The persisted `scheduler_generation` prevents the Step and Stage schedulers
+from taking authority over the same project.
+
 Only one live runner lease is allowed per project. A second start or resume is
 rejected whenever the recorded PID is live, regardless of snapshot status. A
-Worker keeps the project `RUNNING` between successful Steps; `READY` means that
-no Worker owns the project. Every Worker-owned transition atomically compares
+Worker keeps the project `RUNNING` between successful subtasks; `READY` means
+that no Worker owns the project. Every Worker-owned transition atomically compares
 the expected PID, lease, and revision in SQLite. Execution and validation both
 recheck ownership, and a replaced Worker raises `RunnerLeaseLost` without
 committing another event.
 
-After an interrupted Step, recovery calls that Step's validator. Waiting and
-failed recovery decisions return without writing `RUN_STARTED`. Valid artifacts
-produce `RECOVERY_DECIDED`; a structured `completed_through_step` preserves
-adapter fast-forward decisions. A durable reopen marker produces
-`STEP_REOPENED` with `source=recovery`, so normal and recovered reopens consume
-the same budget. Invalid artifacts retry the same Step. Recovery does not
+After an interrupted Stage subtask, recovery calls the source Step or
+specialized subtask validator. Waiting and failed recovery decisions return
+without writing `RUN_STARTED`. Valid artifacts produce `RECOVERY_DECIDED` and a
+Stage checkpoint; a structured `completed_through_step` preserves adapter
+fast-forward decisions. A durable reopen marker produces the appropriate
+Step/Stage reopen event, so normal and recovered reopens consume the same
+inherited budget. Invalid artifacts retry the same subtask. Recovery does not
 compare file modification times.
 
 Pending human selections and consultations are stored in `pending_action`.
@@ -88,8 +109,12 @@ commits `WORKER_LAUNCHED` with the exact resulting revision before releasing the
 worker. Stale requests do not launch a process. The lower-level `resume` method
 remains available for explicit no-start maintenance and tests.
 
-Step 16 consumes the independent final-audit result, then validates publication
-and submission package evidence. `FactoryService` writes `delivery_manifest.json`
+Stage 10 first persists the content-freeze guard, performs pre-snapshot cleanup,
+and freezes the canonical authored final-input manifest. Step 16 consumes the
+independent final-audit result, rechecks that manifest through release, then
+validates publication and submission package evidence. Snapshot mutation records
+`FINALIZATION_ABORTED_SNAPSHOT_CHANGED` and reopens the owning Stage rather than
+reusing the old receipt. `FactoryService` writes `delivery_manifest.json`
 only after the engine reaches `completed`. Archiving then writes an
 archive-request event, checkpoints and closes SQLite, moves the project from
 `ongoing/` to `complete/`, and writes the archive-complete event. Re-entry
@@ -173,7 +198,28 @@ while creating the imported snapshot and event, preventing a runner from
 starting inside the migration window. Pending selection/consultation, paused,
 killed, ready, and completed states are preserved.
 
-Rollback is explicit and requires a stopped engine project:
+Legacy-to-native apply defaults directly to `stage_v1`. An already-native
+`step_v2` project is switched separately, only while stopped and after its
+interrupted Step has been recovered:
+
+```bash
+python3 -m factory_core.cli migrate scheduler-activate ongoing/<base> \
+  --expected-revision <revision>
+```
+
+The activation transaction seeds explicit Stage checkpoints from the approved
+Step cursor. It does not rewrite historical events. A stopped Stage project can
+return to the native Step scheduler only before a subtask attempt and while no
+semantic dirty flag remains unresolved:
+
+```bash
+python3 -m factory_core.cli migrate scheduler-rollback ongoing/<base> \
+  --expected-revision <revision>
+```
+
+Rollback is explicit and requires a stopped engine project. A Stage project
+must also have no unresolved semantic dirty flags; rollback cannot bypass an
+upstream revalidation obligation:
 
 ```bash
 python3 -m factory_core.cli migrate rollback ongoing/<base>
@@ -191,10 +237,13 @@ providers implement `ModelBackend`; new solver transports implement
 `SolverBackend`. None of these changes may add a branch to the engine scheduler,
 CLI/Web routing, or the public `run_paper.sh` launcher.
 
-The database schema is version 4. Versions 1-3 upgrade in place; version 4 adds
-the independent Solver job revision while retaining existing workflow events.
+The database schema is version 6. Versions 1-5 upgrade in place; the current
+schema includes runtime and scheduler generation, Stage cursors/checkpoints,
+semantic dirty evidence, independent Solver job revision, contest policy, and
+append-only workflow decisions while retaining existing workflow events.
 Legacy upgrades retain `legacy_adapter`; new and explicitly native-migrated
-projects use `native_v2`. Events remain append-only across upgrades.
+projects use `native_v2` plus `stage_v1`; upgraded native projects retain
+`step_v2` until explicit activation. Events remain append-only across upgrades.
 
 `FACTORY` is the runtime data root used by the CLI and workers. It defaults to
 the repository root for compatibility, but source code is resolved independently

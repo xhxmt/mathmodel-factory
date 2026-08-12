@@ -11,11 +11,14 @@ from .catalog import STEP_CONTRACTS
 from .prompt_step import PromptStep
 from .prompting import PromptRenderer
 from .specialized import (
+    ConditionalMathPreflightSkipStep,
+    ContentFreezeGuardStep,
     DeliveryStep,
     JudgeStep,
     PaperDraftStep,
     ParallelProposalStep,
     PrecheckedPromptStep,
+    ReviewerEntryGateStep,
 )
 from .validators import validator_for
 
@@ -77,4 +80,41 @@ def build_native_registry(
                 step=step,
             )
         )
+    step8 = next(contract for contract in STEP_CONTRACTS if contract.id == 8)
+    registry.register_stage_subtask(
+        "reviewer_entry_gate",
+        StepDefinition(
+            id=8,
+            name="reviewer_entry_gate",
+            timeout_seconds=min(step8.timeout_seconds, 7_200),
+            max_attempts=step8.max_attempts,
+            max_reopens=0,
+            step=ReviewerEntryGateStep(renderer, dispatcher),
+        ),
+    )
+    step13 = next(contract for contract in STEP_CONTRACTS if contract.id == 13)
+    registry.register_stage_subtask(
+        "conditional_math_preflight_skip",
+        StepDefinition(
+            id=13,
+            name="conditional_math_preflight_skip",
+            timeout_seconds=step13.timeout_seconds,
+            max_attempts=1,
+            max_reopens=0,
+            step=ConditionalMathPreflightSkipStep(root),
+        ),
+    )
+    registry.register_stage_subtask(
+        "content_freeze_guard",
+        StepDefinition(
+            id=16,
+            name="content_freeze_guard",
+            timeout_seconds=next(
+                contract.timeout_seconds for contract in STEP_CONTRACTS if contract.id == 16
+            ),
+            max_attempts=1,
+            max_reopens=0,
+            step=ContentFreezeGuardStep(),
+        ),
+    )
     return registry

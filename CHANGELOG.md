@@ -6,8 +6,10 @@
 
 ### 新增
 
+- 新增 `stage_v1` 10-Stage 权威调度：schema-v6 SQLite 原子持久化 Stage/subtask/source-Step 游标、subtask checkpoint、输入基线、dirty flag 和责任 Stage clear receipt；新项目默认启用，旧 `step_v2` native 项目仅通过显式 `scheduler-activate` 切换，并可在停止且无未清 dirty 时显式回滚。
+- 新增独立 Step 8.5 reviewer-entry subtask、条件式 Step 13、双域 paper-audit fingerprint 和 final-input manifest 冻结守卫；科学语义变化按 MODEL/MATH/RESULT/VISUAL/PROSE/CITATION/FORMAT dirty flag 重开责任 Stage，未知变化失败关闭，最终快照变化会中止发布而不复用旧 receipt。
 - Web 比赛工作区新增完整 P0–P2 控制台：默认八阶段/可下钻 17 Step、最近三步时间风险预测、持久行动中心、三类 gate-aware 人工决策、canonical/Solver/审计证据驾驶舱，以及绑定 Final Audit 和原子 current release 的交付就绪清单与 PDF/ZIP 下载；Legacy 无比赛时钟时明确显示未配置，所有新接口继续执行项目 ACL。
-- 新增 `contest_core_v1`：新建 Native 项目在 schema-v5 SQLite 中持久化默认 74 小时或显式官方 deadline、T−6h content freeze、T−2h delivery freeze 和六小时终端交付保留；共享 deadline 约束 Step、模型/命令、恢复、Final Audit、打包和 release pointer 切换，耗尽后失败关闭。内部 Step 0–16 映射为八个比赛阶段，Step 3 与交付前内容冻结成为默认强制的 SQLite 权威人工节点，冻结后回退需额外人工 override；Web 展示八阶段与冻结/提交倒计时。Solver/Final Audit receipts 与 snapshot hashes 明确保留为不可变机器证据，而 checkpoint、选择 Markdown 和 Web 状态仅为可重建投影。
+- 新增 `contest_core_v1`：新建 Native 项目在 schema-v6 SQLite 中持久化默认 74 小时或显式官方 deadline、T−6h content freeze、T−2h delivery freeze 和六小时终端交付保留；共享 deadline 约束 Step、模型/命令、恢复、Final Audit、打包和 release pointer 切换，耗尽后失败关闭。内部 Step 0–16 映射为八个比赛阶段，Step 3 与交付前内容冻结成为默认强制的 SQLite 权威人工节点，冻结后回退需额外人工 override；Web 展示八阶段与冻结/提交倒计时。Solver/Final Audit receipts 与 snapshot hashes 明确保留为不可变机器证据，而 checkpoint、选择 Markdown 和 Web 状态仅为可重建投影。
 - 新增不可变原子 release：每个最终快照发布到 `papers/releases/<base>/<snapshot>/`，包含审计 PDF、submission ZIP、manifest 和审计 receipts；全部校验完成后只原子替换 `papers/<base>/current.json`，失败保留旧 current，顶层 PDF/ZIP 仅为兼容副本。
 - Web 管理端与 CLI 新增交付 override 签发、查看和撤销；权威记录持久化在 `web/auth.db`，并区分 `continue_after_gate2` 与绑定精确 SHA-256 的 `deliver_snapshot`。
 - 新增 `web/backend_service_health.sh`，统一 full/backend-only 部署验收：验证 systemd MainPID、ControlGroup、全部 8000 listener 所有权及稳定窗口内 `NRestarts`，再接受 HTTP 结果。
