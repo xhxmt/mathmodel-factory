@@ -290,6 +290,14 @@ def test_v3_database_adds_independent_solver_job_revision(tmp_path):
         connection.close()
     assert state.schema_version == SCHEMA_VERSION
     assert "job_revision" in columns
+    assert {
+        "idempotency_key",
+        "request_sha256",
+        "owner_stage",
+        "owner_subtask",
+        "owner_revision",
+        "attempt_id",
+    }.issubset(columns)
 
 
 def test_v5_database_upgrades_to_step_scheduler_without_rewriting_events(tmp_path):

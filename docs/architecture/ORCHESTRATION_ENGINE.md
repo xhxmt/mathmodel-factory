@@ -16,11 +16,16 @@ The snapshot records project identity, control mode, scheduler/catalog
 generation, completed and active Stage/subtask/source Step, the compatibility
 Step cursor, attempt, pending action, runner lease/PID, storage scope, and
 timestamps. Database triggers reject event updates and deletes. Event payloads
-redact secret-, token-, password-, credential-, and API-key-shaped fields.
+redact secret-, token-, password-, credential-, and API-key-shaped fields. New
+events retain their legacy type/payload fields and add a versioned `_workflow`
+envelope containing a canonical event type, structured Gate reason, replay-state
+patch, and SHA-256 of the stable post-transition state. A first event or a
+schema-v6 cutover event is a full replay snapshot; later events are merge patches.
 
-Schema v6 also stores Stage checkpoints and input baselines, machine-owned
+Schema v7 also stores Stage checkpoints and input baselines, machine-owned
 semantic dirty flags and clear receipts, an optional `contest_policy`, and
-append-only `workflow_decisions`. New projects receive `contest_core_v1`: a
+append-only `workflow_decisions`. It adds versioned projector snapshots and
+Solver job idempotency/request/Stage ownership columns. New projects receive `contest_core_v1`: a
 74-hour final deadline, T−6h content freeze, T−2h delivery freeze, and six-hour
 delivery reserve. Existing projects upgraded without a policy remain
 unbounded. Step 3, content freeze, and post-freeze reopen decisions are
@@ -52,7 +57,11 @@ class Step(Protocol):
 
 `FactoryEngine` owns generic dispatch, retry budgets, reopen budgets, recovery,
 pending-action transitions, and archiving. Steps return structured outcomes and
-cannot mutate scheduler state. The Stage catalog maps every Step 0-16 contract
+cannot mutate scheduler state. `StageExecutionPipeline` runs prepare, execution,
+deadline checking and validation from an immutable request and returns a
+`StageOutcome`; even Step 16 returns audit events as outcome effects rather than
+writing SQLite. `TransitionCoordinator` is the only orchestration/application
+writer of workflow state. The Stage catalog maps every Step 0-16 contract
 exactly once and adds non-integer reviewer-entry and content-freeze subtasks;
 specialized implementations own parallel proposals, the Step 6 precheck, the
 Step 8.5 gate, conditional Step 13, isolated judging, and final
@@ -97,9 +106,13 @@ Step/Stage reopen event, so normal and recovered reopens consume the same
 inherited budget. Invalid artifacts retry the same subtask. Recovery does not
 compare file modification times.
 
-Pending human selections and consultations are stored in `pending_action`.
-Structured selection decisions are stored in SQLite; JSON/Markdown files are
-rebuildable projections. Resume is rejected until the decision
+Pending human selections, approvals and consultations share a versioned
+`HumanDecisionRequest`, while Selection and Approval retain distinct validation
+contracts. Structured decisions are stored in SQLite; JSON/Markdown files are
+rebuildable projections. Web writes evidence by atomic rename and fingerprints it
+before one SQLite transaction records the decision, appends `ACTION_RESOLVED`, and
+clears the pending action. Published evidence left by a failed database commit is
+reported as an orphan for retry/reconciliation. Resume is rejected until the decision
 resolves the pending action through an engine transaction. The CLI, Web API,
 and compatibility launchers all call `FactoryService`; Web authentication and
 ACL checks remain outside that service. A normal resume uses
@@ -163,12 +176,29 @@ paused, failed, interrupted, and satisfied human-gate states resume first.
 Local and Cloud Run solvers implement one `SolverBackend` contract and are
 assembled by `build_solver_backends()` for both CLI Workers and Web. Solver
 policy and submission requests use the project revision. Each job has an
-independent `job_revision`, so backend confirmation can persist its external ID
+independent `job_revision`, stable `idempotency_key`, receipt `request_sha256`,
+Stage/subtask/revision ownership and attempt identity, so duplicate requests return
+the existing job and backend confirmation can persist its external ID
 without conflicting with pause, resume, or policy events. `.env.cloud` is only
 a compatibility projection for engine projects and cannot override the global
 cloud quarantine. `CLOUD_SOLVER_URL` is required before cloud execution is
 enabled; IAM credentials are loaded by the transport and are never stored in
-project state.
+project state. Cloud submission passes the idempotency key to the provider; a
+locally `submitting` job reconciles by its provider job ID, while an unprovable
+local-process identity remains fail-closed instead of being submitted again.
+
+Native diagnostics, Action Center, Recovery Status and Audit Timeline are pure
+event projectors. They display the engine-recorded recovery target but never
+calculate or execute recovery. Projector snapshots are optional caches and are
+discarded on version, revision or state-hash mismatch. Legacy projects retain the
+runner status/heartbeat/log fallback.
+
+Operators can inspect the same Native projections and replay-parity result from
+the CLI without executing recovery:
+
+```bash
+python3 -m factory_core.cli diagnostics ongoing/<base>
+```
 
 ## Explicit Migration
 
@@ -237,10 +267,11 @@ providers implement `ModelBackend`; new solver transports implement
 `SolverBackend`. None of these changes may add a branch to the engine scheduler,
 CLI/Web routing, or the public `run_paper.sh` launcher.
 
-The database schema is version 6. Versions 1-5 upgrade in place; the current
+The database schema is version 7. Versions 1-6 upgrade in place; the current
 schema includes runtime and scheduler generation, Stage cursors/checkpoints,
-semantic dirty evidence, independent Solver job revision, contest policy, and
-append-only workflow decisions while retaining existing workflow events.
+semantic dirty evidence, independent Solver job revision and idempotent identity,
+contest policy, append-only workflow decisions, replay envelopes and projector
+snapshots while retaining existing workflow event names.
 Legacy upgrades retain `legacy_adapter`; new and explicitly native-migrated
 projects use `native_v2` plus `stage_v1`; upgraded native projects retain
 `step_v2` until explicit activation. Events remain append-only across upgrades.

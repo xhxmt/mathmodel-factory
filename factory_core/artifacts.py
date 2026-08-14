@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 from enum import Enum
+from pathlib import Path
 from pathlib import PurePosixPath
+from typing import Any
 
 
 class ArtifactLayer(str, Enum):
@@ -64,8 +69,42 @@ ARTIFACT_LAYER_CONTRACT = {
     ArtifactLayer.REBUILDABLE_PROJECTION.value: (
         "checkpoint.md",
         "chosen_method.md",
+        "method_decision.md",
         "solve_log.md",
         "verification summaries",
         "Web runtime status",
     ),
 }
+
+
+def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> Path:
+    """Commit a file with rename semantics before linking it from SQLite."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding=encoding) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def artifact_ref(project: Path, path: Path) -> dict[str, Any]:
+    resolved_project = project.resolve()
+    resolved = path.resolve(strict=True)
+    relative = resolved.relative_to(resolved_project).as_posix()
+    digest = hashlib.sha256()
+    with resolved.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return {
+        "path": relative,
+        "sha256": digest.hexdigest(),
+        "size": resolved.stat().st_size,
+    }

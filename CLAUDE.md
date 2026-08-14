@@ -97,7 +97,7 @@ retained as validation and compatibility boundaries. New projects default to
 activation and may explicitly roll back while stopped and semantically clean.
 Do not delete, renumber, or merge the Step contracts.
 
-New projects persist a 74-hour contest policy in schema-v6 SQLite. Steps 0–15
+New projects persist a 74-hour contest policy in schema-v7 SQLite. Steps 0–15
 are capped at T−6h content freeze; Step 16 owns the six-hour terminal reserve
 and is capped at the final deadline. T−2h is delivery freeze: any audit-driven
 substantive reopen requires a separate human override. Retry sleeps are also

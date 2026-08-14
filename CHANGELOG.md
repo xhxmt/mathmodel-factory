@@ -6,6 +6,9 @@
 
 ### 新增
 
+- 新增 schema-v7 横向运行时收敛合同：append-only 事件带可重放 state patch/hash 和结构化 Gate reason；Native Action Center、恢复状态、诊断与审计时间线由纯 Projector 生成；Selection、Approval、Consultation 统一为 Human Decision 父合同并保持子类型校验；Stage lifecycle 只返回 `StageOutcome`，所有工作流写入集中到 `TransitionCoordinator`。
+- Solver Job 新增稳定 `idempotency_key`、回执 `request_sha256`、Stage/subtask/revision/attempt 所有权和唯一约束；Cloud provider 接收幂等键并支持按持久 job ID 对账，本地无法证明提交状态时失败关闭而不盲目重提。
+- Web 人工 Gate 采用“证据文件原子 rename + fingerprint → SQLite decision/state/event 同事务”顺序；诊断页直接展示 Native 调度坐标、Recovery Status 与 Audit Timeline，并标记已发布但尚未入账的 orphan decision artifact。
 - 新增授权 HMML 完整数据集：保留原始 JSON/Markdown 与来源哈希，确定性展开 97 个可引用方法文档；与现有 21 个精编条目组成双登记表，方法召回升级为“层级分支粗选 → 叶方法细排 → 数据/证据复排”。
 - 新增 `problem-plan-v1` 问题专属 DAG：Step 0 必须产出无环、路径受限、方法引用已登记的任务图；后续建模/求解按拓扑依赖承接，最终审计与发布指纹绑定该业务真相产物，但固定十 Stage / 十七 Step 调度权威不变。
 - Web 新增 `node-output-v1` / `ContentBlock` 结构化输出协议、前端渲染注册表和“任务图”页；建模方向与问题 DAG 统一渲染摘要、方法卡、依赖图、提示和产物链接，模型上下文使用独立的限长白名单投影。

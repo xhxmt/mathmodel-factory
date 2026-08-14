@@ -153,7 +153,16 @@ def test_service_resolves_ready_selection_before_resume(tmp_path):
         event_type="AWAITING_ACTION",
         changes={
             "status": WorkflowStatus.AWAITING_SELECTION,
-            "pending_action": {"type": "step3_selection", "gate": "step3"},
+            "pending_action": {
+                "type": "step3_selection",
+                "gate": "step3",
+                "metadata": {
+                    "human_decision": {
+                        "request_id": "decision-1",
+                        "kind": "selection",
+                    }
+                },
+            },
         },
     )
     store.record_decision(

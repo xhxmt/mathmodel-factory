@@ -240,6 +240,19 @@ def read_runtime_status(project_path: str | Path, base_name: str) -> dict:
             contest_policy=workflow_store.contest_policy(),
             now_epoch=workflow_store.now_epoch(),
         )
+        from factory_core.workflow_events import project_runtime_diagnostics
+
+        projected = project_runtime_diagnostics(
+            workflow_store.events(), state
+        )["status"]
+        for key in (
+            "current_action",
+            "reason_code",
+            "reason_summary",
+            "suggested_actions",
+            "evidence",
+        ):
+            snapshot[key] = projected[key]
         payload = _from_snapshot(project, base_name, snapshot)
         action = state.pending_action or {}
         payload["status"] = state.status.value

@@ -496,6 +496,21 @@ export default {
         activeTab.value = 'logs'
         return
       }
+      if (actionId === 'open_audit_timeline') {
+        activeTab.value = 'diagnostics'
+        return
+      }
+      if (actionId === 'retry_human_decision_commit') {
+        activeTab.value = props.project.consultation_pending ? 'consultation' : 'selection'
+        return
+      }
+      if (actionId === 'open_gate_evidence') {
+        const evidence = diagnostics.value?.status?.evidence?.[0]
+        if (evidence?.path) {
+          requestFile({ path: evidence.path, type: 'text', name: evidence.path })
+        }
+        return
+      }
       const evidenceMap = {
         open_runner_log: { path: 'logs/runner.log', type: 'text', name: 'runner.log' },
         open_entry_gate: { path: 'entry_gate.md', type: 'markdown', name: 'entry_gate.md' },

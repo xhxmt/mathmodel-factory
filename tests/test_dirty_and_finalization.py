@@ -173,7 +173,7 @@ class Unused:
     pass
 
 
-def test_delivery_aborts_and_records_event_when_final_input_changes(tmp_path):
+def test_delivery_returns_events_without_writing_workflow_state_when_input_changes(tmp_path):
     project = tmp_path / "demo"
     project.mkdir()
     (project / "demo_paper.tex").write_text(
@@ -194,7 +194,8 @@ def test_delivery_aborts_and_records_event_when_final_input_changes(tmp_path):
 
     assert result.metadata["finalization_aborted"] is True
     assert result.metadata["resume_after_step"] == 10
-    assert [event.type for event in store.events()][-2:] == [
+    assert [event.type for event in store.events()] == ["PROJECT_CREATED"]
+    assert [event["type"] for event in result.metadata["_workflow_events"]] == [
         "FINAL_SNAPSHOT_CREATED",
         "FINALIZATION_ABORTED_SNAPSHOT_CHANGED",
     ]

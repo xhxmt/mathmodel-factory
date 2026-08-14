@@ -10,6 +10,7 @@ class SolverRequest:
     project_dir: Path
     runtime: str
     script: Path
+    idempotency_key: str = ""
     args: tuple[str, ...] = ()
     max_time_seconds: int = 1_800
     env: dict[str, str] = field(default_factory=dict)

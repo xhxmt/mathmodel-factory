@@ -1180,7 +1180,9 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         if not request:
             raise HTTPException(status_code=404, detail="No pending consultation request")
 
-        def write_evidence() -> None:
+        def write_evidence() -> dict[str, Any]:
+            from factory_core.artifacts import artifact_ref
+
             write_consultation_answer(
                 project_path=project,
                 gate=request.gate,
@@ -1189,6 +1191,19 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                 answer=answer.answer,
                 timestamp=datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S"),
             )
+            return {
+                "schema_version": "human-decision-v1",
+                "gate": request.gate,
+                "kind": "consultation",
+                "answer": answer.answer,
+                "source": "web",
+                "decided_epoch": int(datetime.now(BEIJING_TZ).timestamp()),
+                "artifact_refs": [
+                    artifact_ref(project, project / "human_review.md")
+                ],
+            }
+
+        write_evidence.artifact_first = True  # type: ignore[attr-defined]
 
         try:
             FactoryService(settings.factory_root).resolve_and_start(
@@ -1270,7 +1285,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         project = _resolve_project(settings, base_name)
         saved: dict[str, Any] = {}
 
-        def write_evidence() -> None:
+        def write_evidence() -> dict[str, Any]:
             saved["decision"] = write_selection_decision(
                 project,
                 gate=decision.gate,
@@ -1279,7 +1294,11 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                 source="human",
                 reason=decision.reason.strip() or f"Selected by {current_user.username}",
                 confirmations=list(decision.confirmations),
+                persist_store=False,
             )
+            return saved["decision"]
+
+        write_evidence.artifact_first = True  # type: ignore[attr-defined]
 
         try:
             FactoryService(settings.factory_root).resolve_and_start(

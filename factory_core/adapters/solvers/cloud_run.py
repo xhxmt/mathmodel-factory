@@ -39,18 +39,21 @@ class CloudRunHttpTransport:
     def submit(self, request: SolverRequest) -> SolverSubmission:
         if request.args:
             raise ValueError("Cloud Run solver transport does not support argv")
+        submission_payload = {
+            "job_id": request.job_id,
+            "solver_type": request.runtime,
+            "script_content": request.script.read_text(encoding="utf-8"),
+            "script_name": request.script.name,
+            "max_time": request.max_time_seconds,
+            "working_files": {},
+            "env_vars": request.env,
+        }
+        if request.idempotency_key:
+            submission_payload["idempotency_key"] = request.idempotency_key
         payload = self._request_json(
             "POST",
             f"/solve/{request.runtime}",
-            {
-                "job_id": request.job_id,
-                "solver_type": request.runtime,
-                "script_content": request.script.read_text(encoding="utf-8"),
-                "script_name": request.script.name,
-                "max_time": request.max_time_seconds,
-                "working_files": {},
-                "env_vars": request.env,
-            },
+            submission_payload,
         )
         external_id = str(payload.get("job_id") or request.job_id)
         return SolverSubmission(

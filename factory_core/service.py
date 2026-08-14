@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import shutil
 import signal
 import subprocess
@@ -29,6 +30,9 @@ from .steps import build_native_registry
 from .adapters.solvers import SolverRequest, build_solver_backends
 from .registry import SolverBackendRegistry
 from .storage import SQLiteStateStore
+from .transitions import TransitionCoordinator
+from .workflow_events import canonical_hash
+from .workflow_events import project_runtime_diagnostics
 from .stages import (
     STAGE_CATALOG_VERSION,
     STAGE_SCHEDULER_GENERATION,
@@ -50,6 +54,12 @@ from scripts.solver_job_receipt import (
 
 
 BASE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _workflow_coordinator(store: SQLiteStateStore) -> TransitionCoordinator:
+    return TransitionCoordinator(
+        store.project_dir, store, write_compatibility_projections
+    )
 
 
 @dataclass(frozen=True)
@@ -109,7 +119,7 @@ class WorkerLauncher:
         state = store.load()
         revision = state.revision if expected_revision is None else expected_revision
         try:
-            updated = store.transition(
+            updated = _workflow_coordinator(store).transition(
                 expected_revision=revision,
                 event_type="WORKER_LAUNCHED",
                 changes={
@@ -120,7 +130,6 @@ class WorkerLauncher:
                 },
                 payload={"worker_pid": process.pid, "log": str(log_path.relative_to(project))},
             )
-            write_compatibility_projections(project, updated)
             ready.write_text(str(process.pid) + "\n", encoding="ascii")
         except Exception:
             try:
@@ -256,11 +265,22 @@ class FactoryService:
     def status(self, project: str | Path) -> dict[str, Any]:
         resolved = self.resolve_project(project)
         store = SQLiteStateStore(resolved)
-        return runtime_payload(
-            store.load(),
+        state = store.load()
+        payload = runtime_payload(
+            state,
             contest_policy=store.contest_policy(),
             now_epoch=store.now_epoch(),
         )
+        projected = project_runtime_diagnostics(store.events(), state)["status"]
+        for key in (
+            "current_action",
+            "reason_code",
+            "reason_summary",
+            "suggested_actions",
+            "evidence",
+        ):
+            payload[key] = projected[key]
+        return payload
 
     def start(
         self,
@@ -278,7 +298,7 @@ class FactoryService:
             or state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
         ):
             store = SQLiteStateStore(resolved)
-            state = store.transition(
+            state = _workflow_coordinator(store).transition(
                 expected_revision=state.revision,
                 event_type="RUNNER_INTERRUPTED",
                 changes={
@@ -293,7 +313,6 @@ class FactoryService:
                 },
                 payload={"reason": "recorded runner is no longer live"},
             )
-            write_compatibility_projections(resolved, state)
         if state.status in {
             WorkflowStatus.KILLED,
             WorkflowStatus.COMPLETED,
@@ -386,24 +405,47 @@ class FactoryService:
         project: str | Path,
         resolution: dict[str, Any],
         *,
-        evidence_writer: Callable[[], None],
+        evidence_writer: Callable[[], Any],
         expected_revision: int | None = None,
+        artifact_first: bool = False,
     ) -> tuple[WorkflowState, WorkerHandle]:
-        """Accept a pending decision before projecting evidence and starting."""
+        """Commit evidence and a decision, then resume through the Native worker."""
         resolved_project = self.resolve_project(project)
         engine = self.engine(resolved_project)
         pending = engine.get_state()
         self._assert_expected_revision(pending, expected_revision)
         if pending.pending_action is None:
             raise InvalidTransition("project has no pending action")
-        accepted = engine.resolve_action(
-            resolution, expected_revision=pending.revision
+        artifact_first = artifact_first or bool(
+            getattr(evidence_writer, "artifact_first", False)
         )
+        if artifact_first:
+            decision_record = evidence_writer()
+            if (
+                isinstance(decision_record, dict)
+                and decision_record.get("kind") == "consultation"
+                and "answer" not in resolution
+            ):
+                resolution = {
+                    **resolution,
+                    "answer": decision_record.get("answer"),
+                }
+            accepted = engine.resolve_action(
+                resolution,
+                expected_revision=pending.revision,
+                decision_record=(
+                    decision_record if isinstance(decision_record, dict) else None
+                ),
+            )
+            return self.resume_and_start(
+                resolved_project, expected_revision=accepted.revision
+            )
+        accepted = engine.resolve_action(resolution, expected_revision=pending.revision)
         try:
             evidence_writer()
         except Exception as exc:
             store = SQLiteStateStore(resolved_project)
-            restored = store.transition(
+            _workflow_coordinator(store).transition(
                 expected_revision=accepted.revision,
                 event_type="ACTION_PROJECTION_FAILED",
                 changes={
@@ -412,7 +454,6 @@ class FactoryService:
                 },
                 payload={"error_type": type(exc).__name__},
             )
-            write_compatibility_projections(resolved_project, restored)
             raise
         return self.resume_and_start(
             resolved_project, expected_revision=accepted.revision
@@ -497,7 +538,7 @@ class FactoryService:
                     },
                 }
             )
-        updated = store.transition(
+        updated = _workflow_coordinator(store).transition(
             expected_revision=state.revision,
             event_type="STAGE_SCHEDULER_ACTIVATED",
             changes={
@@ -519,7 +560,6 @@ class FactoryService:
             stage_checkpoint_seed=seeds,
             replace_stage_checkpoints=True,
         )
-        write_compatibility_projections(resolved, updated)
         return updated
 
     def rollback_stage_scheduler(
@@ -548,7 +588,7 @@ class FactoryService:
             raise InvalidTransition(
                 "cannot roll back while Stage-owned semantic dirty flags are unresolved"
             )
-        updated = store.transition(
+        updated = _workflow_coordinator(store).transition(
             expected_revision=state.revision,
             event_type="STAGE_SCHEDULER_ROLLED_BACK",
             changes={
@@ -565,7 +605,6 @@ class FactoryService:
             },
             subtask_baseline=None,
         )
-        write_compatibility_projections(resolved, updated)
         return updated
 
     def configure_solver_policy(
@@ -583,7 +622,7 @@ class FactoryService:
         store = SQLiteStateStore(resolved)
         state = store.load()
         revision = state.revision if expected_revision is None else expected_revision
-        updated = store.configure_solver_policy(
+        updated = _workflow_coordinator(store).configure_solver_policy(
             expected_revision=revision,
             mode=mode,
             threshold_seconds=threshold_seconds,
@@ -637,20 +676,47 @@ class FactoryService:
         backend = self.solver_backends.get(backend_name)
         state = store.load()
         revision = state.revision if expected_revision is None else expected_revision
-        job_id = f"{backend_name}_{runtime}_{time.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
-        store.create_solver_job(
-            expected_revision=revision,
-            record={
-                "job_id": job_id,
-                "backend": backend_name,
-                "runtime": runtime,
-                "script": str(script_path.relative_to(resolved)),
-                "workdir": str(script_path.parent),
-                "argv": list(args),
-                "max_time_seconds": max_time_seconds,
-                "status": "submitting",
-            },
+        idempotency_key = self._solver_idempotency_key(
+            resolved,
+            state,
+            backend=backend_name,
+            runtime=runtime,
+            script=script_path,
+            args=args,
+            max_time_seconds=max_time_seconds,
+            input_paths=input_paths,
+            output_paths=output_paths,
+            seeds=seeds,
         )
+        existing = store.solver_job_by_idempotency_key(idempotency_key)
+        if existing is not None:
+            return existing
+        job_id = f"{backend_name}_{runtime}_{time.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        attempt_id = self._solver_attempt_id(state)
+        try:
+            _workflow_coordinator(store).create_solver_job(
+                expected_revision=revision,
+                record={
+                    "job_id": job_id,
+                    "idempotency_key": idempotency_key,
+                    "owner_stage": state.active_stage,
+                    "owner_subtask": state.active_subtask,
+                    "owner_revision": state.revision,
+                    "attempt_id": attempt_id,
+                    "backend": backend_name,
+                    "runtime": runtime,
+                    "script": str(script_path.relative_to(resolved)),
+                    "workdir": str(script_path.parent),
+                    "argv": list(args),
+                    "max_time_seconds": max_time_seconds,
+                    "status": "submitting",
+                },
+            )
+        except (sqlite3.IntegrityError, RevisionConflict):
+            raced = store.solver_job_by_idempotency_key(idempotency_key)
+            if raced is None:
+                raise
+            return raced
         created_job = store.solver_job(job_id)
         receipt_dir = resolved / ".factory" / "solver_receipts"
         submitted_path, _completed_path = receipt_paths(receipt_dir, job_id)
@@ -670,7 +736,7 @@ class FactoryService:
                 seeds=seeds,
             )
             write_receipt(submitted_path, submission_receipt)
-            store.record_solver_receipt(
+            _workflow_coordinator(store).record_solver_receipt(
                 job_id,
                 stage="submitted",
                 receipt_path=submitted_path.relative_to(resolved).as_posix(),
@@ -690,6 +756,7 @@ class FactoryService:
             raise
         request = SolverRequest(
             job_id=job_id,
+            idempotency_key=idempotency_key,
             project_dir=resolved,
             runtime=runtime,
             script=script_path,
@@ -713,6 +780,73 @@ class FactoryService:
             store, backend, job_id, submission
         )
 
+    @staticmethod
+    def _solver_attempt_id(state: WorkflowState) -> str:
+        return ":".join(
+            (
+                f"stage-{state.active_stage if state.active_stage is not None else 'adhoc'}",
+                f"subtask-{state.active_subtask or 'adhoc'}",
+                f"step-{state.source_step_id if state.source_step_id is not None else state.active_step}",
+                f"attempt-{state.attempt}",
+            )
+        )
+
+    @classmethod
+    def _solver_idempotency_key(
+        cls,
+        project: Path,
+        state: WorkflowState,
+        *,
+        backend: str,
+        runtime: str,
+        script: Path,
+        args: tuple[str, ...],
+        max_time_seconds: int,
+        input_paths: tuple[str | Path, ...],
+        output_paths: tuple[str | Path, ...],
+        seeds: tuple[str | int, ...],
+    ) -> str:
+        root = project.resolve()
+
+        def input_record(value: str | Path) -> dict[str, Any]:
+            raw = Path(value)
+            candidate = raw if raw.is_absolute() else root / raw
+            resolved = candidate.resolve(strict=True)
+            try:
+                relative = resolved.relative_to(root).as_posix()
+            except ValueError as exc:
+                raise ValueError(f"solver input must be inside the project: {value}") from exc
+            if not resolved.is_file():
+                raise ValueError(f"solver input must be a regular file: {value}")
+            return {"path": relative, "sha256": file_sha256(resolved)}
+
+        def output_record(value: str | Path) -> str:
+            raw = Path(value)
+            candidate = raw if raw.is_absolute() else root / raw
+            resolved = candidate.resolve(strict=False)
+            try:
+                return resolved.relative_to(root).as_posix()
+            except ValueError as exc:
+                raise ValueError(f"solver output must be inside the project: {value}") from exc
+
+        body = {
+            "schema": "factory-solver-idempotency-v1",
+            "project_id": state.project_id,
+            "attempt_id": cls._solver_attempt_id(state),
+            "backend": backend,
+            "runtime": runtime,
+            "script": {
+                "path": script.relative_to(root).as_posix(),
+                "sha256": file_sha256(script),
+            },
+            "argv": list(args),
+            "max_time_seconds": max_time_seconds,
+            "inputs": [input_record(value) for value in input_paths],
+            "outputs": [output_record(value) for value in output_paths],
+            "seeds": [str(seed) for seed in seeds],
+        }
+        return canonical_hash(body)
+
     def solver_status(self, project: str | Path, job_id: str) -> dict[str, Any]:
         resolved = self.resolve_project(project)
         store = SQLiteStateStore(resolved)
@@ -721,12 +855,12 @@ class FactoryService:
             self._ensure_solver_completion_receipt(resolved, job)
             return job
         if job["status"] == "submitting":
-            return job
+            return self._reconcile_submitting_solver(resolved, store, job)
         backend = self.solver_backends.get(job["backend"])
         observed = backend.status(job)
         if observed != job["status"]:
             try:
-                store.update_solver_job(
+                _workflow_coordinator(store).update_solver_job(
                     job_id,
                     expected_job_revision=int(job["job_revision"]),
                     status=observed,
@@ -760,7 +894,7 @@ class FactoryService:
         job = store.solver_job(job_id)
         self.solver_backends.get(job["backend"]).cancel(job)
         try:
-            store.update_solver_job(
+            _workflow_coordinator(store).update_solver_job(
                 job_id,
                 expected_job_revision=int(job["job_revision"]),
                 status="cancelled",
@@ -784,15 +918,37 @@ class FactoryService:
         pending = state.pending_action or {}
         gate = str(pending.get("gate") or "")
         action_type = pending.get("type")
+        action_metadata = pending.get("metadata") or {}
+        human_request = action_metadata.get("human_decision") or {}
+        decision_kind = human_request.get("kind")
         ready = False
-        if action_type and action_type.endswith("selection"):
+        resolution: dict[str, Any] = {
+            "source": "artifact_projection",
+            "gate": gate,
+        }
+        if decision_kind in {"selection", "approval"} or (
+            action_type and action_type.endswith("selection")
+        ):
             store = SQLiteStateStore(project)
-            ready = store.decision(gate or "step3") is not None
+            recorded = store.decision(gate or "step3")
+            ready = recorded is not None
+            if recorded is not None:
+                resolution.update(
+                    selected_option_id=(
+                        recorded.get("selected_option_id")
+                        or recorded.get("selected_primary")
+                    ),
+                    selected_aux_id=(
+                        recorded.get("selected_aux_id")
+                        or recorded.get("selected_auxiliary")
+                        or ""
+                    ),
+                )
             if not ready and store.contest_policy() is None:
                 ready = (
                     project / "selection" / f"{gate or 'step3'}_decision.json"
                 ).is_file()
-        elif action_type == "human_consultation":
+        elif decision_kind == "consultation" or action_type == "human_consultation":
             review = project / "human_review.md"
             if review.is_file():
                 text = review.read_text(encoding="utf-8", errors="replace")
@@ -803,10 +959,12 @@ class FactoryService:
                         re.IGNORECASE,
                     )
                 ) if gate else "STATUS: READY" in text
+                if ready:
+                    resolution["answer"] = "recorded in human_review.md"
         if not ready:
             return state
         return self.engine(project).resolve_action(
-            {"source": "artifact_projection", "gate": gate},
+            resolution,
             expected_revision=state.revision,
         )
 
@@ -857,7 +1015,7 @@ class FactoryService:
                 else job["status"]
             )
             try:
-                store.update_solver_job(
+                _workflow_coordinator(store).update_solver_job(
                     job_id,
                     expected_job_revision=int(job["job_revision"]),
                     status=status,
@@ -882,7 +1040,7 @@ class FactoryService:
             if job["status"] != "submitting":
                 return job
             try:
-                store.update_solver_job(
+                _workflow_coordinator(store).update_solver_job(
                     job_id,
                     expected_job_revision=int(job["job_revision"]),
                     status="failed",
@@ -890,7 +1048,43 @@ class FactoryService:
                 )
             except RevisionConflict:
                 continue
-            return store.solver_job(job_id)
+        return store.solver_job(job_id)
+
+    def _reconcile_submitting_solver(
+        self,
+        project: Path,
+        store: SQLiteStateStore,
+        job: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Recover the crash window after provider acceptance but before local ack."""
+
+        if job["backend"] == "cloud_run":
+            backend = self.solver_backends.get(job["backend"])
+            try:
+                observed = backend.status({**job, "external_id": job["job_id"]})
+            except Exception:
+                return {**job, "reconciliation_status": "provider_lookup_pending"}
+            _workflow_coordinator(store).update_solver_job(
+                job["job_id"],
+                expected_job_revision=int(job["job_revision"]),
+                status=observed,
+                external_id=job["job_id"],
+            )
+            return store.solver_job(job["job_id"])
+        exit_path = project / ".factory" / "solver_jobs" / f"{job['job_id']}.json"
+        if exit_path.is_file():
+            try:
+                observed = str(json.loads(exit_path.read_text(encoding="utf-8"))["status"])
+            except (KeyError, OSError, json.JSONDecodeError):
+                return {**job, "reconciliation_status": "local_receipt_invalid"}
+            _workflow_coordinator(store).update_solver_job(
+                job["job_id"],
+                expected_job_revision=int(job["job_revision"]),
+                status=observed,
+                result_refs={"exit": exit_path.relative_to(project).as_posix()},
+            )
+            return store.solver_job(job["job_id"])
+        return {**job, "reconciliation_status": "local_process_identity_unavailable"}
 
     @staticmethod
     def _ensure_solver_completion_receipt(project: Path, job: dict[str, Any]) -> None:
@@ -911,7 +1105,8 @@ class FactoryService:
                 )
                 write_receipt(completed_path, receipt)
             submitted = read_receipt(submitted_path, SUBMISSION_SCHEMA)
-            SQLiteStateStore(project).record_solver_receipt(
+            receipt_store = SQLiteStateStore(project)
+            _workflow_coordinator(receipt_store).record_solver_receipt(
                 str(job["job_id"]),
                 stage="completed",
                 receipt_path=completed_path.relative_to(project).as_posix(),

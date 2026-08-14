@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from factory_core.artifacts import atomic_write_text
+
 
 def gate_ready(human_review: Path, gate: str) -> bool:
     if not human_review.is_file():
@@ -40,4 +42,4 @@ def write_consultation_answer(
     else:
         content = "# 人工审核与介入记录\n\n" + section + "\n"
 
-    human_review.write_text(content, encoding="utf-8")
+    atomic_write_text(human_review, content)

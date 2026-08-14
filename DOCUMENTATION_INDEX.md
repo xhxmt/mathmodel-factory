@@ -10,6 +10,7 @@
 | 查看当前工作流契约 | [STEPS.md](STEPS.md) |
 | 查看编排状态、迁移与恢复契约 | [docs/architecture/ORCHESTRATION_ENGINE.md](docs/architecture/ORCHESTRATION_ENGINE.md) |
 | 查看当前 10-Stage 编排合同与实施状态 | [docs/architecture/STAGE_SIMPLIFICATION_PLAN.md](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md) |
+| 查看横向运行时基础设施收敛实现与验收计划 | [docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md](docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md) |
 | 查看源码、运行数据和兼容边界 | [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md) |
 | 编写模型、代码和论文 | [modeling_guide.md](modeling_guide.md) |
 | 检查建模口径 | [docs/guides/MODELING_CHECKLIST.md](docs/guides/MODELING_CHECKLIST.md) |
@@ -30,6 +31,7 @@
 - [CHANGELOG.md](CHANGELOG.md)：主要功能与工作流变更记录。
 - [docs/architecture/ORCHESTRATION_ENGINE.md](docs/architecture/ORCHESTRATION_ENGINE.md)：Python 引擎、SQLite 状态、Legacy 迁移和恢复契约。
 - [docs/architecture/STAGE_SIMPLIFICATION_PLAN.md](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md)：当前 10 Stage 映射、Step 0–16 验证/兼容边界、dirty flag、迁移/回滚合同及验收状态。
+- [docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md](docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md)：已实现的类型化 WorkflowEvent、纯 Projector、Human Decision、StageExecutionPipeline、TransitionCoordinator 和 Job 幂等合同，以及仍待完成的 clean-room 运营验收。
 - [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md)：核心、应用、部署、评测、历史资产和运行数据的所有权。
 - [docs/architecture/compatibility-removal.md](docs/architecture/compatibility-removal.md)：兼容入口的可观察移除条件；本轮不删除这些入口。
 - [docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md](docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md)：本轮旧 worktree 的恢复、取舍与合并依据（历史快照）。
@@ -100,4 +102,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料。
 
-**最后更新：2026-08-12**
+**最后更新：2026-08-14**

@@ -190,6 +190,7 @@ class SolverRequest(BaseModel):
     """Validated request to execute one Python script."""
 
     job_id: Optional[str] = Field(default=None, max_length=64)
+    idempotency_key: Optional[str] = Field(default=None, min_length=64, max_length=64)
     solver_type: str = Field(..., min_length=1, max_length=16)
     script_content: str = Field(..., min_length=1)
     script_name: str = Field(default="solve.py", min_length=1, max_length=240)
@@ -493,6 +494,25 @@ def submit_solver_job(
 
     job_id = validate_job_id(request.job_id or str(uuid.uuid4()))
     with submission_lock:
+        if request.idempotency_key:
+            prior = next(
+                (
+                    job
+                    for job in job_registry.values()
+                    if job.get("idempotency_key") == request.idempotency_key
+                ),
+                None,
+            )
+            if prior is not None:
+                return JobStatus(**prior)
+        prior_by_id = job_store.load(job_id)
+        if prior_by_id is not None:
+            if (
+                request.idempotency_key
+                and prior_by_id.get("idempotency_key") == request.idempotency_key
+            ):
+                return JobStatus(**prior_by_id)
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job already exists")
         if any(job["status"] in {"queued", "running"} for job in job_registry.values()):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -502,12 +522,10 @@ def submit_solver_job(
                 },
                 headers={"Retry-After": "5"},
             )
-        if job_store.load(job_id) is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job already exists")
-
         job = job_store.save(
             {
                 "job_id": job_id,
+                "idempotency_key": request.idempotency_key,
                 "status": "queued",
                 "submitted_at": time.time(),
                 "started_at": None,

@@ -18,6 +18,13 @@ from .projections import runtime_payload, write_compatibility_projections
 from .storage import SQLiteStateStore
 from .service import FactoryService, wait_for_worker_ready
 from .stages import STAGE_SCHEDULER_GENERATION, STEP_SCHEDULER_GENERATION
+from .workflow_events import (
+    ENVELOPE_KEY,
+    ReplayIntegrityError,
+    project_runtime_diagnostics,
+    replay_events,
+    replay_state,
+)
 from scripts.solver_job_receipt import (
     ReceiptError,
     bind_event_stream,
@@ -184,6 +191,9 @@ def build_parser() -> argparse.ArgumentParser:
     state = sub.add_parser("state")
     state.add_argument("project_dir")
 
+    diagnostics = sub.add_parser("diagnostics")
+    diagnostics.add_argument("project_dir")
+
     run = sub.add_parser("run")
     run.add_argument("project_dir")
     run.add_argument("--max-steps", type=int)
@@ -322,6 +332,44 @@ def main(argv: list[str] | None = None) -> int:
             assert project is not None
             print(_state_json(project))
             return 0
+        if args.command == "diagnostics":
+            assert project is not None
+            store = SQLiteStateStore(project)
+            workflow_state = store.load()
+            events = store.events()
+            payload = project_runtime_diagnostics(events, workflow_state)
+            versioned = any(
+                isinstance(event.payload.get(ENVELOPE_KEY), dict)
+                for event in events
+            )
+            replay_error = None
+            replay_matches = None
+            if versioned:
+                try:
+                    replay_matches = replay_events(events) == replay_state(
+                        workflow_state
+                    )
+                    if not replay_matches:
+                        replay_error = (
+                            "replayed state differs from authoritative state"
+                        )
+                except ReplayIntegrityError as exc:
+                    replay_matches = False
+                    replay_error = str(exc)
+            payload["replay"] = {
+                "available": versioned,
+                "matches_authoritative_state": replay_matches,
+                "error": replay_error,
+            }
+            print(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+            )
+            return 0 if replay_matches is not False else 1
         if args.command == "create":
             state, worker_handle = service.create_project(
                 args.base_name,

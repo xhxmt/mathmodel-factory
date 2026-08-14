@@ -19,8 +19,19 @@
     </div>
 
     <div v-if="events.length" class="diag-events">
-      <div v-for="event in events" :key="`${event.ts}-${event.type}`" class="diag-event mono">
-        {{ event.type }} · {{ event.message }}
+      <div class="diag-section-title mono">AUDIT TIMELINE · {{ coordinate }}</div>
+      <div v-for="event in events" :key="event.event_id || event.revision" class="diag-event mono">
+        r{{ event.revision }} · {{ event.type }} · {{ event.message }}
+      </div>
+    </div>
+    <div v-if="recovery" class="diag-recovery">
+      <div class="diag-section-title mono">RECOVERY STATUS</div>
+      <div class="diag-event mono">
+        {{ recovery.canonical_type }}
+        <template v-if="recovery.decision"> · {{ recovery.decision }}</template>
+        <template v-if="recovery.resume_after_step !== null && recovery.resume_after_step !== undefined">
+          · resume after Step {{ recovery.resume_after_step }}
+        </template>
       </div>
     </div>
   </section>
@@ -48,11 +59,22 @@ export default {
     events() {
       return this.diagnostics?.events || []
     },
+    recovery() {
+      return this.diagnostics?.recovery?.latest || null
+    },
+    coordinate() {
+      const status = this.diagnostics?.status || {}
+      const parts = []
+      if (status.current_stage) parts.push(`Stage ${status.current_stage}`)
+      if (status.current_subtask) parts.push(status.current_subtask)
+      if (status.current_step !== null && status.current_step !== undefined) parts.push(`Step ${status.current_step}`)
+      return parts.join(' / ') || 'project'
+    },
     severityClass() {
       const code = this.diagnostics?.status?.reason_code
       return {
         'is-warn': code === 'NO_LOG_PROGRESS' || code === 'LOCK_STALE_RECLAIMED',
-        'is-block': code === 'AWAITING_STEP8_5' || code === 'VERIFY_OUTPUT_FAILED' || code === 'CONSULTATION_PENDING',
+        'is-block': code === 'AWAITING_STEP8_5' || code === 'VERIFY_OUTPUT_FAILED' || code === 'CONSULTATION_PENDING' || code === 'HUMAN_DECISION_REQUIRED' || code === 'ORPHANED_DECISION_ARTIFACT' || code === 'WORKFLOW_REPLAY_MISMATCH' || String(code || '').startsWith('PERMANENT_'),
       }
     },
   },
@@ -70,6 +92,8 @@ export default {
 .diag-summary { font-size: 12px; color: var(--ink-2); margin-top: 4px; }
 .diag-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .diag-events { display: flex; flex-direction: column; gap: 6px; }
+.diag-recovery { display: flex; flex-direction: column; gap: 6px; }
+.diag-section-title { font-size: 10px; letter-spacing: 0.08em; color: var(--ink-3); }
 .diag-event { font-size: 11px; color: var(--ink-2); padding: 7px 9px; border-radius: var(--r-sm); background: var(--panel-2); }
 @media (max-width: 720px) {
   .diag-top { flex-direction: column; }

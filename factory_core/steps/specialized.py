@@ -1240,16 +1240,18 @@ class DeliveryStep:
                 accepted=(0, 1),
             )
         final_input = build_final_input_manifest(project)
-        self._record_finalization_event(
-            project,
-            "FINAL_SNAPSHOT_CREATED",
+        workflow_events: list[dict[str, object]] = [
             {
+                "type": "FINAL_SNAPSHOT_CREATED",
+                "step": 16,
+                "payload": {
                 "schema_version": "factory-final-snapshot-event-v1",
                 "input_fingerprint": final_input.fingerprint,
                 "manifest": str(final_input.manifest_path.relative_to(project)),
                 "source_step": 16,
-            },
-        )
+                },
+            }
+        ]
 
         def finalization_guard() -> None:
             ensure_deadline()
@@ -1272,38 +1274,48 @@ class DeliveryStep:
         try:
             finalization_guard()
         except FinalizationSnapshotChanged as exc:
-            return self._snapshot_changed_result(project, final_input.fingerprint, exc)
+            return self._snapshot_changed_result(
+                final_input.fingerprint, exc, workflow_events
+            )
         if (
             audit.error_class == "TRANSIENT_FINAL_AUDIT_MUTATION"
             or audit.metadata.get("final_decision")
             == "SNAPSHOT_CHANGED_DURING_FINAL_AUDIT"
         ):
-            self._record_finalization_event(
-                project,
-                "FINALIZATION_ABORTED_SNAPSHOT_CHANGED",
+            workflow_events.append(
                 {
+                    "type": "FINALIZATION_ABORTED_SNAPSHOT_CHANGED",
+                    "step": 16,
+                    "payload": {
                     "schema_version": "factory-finalization-abort-v1",
                     "input_fingerprint": final_input.fingerprint,
                     "audit_snapshot": audit.metadata.get("audit_snapshot"),
                     "mutation_scope": "derived_final_audit_input",
                     "resume_after_step": 15,
+                    },
                 },
             )
-            return ExecutionResult.succeeded(
-                resume_after_step=15,
-                finalization_aborted=True,
-                error_class="TRANSIENT_FINALIZATION_SNAPSHOT_CHANGED",
-                final_input_fingerprint=final_input.fingerprint,
-                audit_snapshot=audit.metadata.get("audit_snapshot"),
+            return self._with_workflow_events(
+                ExecutionResult.succeeded(
+                    resume_after_step=15,
+                    finalization_aborted=True,
+                    error_class="TRANSIENT_FINALIZATION_SNAPSHOT_CHANGED",
+                    final_input_fingerprint=final_input.fingerprint,
+                    audit_snapshot=audit.metadata.get("audit_snapshot"),
+                ),
+                workflow_events,
             )
         if audit.returncode != 0 or audit.metadata.get("resume_after_step") is not None:
-            return audit
+            return self._with_workflow_events(audit, workflow_events)
         if not outcome.record.delivery_allowed:
-            return ExecutionResult.failed(
-                "PERMANENT_AUDIT_NOT_APPROVED",
-                returncode=2,
-                audit_status=outcome.record.status.value,
-                audit_snapshot=outcome.snapshot.snapshot_id,
+            return self._with_workflow_events(
+                ExecutionResult.failed(
+                    "PERMANENT_AUDIT_NOT_APPROVED",
+                    returncode=2,
+                    audit_status=outcome.record.status.value,
+                    audit_snapshot=outcome.snapshot.snapshot_id,
+                ),
+                workflow_events,
             )
 
         papers = self.factory_root / "papers"
@@ -1331,71 +1343,74 @@ class DeliveryStep:
         except ContestDeadlineExceeded:
             raise
         except FinalizationSnapshotChanged as exc:
-            return self._snapshot_changed_result(project, final_input.fingerprint, exc)
+            return self._snapshot_changed_result(
+                final_input.fingerprint, exc, workflow_events
+            )
         except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
-            return ExecutionResult.failed(
-                "PERMANENT_ATOMIC_DELIVERY",
-                returncode=2,
-                delivery_error=str(exc),
-                audit_snapshot=outcome.snapshot.snapshot_id,
+            return self._with_workflow_events(
+                ExecutionResult.failed(
+                    "PERMANENT_ATOMIC_DELIVERY",
+                    returncode=2,
+                    delivery_error=str(exc),
+                    audit_snapshot=outcome.snapshot.snapshot_id,
+                ),
+                workflow_events,
             )
 
-        return ExecutionResult.succeeded(
-            **audit.metadata,
-            input_fingerprint=outcome.snapshot.snapshot_id,
-            release_id=release.release_id,
-            release_manifest=str(release.manifest),
-            release_pointer=str(release.pointer),
-            release_reused=release.reused,
-            published_pdf=str(release.paper),
-            submission_zip=str(release.submission_zip),
-            final_input_fingerprint=final_input.fingerprint,
-            final_input_manifest=str(final_input.manifest_path.relative_to(project)),
+        return self._with_workflow_events(
+            ExecutionResult.succeeded(
+                **audit.metadata,
+                input_fingerprint=outcome.snapshot.snapshot_id,
+                release_id=release.release_id,
+                release_manifest=str(release.manifest),
+                release_pointer=str(release.pointer),
+                release_reused=release.reused,
+                published_pdf=str(release.paper),
+                submission_zip=str(release.submission_zip),
+                final_input_fingerprint=final_input.fingerprint,
+                final_input_manifest=str(final_input.manifest_path.relative_to(project)),
+            ),
+            workflow_events,
         )
 
     @staticmethod
-    def _record_finalization_event(
-        project: Path, event_type: str, payload: dict[str, object]
-    ) -> None:
-        from ..storage import SQLiteStateStore
-
-        store = SQLiteStateStore(project)
-        if not store.exists:
-            return
-        state = store.load()
-        store.transition(
-            expected_revision=state.revision,
-            expected_runner_pid=state.runner_pid,
-            expected_runner_lease_id=state.runner_lease_id,
-            event_type=event_type,
-            changes={},
-            payload=payload,
-            event_step=16,
+    def _with_workflow_events(
+        result: ExecutionResult, events: list[dict[str, object]]
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            returncode=result.returncode,
+            error_class=result.error_class,
+            metadata={**result.metadata, "_workflow_events": tuple(events)},
         )
 
     def _snapshot_changed_result(
         self,
-        project: Path,
         fingerprint: str,
         exc: FinalizationSnapshotChanged,
+        workflow_events: list[dict[str, object]],
     ) -> ExecutionResult:
         resume_after = reopen_after_for_changed_paths(exc.changed_paths)
-        self._record_finalization_event(
-            project,
-            "FINALIZATION_ABORTED_SNAPSHOT_CHANGED",
+        workflow_events.append(
             {
-                "schema_version": "factory-finalization-abort-v1",
-                "input_fingerprint": fingerprint,
-                "changed_paths": exc.changed_paths,
-                "resume_after_step": resume_after,
+                "type": "FINALIZATION_ABORTED_SNAPSHOT_CHANGED",
+                "step": 16,
+                "payload": {
+                    "schema_version": "factory-finalization-abort-v1",
+                    "input_fingerprint": fingerprint,
+                    "changed_paths": exc.changed_paths,
+                    "resume_after_step": resume_after,
+                },
             },
         )
-        return ExecutionResult.succeeded(
-            resume_after_step=resume_after,
-            finalization_aborted=True,
-            error_class="TRANSIENT_FINALIZATION_SNAPSHOT_CHANGED",
-            changed_paths=exc.changed_paths,
-            final_input_fingerprint=fingerprint,
+        return self._with_workflow_events(
+            ExecutionResult.succeeded(
+                resume_after_step=resume_after,
+                finalization_aborted=True,
+                error_class="TRANSIENT_FINALIZATION_SNAPSHOT_CHANGED",
+                changed_paths=exc.changed_paths,
+                final_input_fingerprint=fingerprint,
+            ),
+            workflow_events,
         )
 
     def validate(self, context):

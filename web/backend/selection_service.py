@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from factory_core.artifacts import artifact_ref, atomic_write_text
+
 
 STEP3_HEADING = "## Step 3 decision:"
 VALID_VERDICT_RE = re.compile(r"^VERDICT:\s*(\S+)", re.M)
@@ -21,17 +23,13 @@ def _read_text(path: Path) -> str:
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(
+        path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    )
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, text)
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -269,6 +267,7 @@ def write_selection_decision(
     reason: str,
     confirmations: list[str] | None = None,
     now_epoch: int | None = None,
+    persist_store: bool = True,
 ) -> dict[str, Any]:
     if gate not in {"step3", "content_freeze", "delivery_freeze_override"}:
         raise SelectionError(f"Unsupported selection gate: {gate}")
@@ -300,19 +299,46 @@ def write_selection_decision(
         ),
         "confirmations": [str(item) for item in (confirmations or []) if str(item)],
     }
-    try:
-        from factory_core.storage import SQLiteStateStore
+    decision_store = None
+    if persist_store:
+        try:
+            from factory_core.storage import SQLiteStateStore
 
-        store = SQLiteStateStore(project_path)
-        if store.exists:
-            store.record_decision(gate, decision)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise SelectionError(f"Could not persist structured decision: {exc}") from exc
+            candidate_store = SQLiteStateStore(project_path)
+            if candidate_store.exists:
+                prior = candidate_store.decision(gate)
+                if prior is not None:
+                    prior_core = {
+                        key: value
+                        for key, value in prior.items()
+                        if key != "artifact_refs"
+                    }
+                    if prior_core != decision:
+                        raise SelectionError(
+                            f"Immutable workflow decision already exists for {gate}"
+                        )
+                decision_store = candidate_store
+        except SelectionError:
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise SelectionError(f"Could not inspect structured decision: {exc}") from exc
     _write_json_atomic(project_path / "selection" / f"{gate}_decision.json", decision)
     if gate == "step3":
         mirror_step3_decision_to_human_review(project_path, selected, aux, decision)
     else:
         mirror_release_gate_decision(project_path, decision)
+    decision["artifact_refs"] = [
+        artifact_ref(
+            project_path,
+            project_path / "selection" / f"{gate}_decision.json",
+        ),
+        artifact_ref(project_path, project_path / "human_review.md"),
+    ]
+    if decision_store is not None:
+        try:
+            decision_store.record_decision(gate, decision)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise SelectionError(f"Could not persist structured decision: {exc}") from exc
     return decision
 
 

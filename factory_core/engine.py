@@ -4,7 +4,6 @@ import os
 import shutil
 import time
 import uuid
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -32,6 +31,8 @@ from .domain import (
     WorkflowState,
     WorkflowStatus,
 )
+from .execution_pipeline import StageExecutionPipeline, StageExecutionRequest
+from .human_decisions import build_decision_request, validate_resolution
 from .registry import StepDefinition, StepRegistry
 from .storage import SQLiteStateStore
 from .stages import (
@@ -43,6 +44,7 @@ from .stages import (
     stage_for_id,
     subtask_for_key,
 )
+from .transitions import TransitionCoordinator
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,10 @@ class FactoryEngine:
         self.registry = registry or StepRegistry()
         self._sleep = sleeper
         self._projector = projector
+        self._pipeline = StageExecutionPipeline(self.store.now_epoch)
+        self._transitions = TransitionCoordinator(
+            self.project_dir, self.store, self._projector
+        )
 
     def get_state(self) -> WorkflowState:
         return self.store.load()
@@ -248,8 +254,9 @@ class FactoryEngine:
             )
             try:
                 with deadline_scope(preview_context.deadline_epoch):
-                    prepared = definition.lifecycle.prepare(preview_context)
-                    ensure_deadline(now=self.store.now_epoch())
+                    prepared = self._pipeline.prepare(
+                        StageExecutionRequest(definition, preview_context)
+                    )
             except ContestDeadlineExceeded as exc:
                 return self._deadline_failure(state, definition, exc, lease=lease)
             if prepared.pending_action is not None:
@@ -307,12 +314,28 @@ class FactoryEngine:
                 state, definition, timeout_seconds=timeout_seconds
             )
             try:
-                with deadline_scope(context.deadline_epoch):
-                    result = definition.lifecycle.execute(context)
-                    ensure_deadline(now=self.store.now_epoch())
+                outcome = self._pipeline.run(
+                    StageExecutionRequest(definition, context),
+                    after_execute=lambda: self._refresh_owned_state(
+                        lease, active_step=definition.id
+                    ),
+                )
             except ContestDeadlineExceeded as exc:
                 return self._deadline_failure(state, definition, exc, lease=lease)
+            result = outcome.execution
             state = self._refresh_owned_state(lease, active_step=definition.id)
+            for side_effect in outcome.workflow_events:
+                side_effect_type = str(side_effect.get("type") or "")
+                if not side_effect_type:
+                    raise InvalidTransition("pipeline workflow event is missing a type")
+                state = self._owned_transition(
+                    state,
+                    lease,
+                    event_type=side_effect_type,
+                    changes={},
+                    payload=dict(side_effect.get("payload") or {}),
+                    event_step=side_effect.get("step", definition.id),
+                )
             if result.metadata.get("killed"):
                 return self._owned_transition(
                     state,
@@ -421,12 +444,11 @@ class FactoryEngine:
                     **reopen_kwargs,
                 )
                 continue
-            try:
-                with deadline_scope(context.deadline_epoch):
-                    validation = definition.lifecycle.validate(context)
-                    ensure_deadline(now=self.store.now_epoch())
-            except ContestDeadlineExceeded as exc:
-                return self._deadline_failure(state, definition, exc, lease=lease)
+            validation = outcome.validation
+            if validation is None:
+                raise InvalidTransition(
+                    f"step {definition.id} returned no validation outcome"
+                )
             state = self._refresh_owned_state(lease, active_step=definition.id)
             if validation.pending_action is not None:
                 return self._await_action(
@@ -1135,6 +1157,7 @@ class FactoryEngine:
                 expected_runner_lease_id=expected_runner_lease_id,
                 enforce_lease=enforce_lease,
             )
+        decision_event_payload = {}
         if decision.disposition is RecoveryDisposition.REOPEN:
             if not self._reopen_allowed(definition):
                 return self._transition(
@@ -1180,10 +1203,24 @@ class FactoryEngine:
             if decision.pending_action is None:
                 raise InvalidTransition("await recovery decision is missing pending action")
             action = decision.pending_action.to_dict()
+            request = build_decision_request(
+                project_id=state.project_id,
+                requested_revision=state.revision + 1,
+                action=action,
+                reason=decision.reason,
+                evidence=decision.evidence,
+            )
+            action_metadata = dict(action.get("metadata") or {})
+            action_metadata["human_decision"] = request.to_dict()
+            action["metadata"] = action_metadata
+            decision_event_payload = {
+                "action": request.to_dict(),
+                "pending_action": action,
+            }
             status = (
-                WorkflowStatus.AWAITING_SELECTION
-                if action["type"].endswith("selection")
-                else WorkflowStatus.AWAITING_CONSULTATION
+                WorkflowStatus.AWAITING_CONSULTATION
+                if request.kind.value == "consultation"
+                else WorkflowStatus.AWAITING_SELECTION
             )
             changes = {
                 "status": status,
@@ -1285,6 +1322,7 @@ class FactoryEngine:
                 "reason": decision.reason,
                 "evidence": decision.evidence,
                 **decision.metadata,
+                **decision_event_payload,
             },
             **self._lease_expectations(
                 expected_runner_pid,
@@ -1304,10 +1342,21 @@ class FactoryEngine:
         event_type: str = "AWAITING_ACTION",
         lease: str | None = None,
     ) -> WorkflowState:
+        request = build_decision_request(
+            project_id=state.project_id,
+            requested_revision=state.revision + 1,
+            action=action,
+            reason=reason,
+            evidence=evidence,
+        )
+        action = dict(action)
+        metadata = dict(action.get("metadata") or {})
+        metadata["human_decision"] = request.to_dict()
+        action["metadata"] = metadata
         awaiting_status = (
-            WorkflowStatus.AWAITING_SELECTION
-            if action["type"].endswith("selection")
-            else WorkflowStatus.AWAITING_CONSULTATION
+            WorkflowStatus.AWAITING_CONSULTATION
+            if request.kind.value == "consultation"
+            else WorkflowStatus.AWAITING_SELECTION
         )
         transition = self._transition if lease is None else self._owned_transition
         args = () if lease is None else (state, lease)
@@ -1322,7 +1371,12 @@ class FactoryEngine:
                 "runner_lease_id": None,
                 "heartbeat_at": None,
             },
-            payload={"reason": reason, "evidence": evidence},
+            payload={
+                "reason": request.reason,
+                "evidence": evidence,
+                "action": request.to_dict(),
+                "pending_action": action,
+            },
             **kwargs,
         )
 
@@ -1373,21 +1427,21 @@ class FactoryEngine:
     def kill(self, *, expected_revision: int) -> WorkflowState:
         return self._control_transition(expected_revision, "KILLED", WorkflowStatus.KILLED)
 
-    def resolve_action(self, resolution: dict, *, expected_revision: int) -> WorkflowState:
+    def resolve_action(
+        self,
+        resolution: dict,
+        *,
+        expected_revision: int,
+        decision_record: dict | None = None,
+    ) -> WorkflowState:
         state = self.store.load()
         if state.pending_action is None:
             raise InvalidTransition("project has no pending action")
-        pending_gate = str(state.pending_action.get("gate") or "")
-        resolution_gate = str(resolution.get("gate") or "")
-        if pending_gate and resolution_gate and pending_gate != resolution_gate:
-            raise InvalidTransition(
-                f"pending gate {pending_gate} cannot be resolved as {resolution_gate}"
-            )
-        return self._transition(
+        resolution = validate_resolution(state.pending_action, resolution)
+        return self._transitions.resolve_human_decision(
             expected_revision=expected_revision,
-            event_type="ACTION_RESOLVED",
-            changes={"status": WorkflowStatus.READY, "pending_action": None},
-            payload={"action_type": state.pending_action.get("type"), "resolution": resolution},
+            resolution=resolution,
+            decision_record=decision_record,
         )
 
     def _control_transition(
@@ -1449,6 +1503,8 @@ class FactoryEngine:
             shutil.move(str(self.project_dir), str(destination))
             self.project_dir = destination
             self.store = SQLiteStateStore(destination)
+            self._pipeline = StageExecutionPipeline(self.store.now_epoch)
+            self._transitions.relocate(destination, self.store)
             return self._transition(
                 expected_revision=state.revision,
                 event_type="PROJECT_ARCHIVED",
@@ -1472,6 +1528,8 @@ class FactoryEngine:
         shutil.move(str(self.project_dir), str(destination))
         self.project_dir = destination
         self.store = SQLiteStateStore(destination)
+        self._pipeline = StageExecutionPipeline(self.store.now_epoch)
+        self._transitions.relocate(destination, self.store)
         return self._transition(
             expected_revision=state.revision,
             event_type="PROJECT_ARCHIVED",
@@ -1479,18 +1537,7 @@ class FactoryEngine:
         )
 
     def _transition(self, **kwargs) -> WorkflowState:
-        state = self.store.transition(**kwargs)
-        if self._projector is not None:
-            try:
-                self._projector(self.project_dir, state)
-            except OSError as exc:
-                warnings.warn(
-                    f"workflow state committed at revision {state.revision}, "
-                    f"but compatibility projection failed: {exc}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-        return state
+        return self._transitions.transition(**kwargs)
 
     def _owned_transition(
         self,

@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from .domain import (
     SCHEMA_VERSION,
+    InvalidTransition,
     RevisionConflict,
     RunnerLeaseLost,
     StateNotInitialized,
@@ -24,6 +25,7 @@ from .stages import (
     completed_stage_for_step,
     initial_stage_checkpoints,
 )
+from .workflow_events import ENVELOPE_KEY, build_event_payload, canonical_hash
 
 
 _UNSET = object()
@@ -147,6 +149,12 @@ class SQLiteStateStore:
             CREATE TABLE IF NOT EXISTS solver_jobs (
                 job_id TEXT PRIMARY KEY,
                 job_revision INTEGER NOT NULL,
+                idempotency_key TEXT,
+                request_sha256 TEXT,
+                owner_stage INTEGER,
+                owner_subtask TEXT,
+                owner_revision INTEGER,
+                attempt_id TEXT,
                 backend TEXT NOT NULL,
                 runtime TEXT NOT NULL,
                 script TEXT NOT NULL,
@@ -161,6 +169,8 @@ class SQLiteStateStore:
                 result_refs_json TEXT NOT NULL,
                 failure_json TEXT
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS solver_jobs_idempotency_key_unique
+            ON solver_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
             CREATE TABLE IF NOT EXISTS contest_policy (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 profile TEXT NOT NULL,
@@ -174,6 +184,14 @@ class SQLiteStateStore:
                 gate TEXT PRIMARY KEY,
                 decided_at INTEGER NOT NULL,
                 decision_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS projector_snapshots (
+                projector_name TEXT PRIMARY KEY,
+                projector_version INTEGER NOT NULL,
+                through_revision INTEGER NOT NULL,
+                state_hash TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS stage_cursor_inputs (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -268,7 +286,7 @@ class SQLiteStateStore:
         current = int(row[0])
         if current == SCHEMA_VERSION:
             return
-        if current not in {1, 2, 3, 4, 5}:
+        if current not in {1, 2, 3, 4, 5, 6}:
             raise RuntimeError(
                 f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}"
             )
@@ -318,6 +336,12 @@ class SQLiteStateStore:
             CREATE TABLE IF NOT EXISTS solver_jobs (
                 job_id TEXT PRIMARY KEY,
                 job_revision INTEGER NOT NULL,
+                idempotency_key TEXT,
+                request_sha256 TEXT,
+                owner_stage INTEGER,
+                owner_subtask TEXT,
+                owner_revision INTEGER,
+                attempt_id TEXT,
                 backend TEXT NOT NULL,
                 runtime TEXT NOT NULL,
                 script TEXT NOT NULL,
@@ -353,6 +377,18 @@ class SQLiteStateStore:
                 gate TEXT PRIMARY KEY,
                 decided_at INTEGER NOT NULL,
                 decision_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projector_snapshots (
+                projector_name TEXT PRIMARY KEY,
+                projector_version INTEGER NOT NULL,
+                through_revision INTEGER NOT NULL,
+                state_hash TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
             )
             """
         )
@@ -473,6 +509,42 @@ class SQLiteStateStore:
             connection.execute(
                 "ALTER TABLE solver_jobs ADD COLUMN job_revision INTEGER NOT NULL DEFAULT 1"
             )
+        solver_columns = {
+            column[1]
+            for column in connection.execute("PRAGMA table_info(solver_jobs)").fetchall()
+        }
+        for column, definition in (
+            ("idempotency_key", "TEXT"),
+            ("request_sha256", "TEXT"),
+            ("owner_stage", "INTEGER"),
+            ("owner_subtask", "TEXT"),
+            ("owner_revision", "INTEGER"),
+            ("attempt_id", "TEXT"),
+        ):
+            if column not in solver_columns:
+                connection.execute(
+                    f"ALTER TABLE solver_jobs ADD COLUMN {column} {definition}"
+                )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS solver_jobs_idempotency_key_unique "
+            "ON solver_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL"
+        )
+        receipt_rows = connection.execute(
+            "SELECT payload_json FROM events WHERE type='SOLVER_JOB_RECEIPT_SUBMITTED'"
+        ).fetchall()
+        for receipt_row in receipt_rows:
+            try:
+                receipt_payload = json.loads(receipt_row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            job_id = receipt_payload.get("job_id")
+            request_sha256 = receipt_payload.get("request_sha256")
+            if job_id and request_sha256:
+                connection.execute(
+                    "UPDATE solver_jobs SET request_sha256=COALESCE(request_sha256, ?) "
+                    "WHERE job_id=?",
+                    (str(request_sha256), str(job_id)),
+                )
         connection.execute(
             "UPDATE project_state SET schema_version = ? WHERE singleton = 1",
             (SCHEMA_VERSION,),
@@ -497,6 +569,39 @@ class SQLiteStateStore:
             raise RuntimeError(
                 f"unsupported workflow schema {row[0]}; expected {SCHEMA_VERSION}"
             )
+
+    def _versioned_event_payload(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        before: sqlite3.Row,
+        after: sqlite3.Row,
+        revision: int,
+        event_type: str,
+        created_at: int,
+        payload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        prior_event = connection.execute(
+            "SELECT payload_json FROM events ORDER BY revision DESC LIMIT 1"
+        ).fetchone()
+        prior_versioned = False
+        if prior_event is not None:
+            try:
+                prior_versioned = isinstance(
+                    json.loads(prior_event["payload_json"]).get(ENVELOPE_KEY), dict
+                )
+            except (AttributeError, json.JSONDecodeError):
+                prior_versioned = False
+        return build_event_payload(
+            project_id=str(before["project_id"]),
+            revision=revision,
+            event_type=event_type,
+            created_at=created_at,
+            payload=_redact(payload or {}),
+            before=self._state_from_row(before),
+            after=self._state_from_row(after),
+            force_snapshot=not prior_versioned,
+        )
 
     def initialize(
         self,
@@ -620,6 +725,19 @@ class SQLiteStateStore:
                 )
             event_type = "PROJECT_IMPORTED" if imported else "PROJECT_CREATED"
             payload = _redact(import_payload or {})
+            row = connection.execute(
+                "SELECT * FROM project_state WHERE singleton = 1"
+            ).fetchone()
+            payload = build_event_payload(
+                project_id=project_id,
+                revision=1,
+                event_type=event_type,
+                created_at=now,
+                payload=payload,
+                before=None,
+                after=self._state_from_row(row),
+                force_snapshot=True,
+            )
             connection.execute(
                 """INSERT INTO events(
                        revision, type, created_at, step, attempt, payload_json
@@ -696,6 +814,136 @@ class SQLiteStateStore:
                 (gate, decided_at, encoded),
             )
         return safe
+
+    def resolve_human_decision(
+        self,
+        *,
+        expected_revision: int,
+        resolution: dict[str, Any],
+        decision_record: dict[str, Any] | None = None,
+    ) -> WorkflowState:
+        """Atomically record a durable decision and clear its pending action."""
+
+        now = int(self._clock())
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            before = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            if before is None:
+                raise StateNotInitialized(
+                    f"workflow state is not initialized: {self.path}"
+                )
+            if int(before["revision"]) != expected_revision:
+                raise RevisionConflict(
+                    f"expected revision {expected_revision}, found {before['revision']}"
+                )
+            pending = (
+                json.loads(before["pending_action_json"])
+                if before["pending_action_json"]
+                else None
+            )
+            if pending is None:
+                raise InvalidTransition("project has no pending human decision")
+            gate = str(resolution.get("gate") or pending.get("gate") or "").strip()
+            decision_refs: list[dict[str, Any]] = []
+            decision_sha256: str | None = None
+            if decision_record is not None:
+                if not gate:
+                    raise InvalidTransition("durable human decisions require a gate")
+                record_gate = str(decision_record.get("gate") or gate).strip()
+                if record_gate != gate:
+                    raise InvalidTransition(
+                        f"decision record gate {record_gate} does not match {gate}"
+                    )
+                record_selected = (
+                    decision_record.get("selected_option_id")
+                    or decision_record.get("selected_primary")
+                )
+                resolution_selected = (
+                    resolution.get("selected_option_id")
+                    or resolution.get("selected_primary")
+                    or resolution.get("selected")
+                )
+                if (
+                    record_selected is not None
+                    and resolution_selected is not None
+                    and str(record_selected) != str(resolution_selected)
+                ):
+                    raise InvalidTransition(
+                        "decision record selection does not match the resolution"
+                    )
+                if (
+                    decision_record.get("answer") is not None
+                    and resolution.get("answer") is not None
+                    and str(decision_record["answer"]) != str(resolution["answer"])
+                ):
+                    raise InvalidTransition(
+                        "decision record answer does not match the resolution"
+                    )
+                safe_decision = _redact(decision_record)
+                decision_refs = list(safe_decision.get("artifact_refs") or ())
+                decision_sha256 = canonical_hash(safe_decision)
+                encoded = json.dumps(
+                    safe_decision, ensure_ascii=True, sort_keys=True
+                )
+                prior = connection.execute(
+                    "SELECT decision_json FROM workflow_decisions WHERE gate=?",
+                    (gate,),
+                ).fetchone()
+                if prior is not None and prior["decision_json"] != encoded:
+                    raise InvalidTransition(
+                        f"immutable workflow decision already exists for {gate}"
+                    )
+                if prior is None:
+                    decided_at = int(
+                        safe_decision.get("selected_at")
+                        or safe_decision.get("decided_epoch")
+                        or now
+                    )
+                    connection.execute(
+                        "INSERT INTO workflow_decisions(gate, decided_at, decision_json) "
+                        "VALUES (?, ?, ?)",
+                        (gate, decided_at, encoded),
+                    )
+            revision = expected_revision + 1
+            connection.execute(
+                "UPDATE project_state SET status=?, pending_action_json=NULL, "
+                "revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
+                (WorkflowStatus.READY.value, revision, now, now),
+            )
+            after = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            event_payload = self._versioned_event_payload(
+                connection,
+                before=before,
+                after=after,
+                revision=revision,
+                event_type="ACTION_RESOLVED",
+                created_at=now,
+                payload={
+                    "action_type": pending.get("type"),
+                    "gate": gate or None,
+                    "resolution": resolution,
+                    "decision_recorded": decision_record is not None,
+                    "decision_sha256": decision_sha256,
+                    "artifact_refs": decision_refs,
+                },
+            )
+            connection.execute(
+                "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
+                "VALUES (?, 'ACTION_RESOLVED', ?, ?, ?, ?)",
+                (
+                    revision,
+                    now,
+                    before["active_step"],
+                    before["attempt"],
+                    json.dumps(event_payload, ensure_ascii=True, sort_keys=True),
+                ),
+            )
+        return self._state_from_row(after)
 
     def transition(
         self,
@@ -926,7 +1174,18 @@ class SQLiteStateStore:
                 else event_step
             )
             effective_attempt = int(changes.get("attempt", row["attempt"]))
-            safe_payload = _redact(payload or {})
+            updated = connection.execute(
+                "SELECT * FROM project_state WHERE singleton = 1"
+            ).fetchone()
+            safe_payload = self._versioned_event_payload(
+                connection,
+                before=row,
+                after=updated,
+                revision=revision,
+                event_type=event_type,
+                created_at=now,
+                payload=_redact(payload or {}),
+            )
             connection.execute(
                 "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
                 (
@@ -938,7 +1197,6 @@ class SQLiteStateStore:
                     json.dumps(safe_payload, ensure_ascii=True, sort_keys=True),
                 ),
             )
-            updated = connection.execute("SELECT * FROM project_state WHERE singleton = 1").fetchone()
         return self._state_from_row(updated)
 
     def events(self, *, since_revision: int = 0) -> list[WorkflowEvent]:
@@ -961,6 +1219,75 @@ class SQLiteStateStore:
             )
             for row in rows
         ]
+
+    def save_projector_snapshot(
+        self,
+        projector_name: str,
+        *,
+        projector_version: int,
+        through_revision: int,
+        state_hash: str,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Cache a pure projector result; workflow truth remains the event log."""
+
+        if not projector_name or projector_version < 1 or through_revision < 0:
+            raise ValueError("invalid projector snapshot identity")
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            connection.execute(
+                """
+                INSERT INTO projector_snapshots(
+                    projector_name, projector_version, through_revision,
+                    state_hash, snapshot_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(projector_name) DO UPDATE SET
+                    projector_version=excluded.projector_version,
+                    through_revision=excluded.through_revision,
+                    state_hash=excluded.state_hash,
+                    snapshot_json=excluded.snapshot_json,
+                    created_at=excluded.created_at
+                """,
+                (
+                    projector_name,
+                    projector_version,
+                    through_revision,
+                    state_hash,
+                    json.dumps(_redact(snapshot), ensure_ascii=True, sort_keys=True),
+                    int(self._clock()),
+                ),
+            )
+
+    def projector_snapshot(
+        self,
+        projector_name: str,
+        *,
+        projector_version: int | None = None,
+        maximum_revision: int | None = None,
+        state_hash: str | None = None,
+    ) -> dict[str, Any] | None:
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM projector_snapshots WHERE projector_name=?",
+                (projector_name,),
+            ).fetchone()
+        if row is None:
+            return None
+        if projector_version is not None and row["projector_version"] != projector_version:
+            return None
+        if maximum_revision is not None and row["through_revision"] > maximum_revision:
+            return None
+        if state_hash is not None and row["state_hash"] != state_hash:
+            return None
+        return {
+            "projector_name": row["projector_name"],
+            "projector_version": row["projector_version"],
+            "through_revision": row["through_revision"],
+            "state_hash": row["state_hash"],
+            "snapshot": json.loads(row["snapshot_json"]),
+            "created_at": row["created_at"],
+        }
 
     def completed_stage_subtasks(self) -> set[tuple[int, str]]:
         if not self.path.is_file():
@@ -1105,24 +1432,30 @@ class SQLiteStateStore:
                 "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
                 (revision, now, now),
             )
+            updated = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            event_payload = self._versioned_event_payload(
+                connection,
+                before=row,
+                after=updated,
+                revision=revision,
+                event_type="SOLVER_POLICY_CONFIGURED",
+                created_at=now,
+                payload={
+                    "mode": mode,
+                    "threshold_seconds": threshold_seconds,
+                    "allowed_runtimes": runtimes,
+                },
+            )
             connection.execute(
                 "INSERT INTO events VALUES (?, 'SOLVER_POLICY_CONFIGURED', ?, NULL, 0, ?)",
                 (
                     revision,
                     now,
-                    json.dumps(
-                        {
-                            "mode": mode,
-                            "threshold_seconds": threshold_seconds,
-                            "allowed_runtimes": runtimes,
-                        },
-                        sort_keys=True,
-                    ),
+                    json.dumps(event_payload, sort_keys=True),
                 ),
             )
-            updated = connection.execute(
-                "SELECT * FROM project_state WHERE singleton=1"
-            ).fetchone()
         return self._state_from_row(updated)
 
     def create_solver_job(
@@ -1143,13 +1476,18 @@ class SQLiteStateStore:
             connection.execute(
                 """
                 INSERT INTO solver_jobs(
-                    job_id, job_revision, backend, runtime, script, workdir, argv_json,
+                    job_id, job_revision, idempotency_key, request_sha256,
+                    owner_stage, owner_subtask, owner_revision, attempt_id,
+                    backend, runtime, script, workdir, argv_json,
                     max_time_seconds, external_id, status, requested_at,
                     started_at, finished_at, result_refs_json, failure_json
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    record["job_id"], record["backend"], record["runtime"],
+                    record["job_id"], record.get("idempotency_key"),
+                    record.get("request_sha256"), record.get("owner_stage"),
+                    record.get("owner_subtask"), record.get("owner_revision"),
+                    record.get("attempt_id"), record["backend"], record["runtime"],
                     record["script"], record["workdir"],
                     json.dumps(record.get("argv", []), sort_keys=True),
                     int(record["max_time_seconds"]), record.get("external_id"),
@@ -1164,25 +1502,36 @@ class SQLiteStateStore:
                 "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
                 (revision, now, now),
             )
+            updated = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            event_payload = self._versioned_event_payload(
+                connection,
+                before=state,
+                after=updated,
+                revision=revision,
+                event_type="SOLVER_JOB_SUBMITTED",
+                created_at=now,
+                payload={
+                    "job_id": record["job_id"],
+                    "backend": record["backend"],
+                    "runtime": record["runtime"],
+                    "max_time_seconds": int(record["max_time_seconds"]),
+                    "idempotency_key": record.get("idempotency_key"),
+                    "owner_stage": record.get("owner_stage"),
+                    "owner_subtask": record.get("owner_subtask"),
+                    "owner_revision": record.get("owner_revision"),
+                    "attempt_id": record.get("attempt_id"),
+                },
+            )
             connection.execute(
                 "INSERT INTO events VALUES (?, 'SOLVER_JOB_SUBMITTED', ?, NULL, 0, ?)",
                 (
                     revision,
                     now,
-                    json.dumps(
-                        {
-                            "job_id": record["job_id"],
-                            "backend": record["backend"],
-                            "runtime": record["runtime"],
-                            "max_time_seconds": int(record["max_time_seconds"]),
-                        },
-                        sort_keys=True,
-                    ),
+                    json.dumps(event_payload, sort_keys=True),
                 ),
             )
-            updated = connection.execute(
-                "SELECT * FROM project_state WHERE singleton=1"
-            ).fetchone()
         return self._state_from_row(updated)
 
     def update_solver_job(
@@ -1235,26 +1584,33 @@ class SQLiteStateStore:
                 "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
                 (revision, now, now),
             )
+            updated = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            event_type = f"SOLVER_JOB_{status.upper()}"
+            event_payload = self._versioned_event_payload(
+                connection,
+                before=state,
+                after=updated,
+                revision=revision,
+                event_type=event_type,
+                created_at=now,
+                payload={
+                    "job_id": job_id,
+                    "job_revision": job_revision,
+                    "external_id": external_id,
+                    "failure": _redact(failure),
+                },
+            )
             connection.execute(
                 "INSERT INTO events VALUES (?, ?, ?, NULL, 0, ?)",
                 (
                     revision,
-                    f"SOLVER_JOB_{status.upper()}",
+                    event_type,
                     now,
-                    json.dumps(
-                        {
-                            "job_id": job_id,
-                            "job_revision": job_revision,
-                            "external_id": external_id,
-                            "failure": _redact(failure),
-                        },
-                        sort_keys=True,
-                    ),
+                    json.dumps(event_payload, sort_keys=True),
                 ),
             )
-            updated = connection.execute(
-                "SELECT * FROM project_state WHERE singleton=1"
-            ).fetchone()
         return self._state_from_row(updated)
 
     def record_solver_receipt(
@@ -1297,7 +1653,10 @@ class SQLiteStateStore:
                 prior = json.loads(row["payload_json"])
                 if prior.get("job_id") != job_id:
                     continue
-                if prior != payload:
+                prior_legacy = {
+                    key: value for key, value in prior.items() if key != ENVELOPE_KEY
+                }
+                if prior_legacy != payload:
                     raise ValueError(
                         f"immutable {stage} solver receipt event already differs for {job_id}"
                     )
@@ -1313,13 +1672,27 @@ class SQLiteStateStore:
                 "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
                 (revision, now, now),
             )
-            connection.execute(
-                "INSERT INTO events VALUES (?, ?, ?, NULL, 0, ?)",
-                (revision, event_type, now, json.dumps(payload, sort_keys=True)),
-            )
+            if stage == "submitted":
+                connection.execute(
+                    "UPDATE solver_jobs SET request_sha256=? WHERE job_id=?",
+                    (request_sha256, job_id),
+                )
             updated = connection.execute(
                 "SELECT * FROM project_state WHERE singleton=1"
             ).fetchone()
+            event_payload = self._versioned_event_payload(
+                connection,
+                before=state,
+                after=updated,
+                revision=revision,
+                event_type=event_type,
+                created_at=now,
+                payload=payload,
+            )
+            connection.execute(
+                "INSERT INTO events VALUES (?, ?, ?, NULL, 0, ?)",
+                (revision, event_type, now, json.dumps(event_payload, sort_keys=True)),
+            )
         return self._state_from_row(updated)
 
     def solver_job(self, job_id: str) -> dict[str, Any]:
@@ -1331,6 +1704,17 @@ class SQLiteStateStore:
         if row is None:
             raise KeyError(f"solver job not found: {job_id}")
         return self._solver_job_from_row(row)
+
+    def solver_job_by_idempotency_key(self, idempotency_key: str) -> dict[str, Any] | None:
+        if not idempotency_key:
+            return None
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            row = connection.execute(
+                "SELECT * FROM solver_jobs WHERE idempotency_key=?",
+                (idempotency_key,),
+            ).fetchone()
+        return self._solver_job_from_row(row) if row is not None else None
 
     def solver_jobs(self) -> list[dict[str, Any]]:
         with self._session() as connection:
@@ -1345,6 +1729,12 @@ class SQLiteStateStore:
         return {
             "job_id": row["job_id"],
             "job_revision": row["job_revision"],
+            "idempotency_key": row["idempotency_key"],
+            "request_sha256": row["request_sha256"],
+            "owner_stage": row["owner_stage"],
+            "owner_subtask": row["owner_subtask"],
+            "owner_revision": row["owner_revision"],
+            "attempt_id": row["attempt_id"],
             "backend": row["backend"],
             "runtime": row["runtime"],
             "script": row["script"],

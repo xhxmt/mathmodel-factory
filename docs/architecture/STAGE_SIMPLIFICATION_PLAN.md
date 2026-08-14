@@ -387,3 +387,10 @@ Web contract/build 聚焦测试覆盖。真实模型调用、比赛题输入、�
 在第 4 项完成前，可以把 10 Stage 视为当前代码与新项目默认运行时合同，但不能声称已经完成
 真实比赛项目的端到端生产验证。若该运行暴露 Blocker/Major，必须回滚对应项目的 scheduler
 generation 或修复后重新从 clean-room 验收，不能对失败结果做 override 以满足本条。
+
+## 11. 横向运行时收敛
+
+Gate 原因、恢复状态、前端诊断、审计时间线、Human Decision、执行管线和持久 Job 身份已按
+独立方案完成核心集成，不改变本文已实施的 10-Stage/Step 合同。Capability/Profile 扩展仍延后。
+实现边界和仍待完成的 clean-room 运营验收见
+[`RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md`](RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md)。
