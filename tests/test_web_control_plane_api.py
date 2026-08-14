@@ -186,6 +186,7 @@ def test_main_module_exposes_runtime_api_surface():
         "submit_consultation_answer",
         "get_modeling_directions",
         "select_modeling_direction",
+        "get_problem_plan",
         "get_selection",
         "submit_selection_decision",
         "get_models",

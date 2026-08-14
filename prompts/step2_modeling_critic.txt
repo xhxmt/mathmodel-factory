@@ -14,7 +14,8 @@
 2. `__PROJECT_PATH__/viability_gate.md` —— Step 1 给本流打的标，⚠️ 备注是 spec 必须接住的
 3. `__PROJECT_PATH__/research_brief.md` —— 文献和方法对比（验 spec 引文是否真实）
 4. `__PROJECT_PATH__/problem/problem_brief.md` —— 子问题分解
-5. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— 时间预算 + 硬扣分项
+5. `__PROJECT_PATH__/problem/problem_plan.json` —— 检查本流是否漏掉依赖节点、使用未产出的上游输入，或承诺无法交付的下游输出
+6. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— 时间预算 + 硬扣分项
 6. `__PROJECT_PATH__/problem/terminology_table.md` —— 术语精确定义
 7. `__PROJECT_PATH__/problem/data_inventory.md` —— 数据清单
 8. `__FACTORY__/method_library/<your-method>.md` —— 主方法详档（按 spec 自己声明的路径）

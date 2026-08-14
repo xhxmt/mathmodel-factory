@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .content_blocks import ContentBlock, NodeOutput
+
 
 STEP1_HEADING = "## Step 1 modeling directions:"
 WORD_RE = re.compile(r"[a-z0-9_+\-.]+", re.I)
@@ -18,17 +20,46 @@ def _read_text(path: Path) -> str:
 
 
 def _load_method_index(factory_root: Path) -> dict[str, dict[str, Any]]:
-    index_path = factory_root / "method_library" / "index.json"
-    try:
-        entries = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    if not isinstance(entries, list):
-        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for index_path in (
+        factory_root / "method_library" / "index.json",
+        factory_root / "method_library" / "hmml" / "index.json",
+    ):
+        if not index_path.is_file():
+            continue
+        try:
+            entries = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("path"):
+                result[str(entry["path"])] = entry
+    return result
+
+
+def _unavailable_payload(message: str, selected_direction_id: str) -> dict[str, Any]:
+    output = NodeOutput(
+        node_id="modeling-directions",
+        title="分层方法召回",
+        blocks=[
+            ContentBlock(
+                id="modeling-directions.status",
+                type="status",
+                label="召回状态",
+                render_type="notice",
+                content={"level": "waiting", "message": message},
+            )
+        ],
+        metadata={"available": False},
+    )
     return {
-        str(entry.get("path", "")): entry
-        for entry in entries
-        if isinstance(entry, dict) and entry.get("path")
+        "available": False,
+        "message": message,
+        "selected_direction_id": selected_direction_id,
+        "directions": [],
+        **output.to_ui_dict(),
     }
 
 
@@ -93,7 +124,9 @@ def _contains_concept(haystack: str, needle: str) -> bool:
 def _data_fit(required_data: list[Any], data_text: str) -> float:
     requirements = [str(item) for item in required_data if str(item).strip()]
     if not requirements:
-        return 0.7
+        # Unknown is not evidence of fit. Broad HMML entries intentionally stay
+        # conservative until a curated method record declares concrete inputs.
+        return 0.0
     hits = sum(1 for item in requirements if _contains_concept(data_text, item))
     return hits / len(requirements)
 
@@ -130,22 +163,17 @@ def _selected_direction_id(project_path: Path) -> str:
 def build_modeling_directions(project_path: Path, factory_root: Path, limit: int = 3) -> dict[str, Any]:
     retrieval_path = project_path / "problem" / "method_retrieval.md"
     if not retrieval_path.is_file():
-        return {
-            "available": False,
-            "message": "等待 Step 0 生成 problem/method_retrieval.md",
-            "selected_direction_id": _selected_direction_id(project_path),
-            "directions": [],
-        }
+        return _unavailable_payload(
+            "等待 Step 0 生成 problem/method_retrieval.md",
+            _selected_direction_id(project_path),
+        )
 
     method_index = _load_method_index(factory_root)
     retrieval_rows = _parse_retrieval_table(_read_text(retrieval_path))
     if not method_index or not retrieval_rows:
-        return {
-            "available": False,
-            "message": "暂无可排序的建模方向",
-            "selected_direction_id": _selected_direction_id(project_path),
-            "directions": [],
-        }
+        return _unavailable_payload(
+            "暂无可排序的建模方向", _selected_direction_id(project_path)
+        )
 
     data_text = "\n".join(
         [
@@ -181,6 +209,8 @@ def build_modeling_directions(project_path: Path, factory_root: Path, limit: int
                 "method": method,
                 "domain": str(entry.get("domain") or ""),
                 "subdomain": str(entry.get("subdomain") or ""),
+                "hierarchy": [str(item) for item in (entry.get("hierarchy") or [])],
+                "source": str(entry.get("source") or "Paper Factory 精编方法库"),
                 "method_path": str(entry.get("path") or retrieval.get("path") or ""),
                 "evidence_level": evidence_level,
                 "data_coverage": data_coverage,
@@ -210,15 +240,83 @@ def build_modeling_directions(project_path: Path, factory_root: Path, limit: int
             str(item["id"]),
         )
     )
-    directions = candidates[: max(1, min(limit, 3))]
+    shortlist_limit = max(1, min(limit, 3))
+    directions: list[dict[str, Any]] = []
+    seen_branches: set[str] = set()
+    for item in candidates:
+        hierarchy = item.get("hierarchy") or [item.get("domain")]
+        branch = str(hierarchy[0] or "未分类")
+        if branch in seen_branches:
+            continue
+        seen_branches.add(branch)
+        directions.append(item)
+        if len(directions) >= shortlist_limit:
+            break
+    if len(directions) < shortlist_limit:
+        selected_ids = {item["id"] for item in directions}
+        directions.extend(
+            item
+            for item in candidates
+            if item["id"] not in selected_ids
+        )
+        directions = directions[:shortlist_limit]
     for rank, item in enumerate(directions, 1):
         item["rank"] = rank
 
+    selected_direction_id = _selected_direction_id(project_path)
+    ui_directions = [
+        {
+            **item,
+            "actions": [
+                {
+                    "id": "select_modeling_direction",
+                    "label": "已选" if selected_direction_id == item["id"] else "选择",
+                    "style": "secondary" if selected_direction_id == item["id"] else "primary",
+                    "payload": {"direction_id": item["id"]},
+                }
+            ],
+        }
+        for item in directions
+    ]
+    branches = []
+    for item in directions:
+        hierarchy = item.get("hierarchy") or [item.get("domain")]
+        branch = str(hierarchy[0] or "未分类")
+        if branch not in branches:
+            branches.append(branch)
+    output = NodeOutput(
+        node_id="modeling-directions",
+        title="分层方法召回",
+        blocks=[
+            ContentBlock(
+                id="modeling-directions.summary",
+                type="summary",
+                label="召回摘要",
+                render_type="key_value",
+                content={
+                    "候选方向": len(directions),
+                    "命中分支": " · ".join(branches) or "未分类",
+                    "登记来源": "精编方法库 + 授权 HMML",
+                    "排序原则": "层级匹配 → 方法匹配 → 数据与证据复排",
+                },
+            ),
+            ContentBlock(
+                id="modeling-directions.methods",
+                type="collection",
+                label="推荐方法",
+                render_type="method_cards",
+                content=ui_directions,
+                data_key="directions",
+            ),
+        ],
+        metadata={"available": bool(directions), "selected_direction_id": selected_direction_id},
+    )
     return {
         "available": bool(directions),
         "message": "" if directions else "暂无可排序的建模方向",
-        "selected_direction_id": _selected_direction_id(project_path),
+        "selected_direction_id": selected_direction_id,
         "directions": directions,
+        **output.to_ui_dict(),
     }
 
 

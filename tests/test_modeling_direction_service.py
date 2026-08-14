@@ -95,6 +95,12 @@ def test_build_modeling_directions_returns_ranked_two_to_three_options(tmp_path)
         "strong",
     }
     assert payload["directions"][0]["data_coverage"] >= payload["directions"][1]["data_coverage"]
+    assert payload["schema_version"] == "node-output-v1"
+    assert [block["render_type"] for block in payload["blocks"]] == [
+        "key_value",
+        "method_cards",
+    ]
+    assert payload["blocks"][1]["content"][0]["actions"][0]["id"] == "select_modeling_direction"
 
 
 def test_write_modeling_direction_selection_records_step1_guidance(tmp_path):

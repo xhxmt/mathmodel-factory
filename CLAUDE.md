@@ -237,7 +237,9 @@ SCIP, IPOPT, Octave, and legacy Stata names.
 
 See `STEPS.md` for exact outputs and line/file gates. In short:
 
-- Setup / Step 0: parse a competition problem into `problem/`.
+- Setup / Step 0: parse a competition problem into `problem/`, generate the
+  validated `problem-plan-v1` dependency DAG, and run hierarchical method
+  retrieval across the curated and authorized HMML registries.
 - Step 1: background research, candidate methods, viability gate.
 - Step 2: parallel modeling proposals, demo solves, critic verdicts.
 - Step 3: Human Gate 1 selects PRIMARY/AUXILIARY from validated demo solves; SQLite is authoritative and `human_review.md` is a projection.
@@ -280,6 +282,9 @@ Important project files include:
 
 - `checkpoint.md`: status display only; not authoritative.
 - `problem/*.md`: parsed problem, constraints, data inventory, candidate methods.
+- `problem/problem_plan.json`: authored problem-specific scientific DAG;
+  deterministic validation and audit fingerprints bind it, while SQLite
+  Stage/Step state remains the workflow authority.
 - `viable_streams.md`, `m<N>_spec.md`, `m<N>_critique.md`: Step 2 stream state.
 - `method_decision.md`, `chosen_method.md`: selected primary/auxiliary method.
 - `model.md`, `symbol_table.md`, `assumption_ledger.md`: modeling state.
@@ -361,6 +366,11 @@ append-only. `GET /api/projects/{base}/submission` resolves and verifies the
 atomic current release before serving a ZIP; it must never trust a flat alias
 or an arbitrary project path. Both endpoints enforce the same `project_acl` as
 other internal project details.
+
+`GET /api/projects/{base}/modeling-directions` and
+`GET /api/projects/{base}/problem-plan` expose `node-output-v1` typed
+`ContentBlock` payloads. The frontend registry renders method cards, notices,
+key/value summaries, artifact links, and DAGs without accepting backend HTML.
 
 Production secrets are loaded from GCP Secret Manager by
 `scripts/load_secrets.sh`. `JWT_SECRET` (at least 32 characters) and a strong

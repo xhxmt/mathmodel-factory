@@ -9,9 +9,12 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 - Workflow state: new and explicitly migrated `native_v2` projects use schema-v6 `.factory/state.db` as the authoritative versioned state/event store. New projects default to the versioned 10-Stage scheduler (`stage_v1`) and also persist the `contest_core_v1` clock and human decisions there. Step artifacts remain authoritative validation evidence. Older native projects retain `step_v2` until an explicit scheduler activation; unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
 - Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi). Submit with `--type`, `--max-time`, repeated `--input` / `--output` / `--seed`; inspect immutable two-stage evidence with `--status <jobid> --json`.
 - MinerU PDF → Markdown converter: `../../scripts/mineru_parse.py` (requires `MINERU_TOKEN` in repo `.env`)
-- Method library: `../../method_library/` with `index.json` as the
-  machine-readable HMML-lite registry and README / method `.md` files as the
-  human-readable source of truth. Agents MAY only cite methods registered here.
+- Method library: `../../method_library/` combines the curated `index.json`
+  registry with the authorized `hmml/index.json` hierarchy (118 registered
+  methods in the current checkout). `scripts/method_retrieve.py` performs
+  coarse-to-fine branch/leaf retrieval across both registries. Agents MAY only
+  cite registered on-disk method documents; broad HMML entries remain weak
+  evidence until their data, solver, and failure-mode metadata is curated.
 - Local compile helper: `../../compile_paper.sh "$(pwd)" {base}`
 - Prompt templates: `prompts/step*.txt`
 - Stata wrapper (`../../stata_submit.sh`) is retained as historical reference but is **not** part of an executable workflow.
@@ -66,6 +69,9 @@ Produce in `problem/`:
 - `source.md` — competition problem statement, as Markdown (auto-converted via `mineru_parse.py` if input was a PDF)
 - `source.mineru/` — sidecar with `layout.json`, `content_list.json`, `images/`
 - `problem_brief.md` — authoritative restatement, sub-problem decomposition, dependencies, scoring tendency
+- `problem_plan.json` — validated `problem-plan-v1` DAG for this problem's
+  scientific task dependencies. It is business truth inside the fixed
+  Stage/Step lifecycle; it never replaces scheduler state.
 - `terminology_table.md` — ambiguous-term → precise-definition table (≥ 5 entries)
 - `data_inventory.md` — supplied attachments + missing data + suggested external sources
 - `feasibility_constraints.md` — 74-hour time budget allocation, solver-time caps, submission-format hard constraints
@@ -78,7 +84,7 @@ Produce in `problem/`:
   table it demands (with required column fields). Checked mechanically by
   `scripts/verify_deliverables.py` at Gate 1 and Step 16.
 
-Stop after the 8 files exist and `checkpoint.md` reads `Last completed step: 0`.
+Stop after the 9 files exist and `checkpoint.md` reads `Last completed step: 0`.
 
 ## Step Outputs
 
@@ -91,8 +97,9 @@ Produce:
   - `VERDICT: PASS` (≥ 2 streams pass) — continue to Step 2
   - `VERDICT: KILL` (no stream is feasible) — also write `kill_memo.md` explaining why, then stop. Runner prunes rebuildable intermediates via `scripts/cleanup_project_artifacts.py` and marks the project `.killed`.
 
-Read `problem/*.md`, `problem/method_retrieval.md`,
-`method_library/index.json`, and `method_library/README.md` first. Reference
+Read `problem/*.md`, `problem/problem_plan.json`, `problem/method_retrieval.md`,
+`method_library/index.json`, `method_library/hmml/index.json`, and
+`method_library/README.md` first. Reference
 real, citable sources only.
 
 ### Step 2: Parallel Modeling Proposals

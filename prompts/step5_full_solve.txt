@@ -30,7 +30,8 @@ Step 5 是数据的「真相之锚」：评委读论文时所有引用的数字�
 5. `__PROJECT_PATH__/method_decision.md` —— §下游接力清单 列出了 Step 5 必须覆盖的求解任务（哪些子问题 / 哪些规模 / 哪些必须算）。本步骤的 `solve_log.md` 表格必须**逐条对照**这份清单，确认 100% 覆盖。
 6. `__PROJECT_PATH__/models/m{N}_<short>/` —— Step 4 准备好的代码骨架。`ls -la` 看下结构，重点是 `03_solve.py` 入口签名、`tests/` 下的 sanity check（运行 `pytest models/m{N}_<short>/tests/ -x` 确认骨架本身 OK 再开求解）。
 7. `__PROJECT_PATH__/problem/problem_brief.md` —— **逐字符精读**子问题列表。`solve_log.md` 表格的「subproblem」列必须用本文件的小标题原文（如「问题 1 (SPRT 抽样规则)」），不允许换名。`results/<subproblem>/` 的目录名用对应的 ascii slug（如 `problem1`、`problem2`、`problem4`），slug 写法记录在 `solve_log.md` 顶部。
-8. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— §总求解时间预算 + §单求解器时间上限。本步骤的所有 `solver_submit.sh --max-time` 参数必须遵守此处给的上限；总求解时长不得超过总预算的 30%（剩余预算留给 Step 6 灵敏度扫描 —— STEPS.md:86 明文要求）。
+8. `__PROJECT_PATH__/problem/problem_plan.json` —— 按 `topological_order` 安排可并行求解批次；只有无依赖或依赖产物已落盘的节点可以启动，禁止靠共享进程内状态跨节点传值。
+9. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— §总求解时间预算 + §单求解器时间上限。本步骤的所有 `solver_submit.sh --max-time` 参数必须遵守此处给的上限；总求解时长不得超过总预算的 30%（剩余预算留给 Step 6 灵敏度扫描 —— STEPS.md:86 明文要求）。
 9. `__PROJECT_PATH__/problem/data_inventory.md` —— `01_data.py` 该读哪些题目附件 / 哪些参数靠假设填补。如果 Step 4 已经把数据预处理完落到 `data/intermediate/`，本步骤可以直接读 intermediate 文件而不重跑 `01_data.py`；如果 intermediate 不存在或已过期（基于 mtime），重跑。
 10. `__FACTORY__/modeling_guide.md` —— 参见上方 §重要 — 风格规范。
 11. `__PROJECT_PATH__/human_review.md`（如存在）—— 若包含 `## Step 5 solve:` 段落（不区分大小写），把其内容作为最高优先级指令，`solve_log.md` 顶部 §人工指令承接 子节原话引用 + 执行说明。

@@ -148,6 +148,7 @@ ongoing/<base>/
 ├── problem/
 │   ├── problem.pdf              ← original problem statement (raw)
 │   ├── problem_brief.md         ← restated and decomposed (Step 0)
+│   ├── problem_plan.json        ← validated problem-specific dependency DAG (Step 0)
 │   ├── terminology_table.md     ← ambiguous-term disambiguation (Step 0)
 │   ├── data_inventory.md        ← provided + missing data + sources (Step 0)
 │   ├── feasibility_constraints.md  ← time budget, format, page limit (Step 0)
@@ -397,6 +398,10 @@ update discipline:
 - `problem/problem_brief.md` — written in Step 0, generally immutable
   afterwards. Edit only if a step uncovers a misreading of the problem,
   and log the change in `assumption_ledger.md`.
+- `problem/problem_plan.json` — the `problem-plan-v1` task DAG written in Step
+  0. Keep it aligned with `problem_brief.md`; validate changes with
+  `scripts/validate_problem_plan.py`. It schedules scientific dependencies
+  inside the fixed lifecycle and never advances SQLite workflow state.
 - `assumption_ledger.md` — the canonical record of every modeling
   assumption, its scope, and its justification. Created in Step 4;
   updated in place by every step that introduces or revises an

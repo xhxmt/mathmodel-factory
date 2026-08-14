@@ -113,6 +113,33 @@ Date.now = originalNow
     assert result.returncode == 0, result.stderr
 
 
+def test_solver_job_ui_localizes_statuses_and_receipt_diagnostics():
+    result = run_node(
+        """
+import assert from 'node:assert/strict'
+import {
+  receiptClaimLabel,
+  receiptErrorLabel,
+  solverStatusLabel,
+} from './web/frontend/src/lib/solverJobUi.js'
+
+assert.equal(solverStatusLabel('RUNNING'), '运行中')
+assert.equal(solverStatusLabel('completed'), '已完成')
+assert.equal(receiptClaimLabel('LEGACY_JOB_METADATA_ONLY'), '仅有旧版任务元数据')
+assert.equal(
+  receiptClaimLabel('EXECUTION_IDENTITY_AND_DECLARED_OUTPUTS_ONLY_NO_OPTIMALITY_PROOF'),
+  '仅证明执行身份与声明输出，不构成最优性证明',
+)
+assert.equal(receiptClaimLabel(null), '凭证未就绪')
+assert.equal(receiptErrorLabel('MISSING_TWO_STAGE_RECEIPT'), '缺少两阶段凭证')
+assert.equal(receiptErrorLabel('SUBMISSION_RECEIPT_EVENT_HASH_MISMATCH'), '提交凭证事件哈希不匹配')
+assert.equal(receiptErrorLabel('FUTURE_DIAGNOSTIC_CODE'), 'FUTURE_DIAGNOSTIC_CODE')
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_markdown_renderer_blocks_scriptable_links_and_escapes_attributes():
     result = run_node(
         """
@@ -632,7 +659,7 @@ const tabs = workspaceTabs({
   diagnostics: { status: { reason_code: 'runner_failed' } },
   cloudEnabled: true,
 })
-assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'logs', 'artifacts', 'evidence', 'consultation', 'delivery', 'solver', 'diagnostics', 'cloud'])
+assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'plan', 'logs', 'artifacts', 'evidence', 'consultation', 'delivery', 'solver', 'diagnostics', 'cloud'])
 assert.equal(tabs.find((t) => t.key === 'diagnostics').attention, true)
 assert.equal(workspaceTabs({}).some((t) => t.key === 'consultation'), false)
 assert.equal(workspaceTabs({ selectionPending: true }).find((t) => t.key === 'selection').attention, true)

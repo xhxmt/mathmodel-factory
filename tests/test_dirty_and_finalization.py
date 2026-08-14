@@ -70,6 +70,20 @@ def test_derived_result_projection_does_not_reopen_canonical_solve(tmp_path):
     assert DirtyFlag.RESULT not in flags
 
 
+def test_problem_plan_change_is_owned_by_understand_stage(tmp_path):
+    plan = tmp_path / "problem" / "problem_plan.json"
+    plan.parent.mkdir()
+    before = capture_artifact_manifest(tmp_path)
+    plan.write_text('{"schema_version":"problem-plan-v1"}\n', encoding="utf-8")
+    after = capture_artifact_manifest(tmp_path)
+
+    changes = classify_manifest_changes(before, after)
+
+    assert [(change.flag, change.owner_stage) for change in changes] == [
+        (DirtyFlag.MODEL, 1)
+    ]
+
+
 def test_dirty_flag_clear_requires_owner_stage_receipt_in_same_revision(tmp_path):
     store = SQLiteStateStore(tmp_path)
     state = store.initialize(project_id="demo", project_type="modeling")

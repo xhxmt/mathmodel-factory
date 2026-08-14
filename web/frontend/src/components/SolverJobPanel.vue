@@ -46,7 +46,7 @@
             <span class="sp-jobid mono">{{ job.job_id.substring(0, 16) }}</span>
             <span class="sp-runtime-badge">{{ job.runtime }}</span>
             <span class="sp-backend-dot" :class="`backend-${job.backend}`" :title="job.backend"></span>
-            <span class="sp-status" :class="`status-${job.status.toLowerCase()}`">{{ job.status }}</span>
+            <span class="sp-status" :class="`status-${job.status.toLowerCase()}`">{{ solverStatusLabel(job.status) }}</span>
             <span class="sp-duration mono">{{ formatDuration(job.duration_seconds) }}</span>
             <span class="sp-age">{{ relativeTime(job.requested_at) }}</span>
             <Icon
@@ -69,43 +69,49 @@
             <template v-else-if="evidence[job.job_id]">
               <div class="sp-detail-content">
                 <div class="sp-detail-section">
-                  <div class="sp-detail-label">Receipt 状态</div>
+                  <div class="sp-detail-label">凭证状态</div>
                   <div class="sp-detail-value">
                     <span v-if="evidence[job.job_id].receipt_ready" class="sp-receipt-badge sp-receipt-ready">
-                      <Icon name="check-circle" :size="12" /> Ready
+                      <Icon name="check-circle" :size="12" /> 凭证完整
                     </span>
-                    <span v-else class="sp-receipt-badge sp-receipt-not-ready">
-                      <Icon name="alert-triangle" :size="12" /> {{ evidence[job.job_id].claim_limit || 'Not Ready' }}
+                    <span
+                      v-else
+                      class="sp-receipt-badge sp-receipt-not-ready"
+                      :title="evidence[job.job_id].claim_limit || ''"
+                    >
+                      <Icon name="alert-triangle" :size="12" /> {{ receiptClaimLabel(evidence[job.job_id].claim_limit) }}
                     </span>
                   </div>
                 </div>
 
                 <div v-if="evidence[job.job_id].errors && evidence[job.job_id].errors.length > 0" class="sp-detail-section">
-                  <div class="sp-detail-label">Errors</div>
+                  <div class="sp-detail-label">错误</div>
                   <div class="sp-detail-errors">
-                    <div v-for="(err, idx) in evidence[job.job_id].errors" :key="idx" class="sp-error-item">{{ err }}</div>
+                    <div v-for="(err, idx) in evidence[job.job_id].errors" :key="idx" class="sp-error-item" :title="err">
+                      {{ receiptErrorLabel(err) }}
+                    </div>
                   </div>
                 </div>
 
                 <div v-if="evidence[job.job_id].submission" class="sp-detail-section">
-                  <div class="sp-detail-label">Seeds</div>
-                  <div class="sp-detail-value mono">{{ (evidence[job.job_id].submission.seeds || []).join(', ') || 'N/A' }}</div>
+                  <div class="sp-detail-label">随机种子</div>
+                  <div class="sp-detail-value mono">{{ (evidence[job.job_id].submission.seeds || []).join(', ') || '暂无' }}</div>
                 </div>
 
                 <div v-if="evidence[job.job_id].submission && evidence[job.job_id].submission.inputs" class="sp-detail-section">
-                  <div class="sp-detail-label">Inputs</div>
+                  <div class="sp-detail-label">输入</div>
                   <table class="sp-table">
                     <thead>
                       <tr>
-                        <th>Path</th>
+                        <th>路径</th>
                         <th>SHA256</th>
-                        <th>Size</th>
+                        <th>大小</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr v-for="(inp, idx) in evidence[job.job_id].submission.inputs" :key="idx">
                         <td class="mono">{{ inp.path }}</td>
-                        <td class="mono sp-hash">{{ inp.sha256 ? inp.sha256.substring(0, 12) + '...' : 'N/A' }}</td>
+                        <td class="mono sp-hash">{{ inp.sha256 ? inp.sha256.substring(0, 12) + '...' : '暂无' }}</td>
                         <td class="mono">{{ formatBytes(inp.size) }}</td>
                       </tr>
                     </tbody>
@@ -113,19 +119,19 @@
                 </div>
 
                 <div v-if="evidence[job.job_id].completion && evidence[job.job_id].completion.outputs" class="sp-detail-section">
-                  <div class="sp-detail-label">Outputs</div>
+                  <div class="sp-detail-label">输出</div>
                   <table class="sp-table">
                     <thead>
                       <tr>
-                        <th>Path</th>
+                        <th>路径</th>
                         <th>SHA256</th>
-                        <th>Size</th>
+                        <th>大小</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr v-for="(out, idx) in evidence[job.job_id].completion.outputs" :key="idx">
                         <td class="mono">{{ out.path }}</td>
-                        <td class="mono sp-hash">{{ out.sha256 ? out.sha256.substring(0, 12) + '...' : 'N/A' }}</td>
+                        <td class="mono sp-hash">{{ out.sha256 ? out.sha256.substring(0, 12) + '...' : '暂无' }}</td>
                         <td class="mono">{{ formatBytes(out.size) }}</td>
                       </tr>
                     </tbody>
@@ -136,10 +142,10 @@
                   <div class="sp-detail-label">日志</div>
                   <div class="sp-logs">
                     <a v-if="job.result_refs.stdout" :href="getLogUrl(job.result_refs.stdout)" target="_blank" class="sp-log-link">
-                      <Icon name="file-text" :size="12" /> stdout
+                      <Icon name="file-text" :size="12" /> 标准输出
                     </a>
                     <a v-if="job.result_refs.stderr" :href="getLogUrl(job.result_refs.stderr)" target="_blank" class="sp-log-link">
-                      <Icon name="file-text" :size="12" /> stderr
+                      <Icon name="file-text" :size="12" /> 标准错误
                     </a>
                   </div>
                 </div>
@@ -166,6 +172,7 @@ import { SolverJobs, Projects, relativeTime, formatBytes } from '../lib/api.js'
 import { useToasts } from '../composables/useToasts.js'
 import { useProjectPolling } from '../composables/useProjectPolling.js'
 import { useRealtime } from '../composables/useRealtime.js'
+import { receiptClaimLabel, receiptErrorLabel, solverStatusLabel } from '../lib/solverJobUi.js'
 
 export default {
   name: 'SolverJobPanel',
@@ -186,10 +193,10 @@ export default {
 
     const filters = [
       { key: 'ALL', label: '全部' },
-      { key: 'RUNNING', label: 'RUNNING' },
-      { key: 'COMPLETED', label: 'COMPLETED' },
-      { key: 'FAILED', label: 'FAILED' },
-      { key: 'TIMEOUT', label: 'TIMEOUT' },
+      { key: 'RUNNING', label: '运行中' },
+      { key: 'COMPLETED', label: '已完成' },
+      { key: 'FAILED', label: '已失败' },
+      { key: 'TIMEOUT', label: '已超时' },
     ]
 
     const summary = computed(() => {
@@ -243,7 +250,7 @@ export default {
     }
 
     function formatDuration(seconds) {
-      if (!seconds) return 'N/A'
+      if (!seconds) return '暂无'
       if (seconds < 60) return `${seconds}s`
       if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
       return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
@@ -262,9 +269,9 @@ export default {
     }
 
     function getReceiptTitle(job) {
-      if (job.has_submission_receipt && job.has_completion_receipt) return 'Receipt complete'
-      if (job.has_submission_receipt) return 'Submission receipt only'
-      return 'No receipt'
+      if (job.has_submission_receipt && job.has_completion_receipt) return '凭证完整'
+      if (job.has_submission_receipt) return '仅有提交阶段凭证'
+      return '无凭证'
     }
 
     function getLogUrl(path) {
@@ -312,6 +319,9 @@ export default {
       getReceiptIcon,
       getReceiptClass,
       getReceiptTitle,
+      receiptClaimLabel,
+      receiptErrorLabel,
+      solverStatusLabel,
       getLogUrl,
       copyCommand,
       relativeTime,

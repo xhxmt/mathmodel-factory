@@ -146,6 +146,13 @@
         @manage-models="isAdmin ? (showModels = true) : null"
       />
 
+      <ProblemPlanPanel
+        v-else-if="activeTab === 'plan'"
+        class="tab-panel rise"
+        :base="project.base_name"
+        @open-file="requestFile"
+      />
+
       <LogConsole
         v-else-if="activeTab === 'logs'"
         class="ws-logs tab-panel"
@@ -272,6 +279,7 @@ const TabFallback = {
 }
 const asyncOpts = { loadingComponent: TabFallback, delay: 120 }
 const PipelineTimeline = defineAsyncComponent({ loader: () => import('./PipelineTimeline.vue'), ...asyncOpts })
+const ProblemPlanPanel = defineAsyncComponent({ loader: () => import('./ProblemPlanPanel.vue'), ...asyncOpts })
 const LogConsole = defineAsyncComponent({ loader: () => import('./LogConsole.vue'), ...asyncOpts })
 const ArtifactBrowser = defineAsyncComponent({ loader: () => import('./ArtifactBrowser.vue'), ...asyncOpts })
 const SolverJobPanel = defineAsyncComponent({ loader: () => import('./SolverJobPanel.vue'), ...asyncOpts })
@@ -285,7 +293,7 @@ const DeliveryReadinessPanel = defineAsyncComponent({ loader: () => import('./De
 
 export default {
   name: 'ProjectWorkspace',
-  components: { Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel },
+  components: { Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel },
   props: {
     project: { type: Object, required: true },
     isAdmin: { type: Boolean, default: false },
@@ -573,7 +581,7 @@ export default {
     }, { immediate: true })
 
     // ---- tab deep-linking: keep activeTab and route.query.tab in sync ----
-    const VALID_TABS = new Set(['overview', 'pipeline', 'logs', 'artifacts', 'evidence', 'delivery', 'solver', 'diagnostics', 'consultation', 'selection', 'cloud'])
+    const VALID_TABS = new Set(['overview', 'pipeline', 'plan', 'logs', 'artifacts', 'evidence', 'delivery', 'solver', 'diagnostics', 'consultation', 'selection', 'cloud'])
     let syncingTab = false
     // URL -> tab. Only act when the URL explicitly carries a valid tab, so an
     // absent ?tab leaves the consultation auto-jump / default 'overview' intact.

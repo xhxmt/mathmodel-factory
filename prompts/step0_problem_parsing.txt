@@ -23,12 +23,12 @@ C. 直接的题目纯文本（不以 `/` 开头的 inline 文本）
 
 [必读资料]
 1. `__FACTORY__/modeling_guide.md` — 项目结构、符号规范、图表/代码规范
-2. `__FACTORY__/method_library/index.json` — 机器可检索的方法登记表；**所有候选方法必须在此登记表和对应 `.md` 文档中同时存在**
-3. `__FACTORY__/method_library/README.md` — 人类可读方法字典索引
+2. `__FACTORY__/method_library/index.json` + `__FACTORY__/method_library/hmml/index.json` — 精编方法与授权 HMML 的机器可检索登记表；**所有候选方法必须在登记表和对应 `.md` 文档中同时存在**
+3. `__FACTORY__/method_library/README.md` — 人类可读方法字典索引与分层检索说明
 4. `__PROJECT_PATH__/problem/source.md` — 题目原文（你刚生成或拷贝的）
 5. `__PROJECT_PATH__/human_review.md` — 如存在，作为最新人工指引覆盖默认决策
 
-[输出契约 — 产生 6 个文件，缺一不可]
+[输出契约 — 产生 7 个业务文件，缺一不可]
 
 ═══════════════════════════════════════════════════════════════
 ### 1. `__PROJECT_PATH__/problem/problem_brief.md`
@@ -137,7 +137,50 @@ python3 __FACTORY__/scripts/method_retrieve.py \
 - 若 method_library 不够用，在`未登记但题目暗示需要的方法`小节列出，等用户决定是否补登记，**不要伪造路径**。
 
 ═══════════════════════════════════════════════════════════════
-### 6. `__PROJECT_PATH__/problem/deliverables.json`
+### 6. `__PROJECT_PATH__/problem/problem_plan.json`
+
+**问题专属依赖 DAG**。它描述本题内部的科学任务依赖，不替代固定的 Step 0–16 / Stage 1–10 生命周期。必须使用以下 `problem-plan-v1` 合同：
+
+```json
+{
+  "schema_version": "problem-plan-v1",
+  "title": "本题问题专属任务图",
+  "problem_identity": "题号或题目短标题",
+  "nodes": [
+    {
+      "id": "p1_parameter_estimation",
+      "title": "问题1：参数估计",
+      "objective": "从附件数据估计后续优化需要的参数及不确定区间",
+      "phase": "data",
+      "subproblem": "问题 1",
+      "source_refs": ["problem/problem_brief.md"],
+      "inputs": ["附件1原始观测"],
+      "outputs": ["参数点估计", "置信区间"],
+      "method_candidates": ["method_library/statistics/bayesian_inference.md"]
+    }
+  ],
+  "edges": [
+    {
+      "from": "p1_parameter_estimation",
+      "to": "p2_optimization",
+      "type": "provides_parameters",
+      "rationale": "问题2的目标函数使用问题1估计的参数"
+    }
+  ]
+}
+```
+
+规则：
+- 每个 `problem_brief.md` 子问题至少映射到一个节点；不要按固定模板生搬硬套。
+- `phase` 只能是 `understand/data/model/solve/validate/report`。
+- 边类型只能是 `depends_on/provides_data/provides_parameters/validates`。
+- 图必须无环；独立子问题可以没有入边，但不得伪造依赖。
+- `source_refs` 必须是项目内相对路径；`method_candidates` 只能引用已登记且真实存在的 `.md`。
+- 写完立即运行：
+  `python3 __FACTORY__/scripts/validate_problem_plan.py __PROJECT_PATH__/problem/problem_plan.json`
+
+═══════════════════════════════════════════════════════════════
+### 7. `__PROJECT_PATH__/problem/deliverables.json`
 
 **机器可读的交付物契约** —— Gate 1 和 Step 16 会用
 `scripts/verify_deliverables.py` 按这份契约做硬检查（附件缺失 / 策略表缺失 /
@@ -172,15 +215,16 @@ Excel 与结果不一致 = 直接 FAIL）。逐字扫描题目原文，抽出**�
 
 [执行流程]
 1. 读 `__FACTORY__/modeling_guide.md`（前 60 行即可，主要看项目结构）
-2. 读 `__FACTORY__/method_library/index.json` 和 `__FACTORY__/method_library/README.md`，确认方法登记表与人类索引
+2. 读 `__FACTORY__/method_library/index.json`、`__FACTORY__/method_library/hmml/index.json` 和 `__FACTORY__/method_library/README.md`，确认精编与授权 HMML 登记表
 3. 根据 `__RESEARCH_QUESTION__` 解读输入类型 → 生成 `problem/source.md`（必要时调 mineru_parse.py）
 4. 读 `problem/source.md` 全文
 5. 运行 `python3 __FACTORY__/scripts/method_retrieve.py --query-file __PROJECT_PATH__/problem/source.md --top-k 8 > __PROJECT_PATH__/problem/method_retrieval.md`
-6. 顺序生成 6 个产物文件
+6. 顺序生成 7 个业务产物文件
 7. 自检：
-   - `ls __PROJECT_PATH__/problem/` 应至少看到：`source.md`, `method_retrieval.md`, `problem_brief.md`, `terminology_table.md`, `data_inventory.md`, `feasibility_constraints.md`, `candidate_methods.md`, `deliverables.json`（8 项）
+   - `ls __PROJECT_PATH__/problem/` 应至少看到：`source.md`, `method_retrieval.md`, `problem_brief.md`, `terminology_table.md`, `data_inventory.md`, `feasibility_constraints.md`, `candidate_methods.md`, `problem_plan.json`, `deliverables.json`（9 项）
    - 5 个核心 markdown 交付物（`problem_brief.md`, `terminology_table.md`, `data_inventory.md`, `feasibility_constraints.md`, `candidate_methods.md`）各 ≥ 20 行；`method_retrieval.md` 是短名单，只需包含 `Method Retrieval Results` 表
    - `deliverables.json` 用 `python3 -c "import json; json.load(open('problem/deliverables.json'))"` 验证可解析
+   - `problem_plan.json` 必须通过 `python3 __FACTORY__/scripts/validate_problem_plan.py __PROJECT_PATH__/problem/problem_plan.json`
    - candidate_methods.md 中引用的方法路径用 `test -f` 逐一验证存在
 
 不要写 `checkpoint.md`——runner 用磁盘文件推断步骤进度并自行重写 checkpoint，agent 写入会产生格式冲突的重复行。

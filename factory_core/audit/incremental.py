@@ -645,6 +645,7 @@ class IncrementalAuditService:
             "claim_registry.json",
             "quality_contract.json",
             "problem/problem_brief.md",
+            "problem/problem_plan.json",
             "problem/deliverables.json",
         }
         roots: set[str] = {"models"}

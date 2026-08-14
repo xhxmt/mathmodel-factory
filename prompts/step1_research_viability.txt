@@ -7,12 +7,13 @@
 
 [必读资料]
 1. `__PROJECT_PATH__/problem/problem_brief.md` —— 子问题分解 + 评分倾向
-2. `__PROJECT_PATH__/problem/candidate_methods.md` —— Step 0 提的候选方法
-3. `__PROJECT_PATH__/problem/method_retrieval.md` —— Step 0 的 HMML-lite 检索短名单；若缺失，按下方命令补生成
+2. `__PROJECT_PATH__/problem/problem_plan.json` —— 已校验的问题专属 DAG；候选流必须声明覆盖哪些节点及如何承接上游依赖
+3. `__PROJECT_PATH__/problem/candidate_methods.md` —— Step 0 提的候选方法
+4. `__PROJECT_PATH__/problem/method_retrieval.md` —— Step 0 的分层检索短名单；若缺失，按下方命令补生成
 4. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— 74 小时时间预算 + 算力上限
 5. `__PROJECT_PATH__/problem/data_inventory.md` —— 题目附件清单
 6. `__PROJECT_PATH__/problem/terminology_table.md` —— 术语精确定义
-7. `__FACTORY__/method_library/index.json` + `__FACTORY__/method_library/README.md` 索引表 + 每个被 Step 0 候选过的方法详档
+8. `__FACTORY__/method_library/index.json` + `__FACTORY__/method_library/hmml/index.json` + `__FACTORY__/method_library/README.md` 索引表 + 每个被 Step 0 候选过的方法详档
 8. `__FACTORY__/modeling_guide.md` —— 项目结构、符号规范
 9. `__PROJECT_PATH__/human_review.md`（如存在）—— 最新人工指引
 

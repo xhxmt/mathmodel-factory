@@ -6,6 +6,9 @@
 
 ### 新增
 
+- 新增授权 HMML 完整数据集：保留原始 JSON/Markdown 与来源哈希，确定性展开 97 个可引用方法文档；与现有 21 个精编条目组成双登记表，方法召回升级为“层级分支粗选 → 叶方法细排 → 数据/证据复排”。
+- 新增 `problem-plan-v1` 问题专属 DAG：Step 0 必须产出无环、路径受限、方法引用已登记的任务图；后续建模/求解按拓扑依赖承接，最终审计与发布指纹绑定该业务真相产物，但固定十 Stage / 十七 Step 调度权威不变。
+- Web 新增 `node-output-v1` / `ContentBlock` 结构化输出协议、前端渲染注册表和“任务图”页；建模方向与问题 DAG 统一渲染摘要、方法卡、依赖图、提示和产物链接，模型上下文使用独立的限长白名单投影。
 - 新增 `stage_v1` 10-Stage 权威调度：schema-v6 SQLite 原子持久化 Stage/subtask/source-Step 游标、subtask checkpoint、输入基线、dirty flag 和责任 Stage clear receipt；新项目默认启用，旧 `step_v2` native 项目仅通过显式 `scheduler-activate` 切换，并可在停止且无未清 dirty 时显式回滚。
 - 新增独立 Step 8.5 reviewer-entry subtask、条件式 Step 13、双域 paper-audit fingerprint 和 final-input manifest 冻结守卫；科学语义变化按 MODEL/MATH/RESULT/VISUAL/PROSE/CITATION/FORMAT dirty flag 重开责任 Stage，未知变化失败关闭，最终快照变化会中止发布而不复用旧 receipt。
 - Web 比赛工作区新增完整 P0–P2 控制台：默认八阶段/可下钻 17 Step、最近三步时间风险预测、持久行动中心、三类 gate-aware 人工决策、canonical/Solver/审计证据驾驶舱，以及绑定 Final Audit 和原子 current release 的交付就绪清单与 PDF/ZIP 下载；Legacy 无比赛时钟时明确显示未配置，所有新接口继续执行项目 ACL。
@@ -35,6 +38,7 @@
 
 ### 变更
 
+- Web 求解任务面板将任务状态、两阶段凭证限制/错误码、输入输出字段和标准日志入口统一为中文展示；API 原始值保持不变并保留在诊断提示中。
 - Final Audit 统一为最终编译、完整 Step-10 paper/provenance suite、视觉/页数门禁、packet/fingerprint、enforce-mode 三角色 Judge、判决前后快照复核、judgment receipt 与 final acceptance receipt；PASS 复用也必须验证双 receipt 和当前快照。
 - Native 与 Legacy Step 16 统一消费同一个 Final Audit 和原子 release publisher；项目清理提前到最终快照构建前，`2026-08-09.atomic_release_v7` 成为当前交付合同。
 - 新项目 Step 4 使用 quality-contract v4；Step 5 必须显式声明 solver inputs/outputs/seeds，并由任务内 `FACTORY_SOLVER_JOB_ID` 写 provenance。Step 10 paper audit 新增确定性派生物硬门，旧 v1–v3 合同继续按原边界审计而不被静默升级。
@@ -116,6 +120,7 @@
 
 ### 安全
 
+- 前端构建链将传递依赖 `nanoid` 从 3.3.16 锁定升级到 3.3.18，修复自定义生成器在零长度输入下可能无限循环的 `GHSA-2v37-7h3g-55p8`，并恢复 `npm audit` 零已知漏洞。
 - Cloud Solver P0 执行层增加严格任务/路径校验、12 MiB 请求上限、输入只读/输出独立、环境允许列表、隔离启动的资源限制包装器、UID/GID 10001 降权及 CPU/内存/磁盘近似量、文件描述符、子进程、输出文件/目录和日志硬限制。
 - Cloud Solver 仍保持全局 quarantine：同实例任意代码访问 metadata 和运行服务账号的风险需要独立 Cloud Run Job 或等价 sandbox 才能解除。
 - Cloud Run Solver 进入 P-1 安全隔离：移除匿名 Invoker并默认关闭脚本执行；P0 随后将临时双重认证收敛为单一 Cloud Run IAM。

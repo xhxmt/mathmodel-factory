@@ -127,6 +127,7 @@ export const Projects = {
   }).then((r) => r.data),
   modelingDirections: (b) => api.get(`/api/projects/${b}/modeling-directions`).then((r) => r.data),
   selectModelingDirection: (b, directionId) => api.post(`/api/projects/${b}/modeling-directions/selection`, { direction_id: directionId }).then((r) => r.data),
+  problemPlan: (b) => api.get(`/api/projects/${b}/problem-plan`).then((r) => r.data),
   selection: (b) => api.get(`/api/projects/${b}/selection`).then((r) => r.data),
   selectOption: (b, payload) => api.post(`/api/projects/${b}/selection/decision`, payload).then((r) => r.data),
   action: (b, action, expectedRevision = null) => api.post(`/api/projects/${b}/action`, {

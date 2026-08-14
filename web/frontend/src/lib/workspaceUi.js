@@ -36,6 +36,7 @@ export function workspaceTabs({ consultationPending = false, selectionPending = 
   const tabs = [
     { key: 'overview', label: '概览', icon: 'activity' },
     { key: 'pipeline', label: '流水线', icon: 'layers' },
+    { key: 'plan', label: '任务图', icon: 'git-branch' },
     { key: 'logs', label: '日志', icon: 'terminal' },
     { key: 'artifacts', label: '产物', icon: 'folder' },
     { key: 'evidence', label: '证据', icon: 'shield' },
@@ -45,10 +46,12 @@ export function workspaceTabs({ consultationPending = false, selectionPending = 
     { key: 'cloud', label: '云端', icon: 'zap', attention: cloudEnabled },
   ]
   if (consultationPending) {
-    tabs.splice(5, 0, { key: 'consultation', label: '咨询', icon: 'message-square', attention: true })
+    const deliveryIndex = tabs.findIndex((tab) => tab.key === 'delivery')
+    tabs.splice(deliveryIndex, 0, { key: 'consultation', label: '咨询', icon: 'message-square', attention: true })
   }
   if (selectionPending) {
-    tabs.splice(7, 0, { key: 'selection', label: '人工决策', icon: 'git-branch', attention: true })
+    const diagnosticsIndex = tabs.findIndex((tab) => tab.key === 'diagnostics')
+    tabs.splice(diagnosticsIndex, 0, { key: 'selection', label: '人工决策', icon: 'git-branch', attention: true })
   }
   return tabs
 }

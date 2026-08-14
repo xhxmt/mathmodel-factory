@@ -179,7 +179,11 @@ def _paper_priority(project: Path, path: Path, base_name: str) -> tuple[int, str
     relative = path.relative_to(project).as_posix()
     if relative in {f"{base_name}_paper.tex", "paper/paper.tex"}:
         priority = 0
-    elif relative in {"problem/problem_brief.md", "problem/source.md"}:
+    elif relative in {
+        "problem/problem_brief.md",
+        "problem/problem_plan.json",
+        "problem/source.md",
+    }:
         priority = 1
     else:
         priority = 2
@@ -188,7 +192,11 @@ def _paper_priority(project: Path, path: Path, base_name: str) -> tuple[int, str
 
 def _math_priority(project: Path, path: Path, base_name: str) -> tuple[int, str]:
     relative = path.relative_to(project).as_posix()
-    if relative in {"problem/problem_brief.md", "problem/source.md"}:
+    if relative in {
+        "problem/problem_brief.md",
+        "problem/problem_plan.json",
+        "problem/source.md",
+    }:
         priority = 0
     elif relative == "model.md":
         priority = 1

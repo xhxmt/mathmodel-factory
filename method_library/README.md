@@ -2,7 +2,9 @@
 
 本目录是 Modeling Factory 的"方法字典"。`step0_problem_parsing` agent 读这里来做候选方法预选；后续 step 写代码时也以这里的代码模板为出发点（再按题目改）。
 
-`index.json` 是机器可检索的 HMML-lite 登记表；`scripts/method_retrieve.py` 会读取它并按题目文本输出候选短名单。README 仍是人类阅读入口，方法正文仍以各 `.md` 文件为准。
+`index.json` 是 21 个精编方法的机器登记表；`hmml/index.json` 是经授权导入的 97 个广覆盖 HMML 叶方法。`scripts/method_retrieve.py` 会先选择层级分支，再在分支内排序叶方法，同时保留强直接命中。README 仍是人类阅读入口，方法正文仍以各 `.md` 文件为准。
+
+HMML 原始 `HMML.json` / `HMML.md`、来源 commit、文件哈希和授权导入说明保存在 `hmml/`；97 个 `hmml/methods/*.md` 由 `scripts/import_hmml.py` 确定性生成。HMML 条目用于扩展候选覆盖面，不会因为“被召回”自动获得正确性、数据完备性或求解可行性背书；缺少 `required_data` / `solver_stack` 的条目在 Web 复排中按弱证据处理。
 
 ## 目录约定
 
@@ -10,6 +12,7 @@
 method_library/
   README.md                ← 本文件，索引
   index.json               ← 结构化方法登记表（供 scripts/method_retrieve.py 使用）
+  hmml/                    ← 授权 HMML 原始数据、来源锁、第二登记表与生成方法文档
   evaluation/              ← 评价/赋权类
     ahp.md
     topsis.md
@@ -77,7 +80,7 @@ method_library/
 
 ## 使用规则（给 agent 看）
 
-- step0 的 `candidate_methods.md` 必须用本目录的相对路径引用方法（如 `method_library/optimization/milp.md`），不能凭空写未登记的方法名。
+- step0 的 `candidate_methods.md` 必须用本目录的相对路径引用方法（如 `method_library/optimization/milp.md` 或 `method_library/hmml/methods/*.md`），不能凭空写未登记的方法名。
 - 若题目需要的方法不在本目录，新建条目并在 README 索引表登记。**绝不**在 prompt 阶段杜撰方法。
 - 代码模板默认 Python（`numpy`/`scipy`/`statsmodels`/`gurobipy`），保持 `modeling_guide.md` 的可复现要求（固定随机种子、显式输出文件路径）。
 - 一篇方法文档不超过 ~300 行；如果展开复杂变体，新建 `<name>_variant.md` 而不是把单文件变厚。

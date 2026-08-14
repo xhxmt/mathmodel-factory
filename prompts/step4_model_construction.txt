@@ -27,7 +27,8 @@ Step 4 是论文质量的奠基步骤：评委读的论文「§模型建立」�
    - `__PROJECT_PATH__/m{M}_spec.md`（简版即可，足够了解辅流程在 Step 5/6 的角色）
    - `__PROJECT_PATH__/models/m{M}_<short>/`（看现有 demo 结构）
 6. `__PROJECT_PATH__/problem/problem_brief.md` —— 子问题分解 + 评分倾向（model.md 的 §sub-problem 耦合 必须显式映射到这里列出的每个子问题）。
-7. `__PROJECT_PATH__/problem/terminology_table.md` —— 题目术语精确定义。model.md 和 symbol_table.md 不允许引入与本表冲突的术语。
+7. `__PROJECT_PATH__/problem/problem_plan.json` —— 已校验的问题 DAG；model.md 的 §sub-problem 耦合必须逐节点说明输入、输出和依赖边的数学实现。
+8. `__PROJECT_PATH__/problem/terminology_table.md` —— 题目术语精确定义。model.md 和 symbol_table.md 不允许引入与本表冲突的术语。
 8. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— 给 Step 4-6 的总时间预算 + 单求解器时间上限 + 提交格式硬约束（如页数、附录长度、求解器版本要求）。本步骤代码里的 `solver_submit.sh --max-time` 参数必须遵守此处给的上限。
 9. `__PROJECT_PATH__/problem/data_inventory.md` —— 题目附件与数据缺口；`01_data.py` 必须显式声明读哪些附件、哪些参数靠合理假设填补（合理假设需在 assumption_ledger.md 登记）。
 10. `__PROJECT_PATH__/problem/candidate_methods.md` —— Step 0 的方法 ↔ 子问题映射；和本步骤 PRIMARY 实际覆盖的子问题做交叉验证。

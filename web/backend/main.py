@@ -491,6 +491,7 @@ get_consultation = _router_endpoint(project_router, "/api/projects/{base_name}/c
 submit_consultation_answer = _router_endpoint(project_router, "/api/projects/{base_name}/consultation/answer")
 get_modeling_directions = _router_endpoint(project_router, "/api/projects/{base_name}/modeling-directions")
 select_modeling_direction = _router_endpoint(project_router, "/api/projects/{base_name}/modeling-directions/selection")
+get_problem_plan = _router_endpoint(project_router, "/api/projects/{base_name}/problem-plan")
 get_selection = _router_endpoint(project_router, "/api/projects/{base_name}/selection")
 submit_selection_decision = _router_endpoint(project_router, "/api/projects/{base_name}/selection/decision")
 upload_problem_file = _router_endpoint(project_router, "/api/upload/problem")

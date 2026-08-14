@@ -24,6 +24,7 @@ from .modeling_direction_service import (
     build_modeling_directions,
     write_modeling_direction_selection,
 )
+from .problem_plan_service import build_problem_plan
 from .project_actions import ActionResult, run_action
 from factory_core.domain import FactoryCoreError
 from factory_core.delivery.release import resolve_current_release
@@ -119,6 +120,8 @@ ARTIFACT_GROUPS = {
         "problem/candidate_methods.md",
         "problem/terminology_table.md",
         "problem/method_retrieval.md",
+        "problem/problem_plan.json",
+        "problem/deliverables.json",
     ],
     "method": [
         "research_brief.md",
@@ -165,6 +168,9 @@ STEP_ARTIFACTS = {
         "problem/feasibility_constraints.md",
         "problem/candidate_methods.md",
         "problem/terminology_table.md",
+        "problem/method_retrieval.md",
+        "problem/problem_plan.json",
+        "problem/deliverables.json",
     ],
     1: ["research_brief.md", "viability_gate.md", "method_retrieval.md"],
     2: [
@@ -1210,6 +1216,12 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
         return build_modeling_directions(project, settings.factory_root)
+
+    @router.get("/api/projects/{base_name}/problem-plan")
+    async def get_problem_plan(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        return build_problem_plan(project)
 
     @router.post("/api/projects/{base_name}/modeling-directions/selection")
     async def select_modeling_direction(

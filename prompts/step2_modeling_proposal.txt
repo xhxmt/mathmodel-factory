@@ -15,7 +15,8 @@
 2. `__PROJECT_PATH__/research_brief.md` —— Step 1 的文献和方法对比，你写 spec 时引用这里的真实文献
 3. `__PROJECT_PATH__/viability_gate.md` —— 你的流被打了什么标（✅/⚠️），⚠️ 备注是必须在 spec 里回应的硬约束
 4. `__PROJECT_PATH__/problem/problem_brief.md` —— 子问题分解 + 评分倾向
-5. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— 时间预算 + 求解器时间上限
+5. `__PROJECT_PATH__/problem/problem_plan.json` —— 本题任务依赖 DAG；spec 必须列出本流覆盖的节点、入边输入和出边交付
+6. `__PROJECT_PATH__/problem/feasibility_constraints.md` —— 时间预算 + 求解器时间上限
 6. `__PROJECT_PATH__/problem/data_inventory.md` —— 数据清单
 7. `__PROJECT_PATH__/problem/terminology_table.md` —— 术语精确定义
 8. `__FACTORY__/method_library/<your-method>.md` —— 你流的主方法详档（按 viable_streams.md 给的实际路径）；辅方法同理

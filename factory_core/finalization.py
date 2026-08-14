@@ -48,6 +48,7 @@ def _input_paths(project: Path) -> list[Path]:
     paths = set(submission_files(project, project.name))
     for relative in (
         "problem/problem_brief.md",
+        "problem/problem_plan.json",
         "problem/deliverables.json",
         "chosen_method.md",
         "model.md",

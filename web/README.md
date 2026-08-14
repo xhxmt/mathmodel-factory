@@ -21,6 +21,8 @@
 - Dashboard 将题目内容相同的多次运行按 canonical SHA-256 身份聚合为一个“题目归档”。这只是展示层分组，不移动或改名 `ongoing/`、`complete/` 中的目录。
 - 进行中的运行可暂停、恢复或终止；完成归档保持只读。
 - 项目工作区默认显示 8 个比赛阶段，可下钻到 Step 0–16，并在高级诊断区显示持久 Stage/subtask/source Step 调度位置；最近三步平均耗时用于预测内容完成时间和 content-freeze slack。Legacy 项目没有比赛 policy 时明确显示“未配置”，不虚构倒计时。
+- “任务图”页展示 Step 0 的 `problem-plan-v1` 问题专属 DAG；固定 Stage/Step 仍是调度权威，DAG 只表达题目内部的数据、参数、求解和验证依赖。
+- 建模方向与任务图 API 使用统一 `node-output-v1` / `ContentBlock` 协议，前端按注册的 `render_type` 渲染摘要、方法卡、DAG、提示和产物链接；后端不下发可执行 HTML。
 - 顶部行动中心持续聚合 Human Gate、deadline 风险、Solver 失败、未解决审计事项和交付阻塞。
 - `step3`、`content_freeze`、`delivery_freeze_override` 三类人工决策可在 Web 中完成，均携带当前 revision 并写入 append-only SQLite；CLI 路径始终保留。
 - 证据驾驶舱汇总 canonical results、PRIMARY/AUXILIARY、Solver jobs/receipts、model/results/paper/final audits 与三角色状态。
@@ -163,6 +165,8 @@ revision；过期页面会收到 `409`，不会写入旧决策或启动 worker�
 - `POST /api/admin/project-requests/{request_id}/reject`
 - `POST /api/projects/{base_name}/action`
 - `GET /api/projects/{base_name}/contest-dashboard`
+- `GET /api/projects/{base_name}/modeling-directions`（分层方法召回与结构化内容块）
+- `GET /api/projects/{base_name}/problem-plan`（经校验的问题专属 DAG）
 - `GET /api/projects/{base_name}/submission`（仅验证过的 current release ZIP）
 
 管理员：

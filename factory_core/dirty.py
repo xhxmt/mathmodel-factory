@@ -203,7 +203,9 @@ def classify_manifest_changes(
             paper_raw_changes.add(artifact)
             continue
         lowered = artifact.lower()
-        if lowered.startswith("models/") or lowered in {
+        if lowered == "problem/problem_plan.json":
+            remember(_change(DirtyFlag.MODEL, 1, artifact, before, after))
+        elif lowered.startswith("models/") or lowered in {
             "model.md",
             "quality_contract.json",
             "symbol_table.md",

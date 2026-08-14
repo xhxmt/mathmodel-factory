@@ -1,0 +1,11 @@
+{
+  "schema_version": "hmml-source-lock-v1",
+  "source_repository": "https://github.com/usail-hkust/LLM-MM-Agent",
+  "source_commit": "8abc1300e378eb40fe85b1ffcba6820c1358610a",
+  "source_files": {
+    "HMML.json": "b146fc917a8b93ce9607f8660b2a9d852b3900db2d3b82c29fad0c2c49c441b9",
+    "HMML.md": "b407823ab7d96ef517ad7f67dc64d5a5c5a18656a296fbe982bd15429abb28db"
+  },
+  "generated_method_count": 97,
+  "authorization_note": "Imported at the repository owner's direction after they confirmed authorization to copy the complete HMML data set."
+}

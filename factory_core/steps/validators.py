@@ -215,6 +215,7 @@ class NativeArtifactValidator:
             "problem/feasibility_constraints.md",
             "problem/candidate_methods.md",
             "problem/deliverables.json",
+            "problem/problem_plan.json",
         )
         ok = all((project / path).is_file() for path in required)
         if ok and (project / "problem/candidate_methods.md").is_file():
@@ -224,6 +225,16 @@ class NativeArtifactValidator:
                     "scripts/method_retrieve.py",
                     "--check-citations",
                     str(project / "problem/candidate_methods.md"),
+                    "--check-citations",
+                    str(project / "problem/problem_plan.json"),
+                ],
+            )
+        if ok:
+            ok = _run(
+                self.factory_root,
+                [
+                    "scripts/validate_problem_plan.py",
+                    str(project / "problem/problem_plan.json"),
                 ],
             )
         return ok, "Step 0 artifacts or method citations invalid", required, {}
