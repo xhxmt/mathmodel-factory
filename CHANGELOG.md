@@ -6,10 +6,11 @@
 
 ### 新增
 
-- 新增 schema-v8 审计加固合同：Human Decision 拆分为按 gate/request/generation 和 subject/options fingerprint 绑定的不可变请求与结果，拒绝审批会保留并开启下一代；event-v2 同时记录完成主体与迁移结果坐标，并用 aggregate root 绑定决策、dirty、checkpoint 与 Solver side table；dirty cause 和 Stage checkpoint 增加 append-only 历史，投影失败可记录、诊断和恢复。
-- 论文源发现统一支持根目录 `{base}_paper.tex` 与 `paper/paper.tex`，dirty tracking、提交 fingerprint、Web artifact/PDF 发现和 `compile_paper.sh` 使用同一合同。
+- 新增 schema-v8 审计加固合同：Human Decision 拆分为按 gate/request/generation 和 subject/options fingerprint 绑定的不可变请求与结果；每个决定生成 `.factory/decisions/<gate>/<request>/<decision>.json` 内容寻址 receipt，固定 selection/human-review 文件仅作兼容投影。内容冻结拒绝会清除 pending、失效 Stage 9 之后的 checkpoint 并回到 Stage 9，修复完成后才生成绑定新内容的下一代请求；陈旧的开放请求也可原子标记为 superseded 并重新绑定。
+- 新增统一递归 LaTeX 依赖图：从权威论文入口解析 `input`、`include`、`subfile`、`bibliography` 与 `addbibresource`，报告循环/缺失依赖并排除未引用草稿；content freeze、dirty 语义分类、提交/final fingerprint、数字/符号/数值链审计、Judge packet、Web artifact browser 与 submission package 共享活动源合同。
+- event-v2 同时记录完成主体与迁移结果坐标，并用 aggregate root 绑定 contest policy、project config、决策、dirty、checkpoint 与 Solver side table；dirty cause 和 Stage checkpoint 增加 append-only 历史，投影失败可记录、诊断和恢复。
 - Cloud Solver 请求传输精确输入字节与 SHA-256、声明输出和 seeds，保留 queued/submitting/running 状态并执行实际进程取消；Web 上传改为限额分块写入，普通用户项目申请只接受上传目录内的 PDF/Markdown。
-- 新增 GitHub Actions `CI` 工作流，分离 core、Web（含前端构建）与 Cloud/数值依赖测试；分支保护仍由仓库管理员在 GitHub 侧把这些检查设为 required。
+- 新增 GitHub Actions `CI` 工作流，分离 core、Web（含前端构建）与 Cloud/数值依赖测试；`main` 分支保护要求 PR、分支最新且 `CI / core`、`CI / web`、`CI / cloud` 全部通过，并阻止 force push 与分支删除。
 - Solver Job 新增稳定 `idempotency_key`、回执 `request_sha256`、Stage/subtask/revision/attempt 所有权和唯一约束；Cloud provider 接收幂等键并支持按持久 job ID 对账，本地无法证明提交状态时失败关闭而不盲目重提。
 - Web 人工 Gate 采用“证据文件原子 rename + fingerprint → SQLite decision/state/event 同事务”顺序；诊断页直接展示 Native 调度坐标、Recovery Status 与 Audit Timeline，并标记已发布但尚未入账的 orphan decision artifact。
 - 新增授权 HMML 完整数据集：保留原始 JSON/Markdown 与来源哈希，确定性展开 97 个可引用方法文档；与现有 21 个精编条目组成双登记表，方法召回升级为“层级分支粗选 → 叶方法细排 → 数据/证据复排”。
@@ -23,7 +24,7 @@
 - Web 管理端与 CLI 新增交付 override 签发、查看和撤销；权威记录持久化在 `web/auth.db`，并区分 `continue_after_gate2` 与绑定精确 SHA-256 的 `deliver_snapshot`。
 - 新增 `web/backend_service_health.sh`，统一 full/backend-only 部署验收：验证 systemd MainPID、ControlGroup、全部 8000 listener 所有权及稳定窗口内 `NRestarts`，再接受 HTTP 结果。
 - 新增 `quality_contract.json` v4：按最大化/最小化方向硬验有效松弛界、预算阶梯、平台期语义和跨算法族对照工件；新增 canonical 派生物 manifest、生成辅助脚本及临时目录重生成/diff 门禁。
-- Solver 新增 content-addressed 两阶段 receipt：submission 绑定 runtime、代码、输入、参数摘要和 seeds，completion 绑定终态及声明输出哈希；native/Legacy 统一通过 `--status <jobid> --json` 返回 fail-closed `solver-job-evidence-v2`。
+- Solver 新增 content-addressed 两阶段 receipt：submission 绑定 runtime、代码、输入、参数摘要和 seeds，completion 绑定终态及声明输出哈希；seed receipt 明确只证明声明，未证明进程实际消费该 seed；native/Legacy 统一通过 `--status <jobid> --json` 返回 fail-closed `solver-job-evidence-v2`。
 - 新增 R0a exact-runtime 硬门能力校准：数学/执行角色必须同时覆盖 oracle-backed hard defect 与 neutral transform，并将每个 held-out packet 的 capability observation 与 K>=5 重复稳定性、evaluator/packet/condition hash 逐项绑定；报告失败关闭且不自动放权。
 - 新增 R0b pairwise selector 可靠性合同：冻结 dev/holdout family、exact evaluator/packet identity、AB/BA 与重复观测，使用 dev-only TIE 带和 Wilson 界分别报告 proxy/human readiness；未取得独立人工 holdout 前不允许自然稿择优。
 - 新增 R3 shadow portfolio 编排器：候选须先通过 R0a 与 R1/R2-min，绑定不可变求解/结果/PDF证据并遵守预算政策；报告 selector 覆盖、TIE、主线分歧、独立 adjudication/regret 与候选数 K，但始终不自动改变主线。

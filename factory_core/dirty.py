@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .paper_sources import discover_paper_sources
+from .paper_sources import resolve_latex_dependency_graph
 
 
 DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v1"
@@ -124,9 +124,14 @@ def _paper_semantics(text: str) -> dict[str, str]:
 
 def capture_artifact_manifest(project_dir: str | Path) -> dict[str, str]:
     project = Path(project_dir).resolve()
+    dependency_graph = resolve_latex_dependency_graph(project)
     paper_sources = {
         path.relative_to(project).as_posix()
-        for path in discover_paper_sources(project)
+        for path in dependency_graph.sources
+    }
+    paper_dependencies = {
+        path.relative_to(project).as_posix()
+        for path in dependency_graph.files
     }
     manifest: dict[str, str] = {}
     for path in sorted(project.rglob("*")):
@@ -134,6 +139,12 @@ def capture_artifact_manifest(project_dir: str | Path) -> dict[str, str]:
             continue
         relative = path.relative_to(project).as_posix()
         if not _tracked(relative, path):
+            continue
+        if (
+            relative.startswith("paper/")
+            and path.suffix.lower() in {".tex", ".bib"}
+            and relative not in paper_dependencies
+        ):
             continue
         try:
             data = path.read_bytes()
@@ -183,11 +194,11 @@ def classify_manifest_changes(
     changed = sorted(
         path for path in set(before) | set(after) if before.get(path) != after.get(path)
     )
-    changes: dict[DirtyFlag, DirtyChange] = {}
+    changes: dict[tuple[DirtyFlag, str], DirtyChange] = {}
     paper_raw_changes: set[str] = set()
 
     def remember(change: DirtyChange) -> None:
-        changes.setdefault(change.flag, change)
+        changes.setdefault((change.flag, change.cause_artifact), change)
 
     for artifact in changed:
         if artifact.startswith("@protected:"):
@@ -204,7 +215,11 @@ def classify_manifest_changes(
             elif domain == "format":
                 remember(_change(DirtyFlag.FORMAT, 9, relative, before, after))
             continue
-        if artifact.endswith("_paper.tex") or artifact == "paper/paper.tex":
+        if artifact.endswith(".tex") and any(
+            f"@paper:{artifact}:{domain}" in before
+            or f"@paper:{artifact}:{domain}" in after
+            for domain in ("math", "citation", "prose", "format")
+        ):
             paper_raw_changes.add(artifact)
             continue
         lowered = artifact.lower()

@@ -112,6 +112,10 @@ def test_artifact_layers_keep_receipts_as_machine_evidence():
     assert classify_artifact("paper.tex") is ArtifactLayer.BUSINESS_TRUTH
     assert classify_artifact("solver/receipts/job.completed.json") is ArtifactLayer.MACHINE_EVIDENCE
     assert classify_artifact("final_audit/acceptance_receipt.json") is ArtifactLayer.MACHINE_EVIDENCE
+    assert (
+        classify_artifact(".factory/decisions/step3/request/decision.json")
+        is ArtifactLayer.MACHINE_EVIDENCE
+    )
     assert classify_artifact("checkpoint.md") is ArtifactLayer.REBUILDABLE_PROJECTION
 
 

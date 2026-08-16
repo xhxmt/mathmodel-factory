@@ -44,6 +44,7 @@ from .schemas import (
     ProjectRequestResponse,
     ProjectStatus,
     SelectionDecisionRequest,
+    SelectionRefreshRequest,
     UserInfo,
 )
 from .state_store import read_runtime_status
@@ -1372,6 +1373,41 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
             ) from exc
         await manager.broadcast({"type": "project_action", "project": base_name, "action": "select_option"})
         return {"status": "ok", "decision": saved["decision"]}
+
+    @router.post("/api/projects/{base_name}/selection/refresh")
+    async def refresh_selection_request(
+        base_name: str,
+        refresh: SelectionRefreshRequest,
+        current_user: UserInfo = Depends(get_current_user(settings)),
+    ):
+        require_project_access(settings, current_user, base_name)
+        project = _resolve_project(settings, base_name)
+        try:
+            state = FactoryService(
+                settings.factory_root
+            ).supersede_pending_decision_request(
+                project,
+                expected_revision=refresh.expected_revision,
+                gate=refresh.gate,
+                reason=refresh.reason,
+            )
+        except (FactoryCoreError, OSError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc) or "decision request refresh failed",
+            ) from exc
+        await manager.broadcast(
+            {
+                "type": "project_action",
+                "project": base_name,
+                "action": "refresh_selection_request",
+            }
+        )
+        return {
+            "status": "ok",
+            "revision": state.revision,
+            "pending_action": state.pending_action,
+        }
 
     @router.post("/api/projects/{base_name}/action")
     async def project_action(

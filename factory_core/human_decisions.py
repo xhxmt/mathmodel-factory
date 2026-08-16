@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .domain import InvalidTransition
-from .paper_sources import discover_paper_sources
+from .paper_sources import resolve_latex_dependency_graph
 from .workflow_events import canonical_hash
 
 
@@ -123,16 +123,21 @@ def decision_fingerprints(
     project = Path(project_dir).resolve()
     option_evidence, options_path = _option_evidence(project, gate)
     subject_paths: set[Path] = set()
+    subject_metadata: list[dict[str, Any]] = []
     if gate == "content_freeze":
-        subject_paths.update(discover_paper_sources(project))
-        subject_paths.update(
-            path
-            for path in sorted(project.glob("*.bib"))
-            if path.is_file() and not path.is_symlink()
+        dependency_graph = resolve_latex_dependency_graph(project)
+        subject_paths.update(dependency_graph.files)
+        subject_metadata.append(
+            {
+                "path": "<latex-dependency-graph>",
+                "exists": True,
+                "sha256": canonical_hash(dependency_graph.manifest()),
+                "manifest": dependency_graph.manifest(),
+            }
         )
         subject_paths.update(
             path
-            for path in sorted((project / "paper").rglob("*.bib"))
+            for path in sorted(project.glob("*.bib"))
             if path.is_file() and not path.is_symlink()
         )
         for value in (
@@ -155,7 +160,7 @@ def decision_fingerprints(
     for value in evidence:
         if value != options_path.relative_to(project).as_posix():
             subject_paths.update(_contained_files(project, value))
-    subject_records = [
+    subject_records = subject_metadata + [
         _file_record(project, path)
         for path in sorted(subject_paths, key=lambda item: item.relative_to(project).as_posix())
     ]

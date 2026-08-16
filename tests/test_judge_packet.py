@@ -79,7 +79,7 @@ def test_packet_manifest_has_stable_hashes_and_context(tmp_path):
     context_path = project / "judge_packets/paper/context.txt"
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == first_manifest
     assert "same paper" in context_path.read_text(encoding="utf-8")
-    assert first_manifest["version"] == 3
+    assert first_manifest["version"] == 4
     assert first_manifest["files"][0]["status"] == "included"
     assert first_manifest["status_counts"] == {
         "included": 1,

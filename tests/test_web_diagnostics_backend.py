@@ -3,6 +3,8 @@ import json
 
 from web.backend.diagnostics_service import build_project_diagnostics, summarize_project_diagnostics
 from factory_core.domain import WorkflowStatus
+from factory_core.domain import PendingAction
+from factory_core.human_decisions import build_decision_request
 from factory_core.storage import SQLiteStateStore
 
 
@@ -112,6 +114,64 @@ def test_native_diagnostics_reports_orphaned_decision_projection(tmp_path):
     assert {action["id"] for action in diag["actions"]} >= {
         "retry_human_decision_commit"
     }
+
+
+def test_prior_rejected_decision_projection_is_not_orphaned(tmp_path):
+    store = SQLiteStateStore(tmp_path, clock=lambda: 100)
+    initial = store.initialize(project_id="demo", project_type="modeling")
+    rejected = store.record_decision(
+        "content_freeze",
+        {
+            "approved": False,
+            "selected_option_id": "reject_content_freeze",
+            "reason": "repair the conclusion",
+            "selected_at": 100,
+        },
+    )
+    current = store.load()
+    action = PendingAction(
+        type="content_freeze_selection", gate="content_freeze"
+    )
+    request = build_decision_request(
+        project_id="demo",
+        project_dir=tmp_path,
+        requested_revision=current.revision + 1,
+        generation=2,
+        action=action.to_dict(),
+        reason="review repaired content",
+    )
+    pending = action.to_dict()
+    pending["metadata"] = {"human_decision": request.to_dict()}
+    store.transition(
+        expected_revision=current.revision,
+        event_type="AWAITING_ACTION",
+        changes={
+            "status": WorkflowStatus.AWAITING_SELECTION,
+            "pending_action": pending,
+        },
+        payload={"action": request.to_dict()},
+    )
+    write_file(
+        tmp_path / "selection" / "content_freeze_decision.json",
+        json.dumps(
+            {
+                "gate": "content_freeze",
+                "request_id": rejected["request_id"],
+                "approved": False,
+            }
+        )
+        + "\n",
+    )
+
+    diag = build_project_diagnostics(
+        tmp_path,
+        "demo",
+        is_running=False,
+        consultation_pending=False,
+        consultation_gate=None,
+    )
+
+    assert diag["orphaned_artifacts"] == []
 
 
 def test_native_diagnostics_fails_closed_on_replay_hash_mismatch(tmp_path):

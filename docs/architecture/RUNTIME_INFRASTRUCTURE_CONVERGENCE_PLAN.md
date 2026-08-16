@@ -22,7 +22,8 @@
   `scheduler-activate`。Legacy Adapter 继续保持冻结兼容路径。
 - SQLite `events` 保持 append-only；schema v8 的所有新 transition 写入 event-v2
   `_workflow` 信封，记录 versioned state patch、前后状态哈希、主体/结果坐标、规范事件类型、
-  结构化 reason 和决策/dirty/checkpoint/Solver side-table aggregate root。
+  结构化 reason 和 contest policy/project config/决策/dirty/checkpoint/Solver
+  side-table aggregate root。
 - Native Web 状态、Action Center、恢复状态和审计时间线从 SQLite 事件纯投影；只有 Legacy
   或 Native 数据库不可读时才回退到 `diagnostics/status.json`、heartbeat 和日志。
 
@@ -35,8 +36,10 @@
 
 1. **Scheduler 唯一决定下一项工作是什么。** `stage_v1` 以 Stage/subtask 为权威；
    `step_v2` 以 Step cursor 为权威，Stage 仅是兼容投影。
-2. **StageExecutionPipeline 唯一决定一项工作如何被安全执行和验证。** Pipeline 可以运行
-   guards、wrapper、provider、validator 和 audit hook，但不能修改 workflow durable state。
+2. **StageExecutionPipeline 是统一的执行调用边界。** 当前它负责 deadline scope、
+   prepare/execute/validate、异常规范化和 workflow-event 提取；lease、input fingerprint、
+   freeze、human decision、evidence 与 audit guards 仍分别由 Engine、Step 和 Storage 执行。
+   把这些 guards 继续收敛到 Pipeline 是后续目标，现状不得表述为已经完成。
 3. **TransitionCoordinator 唯一修改 workflow durable state。** FactoryEngine 根据
    StageOutcome 和 Recovery Planner 的领域决定调用它；其他组件不得直接推进 cursor、清除
    dirty flag 或失效 checkpoint。
@@ -221,12 +224,18 @@ HumanDecisionRequest(
 无可用决定通道、过期 revision、gate/request 不匹配或 fingerprint 改变时失败关闭。一次性批准
 只授权绑定的动作、request generation、subject/options fingerprint 和 revision，不能永久关闭
 freeze。Schema v8 的 `workflow_decision_requests` 保存每代请求，
-`workflow_decision_instances` 保存不可变结果；拒绝保留并生成下一代请求。旧
-`workflow_decisions` 仅为冻结迁移来源，Markdown/JSON 请求文件保持可重建投影。
+`workflow_decision_instances` 保存不可变结果。每个结果只把
+`.factory/decisions/<gate>/<request_id>/<decision_id>.json` 作为权威 artifact ref；
+`selection/*_decision.json` 与 `human_review.md` 是可覆盖、可重建投影。Content freeze 被拒绝时
+当前 pending 被清除、Stage 9 之后的 checkpoint 失效，工作流回到 Stage 9；修复与验证完成、
+再次到达 Gate 后才创建绑定新 fingerprint 的下一代请求。仍停留在 Gate 的陈旧开放请求可通过
+原子 supersede/rebind 操作换代。旧 `workflow_decisions` 仅为冻结迁移来源。
 
-## 6. StageExecutionPipeline 与唯一状态写者
+## 6. StageExecutionPipeline 调用边界与唯一状态写者
 
-Pipeline 接受不可变 `StageExecutionRequest`，按固定边界运行：
+以下是目标 guard 收敛边界，并非当前全部实现。当前 Pipeline 已覆盖 deadline scope、
+prepare、execute、validate、异常与事件提取；标注为 guard/capability/evidence/audit 的环节仍分布
+在 Engine、Step 和 Storage，必须以运行代码为准：
 
 ```text
 PreStage

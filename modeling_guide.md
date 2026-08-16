@@ -81,6 +81,9 @@ Important rules:
   submission, then hashes declared outputs at completion. The solver receives
   `FACTORY_SOLVER_JOB_ID`; write it into the final result provenance inside the
   job, because editing an output after completion invalidates the receipt.
+- A Solver receipt proves that a seed was declared, not that arbitrary model
+  code consumed it. Set the seed explicitly in the script and record the
+  observed seed in result provenance whenever reproducibility depends on it.
 - Use `--status "$JOBID" --json` as the only public evidence query. Native and
   Legacy jobs share `solver-job-evidence-v2`; old jobs without immutable
   submission/completion receipts return `receipt_ready=false` and are not proof

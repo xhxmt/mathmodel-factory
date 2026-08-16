@@ -15,10 +15,10 @@ if __package__ in (None, ""):
 
 from scripts.judge_packet import packet_fingerprints
 from scripts.model_dispatch_config import get_model_entry, get_step_model_ids
-from factory_core.paper_sources import discover_paper_sources
+from factory_core.paper_sources import discover_paper_dependencies
 
 
-FINGERPRINT_VERSION = 7
+FINGERPRINT_VERSION = 8
 EVALUATOR_CONTRACT_VERSION = 6
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,7 +54,7 @@ def submission_files(project: Path, base: str) -> list[Path]:
 
     project = project.resolve()
     candidates: list[Path] = []
-    candidates.extend(discover_paper_sources(project, base))
+    candidates.extend(discover_paper_dependencies(project, base))
     references = project / "references.bib"
     if _contained_file(project, references):
         candidates.append(references)

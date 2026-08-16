@@ -656,6 +656,52 @@ def test_selection_decision_rejects_stale_revision_before_writing(tmp_path, monk
     assert not (project / "selection/step3_decision.json").exists()
 
 
+def test_selection_refresh_rebinds_stale_request_through_service(tmp_path, monkeypatch):
+    mod = load_main_module(
+        factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db"
+    )
+    user = mod.UserInfo(username="admin", role="admin")
+    project = tmp_path / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    calls = []
+
+    class Service:
+        def __init__(self, root):
+            calls.append(("init", root))
+
+        def supersede_pending_decision_request(
+            self, selected_project, *, expected_revision, gate, reason
+        ):
+            calls.append(
+                ("refresh", selected_project, expected_revision, gate, reason)
+            )
+            return types.SimpleNamespace(
+                revision=5,
+                pending_action={"gate": gate, "metadata": {"generation": 2}},
+            )
+
+    monkeypatch.setattr(mod.project_api, "FactoryService", Service)
+
+    response = asyncio.run(
+        mod.refresh_selection_request(
+            "demo",
+            mod.project_api.SelectionRefreshRequest(
+                expected_revision=4,
+                gate="content_freeze",
+                reason="paper changed",
+            ),
+            current_user=user,
+        )
+    )
+
+    assert response["revision"] == 5
+    assert response["pending_action"]["gate"] == "content_freeze"
+    assert calls == [
+        ("init", tmp_path),
+        ("refresh", project, 4, "content_freeze", "paper changed"),
+    ]
+
+
 def _make_project(root, name):
     project = root / "ongoing" / name
     project.mkdir(parents=True)

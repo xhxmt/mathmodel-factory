@@ -411,6 +411,21 @@ class FactoryService:
         revision = state.revision if expected_revision is None else expected_revision
         return engine.resolve_action(resolution, expected_revision=revision)
 
+    def supersede_pending_decision_request(
+        self,
+        project: str | Path,
+        *,
+        expected_revision: int,
+        gate: str | None = None,
+        reason: str = "Rebind the pending request to current project evidence",
+    ) -> WorkflowState:
+        resolved_project = self.resolve_project(project)
+        return SQLiteStateStore(resolved_project).supersede_pending_decision_request(
+            expected_revision=expected_revision,
+            gate=gate,
+            reason=reason,
+        )
+
     def resolve_and_start(
         self,
         project: str | Path,

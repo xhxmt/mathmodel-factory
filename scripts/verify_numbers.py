@@ -32,7 +32,7 @@ from typing import Dict, List, Tuple, Any
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factory_core.paper_sources import primary_paper_source
+from factory_core.paper_sources import primary_paper_source, resolve_latex_dependency_graph
 
 
 def compute_checksum(value: Any) -> str:
@@ -101,6 +101,19 @@ def extract_tex_numbers(tex_path: str | Path) -> List[Dict[str, Any]]:
     return results
 
 
+def extract_tex_numbers_from_project(
+    project_dir: str | Path, base_name: str
+) -> List[Dict[str, Any]]:
+    project = Path(project_dir).resolve()
+    graph = resolve_latex_dependency_graph(project, base_name)
+    combined: List[Dict[str, Any]] = []
+    for source in graph.sources:
+        relative = source.relative_to(project).as_posix()
+        for entry in extract_tex_numbers(source):
+            combined.append({**entry, "source": relative})
+    return combined
+
+
 def extract_log_numbers(log_dir: str | Path) -> set[float]:
     numbers: set[float] = set()
     for lf in glob.glob(os.path.join(str(log_dir), "*.log")):
@@ -167,7 +180,7 @@ def collect_number_metrics(project_dir: str | Path, base_name: str) -> Dict[str,
 
     log_dir = project_dir / "logs"
     tables_dir = project_dir / "tables"
-    paper_numbers = extract_tex_numbers(tex_path)
+    paper_numbers = extract_tex_numbers_from_project(project_dir, base_name)
     log_numbers = extract_log_numbers(log_dir)
     table_numbers = extract_table_numbers(tables_dir)
     reference_numbers = log_numbers | table_numbers
@@ -363,7 +376,9 @@ def _strip_non_content_latex(line: str) -> str:
     return line
 
 
-def extract_numbers_from_tex(tex_file: Path) -> List[Tuple[int, str, float]]:
+def extract_numbers_from_tex(
+    tex_file: Path, *, assume_document: bool = False
+) -> List[Tuple[int, str, float]]:
     """
     Extract numerical values from LaTeX file.
 
@@ -372,7 +387,7 @@ def extract_numbers_from_tex(tex_file: Path) -> List[Tuple[int, str, float]]:
     """
     numbers = []
 
-    in_document = False
+    in_document = assume_document
     in_references = False
     in_tikzpicture = False
 
@@ -428,6 +443,30 @@ def extract_numbers_from_tex(tex_file: Path) -> List[Tuple[int, str, float]]:
     return numbers
 
 
+def extract_numbers_from_project(
+    project_dir: Path, base_name: str
+) -> List[Tuple[int, str, float]]:
+    project = project_dir.resolve()
+    graph = resolve_latex_dependency_graph(project, base_name)
+    roots = set(graph.roots)
+    combined: List[Tuple[int, str, float]] = []
+    line_offset = 0
+    for source in graph.sources:
+        relative = source.relative_to(project).as_posix()
+        entries = extract_numbers_from_tex(
+            source, assume_document=source not in roots
+        )
+        combined.extend(
+            (line_offset + line_number, f"{relative}: {context}", value)
+            for line_number, context, value in entries
+        )
+        try:
+            line_offset += len(source.read_text(encoding="utf-8").splitlines()) + 1
+        except OSError:
+            line_offset += 1
+    return combined
+
+
 def verify_paper(project_dir: Path, base_name: str) -> bool:
     """
     Verify paper numbers against manifest.
@@ -471,7 +510,7 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
         print("✗ Paper source file not found.", file=sys.stderr)
         return False
 
-    paper_numbers = extract_numbers_from_tex(paper_file)
+    paper_numbers = extract_numbers_from_project(project_dir, base_name)
 
     # Check each number
     untraced = []

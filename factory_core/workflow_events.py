@@ -298,6 +298,19 @@ def project_action_center(events: Iterable[WorkflowEvent]) -> dict[str, Any]:
             event.payload.get("action"), dict
         ):
             action = event.payload.get("action") or event.payload.get("pending_action") or {}
+            superseded_request_id = str(
+                event.payload.get("superseded_request_id") or ""
+            )
+            if superseded_request_id:
+                superseded = active.pop(superseded_request_id, None)
+                history.append(
+                    {
+                        "status": "superseded",
+                        "request_id": superseded_request_id,
+                        "revision": event.revision,
+                        **({"gate": superseded.get("gate")} if superseded else {}),
+                    }
+                )
             gate = str(action.get("gate") or event.payload.get("gate") or f"revision-{event.revision}")
             request_id = str(
                 action.get("request_id")

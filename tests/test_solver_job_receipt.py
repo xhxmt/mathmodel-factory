@@ -64,6 +64,10 @@ def test_two_stage_receipt_binds_code_inputs_environment_seed_and_outputs(tmp_pa
     assert submitted["inputs"][0]["path"] == "data/input.json"
     assert submitted["environment"]["runtime_executable"] == str(Path(sys.executable).resolve())
     assert submitted["seeds"] == ["42"]
+    assert (
+        submitted["seed_claim_limit"]
+        == "DECLARATION_ONLY_EXECUTION_CONSUMPTION_NOT_ATTESTED"
+    )
     assert completed["schema"] == "solver-job-completion-receipt-v1"
     assert completed["submission_receipt_sha256"]
     assert completed["outputs"][0]["path"] == "results/p1/values.json"

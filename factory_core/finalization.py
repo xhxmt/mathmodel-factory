@@ -160,7 +160,7 @@ def reopen_after_for_changed_paths(paths: list[str]) -> int:
             target = min(target, 4)
         elif lowered.startswith("figures/"):
             target = min(target, 7)
-        elif lowered.endswith("_paper.tex") or lowered == "paper/paper.tex":
+        elif lowered.endswith(".tex") and not lowered.startswith("tables/"):
             target = min(target, 10)
         elif lowered.endswith(".bib") or lowered.startswith("tables/"):
             target = min(target, 13)

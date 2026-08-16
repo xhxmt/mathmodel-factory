@@ -313,6 +313,12 @@ class SelectionDecisionRequest(BaseModel):
     options_fingerprint: str | None = None
 
 
+class SelectionRefreshRequest(BaseModel):
+    expected_revision: int
+    gate: str | None = None
+    reason: str = "Rebind the pending request to current project evidence"
+
+
 class ModelEntry(BaseModel):
     id: str
     label: str

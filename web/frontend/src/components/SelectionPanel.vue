@@ -7,8 +7,8 @@
       </div>
       <div class="head-meta">
         <span v-if="request.generation" class="revision mono">GEN {{ request.generation }}</span>
-        <span class="revision mono">REV {{ revision ?? '—' }}</span>
-        <button class="btn btn-icon btn-ghost btn-sm" @click="load" :disabled="loading" title="刷新">
+        <span class="revision mono">REV {{ payload.workflow_revision ?? revision ?? '—' }}</span>
+        <button class="btn btn-icon btn-ghost btn-sm" @click="refresh" :disabled="loading" :title="requestStale ? '重新绑定当前内容' : '刷新'">
           <Icon name="refresh" :size="13" :class="{ spin: loading }" />
         </button>
       </div>
@@ -29,6 +29,9 @@
       <span>REQUEST {{ request.request_id }}</span>
       <span>SUBJECT {{ shortHash(request.subject_fingerprint) }}</span>
       <span>OPTIONS {{ shortHash(request.options_fingerprint) }}</span>
+    </div>
+    <div v-if="requestStale" class="stale-request">
+      当前内容已变化，此请求不能直接提交。点击右上角刷新按钮，将旧请求标记为 superseded 并绑定当前内容。
     </div>
 
     <template v-if="gate === 'step3'">
@@ -74,7 +77,7 @@
       <div v-if="!rejecting" class="checklist">
         <label v-for="item in freezeChecks" :key="item.key"><input v-model="confirmations[item.key]" type="checkbox" /><span>{{ item.label }}</span></label>
       </div>
-      <div v-else class="reject-note">拒绝会保留当前阻塞，并立即创建下一代审批请求；本次拒绝记录不会被覆盖。</div>
+      <div v-else class="reject-note">拒绝会保存不可变记录、清除当前请求并回到 Stage 9；完成修改与验证后，工作流会用新内容创建下一代审批请求。</div>
     </template>
 
     <template v-else>
@@ -136,6 +139,7 @@ export default {
     const options = computed(() => Array.isArray(payload.value?.options) ? payload.value.options : [])
     const decision = computed(() => payload.value?.decision || null)
     const request = computed(() => payload.value?.request || {})
+    const requestStale = computed(() => Boolean(payload.value?.request_stale))
     const message = computed(() => payload.value?.message || '')
     const selectedOption = computed(() => options.value.find((item) => item.id === selectedOptionId.value))
     const rejecting = computed(() => String(selectedOptionId.value).startsWith('reject'))
@@ -147,6 +151,7 @@ export default {
       { key: 'attachments', label: '页数、必交代码与附件已经核对' },
     ]
     const ready = computed(() => {
+      if (requestStale.value) return false
       if (!selectedOption.value || reason.value.trim().length < 8) return false
       if (gate.value === 'content_freeze') {
         return rejecting.value || freezeChecks.every((item) => confirmations[item.key])
@@ -180,6 +185,24 @@ export default {
         error.value = err.response?.data?.detail || '人工决策加载失败'
       } finally { loading.value = false }
     }
+    async function refresh() {
+      if (!requestStale.value) return load()
+      loading.value = true
+      error.value = ''
+      try {
+        await Projects.refreshSelection(props.base, {
+          expected_revision: payload.value?.workflow_revision ?? props.revision,
+          gate: gate.value,
+          reason: 'Rebind stale request from the Web selection panel',
+        })
+        toasts.success('已生成绑定当前内容的新一代请求', '人工节点')
+        emit('changed')
+        await load()
+      } catch (err) {
+        error.value = err.response?.data?.detail || '人工决策请求刷新失败'
+        loading.value = false
+      }
+    }
     async function submitDecision() {
       if (!ready.value || submitting.value) return
       submitting.value = true
@@ -193,7 +216,7 @@ export default {
           confirmations: gate.value === 'content_freeze'
             ? freezeChecks.filter((item) => confirmations[item.key]).map((item) => item.key)
             : gate.value === 'delivery_freeze_override' && confirmations.override ? ['override_risk_accepted'] : [],
-          expected_revision: props.revision,
+          expected_revision: payload.value?.workflow_revision ?? props.revision,
           request_id: request.value.request_id || null,
           generation: request.value.generation || null,
           subject_fingerprint: request.value.subject_fingerprint || null,
@@ -209,7 +232,7 @@ export default {
 
     watch(() => props.base, load)
     onMounted(load)
-    return { loading, submitting, payload, selectedOptionId, reason, error, confirmations, gate, gateMeta, available, options, decision, request, message, freezeChecks, ready, rejecting, submitLabel, fileName, shortHash, evidence, risks, demoStatus, openEvidence, load, submitDecision }
+    return { loading, submitting, payload, selectedOptionId, reason, error, confirmations, gate, gateMeta, available, options, decision, request, requestStale, message, freezeChecks, ready, rejecting, submitLabel, fileName, shortHash, evidence, risks, demoStatus, openEvidence, load, refresh, submitDecision }
   },
 }
 </script>
@@ -224,6 +247,7 @@ export default {
 .head-meta { gap: 7px; }
 .revision { padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-3); font-size: 9px; }
 .request-binding { display: flex; flex-wrap: wrap; gap: 7px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--ink-3); font-size: 9px; }
+.stale-request { padding: 10px 12px; border: 1px solid var(--bad); border-radius: var(--r-sm); background: var(--bad-dim); color: var(--bad); font-size: 11px; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .card { display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
 .card.selected { border-color: var(--ok); background: var(--ok-dim); }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -165,7 +166,21 @@ def build_project_diagnostics(
                 orphaned = []
                 for path in sorted((project / "selection").glob("*_decision.json")):
                     gate = path.name.removesuffix("_decision.json")
-                    if store.decision(gate) is None:
+                    try:
+                        projection = json.loads(path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        projection = {}
+                    request_id = str(projection.get("request_id") or "")
+                    decision_id = str(projection.get("decision_id") or "")
+                    linked = (
+                        store.decision_for_request(request_id)
+                        if request_id
+                        else store.decision(gate)
+                    )
+                    if linked is None or (
+                        decision_id
+                        and decision_id != str(linked.get("decision_id") or "")
+                    ):
                         orphaned.append(
                             {"gate": gate, "path": path.relative_to(project).as_posix()}
                         )

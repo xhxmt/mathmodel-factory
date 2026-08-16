@@ -31,7 +31,7 @@ from pathlib import Path
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factory_core.paper_sources import primary_paper_source
+from factory_core.paper_sources import primary_paper_source, resolve_latex_dependency_graph
 
 
 # ── symbol normalization ──────────────────────────────────────────────────────
@@ -278,6 +278,39 @@ def extract_used_symbols(paper_path: str):
     return used, first_use_line
 
 
+def extract_used_symbols_from_project(project_dir, base_name):
+    project = Path(project_dir).resolve()
+    graph = resolve_latex_dependency_graph(project, base_name)
+    used = set()
+    first_use = {}
+    line_offset = 0
+    for source in graph.sources:
+        source_used, source_first = extract_used_symbols(str(source))
+        used.update(source_used)
+        for symbol, line in source_first.items():
+            first_use.setdefault(symbol, line_offset + line)
+        try:
+            line_offset += len(source.read_text(encoding='utf-8').splitlines()) + 1
+        except OSError:
+            line_offset += 1
+    return used, first_use
+
+
+def find_symbol_table_line_in_project(project_dir, base_name) -> int:
+    project = Path(project_dir).resolve()
+    graph = resolve_latex_dependency_graph(project, base_name)
+    line_offset = 0
+    for source in graph.sources:
+        line = find_symbol_table_line(str(source))
+        if line > 0:
+            return line_offset + line
+        try:
+            line_offset += len(source.read_text(encoding='utf-8').splitlines()) + 1
+        except OSError:
+            line_offset += 1
+    return -1
+
+
 def find_symbol_table_line(paper_path: str) -> int:
     """Return the line number where the symbol-table section starts in the
     paper (for use-before-def heuristic), or -1."""
@@ -297,8 +330,8 @@ def collect_symbol_metrics(project_dir, base_name):
     if paper is None:
         return None
     defined = extract_defined_symbols(table_path)
-    used, first_use = extract_used_symbols(paper_path)
-    table_line = find_symbol_table_line(paper_path)
+    used, first_use = extract_used_symbols_from_project(project_dir, base_name)
+    table_line = find_symbol_table_line_in_project(project_dir, base_name)
     undefined = sorted(used - defined)
     use_before_def = []
     if table_line > 0:

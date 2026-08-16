@@ -768,6 +768,9 @@ def test_human_gate_ui_has_three_gate_specific_contracts_and_required_reason():
     assert "append-only SQLite" in selection
     assert "reason.value.trim().length < 8" in selection
     assert "resume_after_step" in selection
+    assert "requestStale.value" in selection
+    assert "Projects.refreshSelection" in selection
+    assert "workflow_revision ?? props.revision" in selection
 
 
 def test_frontend_contracts_include_selection_fields():

@@ -156,6 +156,7 @@ def build_submission_receipt(
         "inputs": input_records,
         "declared_outputs": declared_outputs,
         "seeds": [str(seed) for seed in seeds],
+        "seed_claim_limit": "DECLARATION_ONLY_EXECUTION_CONSUMPTION_NOT_ATTESTED",
         "environment": _runtime_environment(runtime),
     }
     base["request_sha256"] = canonical_hash(base)
@@ -313,6 +314,10 @@ def build_evidence(
         "receipt_ready": receipt_ready,
         "errors": errors,
         "claim_limit": "EXECUTION_IDENTITY_AND_DECLARED_OUTPUTS_ONLY_NO_OPTIMALITY_PROOF",
+        "seed_claim_limit": submitted.get(
+            "seed_claim_limit",
+            "DECLARATION_ONLY_EXECUTION_CONSUMPTION_NOT_ATTESTED",
+        ),
     }
 
 

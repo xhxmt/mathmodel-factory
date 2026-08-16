@@ -247,11 +247,18 @@ def read_selection_request(project_path: Path, gate: str = "step3") -> dict[str,
             sqlite_authoritative = store.contest_policy() is not None
             decision = store.decision(gate)
             state = store.load()
+            options["workflow_revision"] = state.revision
             pending = state.pending_action or {}
             if str(pending.get("gate") or "") == gate:
                 options["request"] = dict(
                     ((pending.get("metadata") or {}).get("human_decision") or {})
                 )
+                try:
+                    store.assert_pending_decision_current(gate)
+                    options["request_stale"] = False
+                except RuntimeError as exc:
+                    options["request_stale"] = True
+                    options["request_stale_reason"] = str(exc)
             options["decision_history"] = store.decision_history(gate)
     except (OSError, RuntimeError):
         decision = None

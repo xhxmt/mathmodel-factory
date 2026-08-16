@@ -6,7 +6,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from pathlib import Path
+
+if __package__ in {None, ""}:  # pragma: no cover - direct script execution
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from factory_core.paper_sources import resolve_latex_dependency_graph
 
 try:
     from scripts.claim_graph import (
@@ -57,7 +63,7 @@ TEXT_SUFFIXES = {
 MAX_CONTEXT_BYTES = 180_000
 EXECUTION_CONTEXT_BYTES = 360_000
 MAX_FILE_BYTES = 55_000
-PACKET_VERSION = 3
+PACKET_VERSION = 4
 COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v1"
 
 
@@ -224,8 +230,21 @@ def _selected_paths(
     project: Path, base_name: str, registry: dict[str, object]
 ) -> dict[str, list[Path]]:
     files = _project_files(project)
-    root_paper = f"{base_name}_paper.tex"
-    paper_names = {root_paper} if (project / root_paper).is_file() else {"paper/paper.tex"}
+    dependency_graph = resolve_latex_dependency_graph(project, base_name)
+    paper_source_names = {
+        path.relative_to(project).as_posix() for path in dependency_graph.sources
+    }
+    paper_dependency_names = {
+        path.relative_to(project).as_posix() for path in dependency_graph.files
+    }
+    if not paper_source_names:
+        legacy_root = project / f"{base_name}_paper.tex"
+        if not legacy_root.exists():
+            legacy_root = project / "paper" / "paper.tex"
+        if legacy_root.exists():
+            relative = legacy_root.relative_to(project).as_posix()
+            paper_source_names.add(relative)
+            paper_dependency_names.add(relative)
     math_names = {
         "model.md",
         "symbol_table.md",
@@ -237,7 +256,7 @@ def _selected_paths(
     paper = [
         path
         for path in files
-        if path.relative_to(project).as_posix() in paper_names
+        if path.relative_to(project).as_posix() in paper_dependency_names
         or _is_problem_file(path.relative_to(project).as_posix())
     ]
     paper.sort(key=lambda path: _paper_priority(project, path, base_name))
@@ -246,7 +265,7 @@ def _selected_paths(
         path
         for path in files
         if _is_problem_file(path.relative_to(project).as_posix())
-        or path.relative_to(project).as_posix() in math_names | paper_names
+        or path.relative_to(project).as_posix() in math_names | paper_source_names
         or _is_model_code(path.relative_to(project).as_posix())
     ]
     math.sort(key=lambda path: _math_priority(project, path, base_name))
@@ -256,7 +275,7 @@ def _selected_paths(
         for path in files
         if (
             _is_execution_evidence(path.relative_to(project).as_posix())
-            or path.relative_to(project).as_posix() in paper_names
+            or path.relative_to(project).as_posix() in paper_source_names
         )
     ]
     selected = {"paper": paper, "math": math, "execution": execution}
@@ -308,24 +327,44 @@ def _role_requirements(
     silently treated as sufficient evidence.
     """
 
-    final_paper = _first_path(
-        project,
-        paths,
-        lambda relative: relative in {f"{base_name}_paper.tex", "paper/paper.tex"},
-    )
+    dependency_graph = resolve_latex_dependency_graph(project, base_name)
+    selected_names = {_relative(project, path) for path in paths}
+    final_paper_sources = [
+        _relative(project, path)
+        for path in dependency_graph.sources
+        if _relative(project, path) in selected_names
+    ]
+    if not final_paper_sources:
+        final_paper = _first_path(
+            project,
+            paths,
+            lambda relative: relative
+            in {f"{base_name}_paper.tex", "paper/paper.tex"},
+        )
+        final_paper_sources = [final_paper] if final_paper else []
+    final_paper = final_paper_sources[0] if final_paper_sources else None
     problem = _first_path(project, paths, _is_problem_file)
 
-    def requirement(identifier: str, description: str, path: str | None) -> dict[str, object]:
+    def requirement(
+        identifier: str,
+        description: str,
+        path: str | list[str] | None,
+    ) -> dict[str, object]:
+        requirement_paths = path if isinstance(path, list) else [path] if path else []
         return {
             "id": identifier,
             "description": description,
             "required_status": "included",
-            "paths": [path] if path else [],
+            "paths": requirement_paths,
         }
 
     if role == "paper":
         requirements = [
-            requirement("final_paper", "final paper text", final_paper),
+            requirement(
+                "final_paper",
+                "all active final paper sources",
+                final_paper_sources,
+            ),
             requirement("problem_statement", "primary problem statement", problem),
         ]
         requirements.extend(coverage_requirements(registry, role))
@@ -336,7 +375,11 @@ def _role_requirements(
         exposition = exposition or final_paper
         requirements = [
             requirement("problem_statement", "primary problem statement", problem),
-            requirement("final_paper", "final paper text containing mathematical claims", final_paper),
+            requirement(
+                "final_paper",
+                "all active final paper sources containing mathematical claims",
+                final_paper_sources,
+            ),
             requirement(
                 "mathematical_exposition",
                 "primary mathematical exposition (model.md, otherwise final paper)",
@@ -411,7 +454,11 @@ def _role_requirements(
         and Path(relative).suffix.lower() == ".log",
     )
     requirements = [
-        requirement("final_paper", "final paper text containing reported claims", final_paper),
+        requirement(
+            "final_paper",
+            "all active final paper sources containing reported claims",
+            final_paper_sources,
+        ),
         requirement("primary_results", "canonical or primary machine-readable results", primary_result),
         requirement("implementation", "primary model implementation", implementation),
         requirement("execution_trace", "solver or verification execution evidence", execution_trace),

@@ -42,6 +42,7 @@ def classify_artifact(path: str) -> ArtifactLayer:
     if (
         "receipt" in name
         or "receipts/" in normalized
+        or normalized.startswith(".factory/decisions/")
         or "snapshot" in name
         or "fingerprint" in name
     ):

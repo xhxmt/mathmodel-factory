@@ -28,7 +28,7 @@ from pathlib import Path
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factory_core.paper_sources import primary_paper_source
+from factory_core.paper_sources import primary_paper_source, resolve_latex_dependency_graph
 
 
 def _read_file(path):
@@ -213,10 +213,16 @@ def collect_number_chain_metrics(project_dir, base_name):
     paper = primary_paper_source(project_dir, base_name)
     if paper is None:
         return None
-    tex_path = str(paper)
-
     key_results = extract_key_results(project_dir)
-    paper_numbers = extract_tex_numbers_detailed(tex_path)
+    project = Path(project_dir).resolve()
+    graph = resolve_latex_dependency_graph(project, base_name)
+    paper_numbers = []
+    for source in graph.sources:
+        relative = source.relative_to(project).as_posix()
+        paper_numbers.extend(
+            {**entry, "source": relative}
+            for entry in extract_tex_numbers_detailed(str(source))
+        )
 
     if not key_results:
         # 没有标记关键结果，无法做链检查

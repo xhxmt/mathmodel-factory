@@ -99,6 +99,36 @@ def test_nested_paper_source_participates_in_dirty_classification(tmp_path):
     assert DirtyFlag.MATH in _flags(before, after)
 
 
+def test_dirty_classifier_preserves_each_recursive_source_cause(tmp_path):
+    paper = tmp_path / "paper" / "paper.tex"
+    first = tmp_path / "paper" / "sections" / "first.tex"
+    second = tmp_path / "paper" / "sections" / "second.tex"
+    paper.parent.mkdir(parents=True)
+    first.parent.mkdir(parents=True)
+    paper.write_text(
+        "\\begin{document}\\input{sections/first}\\input{sections/second}"
+        "\\end{document}\n",
+        encoding="utf-8",
+    )
+    first.write_text("$x=1$\n", encoding="utf-8")
+    second.write_text("$y=1$\n", encoding="utf-8")
+    before = capture_artifact_manifest(tmp_path)
+
+    first.write_text("$x=2$\n", encoding="utf-8")
+    second.write_text("$y=2$\n", encoding="utf-8")
+    after = capture_artifact_manifest(tmp_path)
+    math_causes = {
+        change.cause_artifact
+        for change in classify_manifest_changes(before, after)
+        if change.flag is DirtyFlag.MATH
+    }
+
+    assert math_causes == {
+        "paper/sections/first.tex",
+        "paper/sections/second.tex",
+    }
+
+
 def test_dirty_flag_clear_requires_owner_stage_receipt_in_same_revision(tmp_path):
     store = SQLiteStateStore(tmp_path)
     state = store.initialize(project_id="demo", project_type="modeling")
