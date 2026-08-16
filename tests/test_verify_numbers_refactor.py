@@ -9,7 +9,8 @@ def test_cli_output_byte_identical():
         capture_output=True, text=True,
     )
     with open(GOLDEN) as f:
-        assert out.stdout + out.stderr == f.read()
+        expected = f.read().replace("{FIXTURE}", FIXTURE)
+    assert out.stdout + out.stderr == expected
 
 def test_collect_number_metrics_dict():
     from verify_numbers import collect_number_metrics

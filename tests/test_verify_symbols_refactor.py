@@ -10,7 +10,12 @@ def test_cli_output_byte_identical():
     )
     combined = out.stdout + out.stderr
     with open(GOLDEN) as f:
-        assert combined == f.read()
+        expected = (
+            f.read()
+            .replace("{FIXTURE}", FIXTURE)
+            .replace("{TRAILING_BLANK_LINE}", "")
+        )
+    assert combined == expected
 
 def test_collect_symbol_metrics_dict():
     from verify_symbols import collect_symbol_metrics
