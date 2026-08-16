@@ -55,7 +55,7 @@ jobs:
           texlive-xetex biber
       - run: uv sync --group dev --locked
       - run: command -v pdflatex && command -v xelatex && command -v bibtex && command -v biber
-      - run: uv run pytest -q -m latex --strict-markers
+      - run: uv run pytest -q tests/test_paper_sources.py -m latex --strict-markers
 
   web:
     runs-on: ubuntu-latest
