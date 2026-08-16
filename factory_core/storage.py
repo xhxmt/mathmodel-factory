@@ -266,13 +266,14 @@ class SQLiteStateStore:
                 receipt_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS dirty_flags (
-                flag TEXT PRIMARY KEY,
+                flag TEXT NOT NULL,
                 owner_stage INTEGER NOT NULL,
                 cause_revision INTEGER NOT NULL,
                 cause_artifact TEXT NOT NULL,
                 baseline_fingerprint TEXT NOT NULL,
                 current_fingerprint TEXT NOT NULL,
-                classifier_contract_sha256 TEXT NOT NULL
+                classifier_contract_sha256 TEXT NOT NULL,
+                PRIMARY KEY(flag, owner_stage)
             );
             CREATE TABLE IF NOT EXISTS dirty_causes (
                 cause_id TEXT PRIMARY KEY,
@@ -291,7 +292,7 @@ class SQLiteStateStore:
                 cleared_fingerprint TEXT NOT NULL,
                 classifier_contract_sha256 TEXT NOT NULL,
                 receipt_json TEXT NOT NULL,
-                PRIMARY KEY(revision, flag)
+                PRIMARY KEY(revision, flag, owner_stage)
             );
             CREATE TRIGGER IF NOT EXISTS events_append_only_update
             BEFORE UPDATE ON events
@@ -391,7 +392,7 @@ class SQLiteStateStore:
         current = int(row[0])
         if current == SCHEMA_VERSION:
             return
-        if current not in {1, 2, 3, 4, 5, 6, 7}:
+        if current not in {1, 2, 3, 4, 5, 6, 7, 8}:
             raise RuntimeError(
                 f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}"
             )
@@ -610,13 +611,14 @@ class SQLiteStateStore:
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS dirty_flags (
-                flag TEXT PRIMARY KEY,
+                flag TEXT NOT NULL,
                 owner_stage INTEGER NOT NULL,
                 cause_revision INTEGER NOT NULL,
                 cause_artifact TEXT NOT NULL,
                 baseline_fingerprint TEXT NOT NULL,
                 current_fingerprint TEXT NOT NULL,
-                classifier_contract_sha256 TEXT NOT NULL
+                classifier_contract_sha256 TEXT NOT NULL,
+                PRIMARY KEY(flag, owner_stage)
             )
             """
         )
@@ -643,10 +645,69 @@ class SQLiteStateStore:
                 cleared_fingerprint TEXT NOT NULL,
                 classifier_contract_sha256 TEXT NOT NULL,
                 receipt_json TEXT NOT NULL,
-                PRIMARY KEY(revision, flag)
+                PRIMARY KEY(revision, flag, owner_stage)
             )
             """
         )
+        dirty_pk = [
+            column[1]
+            for column in sorted(
+                connection.execute("PRAGMA table_info(dirty_flags)").fetchall(),
+                key=lambda column: int(column[5]) if column[5] else 99,
+            )
+            if column[5]
+        ]
+        if dirty_pk != ["flag", "owner_stage"]:
+            connection.execute(
+                """
+                CREATE TABLE dirty_flags_v9 (
+                    flag TEXT NOT NULL,
+                    owner_stage INTEGER NOT NULL,
+                    cause_revision INTEGER NOT NULL,
+                    cause_artifact TEXT NOT NULL,
+                    baseline_fingerprint TEXT NOT NULL,
+                    current_fingerprint TEXT NOT NULL,
+                    classifier_contract_sha256 TEXT NOT NULL,
+                    PRIMARY KEY(flag, owner_stage)
+                )
+                """
+            )
+            connection.execute("INSERT INTO dirty_flags_v9 SELECT * FROM dirty_flags")
+            connection.execute("DROP TABLE dirty_flags")
+            connection.execute("ALTER TABLE dirty_flags_v9 RENAME TO dirty_flags")
+        clear_pk = [
+            column[1]
+            for column in sorted(
+                connection.execute(
+                    "PRAGMA table_info(dirty_flag_clear_receipts)"
+                ).fetchall(),
+                key=lambda column: int(column[5]) if column[5] else 99,
+            )
+            if column[5]
+        ]
+        if clear_pk != ["revision", "flag", "owner_stage"]:
+            connection.execute(
+                """
+                CREATE TABLE dirty_flag_clear_receipts_v9 (
+                    revision INTEGER NOT NULL,
+                    flag TEXT NOT NULL,
+                    owner_stage INTEGER NOT NULL,
+                    cleared_fingerprint TEXT NOT NULL,
+                    classifier_contract_sha256 TEXT NOT NULL,
+                    receipt_json TEXT NOT NULL,
+                    PRIMARY KEY(revision, flag, owner_stage)
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO dirty_flag_clear_receipts_v9 "
+                "SELECT * FROM dirty_flag_clear_receipts"
+            )
+            connection.execute("DROP TABLE dirty_flag_clear_receipts")
+            connection.execute(
+                "ALTER TABLE dirty_flag_clear_receipts_v9 "
+                "RENAME TO dirty_flag_clear_receipts"
+            )
         for checkpoint in connection.execute(
             "SELECT * FROM stage_checkpoints ORDER BY completed_revision, stage_id, subtask"
         ).fetchall():
@@ -1064,7 +1125,9 @@ class SQLiteStateStore:
             "decision_instances": rows_hash(
                 "SELECT * FROM workflow_decision_instances ORDER BY request_id"
             ),
-            "dirty_flags": rows_hash("SELECT * FROM dirty_flags ORDER BY flag"),
+            "dirty_flags": rows_hash(
+                "SELECT * FROM dirty_flags ORDER BY flag, owner_stage"
+            ),
             "dirty_causes": rows_hash(
                 "SELECT * FROM dirty_causes ORDER BY cause_revision, cause_id"
             ),
@@ -1076,7 +1139,8 @@ class SQLiteStateStore:
             ),
             "solver_jobs": rows_hash("SELECT * FROM solver_jobs ORDER BY job_id"),
             "dirty_clear_receipts": rows_hash(
-                "SELECT * FROM dirty_flag_clear_receipts ORDER BY revision, flag"
+                "SELECT * FROM dirty_flag_clear_receipts "
+                "ORDER BY revision, flag, owner_stage"
             ),
         }
 
@@ -2670,8 +2734,7 @@ class SQLiteStateStore:
                         baseline_fingerprint, current_fingerprint,
                         classifier_contract_sha256
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(flag) DO UPDATE SET
-                        owner_stage=excluded.owner_stage,
+                    ON CONFLICT(flag, owner_stage) DO UPDATE SET
                         cause_revision=excluded.cause_revision,
                         cause_artifact=excluded.cause_artifact,
                         baseline_fingerprint=excluded.baseline_fingerprint,
@@ -2729,7 +2792,8 @@ class SQLiteStateStore:
                         "dirty clear classifier does not match the checkpoint receipt"
                     )
                 rows_to_clear = connection.execute(
-                    "SELECT * FROM dirty_flags WHERE owner_stage = ? ORDER BY flag",
+                    "SELECT * FROM dirty_flags WHERE owner_stage = ? "
+                    "ORDER BY flag, owner_stage",
                     (owner_stage,),
                 ).fetchall()
                 for dirty_row in rows_to_clear:
@@ -3023,7 +3087,7 @@ class SQLiteStateStore:
         with self._session() as connection:
             self._upgrade_schema(connection)
             rows = connection.execute(
-                "SELECT * FROM dirty_flags ORDER BY flag"
+                "SELECT * FROM dirty_flags ORDER BY flag, owner_stage"
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -3033,7 +3097,8 @@ class SQLiteStateStore:
         with self._session() as connection:
             self._upgrade_schema(connection)
             rows = connection.execute(
-                "SELECT * FROM dirty_flag_clear_receipts ORDER BY revision, flag"
+                "SELECT * FROM dirty_flag_clear_receipts "
+                "ORDER BY revision, flag, owner_stage"
             ).fetchall()
         return [
             {

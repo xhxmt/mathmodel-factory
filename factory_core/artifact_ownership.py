@@ -40,10 +40,12 @@ ARTIFACT_OWNERSHIP_REGISTRY: tuple[ArtifactOwnership, ...] = (
     ArtifactOwnership("models/**", 3, "model_contract", "MODEL_DIRTY"),
     ArtifactOwnership("scripts/**", 3, "model_implementation", "MODEL_DIRTY"),
     ArtifactOwnership("model.md", 3, "model_contract", "MODEL_DIRTY"),
+    ArtifactOwnership("analysis_guide.md", 3, "modeling_guidance", "MODEL_DIRTY"),
     ArtifactOwnership("modeling_guide.md", 3, "modeling_guidance", "MODEL_DIRTY"),
     ArtifactOwnership("modeling_scope_gate.md", 3, "model_contract", "MODEL_DIRTY"),
     ArtifactOwnership("quality_contract.json", 3, "model_contract", "MODEL_DIRTY"),
     ArtifactOwnership("claim_registry.json", 3, "model_contract", "MODEL_DIRTY"),
+    ArtifactOwnership("claim_ledger.json", 3, "model_contract", "MODEL_DIRTY"),
     ArtifactOwnership("symbol_table.md", 3, "model_contract", "MODEL_DIRTY"),
     ArtifactOwnership("assumption_ledger.md", 3, "model_contract", "MODEL_DIRTY"),
     # Stage 5-specific result validation must precede the generic result tree.
@@ -106,6 +108,14 @@ ARTIFACT_OWNERSHIP_REGISTRY: tuple[ArtifactOwnership, ...] = (
         submission_member=False,
     ),
     ArtifactOwnership("audit_issue_ledger.md", 8, "issue_ledger", "MATH_DIRTY"),
+    ArtifactOwnership(
+        "gate2_delivery_override.json",
+        10,
+        "legacy_override_projection",
+        "FORMAT_DIRTY",
+        final_input=False,
+        submission_member=False,
+    ),
     # Active paper sources default to Stage 8 for fail-closed finalization
     # routing.  Dirty classification refines their prose/citation/format domains
     # to Stage 9 when it can prove that the mathematical fingerprint is stable.

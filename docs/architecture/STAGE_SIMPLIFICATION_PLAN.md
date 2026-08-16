@@ -297,10 +297,11 @@ release 目录和原子 current pointer；审计系统仍不得自行发布。
    `active_step`、`pending_action` 和 `status`，不能只看完成游标；只有显式迁移后才使用
    Stage 调度。
 7. Legacy 项目继续由 Legacy Adapter 读取，不因本计划自动获得新状态或 `CURRENT_PASS`；Stage
-   项目存在未清语义 dirty flag 时不得通过整体回滚到 Legacy 绕过责任 Stage 复验。
+   项目只允许回滚到 `step_v2`，一旦存在 Stage 权威历史就禁止整体回滚到 Legacy，避免残留
+   下游产物绕过责任 Stage 复验。
    所有 scheduler/control-mode 回滚共享同一 fail-closed guard：拒绝已开始的 attempt，复算
-   `stage_cursor_input` baseline 与当前 manifest，拒绝 pending Finalization snapshot、未解决
-   projection failure 或 Step-3 projection drift。
+   `stage_cursor_input` baseline 与当前 manifest，拒绝 pending action/未完成 decision request、
+   pending Finalization snapshot、未解决 projection failure 或 Step-3/consultation projection drift。
 8. Web 的 8 个比赛阶段保持稳定，并始终从当前 subtask 的 `source_step_id` 投影，不从
    Stage ID 投影。例如 Stage 7 的 draft subtask 显示 Phase 5，audit subtask 显示 Phase 6。
    10-Stage 主要用于高级诊断、恢复和事件展示。

@@ -94,17 +94,19 @@ The active scheduler contract is documented in
 phases, ten persistent scheduler Stages, and the existing Step 0-16 contracts
 retained as validation and compatibility boundaries. New projects default to
 `stage_v1`; old native `step_v2` projects switch only through explicit scheduler
-activation and may explicitly roll back while stopped and semantically clean.
+activation. A Stage project may roll back only to `step_v2` while stopped and
+semantically clean; once Stage authority has existed it may not be downgraded
+to Legacy artifact inference.
 Do not delete, renumber, or merge the Step contracts.
 
-New projects persist a 74-hour contest policy in schema-v8 SQLite. Steps 0–15
+New projects persist a 74-hour contest policy in schema-v9 SQLite. Steps 0–15
 are capped at T−6h content freeze; Step 16 owns the six-hour terminal reserve
 and is capped at the final deadline. T−2h is delivery freeze: any audit-driven
 substantive reopen requires a separate human override. Retry sleeps are also
 budget checked. Historical/migrated projects without a contest-policy row stay
 unbounded for compatibility; do not synthesize an expired deadline for them.
 
-Schema v8 represents every Human Gate occurrence as an immutable request
+Schema v9 represents every Human Gate occurrence as an immutable request
 (`request_id`, gate, generation, subject/options fingerprints) and one optional
 append-only decision instance. A rejected Approval remains historical evidence,
 but content-freeze rejection clears the pending action, invalidates downstream
@@ -142,7 +144,10 @@ Markdown forms are projections. For current Native projects,
 `method_decision.md` carries the same machine-verifiable identity header. Step 3
 validation and Step 4 prepare both verify the receipt, current candidate
 fingerprints, and every projection identity field; `human_review.md` cannot
-override them.
+override them. Consultation decisions likewise store the exact answer in
+SQLite, deterministically rebuild their `human_review.md` section, inject the
+verified answer into the effective model prompt, and bind that prompt plus Web
+researcher notes by SHA-256 in the Step result/checkpoint evidence.
 
 Artifact responsibility is centralized in
 `factory_core/artifact_ownership.py`. Dirty classification, semantic reopen,
@@ -150,7 +155,11 @@ Finalization recovery, Judge missing-evidence routing, Web diagnostics, and
 final/submission manifests must consume that registry rather than add local
 path-owner conditionals. Scheduler/control-mode rollback shares one guard that
 rejects active attempts, unresolved dirty/projection state, pending Finalization
-snapshots, and any current manifest drift from `stage_cursor_input`.
+snapshots, unfinished human decisions, and any current manifest drift from
+`stage_cursor_input`. Dirty state is keyed by `(flag, owner_stage)` so one
+domain cannot overwrite another Stage's active cause. Final/submission
+collection fails closed when a tracked authored file has neither registry
+ownership nor an explicit active-LaTeX or declared-deliverable route.
 
 Native failure events preserve execution and validation metadata such as the
 failed check, role, backend, report, and missing artifact paths. A model process

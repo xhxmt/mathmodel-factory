@@ -409,7 +409,15 @@ class FactoryService:
         engine = self.engine(project)
         state = engine.get_state()
         revision = state.revision if expected_revision is None else expected_revision
-        return engine.resolve_action(resolution, expected_revision=revision)
+        pending = state.pending_action or {}
+        updated = engine.resolve_action(resolution, expected_revision=revision)
+        if pending.get("type") == "human_consultation":
+            from .consultation_projection import rebuild_consultation_projection
+
+            rebuild_consultation_projection(
+                engine.project_dir, str(pending.get("gate") or "")
+            )
+        return updated
 
     def supersede_pending_decision_request(
         self,
@@ -475,6 +483,13 @@ class FactoryService:
                 from .selection_projection import rebuild_step3_projections
 
                 rebuild_step3_projections(resolved_project)
+            if (pending.pending_action or {}).get("type") == "human_consultation":
+                from .consultation_projection import rebuild_consultation_projection
+
+                rebuild_consultation_projection(
+                    resolved_project,
+                    str((pending.pending_action or {}).get("gate") or ""),
+                )
             return self.resume_and_start(
                 resolved_project, expected_revision=accepted.revision
             )
@@ -495,6 +510,13 @@ class FactoryService:
                 payload={"error_type": type(exc).__name__},
             )
             raise
+        if (pending.pending_action or {}).get("type") == "human_consultation":
+            from .consultation_projection import rebuild_consultation_projection
+
+            rebuild_consultation_projection(
+                resolved_project,
+                str((pending.pending_action or {}).get("gate") or ""),
+            )
         return self.resume_and_start(
             resolved_project, expected_revision=accepted.revision
         )
@@ -527,10 +549,31 @@ class FactoryService:
         write_compatibility_projections(resolved, state)
         return state
 
-    def rollback_migration(self, project: str | Path) -> WorkflowState:
+    def rollback_migration(
+        self,
+        project: str | Path,
+        *,
+        expected_revision: int,
+    ) -> WorkflowState:
         engine = self.engine(project)
         state = engine.get_state()
-        return engine.deactivate(expected_revision=state.revision)
+        self._assert_expected_revision(state, expected_revision)
+        stage_history = state.scheduler_generation == STAGE_SCHEDULER_GENERATION or any(
+            event.type in {
+                "STAGE_SCHEDULER_ACTIVATED",
+                "STAGE_SCHEDULER_ROLLED_BACK",
+            }
+            for event in SQLiteStateStore(engine.project_dir).events()
+        )
+        inferred_step = None
+        if not stage_history:
+            inferred_step = LegacyArtifactValidator(
+                self.root, self.legacy_runner
+            ).infer_step(engine.project_dir)
+        return engine.deactivate(
+            expected_revision=expected_revision,
+            legacy_inferred_step=inferred_step,
+        )
 
     def activate_stage_scheduler(
         self,
@@ -1000,24 +1043,24 @@ class FactoryService:
                     project / "selection" / f"{gate or 'step3'}_decision.json"
                 ).is_file()
         elif decision_kind == "consultation" or action_type == "human_consultation":
-            review = project / "human_review.md"
-            if review.is_file():
-                text = review.read_text(encoding="utf-8", errors="replace")
-                ready = bool(
-                    re.search(
-                        rf"##\s+CONSULT\s+{re.escape(gate)}\b[\s\S]*?STATUS:\s*READY",
-                        text,
-                        re.IGNORECASE,
-                    )
-                ) if gate else "STATUS: READY" in text
-                if ready:
-                    resolution["answer"] = "recorded in human_review.md"
+            from .consultation_projection import (
+                extract_ready_consultation_answer,
+                rebuild_consultation_projection,
+            )
+
+            answer = extract_ready_consultation_answer(project, gate) if gate else None
+            ready = bool(answer)
+            if answer:
+                resolution["answer"] = answer
         if not ready:
             return state
-        return self.engine(project).resolve_action(
+        updated = self.engine(project).resolve_action(
             resolution,
             expected_revision=state.revision,
         )
+        if decision_kind == "consultation" or action_type == "human_consultation":
+            rebuild_consultation_projection(project, gate)
+        return updated
 
     def _write_delivery_manifest(self, project: Path) -> None:
         from .delivery.release import resolve_current_release

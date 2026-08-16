@@ -8,7 +8,7 @@ from pathlib import Path
 
 COMMON_PREAMBLE = """Before doing any substantive work, read the project style guide in the current project directory: prefer `modeling_guide.md` (math-modeling mode) if present, otherwise read `analysis_guide.md` (legacy social-science mode). It is the canonical guide for local job execution, figure style, project file layout, code conventions, error recovery, and table formatting.
 
-If `human_review.md` exists, read it before substantive work and treat it as the newest human guidance. Older downstream artifacts may remain after a rewind; do not treat them as authoritative unless deliberately regenerated.
+If `human_review.md` exists, read it before substantive work. Consultation sections are rebuildable projections: the verified SQLite-backed answers embedded directly in this prompt are authoritative. Older downstream artifacts may remain after a rewind; do not treat them as authoritative unless deliberately regenerated.
 
 Do not inspect, read, cite, summarize, reuse, or mention completed projects unless the human researcher explicitly instructs you to do so.
 
@@ -29,6 +29,7 @@ class PromptRenderer:
         step_key: str | int,
         replacements: dict[str, str] | None = None,
         include_preamble: bool = True,
+        researcher_note: str | None = None,
     ) -> str:
         path = self.root / "prompts" / template
         text = path.read_text(encoding="utf-8")
@@ -42,12 +43,22 @@ class PromptRenderer:
         for key, value in values.items():
             text = text.replace(key, value)
         text = self._apply_ablations(template, text)
-        note = self.user_note(project.name, step_key)
+        note = (
+            self.user_note(project.name, step_key)
+            if researcher_note is None
+            else researcher_note
+        )
         if note:
             text += f"\n\nNOTE FROM THE RESEARCHER: {note}"
         agent_key = path.stem if str(step_key) == path.stem.removeprefix("step") else f"step{step_key}"
         text = f"AGENT_KEY: {agent_key}\n\n{text}"
-        preamble = COMMON_PREAMBLE + self._dynamic_consultation_preamble(project)
+        from ..consultation_projection import authoritative_consultation_prompt
+
+        preamble = (
+            COMMON_PREAMBLE
+            + authoritative_consultation_prompt(project)
+            + self._dynamic_consultation_preamble(project)
+        )
         return preamble + text if include_preamble else text
 
     @staticmethod

@@ -12,7 +12,7 @@ from .artifact_ownership import artifact_ownership
 from .paper_sources import mask_inactive_latex, resolve_latex_dependency_graph
 
 
-DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v3"
+DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v4"
 
 
 class DirtyFlag(str, Enum):
@@ -75,20 +75,23 @@ _IGNORED_NAMES = {
 }
 _MATH_RE = re.compile(
     r"\$\$.*?\$\$|(?<!\$)\$(?!\$).*?(?<!\$)\$(?!\$)|"
-    r"\\\[(?:.|\n)*?\\\]|\\begin\{(?:equation\*?|align\*?|gather\*?|multline\*?)\}"
-    r"(?:.|\n)*?\\end\{(?:equation\*?|align\*?|gather\*?|multline\*?)\}",
+    r"\\\((?:.|\n)*?\\\)|\\\[(?:.|\n)*?\\\]|"
+    r"\\begin\{(?:math|displaymath|equation\*?|align\*?|alignat\*?|flalign\*?|"
+    r"gather\*?|multline\*?|eqnarray\*?)\}(?:.|\n)*?"
+    r"\\end\{(?:math|displaymath|equation\*?|align\*?|alignat\*?|flalign\*?|"
+    r"gather\*?|multline\*?|eqnarray\*?)\}",
     re.DOTALL,
 )
 _CITATION_RE = re.compile(r"\\(?:cite|citep|citet|autocite)\*?(?:\[[^]]*\])?\{[^}]+\}")
 _LATEX_COMMAND_RE = re.compile(r"\\[A-Za-z@]+\*?(?:\[[^]]*\])?")
 _MATH_DEFINITION_RE = re.compile(
-    r"\\(?P<command>"
+    r"(?:\\(?:global|long|outer|protected)\s*)*\\(?P<command>"
     # LaTeX2e/xparse definitions are matched by definition family rather than
     # a command-name whitelist.  This intentionally includes new definition
     # families without requiring a classifier release for each package.
     r"(?:new|renew|provide|declare|define)[A-Za-z@]+|"
     # TeX primitives and aliases.
-    r"(?:global)?(?:long)?(?:outer)?(?:g|e|x)?def|let|"
+    r"(?:g|e|x)?def|let|"
     # expl3 variable/control-sequence constructors and setters.
     r"[A-Za-z]+_(?:new|set|gset|const|generate)(?::[A-Za-z]+)?|"
     # Macro-valued math helpers and counter definitions/assignments.
@@ -97,7 +100,7 @@ _MATH_DEFINITION_RE = re.compile(
     re.IGNORECASE,
 )
 _DEF_STYLE_RE = re.compile(
-    r"^(?:(?:global)?(?:long)?(?:outer)?(?:g|e|x)?def|let|"
+    r"^(?:(?:g|e|x)?def|let|"
     r"[A-Za-z]+_(?:new|set|gset|const|generate)(?::[A-Za-z]+)?)$",
     re.IGNORECASE,
 )
@@ -135,6 +138,20 @@ def _tracked(relative: str, path: Path) -> bool:
     if len(parts) == 1:
         return path.suffix.lower() in _TRACKED_TOP_SUFFIXES
     return any(relative == root or relative.startswith(root + "/") for root in _TRACKED_ROOTS)
+
+
+def tracked_artifact_paths(project_dir: str | Path) -> tuple[str, ...]:
+    """List ordinary authored paths covered by dirty/finalization governance."""
+
+    project = Path(project_dir).resolve()
+    tracked: list[str] = []
+    for path in sorted(project.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        relative = path.relative_to(project).as_posix()
+        if _tracked(relative, path):
+            tracked.append(relative)
+    return tuple(tracked)
 
 
 def _balanced_group_end(

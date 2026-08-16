@@ -108,7 +108,7 @@ def test_legacy_rollback_cannot_bypass_unresolved_stage_dirty_flags(tmp_path):
     )
 
     with pytest.raises(InvalidTransition, match="semantic dirty flags"):
-        service.rollback_migration("demo")
+        service.rollback_migration("demo", expected_revision=dirty.revision)
 
     assert store.load().revision == dirty.revision
     assert store.load().scheduler_generation == "stage_v1"
@@ -148,7 +148,7 @@ def test_deactivate_rejects_manifest_drift_without_dirty_row(tmp_path):
     problem.write_text("mutated after baseline\n", encoding="utf-8")
 
     with pytest.raises(InvalidTransition, match="manifest drifted"):
-        service.rollback_migration("demo")
+        service.rollback_migration("demo", expected_revision=selected.revision)
 
     assert store.load().revision == selected.revision
     assert store.dirty_flags() == []
@@ -187,9 +187,95 @@ def test_legacy_rollback_rejects_failed_mutating_stage(tmp_path):
     problem.write_text("failed attempt mutation\n", encoding="utf-8")
 
     with pytest.raises(InvalidTransition, match="execution attempt started"):
-        service.rollback_migration("demo")
+        service.rollback_migration("demo", expected_revision=failed.revision)
 
     assert store.load().revision == failed.revision
+
+
+def _assert_full_rollback_rejects_pending(tmp_path, status, action):
+    service = FactoryService(tmp_path)
+    state, _ = service.create_project("demo", "question", start=False)
+    store = SQLiteStateStore(tmp_path / "ongoing" / "demo")
+    waiting = store.transition(
+        expected_revision=state.revision,
+        event_type="PENDING_HUMAN_AUTHORITY_FOR_TEST",
+        changes={"status": status, "pending_action": action},
+    )
+
+    with pytest.raises(InvalidTransition, match="human decision is pending"):
+        service.rollback_migration("demo", expected_revision=waiting.revision)
+
+
+def test_full_rollback_rejects_pending_step3_gate(tmp_path):
+    _assert_full_rollback_rejects_pending(
+        tmp_path,
+        WorkflowStatus.AWAITING_SELECTION,
+        {"type": "step3_selection", "gate": "step3"},
+    )
+
+
+def test_full_rollback_rejects_pending_consultation(tmp_path):
+    _assert_full_rollback_rejects_pending(
+        tmp_path,
+        WorkflowStatus.AWAITING_CONSULTATION,
+        {"type": "human_consultation", "gate": "preflight"},
+    )
+
+
+def test_full_rollback_rejects_pending_content_freeze(tmp_path):
+    _assert_full_rollback_rejects_pending(
+        tmp_path,
+        WorkflowStatus.AWAITING_SELECTION,
+        {"type": "content_freeze_selection", "gate": "content_freeze"},
+    )
+
+
+def test_full_rollback_rejects_legacy_infer_ahead_of_sqlite(tmp_path, monkeypatch):
+    project = tmp_path / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    state = SQLiteStateStore(project).initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=2,
+        scheduler_generation=STEP_SCHEDULER_GENERATION,
+    )
+    monkeypatch.setattr(
+        "factory_core.service.LegacyArtifactValidator.infer_step",
+        lambda _self, _project: 15,
+    )
+
+    with pytest.raises(InvalidTransition, match="Legacy inference does not match"):
+        FactoryService(tmp_path).rollback_migration(
+            "demo", expected_revision=state.revision
+        )
+
+
+def test_full_rollback_rejects_stale_expected_revision(tmp_path):
+    service = FactoryService(tmp_path)
+    state, _ = service.create_project("demo", "question", start=False)
+    current = service.pause("demo", expected_revision=state.revision)
+
+    with pytest.raises(RevisionConflict, match="expected revision"):
+        service.rollback_migration("demo", expected_revision=state.revision)
+
+    assert service.inspect("demo").revision == current.revision
+
+
+def test_semantic_reopen_cannot_fast_forward_through_legacy_artifacts(tmp_path):
+    service = FactoryService(tmp_path)
+    state, _ = service.create_project("demo", "question", start=False)
+    rolled_back = service.rollback_stage_scheduler(
+        "demo", expected_revision=state.revision
+    )
+    project = tmp_path / "ongoing" / "demo"
+    (project / "citation_audit.md").write_text("stale PASS\n", encoding="utf-8")
+
+    with pytest.raises(InvalidTransition, match="full Legacy deactivation is prohibited"):
+        service.rollback_migration(
+            "demo", expected_revision=rolled_back.revision
+        )
+
+    assert service.inspect("demo").control_mode == "engine"
 
 
 def test_service_and_web_action_share_revision_and_event_contract(tmp_path):
@@ -426,9 +512,20 @@ def test_web_resume_after_rollback_uses_legacy_registry(tmp_path, monkeypatch):
         worker_launcher=launcher,
         native_registry_factory=native_registry,
     )
-    service.create_project("demo", "question", start=False)
+    project = tmp_path / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    (project / "checkpoint.md").write_text(
+        "- **Last completed step**: -1\n", encoding="utf-8"
+    )
+    state = SQLiteStateStore(project).initialize(
+        project_id="demo",
+        project_type="modeling",
+        scheduler_generation=STEP_SCHEDULER_GENERATION,
+    )
 
-    rolled_back = service.rollback_migration("demo")
+    rolled_back = service.rollback_migration(
+        "demo", expected_revision=state.revision
+    )
 
     assert rolled_back.control_mode == "legacy"
     assert rolled_back.runtime_generation == "legacy_adapter"

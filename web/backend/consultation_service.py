@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from factory_core.artifacts import atomic_write_text
+from factory_core.consultation_projection import write_pending_consultation_answer
 
 
 def gate_ready(human_review: Path, gate: str) -> bool:
@@ -23,23 +23,11 @@ def write_consultation_answer(
     answer: str,
     timestamp: str,
 ) -> None:
-    human_review = project_path / "human_review.md"
-    heading = f"## CONSULT {gate} (Step {step}) — STATUS: READY"
-    section = (
-        f"{heading}\n"
-        f"咨询点：{title}\n"
-        f"提交时间: {timestamp}\n\n"
-        f"{answer.strip()}\n"
+    write_pending_consultation_answer(
+        project_dir=project_path,
+        gate=gate,
+        step=step,
+        title=title,
+        answer=answer,
+        timestamp=timestamp,
     )
-
-    if human_review.is_file():
-        content = human_review.read_text(encoding="utf-8", errors="replace")
-        pattern = rf"(?ims)^##[ \t]+CONSULT[ \t]+{re.escape(gate)}.*?(?=^##[ \t]|\Z)"
-        if re.search(pattern, content):
-            content = re.sub(pattern, section + "\n", content)
-        else:
-            content = content.rstrip() + "\n\n" + section + "\n"
-    else:
-        content = "# 人工审核与介入记录\n\n" + section + "\n"
-
-    atomic_write_text(human_review, content)

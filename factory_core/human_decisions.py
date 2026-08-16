@@ -278,6 +278,8 @@ def validate_resolution(
         answer = normalized.get("answer") or normalized.get("response")
         if not isinstance(answer, str) or not answer.strip():
             raise InvalidTransition("consultation decisions require a nonempty answer")
+        normalized["answer"] = answer.strip()
+        normalized.pop("response", None)
     if isinstance(request, Mapping):
         request_id = request.get("request_id")
         supplied_request_id = normalized.get("request_id")

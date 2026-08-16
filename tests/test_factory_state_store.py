@@ -300,6 +300,78 @@ def test_v3_database_adds_independent_solver_job_revision(tmp_path):
     }.issubset(columns)
 
 
+def test_v8_database_upgrades_dirty_identity_to_owner_scoped_keys(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="v8", project_type="modeling")
+    connection = sqlite3.connect(store.path)
+    try:
+        connection.executescript(
+            """
+            ALTER TABLE dirty_flags RENAME TO dirty_flags_v9;
+            CREATE TABLE dirty_flags (
+                flag TEXT PRIMARY KEY,
+                owner_stage INTEGER NOT NULL,
+                cause_revision INTEGER NOT NULL,
+                cause_artifact TEXT NOT NULL,
+                baseline_fingerprint TEXT NOT NULL,
+                current_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL
+            );
+            INSERT INTO dirty_flags VALUES (
+                'MODEL_DIRTY', 1, 1, 'problem/problem_brief.md',
+                'aaaaaaaa', 'bbbbbbbb', 'cccccccc'
+            );
+            DROP TABLE dirty_flags_v9;
+            ALTER TABLE dirty_flag_clear_receipts
+                RENAME TO dirty_flag_clear_receipts_v9;
+            CREATE TABLE dirty_flag_clear_receipts (
+                revision INTEGER NOT NULL,
+                flag TEXT NOT NULL,
+                owner_stage INTEGER NOT NULL,
+                cleared_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                PRIMARY KEY(revision, flag)
+            );
+            DROP TABLE dirty_flag_clear_receipts_v9;
+            UPDATE schema_info SET schema_version = 8 WHERE singleton = 1;
+            UPDATE project_state SET schema_version = 8 WHERE singleton = 1;
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    state = store.load()
+
+    connection = sqlite3.connect(store.path)
+    try:
+        dirty_pk = [
+            row[1]
+            for row in sorted(
+                connection.execute("PRAGMA table_info(dirty_flags)"),
+                key=lambda row: row[5] if row[5] else 99,
+            )
+            if row[5]
+        ]
+        clear_pk = [
+            row[1]
+            for row in sorted(
+                connection.execute(
+                    "PRAGMA table_info(dirty_flag_clear_receipts)"
+                ),
+                key=lambda row: row[5] if row[5] else 99,
+            )
+            if row[5]
+        ]
+    finally:
+        connection.close()
+    assert state.schema_version == SCHEMA_VERSION
+    assert dirty_pk == ["flag", "owner_stage"]
+    assert clear_pk == ["revision", "flag", "owner_stage"]
+    assert store.dirty_flags()[0]["owner_stage"] == 1
+
+
 def test_v5_database_upgrades_to_step_scheduler_without_rewriting_events(tmp_path):
     store = SQLiteStateStore(tmp_path)
     created = store.initialize(project_id="v5", project_type="modeling")

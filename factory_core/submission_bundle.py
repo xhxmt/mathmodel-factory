@@ -146,6 +146,22 @@ def submission_bundle_paths(
         selected.add(
             _validate_regular_file(project, project / relative, label="declared deliverable")
         )
+    from .dirty import tracked_artifact_paths
+
+    selected_relatives = {
+        path.relative_to(project).as_posix() for path in selected
+    }
+    unowned = sorted(
+        relative
+        for relative in tracked_artifact_paths(project)
+        if artifact_ownership(relative) is None
+        and relative not in selected_relatives
+    )
+    if unowned:
+        raise ValueError(
+            "authored artifact ownership coverage failed: "
+            + ", ".join(unowned[:8])
+        )
     return tuple(sorted(selected, key=lambda path: path.relative_to(project).as_posix()))
 
 

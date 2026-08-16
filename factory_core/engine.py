@@ -1616,9 +1616,39 @@ class FactoryEngine:
             },
         )
 
-    def deactivate(self, *, expected_revision: int) -> WorkflowState:
+    def deactivate(
+        self,
+        *,
+        expected_revision: int,
+        legacy_inferred_step: int | None = None,
+    ) -> WorkflowState:
         state = self.store.load()
+        if state.revision != expected_revision:
+            raise RevisionConflict(
+                f"expected revision {expected_revision}, found {state.revision}"
+            )
         self.assert_semantically_clean_for_rollback(state=state)
+        stage_history = state.scheduler_generation == STAGE_SCHEDULER_GENERATION or any(
+            event.type in {
+                "STAGE_SCHEDULER_ACTIVATED",
+                "STAGE_SCHEDULER_ROLLED_BACK",
+            }
+            for event in self.store.events()
+        )
+        if stage_history:
+            raise InvalidTransition(
+                "Stage-scheduled projects may only roll back to step_v2; "
+                "full Legacy deactivation is prohibited"
+            )
+        if legacy_inferred_step is None:
+            raise InvalidTransition(
+                "full Legacy deactivation requires a verified Legacy cursor"
+            )
+        if legacy_inferred_step != state.last_completed_step:
+            raise InvalidTransition(
+                "Legacy inference does not match the authoritative SQLite cursor: "
+                f"legacy={legacy_inferred_step}, sqlite={state.last_completed_step}"
+            )
         return self._transition(
             expected_revision=expected_revision,
             event_type="ENGINE_DEACTIVATED",
@@ -1650,11 +1680,25 @@ class FactoryEngine:
             and self._pid_is_live(current.runner_pid)
         ):
             raise InvalidTransition("cannot change scheduler authority while a runner is active")
-        if current.scheduler_generation != STAGE_SCHEDULER_GENERATION:
-            return
+        if current.pending_action is not None or current.status in {
+            WorkflowStatus.AWAITING_SELECTION,
+            WorkflowStatus.AWAITING_CONSULTATION,
+        }:
+            raise InvalidTransition(
+                "cannot change scheduler authority while a human decision is pending"
+            )
+        open_requests = [
+            request
+            for request in self.store.decision_requests()
+            if request.get("status") == "open"
+        ]
+        if open_requests:
+            raise InvalidTransition(
+                "cannot change scheduler authority with unfinished decision requests"
+            )
         if current.attempt > 0:
             raise InvalidTransition(
-                "cannot change scheduler authority after a Stage execution attempt started"
+                "cannot change scheduler authority after a workflow execution attempt started"
             )
         dirty = self.store.dirty_flags()
         if dirty:
@@ -1714,6 +1758,14 @@ class FactoryEngine:
                     "cannot change scheduler authority with unresolved Step 3 "
                     "projection drift: " + "; ".join(projection.errors)
                 )
+        from .consultation_projection import verify_consultation_projections
+
+        consultation = verify_consultation_projections(self.project_dir)
+        if not consultation.valid:
+            raise InvalidTransition(
+                "cannot change scheduler authority with unresolved consultation "
+                "projection drift: " + "; ".join(consultation.errors)
+            )
 
     def archive_completed(self, factory_root: str | Path) -> WorkflowState:
         root = Path(factory_root).resolve()

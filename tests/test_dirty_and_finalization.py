@@ -148,6 +148,42 @@ def test_def_change_marks_math_dirty(tmp_path):
     assert DirtyFlag.MATH in flags
 
 
+@pytest.mark.parametrize(
+    "formula",
+    [
+        r"\(x=1\)",
+        r"\begin{math}x=1\end{math}",
+        r"\begin{displaymath}x=1\end{displaymath}",
+        r"\begin{alignat}{2}x&=1\end{alignat}",
+        r"\begin{flalign}x&=1&&\end{flalign}",
+        r"\begin{eqnarray}x&=&1\end{eqnarray}",
+    ],
+)
+def test_additional_math_delimiters_mark_math_dirty(tmp_path, formula):
+    paper = tmp_path / "paper" / "paper.tex"
+    paper.parent.mkdir(parents=True)
+    paper.write_text("\\begin{document}plain\\end{document}\n", encoding="utf-8")
+    before = capture_artifact_manifest(tmp_path)
+    paper.write_text(
+        f"\\begin{{document}}{formula}\\end{{document}}\n",
+        encoding="utf-8",
+    )
+
+    assert DirtyFlag.MATH in _flags(before, capture_artifact_manifest(tmp_path))
+
+
+@pytest.mark.parametrize("prefix", [r"\global", r"\long", r"\outer", r"\protected"])
+def test_tex_definition_prefix_change_marks_math_dirty(tmp_path, prefix):
+    flags = _macro_change_flags(
+        tmp_path,
+        r"\def\coef{1}",
+        prefix + r"\def\coef{1}",
+        r"$x=\coef$",
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
 def test_included_macro_file_change_marks_math_dirty(tmp_path):
     paper = tmp_path / "paper" / "paper.tex"
     macros = tmp_path / "paper" / "macros.tex"
@@ -392,6 +428,75 @@ def test_dirty_flag_clear_requires_owner_stage_receipt_in_same_revision(tmp_path
     assert receipt["receipt"]["success_receipt"] == success_receipt
 
 
+def test_active_dirty_flags_preserve_same_domain_across_multiple_owners(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="demo", project_type="modeling")
+    dirty = store.transition(
+        expected_revision=state.revision,
+        event_type="MULTI_OWNER_DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            {
+                "flag": flag,
+                "owner_stage": owner,
+                "cause_artifact": artifact,
+                "baseline_fingerprint": "a" * 64,
+                "current_fingerprint": "b" * 64,
+                "classifier_contract_sha256": classifier_contract_sha256(),
+            }
+            for flag, owner, artifact in (
+                ("MODEL_DIRTY", 1, "problem/problem_brief.md"),
+                ("MODEL_DIRTY", 3, "model.md"),
+                ("RESULT_DIRTY", 4, "results/canonical_results.json"),
+                ("RESULT_DIRTY", 5, "sensitivity_report.md"),
+            )
+        ],
+    )
+
+    assert {(row["flag"], row["owner_stage"]) for row in store.dirty_flags()} == {
+        ("MODEL_DIRTY", 1),
+        ("MODEL_DIRTY", 3),
+        ("RESULT_DIRTY", 4),
+        ("RESULT_DIRTY", 5),
+    }
+    assert all(row["cause_revision"] == dirty.revision for row in store.dirty_flags())
+
+    output = manifest_fingerprint(capture_artifact_manifest(tmp_path))
+    receipt = {
+        "schema_version": "factory-stage-checkpoint-v1",
+        "status": "PASS",
+        "stage": 1,
+        "output_fingerprint": output,
+        "classifier_contract_sha256": classifier_contract_sha256(),
+    }
+    store.transition(
+        expected_revision=dirty.revision,
+        event_type="CLEAR_ONE_DIRTY_OWNER_FOR_TEST",
+        changes={},
+        stage_checkpoint={
+            "stage_id": 1,
+            "subtask": "problem_setup",
+            "source_step_id": 0,
+            "completed_step_id": 0,
+            "input_fingerprint": output,
+            "output_fingerprint": output,
+            "receipt": receipt,
+        },
+        clear_dirty_stage={
+            "owner_stage": 1,
+            "cleared_fingerprint": output,
+            "classifier_contract_sha256": classifier_contract_sha256(),
+            "success_receipt": receipt,
+        },
+    )
+
+    assert {(row["flag"], row["owner_stage"]) for row in store.dirty_flags()} == {
+        ("MODEL_DIRTY", 3),
+        ("RESULT_DIRTY", 4),
+        ("RESULT_DIRTY", 5),
+    }
+
+
 @pytest.mark.parametrize(
     ("checkpoint_stage", "fingerprint", "message"),
     [
@@ -477,6 +582,46 @@ def test_final_input_manifest_excludes_final_audit_output(tmp_path):
     judge.write_text("VERDICT: PASS\n", encoding="utf-8")
 
     verify_final_input_snapshot(tmp_path, snapshot)
+
+
+def test_unregistered_authored_artifact_blocks_finalization(tmp_path):
+    paper = tmp_path / f"{tmp_path.name}_paper.tex"
+    paper.write_text("\\begin{document}hello\\end{document}\n", encoding="utf-8")
+    (tmp_path / "calibration.json").write_text('{"scale": 2}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="ownership coverage.*calibration.json"):
+        build_final_input_manifest(tmp_path)
+
+
+def test_unregistered_inactive_paper_artifact_blocks_finalization(tmp_path):
+    paper = tmp_path / f"{tmp_path.name}_paper.tex"
+    paper.write_text("\\begin{document}hello\\end{document}\n", encoding="utf-8")
+    draft_data = tmp_path / "paper" / "calibration.json"
+    draft_data.parent.mkdir()
+    draft_data.write_text('{"scale": 2}\n', encoding="utf-8")
+
+    with pytest.raises(
+        ValueError, match="ownership coverage.*paper/calibration.json"
+    ):
+        build_final_input_manifest(tmp_path)
+
+
+def test_declared_unowned_attachment_is_covered_and_included(tmp_path):
+    paper = tmp_path / f"{tmp_path.name}_paper.tex"
+    paper.write_text("\\begin{document}hello\\end{document}\n", encoding="utf-8")
+    attachment = tmp_path / "calibration.json"
+    attachment.write_text('{"scale": 2}\n', encoding="utf-8")
+    deliverables = tmp_path / "problem" / "deliverables.json"
+    deliverables.parent.mkdir(parents=True)
+    deliverables.write_text(
+        '{"attachments": [{"file": "calibration.json"}]}\n',
+        encoding="utf-8",
+    )
+
+    snapshot = build_final_input_manifest(tmp_path)
+
+    paths = {item["path"] for item in snapshot.manifest["files"]}
+    assert "calibration.json" in paths
 
 
 @dataclass

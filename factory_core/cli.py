@@ -295,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rollback = migrate_sub.add_parser("rollback")
     rollback.add_argument("project_dir")
+    rollback.add_argument("--expected-revision", type=int, required=True)
     scheduler_activate = migrate_sub.add_parser("scheduler-activate")
     scheduler_activate.add_argument("project_dir")
     scheduler_activate.add_argument("--expected-revision", type=int)
@@ -533,7 +534,9 @@ def main(argv: list[str] | None = None) -> int:
                     expected_revision=revision,
                 )
             else:
-                updated = service.rollback_migration(project)
+                updated = service.rollback_migration(
+                    project, expected_revision=revision
+                )
             print(json.dumps(runtime_payload(updated), ensure_ascii=False, sort_keys=True))
             return 0
         if args.migration_command == "inspect":
@@ -544,7 +547,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2 if report.conflicts else 0
         if args.migration_command == "rollback":
             assert project is not None
-            updated = service.rollback_migration(project)
+            updated = service.rollback_migration(
+                project, expected_revision=args.expected_revision
+            )
             print(json.dumps(runtime_payload(updated), ensure_ascii=False, sort_keys=True))
             return 0
         if args.migration_command == "scheduler-activate":

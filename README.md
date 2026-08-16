@@ -91,7 +91,7 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 当前 `main` 分支的近期变更集中在核心编排、Web 控制面、评测治理与仓库治理：
 
-- 新项目使用 `factory_core.FactoryEngine`、`contest_core_v1` 和 10-Stage `stage_v1` 调度；未显式配置时默认 74 小时，CLI/Web 可写入官方提交 deadline 作为权威时间。Stage/subtask/Step 兼容游标、v2 主体/结果事件信封、T−6h content freeze、T−2h delivery freeze、按 request/generation 绑定且拥有不可变 receipt 的人工决策及 Solver 幂等身份保存在项目内 schema-v8 `.factory/state.db`。模块化论文从权威主文件递归解析活动 LaTeX/参考文献依赖，冻结、审计与最终指纹不会把未引用草稿混入论文身份。
+- 新项目使用 `factory_core.FactoryEngine`、`contest_core_v1` 和 10-Stage `stage_v1` 调度；未显式配置时默认 74 小时，CLI/Web 可写入官方提交 deadline 作为权威时间。Stage/subtask/Step 兼容游标、v2 主体/结果事件信封、T−6h content freeze、T−2h delivery freeze、按 request/generation 绑定且拥有不可变 receipt 的人工决策及 Solver 幂等身份保存在项目内 schema-v9 `.factory/state.db`。模块化论文从权威主文件递归解析活动 LaTeX/参考文献依赖，冻结、审计与最终指纹不会把未引用草稿混入论文身份。
 - `run_paper.sh` 已降级为兼容启动器；原生 Stage 调度在内部继续调用 Step 0–16 lifecycle/validator，不调用冻结 Bash，冻结实现只服务未迁移或显式回滚的项目。
 - CLI、Web 和本地/Cloud Run 求解器通过同一 `FactoryService`、revision 与事件合同运行；云执行仍受全局 quarantine 限制。
 - Python、Web backend、Cloud 镜像和前端构建均有锁文件，运行时启动脚本不再动态安装依赖。
@@ -249,10 +249,17 @@ python3 -m factory_core.cli migrate apply ongoing/<base> \
   --report /tmp/<base>-migration.json --digest <report-digest>
 ```
 
-迁移后 CLI、Web 和 `run_paper.sh --infer-step` 都读取 SQLite。需要回滚到冻结 Legacy Runner 时，项目必须已停止：
+迁移后 CLI、Web 和 `run_paper.sh --infer-step` 都读取 SQLite。曾经启用
+`stage_v1` 的项目只能显式回滚到 `step_v2`，不能再降级为按残留产物推断的
+Legacy Runner。只有从未启用 Stage 的 `step_v2` 项目才允许完整 Legacy 回滚，
+且必须已停止、没有未完成的人类决策、Legacy 推断与 SQLite 游标完全相同，并携带
+调用方读取的 revision：
 
 ```bash
-python3 -m factory_core.cli migrate rollback ongoing/<base>
+python3 -m factory_core.cli migrate scheduler-rollback ongoing/<base> \
+  --expected-revision <revision>  # stage_v1 -> step_v2
+python3 -m factory_core.cli migrate rollback ongoing/<base> \
+  --expected-revision <revision>  # never-Stage step_v2 -> Legacy only
 ```
 
 迁移不会删除 checkpoint、marker、诊断、日志或论文产物。详细状态和恢复契约见 [`docs/architecture/ORCHESTRATION_ENGINE.md`](docs/architecture/ORCHESTRATION_ENGINE.md)。

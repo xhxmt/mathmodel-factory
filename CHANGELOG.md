@@ -6,6 +6,8 @@
 
 ### 新增
 
+- 工作流状态升级为 schema-v9：活动 dirty 状态及清除 receipt 按 `(flag, owner_stage)` 持久化，同一 MODEL/RESULT 域的多个责任 Stage 不再相互覆盖；LaTeX 数学语义补齐 `\\(...\\)`、`math`/`displaymath`、`alignat`/`flalign`/`eqnarray` 和 TeX definition prefix。最终输入与 submission bundle 增加 authored-artifact ownership coverage gate，未登记且未声明的普通产物失败关闭。
+- Consultation 决策现在把完整答案写入不可变 SQLite receipt，由控制平面确定性重建 `human_review.md` 段落；执行前校验投影并将权威答案直接嵌入提示词，Step 事件/checkpoint 绑定 effective prompt、决策 ID 与 Web researcher note 哈希。Stage 项目仅允许回滚到 `step_v2`，禁止继续降级 Legacy；所有回滚检查 pending Gate、开放请求、调用方 revision 和 Legacy/SQLite 游标一致性。
 - LaTeX 构建证据升级为三轮 recorder 与 bibliography 双合同：所有 `.fls` 输入分类为已声明项目文件、未声明项目文件、项目符号链接、受控 TeX runtime、禁止外部文件或允许生成物，异常路径不再静默过滤；编译清理继承的 TeX/BibTeX 搜索环境，启用 `-no-shell-escape`/严格 `openin_any`，并要求三轮项目输入身份一致。
 - 新增 `bibliography-build-receipt-v1`：编译前清除当前 job 的旧 `.bbl`/控制文件，按 `\\bibliography` 或 `\\addbibresource` 唯一选择 BibTeX/Biber，任何 backend 失败或未解析 citation 均终止；receipt 绑定 backend 版本、首轮 AUX/BCF、`.bib`、项目 `.bst` 与生成 `.bbl`。最终 fingerprint、acceptance 与 evaluator 合同同时绑定该证据。
 - 最终发布链现在在 Final Audit 开始、acceptance 构建及 release pointer 切换前验证实际消费的人工 Approval receipt；不可变 release 会复制这些 receipt 并纳入 delivery manifest。决定 receipt 改为 `O_NOFOLLOW` 单次字节读取，并新增 `scripts/decision_receipt_repair.py`，仅当 SQLite 可重建字节与原 SHA-256 完全一致时恢复缺失文件。
