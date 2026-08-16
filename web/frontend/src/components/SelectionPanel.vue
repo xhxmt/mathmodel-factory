@@ -6,6 +6,7 @@
         <div><span>{{ gateMeta.title }}</span><small>{{ gateMeta.subtitle }}</small></div>
       </div>
       <div class="head-meta">
+        <span v-if="request.generation" class="revision mono">GEN {{ request.generation }}</span>
         <span class="revision mono">REV {{ revision ?? '—' }}</span>
         <button class="btn btn-icon btn-ghost btn-sm" @click="load" :disabled="loading" title="刷新">
           <Icon name="refresh" :size="13" :class="{ spin: loading }" />
@@ -23,7 +24,14 @@
     </div>
     <div v-else-if="!available" class="empty">{{ message || '暂无待处理人工节点' }}</div>
 
-    <template v-else-if="gate === 'step3'">
+    <template v-else>
+    <div v-if="request.request_id" class="request-binding mono">
+      <span>REQUEST {{ request.request_id }}</span>
+      <span>SUBJECT {{ shortHash(request.subject_fingerprint) }}</span>
+      <span>OPTIONS {{ shortHash(request.options_fingerprint) }}</span>
+    </div>
+
+    <template v-if="gate === 'step3'">
       <div class="gate-note">先看小样证据与失败风险，再确认 PRIMARY；系统不会代替你按分数自动选主线。</div>
       <div class="grid">
         <article v-for="option in options" :key="option.id" class="card" :class="{ selected: selectedOptionId === option.id }">
@@ -54,9 +62,19 @@
         <Icon name="lock" :size="19" />
         <div><strong>确认后停止内容探索</strong><span>后续只运行确定性检查、Final Audit、编译、打包与交付。</span></div>
       </div>
-      <div class="checklist">
+      <div class="approval-options">
+        <button
+          v-for="option in options"
+          :key="option.id"
+          class="btn btn-sm"
+          :class="selectedOptionId === option.id ? 'btn-amber' : 'btn-ghost'"
+          @click="selectedOptionId = option.id"
+        >{{ option.title }}</button>
+      </div>
+      <div v-if="!rejecting" class="checklist">
         <label v-for="item in freezeChecks" :key="item.key"><input v-model="confirmations[item.key]" type="checkbox" /><span>{{ item.label }}</span></label>
       </div>
+      <div v-else class="reject-note">拒绝会保留当前阻塞，并立即创建下一代审批请求；本次拒绝记录不会被覆盖。</div>
     </template>
 
     <template v-else>
@@ -67,17 +85,18 @@
       <label class="override-confirm"><input v-model="confirmations.override" type="checkbox" />我已评估剩余提交时间，并接受重新生成证据与错过截止时间的风险。</label>
     </template>
 
-    <div v-if="available && !decision" class="decision-form">
+    <div class="decision-form">
       <label><span>{{ gate === 'step3' ? '选型理由' : gate === 'content_freeze' ? '冻结确认说明' : '强制回退理由' }}</span>
         <textarea v-model="reason" class="field" rows="3" :placeholder="gateMeta.placeholder"></textarea>
       </label>
       <div class="decision-footer">
         <span>提交后写入 append-only SQLite 决策，不能在 Web 中覆盖。</span>
         <button class="btn btn-amber" :disabled="!ready || submitting" @click="submitDecision">
-          <Icon name="lock" :size="13" /> {{ submitting ? '正在写入…' : gateMeta.button }}
+          <Icon name="lock" :size="13" /> {{ submitting ? '正在写入…' : submitLabel }}
         </button>
       </div>
     </div>
+    </template>
     <div v-if="error" class="error">{{ error }}</div>
   </section>
 </template>
@@ -116,8 +135,11 @@ export default {
     const available = computed(() => Boolean(payload.value?.available))
     const options = computed(() => Array.isArray(payload.value?.options) ? payload.value.options : [])
     const decision = computed(() => payload.value?.decision || null)
+    const request = computed(() => payload.value?.request || {})
     const message = computed(() => payload.value?.message || '')
     const selectedOption = computed(() => options.value.find((item) => item.id === selectedOptionId.value))
+    const rejecting = computed(() => String(selectedOptionId.value).startsWith('reject'))
+    const submitLabel = computed(() => rejecting.value ? '拒绝并保持内容开放' : gateMeta.value.button)
     const freezeChecks = [
       { key: 'conclusion', label: '主结论与 canonical results 完全一致' },
       { key: 'abstract', label: '摘要中的数字、方法和结论已人工通读' },
@@ -126,12 +148,15 @@ export default {
     ]
     const ready = computed(() => {
       if (!selectedOption.value || reason.value.trim().length < 8) return false
-      if (gate.value === 'content_freeze') return freezeChecks.every((item) => confirmations[item.key])
+      if (gate.value === 'content_freeze') {
+        return rejecting.value || freezeChecks.every((item) => confirmations[item.key])
+      }
       if (gate.value === 'delivery_freeze_override') return confirmations.override
       return true
     })
 
     const fileName = (path) => String(path || '').split('/').pop() || path
+    const shortHash = (value) => String(value || '—').slice(0, 12)
     const evidence = (option) => Array.isArray(option?.evidence_files) ? option.evidence_files : Array.isArray(option?.evidence) ? option.evidence : []
     const risks = (option) => Array.isArray(option?.main_tradeoffs) && option.main_tradeoffs.length ? option.main_tradeoffs.slice(0, 3) : ['未记录阻塞性批评']
     function demoStatus(option) {
@@ -169,6 +194,10 @@ export default {
             ? freezeChecks.filter((item) => confirmations[item.key]).map((item) => item.key)
             : gate.value === 'delivery_freeze_override' && confirmations.override ? ['override_risk_accepted'] : [],
           expected_revision: props.revision,
+          request_id: request.value.request_id || null,
+          generation: request.value.generation || null,
+          subject_fingerprint: request.value.subject_fingerprint || null,
+          options_fingerprint: request.value.options_fingerprint || null,
         })
         toasts.success(`${gateMeta.value.title} 已写入不可变决策`, '人工节点')
         emit('changed')
@@ -180,7 +209,7 @@ export default {
 
     watch(() => props.base, load)
     onMounted(load)
-    return { loading, submitting, payload, selectedOptionId, reason, error, confirmations, gate, gateMeta, available, options, decision, message, freezeChecks, ready, fileName, evidence, risks, demoStatus, openEvidence, load, submitDecision }
+    return { loading, submitting, payload, selectedOptionId, reason, error, confirmations, gate, gateMeta, available, options, decision, request, message, freezeChecks, ready, rejecting, submitLabel, fileName, shortHash, evidence, risks, demoStatus, openEvidence, load, submitDecision }
   },
 }
 </script>
@@ -194,6 +223,7 @@ export default {
 .sel-title small { color: var(--ink-3); font-size: 9.5px; font-weight: 500; }
 .head-meta { gap: 7px; }
 .revision { padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-3); font-size: 9px; }
+.request-binding { display: flex; flex-wrap: wrap; gap: 7px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--ink-3); font-size: 9px; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .card { display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
 .card.selected { border-color: var(--ok); background: var(--ok-dim); }
@@ -216,6 +246,8 @@ h3 { margin: 0; font-size: 14px; }
 .override-warning { border-color: var(--bad); background: var(--bad-dim); color: var(--bad); }
 .decision-done { border-color: var(--ok); background: var(--ok-dim); color: var(--ok); }
 .checklist { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.approval-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.reject-note { padding: 10px 12px; border: 1px solid var(--bad); border-radius: var(--r-sm); background: var(--bad-dim); color: var(--bad); font-size: 11px; }
 .checklist label, .override-confirm { display: flex; align-items: flex-start; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--ink-2); font-size: 11px; }
 input[type='checkbox'] { accent-color: var(--amber); }
 .decision-form { padding-top: 12px; border-top: 1px solid var(--line); }

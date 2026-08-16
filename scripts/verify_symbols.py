@@ -26,6 +26,12 @@ Exit code: 0 if no undefined symbols, 1 otherwise.
 import re
 import sys
 import os
+from pathlib import Path
+
+if __package__ in {None, ""}:  # pragma: no cover - direct script execution
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from factory_core.paper_sources import primary_paper_source
 
 
 # ── symbol normalization ──────────────────────────────────────────────────────
@@ -285,9 +291,10 @@ def find_symbol_table_line(paper_path: str) -> int:
 
 def collect_symbol_metrics(project_dir, base_name):
     """返回符号覆盖指标 dict；不打印。paper 缺失返回 None。"""
-    paper_path = os.path.join(project_dir, f'{base_name}_paper.tex')
+    paper = primary_paper_source(project_dir, base_name)
+    paper_path = str(paper) if paper is not None else ""
     table_path = os.path.join(project_dir, 'symbol_table.md')
-    if not os.path.exists(paper_path):
+    if paper is None:
         return None
     defined = extract_defined_symbols(table_path)
     used, first_use = extract_used_symbols(paper_path)
@@ -374,8 +381,7 @@ def main():
         project_dir, base_name = args[0], args[1]
         metrics = collect_symbol_metrics(project_dir, base_name)
         if metrics is None:
-            paper_path = os.path.join(project_dir, f'{base_name}_paper.tex')
-            print(f"ERROR: {paper_path} not found")
+            print(f"ERROR: {base_name}_paper.tex or paper/paper.tex not found")
             sys.exit(3)
 
         undefined = metrics["_undefined_list"]

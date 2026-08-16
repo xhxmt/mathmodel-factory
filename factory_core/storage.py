@@ -185,13 +185,53 @@ class SQLiteStateStore:
                 decided_at INTEGER NOT NULL,
                 decision_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS workflow_decision_requests (
+                request_id TEXT PRIMARY KEY,
+                gate_type TEXT NOT NULL,
+                generation INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                requested_revision INTEGER NOT NULL,
+                subject_fingerprint TEXT NOT NULL,
+                options_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                request_json TEXT NOT NULL,
+                UNIQUE(gate_type, generation)
+            );
+            CREATE TABLE IF NOT EXISTS workflow_decision_instances (
+                decision_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                approved INTEGER,
+                selected_option_id TEXT,
+                reason TEXT NOT NULL,
+                evidence_manifest_sha256 TEXT NOT NULL,
+                decided_by TEXT NOT NULL,
+                decided_at INTEGER NOT NULL,
+                decision_json TEXT NOT NULL,
+                FOREIGN KEY(request_id) REFERENCES workflow_decision_requests(request_id)
+            );
             CREATE TABLE IF NOT EXISTS projector_snapshots (
                 projector_name TEXT PRIMARY KEY,
                 projector_version INTEGER NOT NULL,
                 through_revision INTEGER NOT NULL,
                 state_hash TEXT NOT NULL,
+                through_event_id TEXT,
+                through_event_payload_sha256 TEXT,
+                source_chain_root_sha256 TEXT,
                 snapshot_json TEXT NOT NULL,
                 created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS projection_failures (
+                revision INTEGER NOT NULL,
+                projector_name TEXT NOT NULL,
+                error_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                resolved_at INTEGER,
+                PRIMARY KEY(revision, projector_name)
             );
             CREATE TABLE IF NOT EXISTS stage_cursor_inputs (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -213,8 +253,29 @@ class SQLiteStateStore:
                 receipt_json TEXT NOT NULL,
                 PRIMARY KEY(stage_id, subtask)
             );
+            CREATE TABLE IF NOT EXISTS stage_checkpoint_history (
+                checkpoint_id TEXT PRIMARY KEY,
+                stage_id INTEGER NOT NULL,
+                subtask TEXT NOT NULL,
+                source_step_id INTEGER NOT NULL,
+                completed_step_id INTEGER,
+                input_fingerprint TEXT NOT NULL,
+                output_fingerprint TEXT NOT NULL,
+                completed_revision INTEGER NOT NULL,
+                receipt_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS dirty_flags (
                 flag TEXT PRIMARY KEY,
+                owner_stage INTEGER NOT NULL,
+                cause_revision INTEGER NOT NULL,
+                cause_artifact TEXT NOT NULL,
+                baseline_fingerprint TEXT NOT NULL,
+                current_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS dirty_causes (
+                cause_id TEXT PRIMARY KEY,
+                flag TEXT NOT NULL,
                 owner_stage INTEGER NOT NULL,
                 cause_revision INTEGER NOT NULL,
                 cause_artifact TEXT NOT NULL,
@@ -251,10 +312,53 @@ class SQLiteStateStore:
             BEGIN
                 SELECT RAISE(ABORT, 'workflow decisions are append-only');
             END;
+            CREATE TRIGGER IF NOT EXISTS workflow_decision_requests_immutable_identity
+            BEFORE UPDATE OF request_id, gate_type, generation, kind, action_type,
+                             requested_revision, subject_fingerprint,
+                             options_fingerprint, created_at, request_json
+            ON workflow_decision_requests
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decision requests have immutable identity');
+            END;
+            CREATE TRIGGER IF NOT EXISTS workflow_decision_requests_append_only_delete
+            BEFORE DELETE ON workflow_decision_requests
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decision requests are append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS workflow_decision_instances_append_only_update
+            BEFORE UPDATE ON workflow_decision_instances
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decision instances are append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS workflow_decision_instances_append_only_delete
+            BEFORE DELETE ON workflow_decision_instances
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decision instances are append-only');
+            END;
             CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_update
             BEFORE UPDATE ON dirty_flag_clear_receipts
             BEGIN
                 SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS stage_checkpoint_history_append_only_update
+            BEFORE UPDATE ON stage_checkpoint_history
+            BEGIN
+                SELECT RAISE(ABORT, 'stage checkpoint history is append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS stage_checkpoint_history_append_only_delete
+            BEFORE DELETE ON stage_checkpoint_history
+            BEGIN
+                SELECT RAISE(ABORT, 'stage checkpoint history is append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS dirty_causes_append_only_update
+            BEFORE UPDATE ON dirty_causes
+            BEGIN
+                SELECT RAISE(ABORT, 'dirty causes are append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS dirty_causes_append_only_delete
+            BEFORE DELETE ON dirty_causes
+            BEGIN
+                SELECT RAISE(ABORT, 'dirty causes are append-only');
             END;
             CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_delete
             BEFORE DELETE ON dirty_flag_clear_receipts
@@ -286,7 +390,7 @@ class SQLiteStateStore:
         current = int(row[0])
         if current == SCHEMA_VERSION:
             return
-        if current not in {1, 2, 3, 4, 5, 6}:
+        if current not in {1, 2, 3, 4, 5, 6, 7}:
             raise RuntimeError(
                 f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}"
             )
@@ -382,16 +486,83 @@ class SQLiteStateStore:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS workflow_decision_requests (
+                request_id TEXT PRIMARY KEY,
+                gate_type TEXT NOT NULL,
+                generation INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                requested_revision INTEGER NOT NULL,
+                subject_fingerprint TEXT NOT NULL,
+                options_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                request_json TEXT NOT NULL,
+                UNIQUE(gate_type, generation)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_decision_instances (
+                decision_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                approved INTEGER,
+                selected_option_id TEXT,
+                reason TEXT NOT NULL,
+                evidence_manifest_sha256 TEXT NOT NULL,
+                decided_by TEXT NOT NULL,
+                decided_at INTEGER NOT NULL,
+                decision_json TEXT NOT NULL,
+                FOREIGN KEY(request_id) REFERENCES workflow_decision_requests(request_id)
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS projector_snapshots (
                 projector_name TEXT PRIMARY KEY,
                 projector_version INTEGER NOT NULL,
                 through_revision INTEGER NOT NULL,
                 state_hash TEXT NOT NULL,
+                through_event_id TEXT,
+                through_event_payload_sha256 TEXT,
+                source_chain_root_sha256 TEXT,
                 snapshot_json TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projection_failures (
+                revision INTEGER NOT NULL,
+                projector_name TEXT NOT NULL,
+                error_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                resolved_at INTEGER,
+                PRIMARY KEY(revision, projector_name)
+            )
+            """
+        )
+        projector_columns = {
+            column[1]
+            for column in connection.execute(
+                "PRAGMA table_info(projector_snapshots)"
+            ).fetchall()
+        }
+        for column in (
+            "through_event_id",
+            "through_event_payload_sha256",
+            "source_chain_root_sha256",
+        ):
+            if column not in projector_columns:
+                connection.execute(
+                    f"ALTER TABLE projector_snapshots ADD COLUMN {column} TEXT"
+                )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS stage_cursor_inputs (
@@ -422,8 +593,37 @@ class SQLiteStateStore:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS stage_checkpoint_history (
+                checkpoint_id TEXT PRIMARY KEY,
+                stage_id INTEGER NOT NULL,
+                subtask TEXT NOT NULL,
+                source_step_id INTEGER NOT NULL,
+                completed_step_id INTEGER,
+                input_fingerprint TEXT NOT NULL,
+                output_fingerprint TEXT NOT NULL,
+                completed_revision INTEGER NOT NULL,
+                receipt_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS dirty_flags (
                 flag TEXT PRIMARY KEY,
+                owner_stage INTEGER NOT NULL,
+                cause_revision INTEGER NOT NULL,
+                cause_artifact TEXT NOT NULL,
+                baseline_fingerprint TEXT NOT NULL,
+                current_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dirty_causes (
+                cause_id TEXT PRIMARY KEY,
+                flag TEXT NOT NULL,
                 owner_stage INTEGER NOT NULL,
                 cause_revision INTEGER NOT NULL,
                 cause_artifact TEXT NOT NULL,
@@ -446,6 +646,70 @@ class SQLiteStateStore:
             )
             """
         )
+        for checkpoint in connection.execute(
+            "SELECT * FROM stage_checkpoints ORDER BY completed_revision, stage_id, subtask"
+        ).fetchall():
+            checkpoint_id = canonical_hash(
+                {
+                    "stage_id": int(checkpoint["stage_id"]),
+                    "subtask": str(checkpoint["subtask"]),
+                    "revision": int(checkpoint["completed_revision"]),
+                    "input": str(checkpoint["input_fingerprint"]),
+                    "output": str(checkpoint["output_fingerprint"]),
+                }
+            )[:32]
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO stage_checkpoint_history(
+                    checkpoint_id, stage_id, subtask, source_step_id,
+                    completed_step_id, input_fingerprint, output_fingerprint,
+                    completed_revision, receipt_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checkpoint_id,
+                    checkpoint["stage_id"],
+                    checkpoint["subtask"],
+                    checkpoint["source_step_id"],
+                    checkpoint["completed_step_id"],
+                    checkpoint["input_fingerprint"],
+                    checkpoint["output_fingerprint"],
+                    checkpoint["completed_revision"],
+                    checkpoint["receipt_json"],
+                ),
+            )
+        for dirty in connection.execute(
+            "SELECT * FROM dirty_flags ORDER BY cause_revision, flag"
+        ).fetchall():
+            cause_id = canonical_hash(
+                {
+                    "revision": int(dirty["cause_revision"]),
+                    "flag": str(dirty["flag"]),
+                    "owner_stage": int(dirty["owner_stage"]),
+                    "artifact": str(dirty["cause_artifact"]),
+                    "baseline": str(dirty["baseline_fingerprint"]),
+                    "current": str(dirty["current_fingerprint"]),
+                }
+            )[:32]
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO dirty_causes(
+                    cause_id, flag, owner_stage, cause_revision,
+                    cause_artifact, baseline_fingerprint,
+                    current_fingerprint, classifier_contract_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cause_id,
+                    dirty["flag"],
+                    dirty["owner_stage"],
+                    dirty["cause_revision"],
+                    dirty["cause_artifact"],
+                    dirty["baseline_fingerprint"],
+                    dirty["current_fingerprint"],
+                    dirty["classifier_contract_sha256"],
+                ),
+            )
         connection.execute(
             """
             CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_update
@@ -461,6 +725,45 @@ class SQLiteStateStore:
             BEFORE DELETE ON workflow_decisions
             BEGIN
                 SELECT RAISE(ABORT, 'workflow decisions are append-only');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS workflow_decision_requests_immutable_identity
+            BEFORE UPDATE OF request_id, gate_type, generation, kind, action_type,
+                             requested_revision, subject_fingerprint,
+                             options_fingerprint, created_at, request_json
+            ON workflow_decision_requests
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decision requests have immutable identity');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS workflow_decision_requests_append_only_delete
+            BEFORE DELETE ON workflow_decision_requests
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decision requests are append-only');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS workflow_decision_instances_append_only_update
+            BEFORE UPDATE ON workflow_decision_instances
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decision instances are append-only');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS workflow_decision_instances_append_only_delete
+            BEFORE DELETE ON workflow_decision_instances
+            BEGIN
+                SELECT RAISE(ABORT, 'workflow decision instances are append-only');
             END
             """
         )
@@ -482,6 +785,140 @@ class SQLiteStateStore:
             END
             """
         )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS stage_checkpoint_history_append_only_update
+            BEFORE UPDATE ON stage_checkpoint_history
+            BEGIN
+                SELECT RAISE(ABORT, 'stage checkpoint history is append-only');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS stage_checkpoint_history_append_only_delete
+            BEFORE DELETE ON stage_checkpoint_history
+            BEGIN
+                SELECT RAISE(ABORT, 'stage checkpoint history is append-only');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS dirty_causes_append_only_update
+            BEFORE UPDATE ON dirty_causes
+            BEGIN
+                SELECT RAISE(ABORT, 'dirty causes are append-only');
+            END
+            """
+        )
+        connection.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS dirty_causes_append_only_delete
+            BEFORE DELETE ON dirty_causes
+            BEGIN
+                SELECT RAISE(ABORT, 'dirty causes are append-only');
+            END
+            """
+        )
+        project_row = connection.execute(
+            "SELECT project_id FROM project_state WHERE singleton=1"
+        ).fetchone()
+        project_id = str(project_row["project_id"]) if project_row is not None else "legacy"
+        legacy_rows = connection.execute(
+            "SELECT gate, decided_at, decision_json FROM workflow_decisions ORDER BY decided_at, gate"
+        ).fetchall()
+        for legacy in legacy_rows:
+            gate = str(legacy["gate"])
+            request_id = canonical_hash(
+                {"project_id": project_id, "gate": gate, "generation": 1, "legacy": True}
+            )[:24]
+            try:
+                decision = json.loads(legacy["decision_json"])
+            except (TypeError, json.JSONDecodeError):
+                decision = {"gate": gate, "legacy_payload_invalid": True}
+            kind = str(decision.get("kind") or (
+                "approval"
+                if gate in {"content_freeze", "delivery_freeze_override"}
+                else "selection"
+            ))
+            request_payload = {
+                "request_id": request_id,
+                "gate": gate,
+                "generation": 1,
+                "kind": kind,
+                "type": "legacy_unbound",
+                "requested_revision": 0,
+                "subject_fingerprint": "LEGACY_UNBOUND",
+                "options_fingerprint": "LEGACY_UNBOUND",
+                "reason": {"code": "legacy_unbound", "message": "Migrated schema-v7 decision"},
+                "evidence": [],
+                "metadata": {"migration": "schema_v8"},
+            }
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO workflow_decision_requests(
+                    request_id, gate_type, generation, kind, action_type,
+                    requested_revision, subject_fingerprint, options_fingerprint,
+                    status, created_at, request_json
+                ) VALUES (?, ?, 1, ?, 'legacy_unbound', 0, 'LEGACY_UNBOUND',
+                          'LEGACY_UNBOUND', 'legacy_unbound', ?, ?)
+                """,
+                (
+                    request_id,
+                    gate,
+                    kind,
+                    int(legacy["decided_at"]),
+                    json.dumps(request_payload, ensure_ascii=True, sort_keys=True),
+                ),
+            )
+            selected = (
+                decision.get("selected_option_id")
+                or decision.get("selected_primary")
+                or decision.get("selected")
+            )
+            approved = decision.get("approved")
+            if kind == "approval" and not isinstance(approved, bool):
+                normalized_selection = str(selected or "").lower()
+                if normalized_selection.startswith(("approve", "allow", "override")):
+                    approved = True
+                elif normalized_selection.startswith(("reject", "deny")):
+                    approved = False
+                else:
+                    approved = None
+                # Never preserve a truthy legacy string such as "false" as an
+                # approval. Current gates accept the boolean true only.
+                if approved is None:
+                    decision.pop("approved", None)
+                else:
+                    decision["approved"] = approved
+            outcome = (
+                "approved" if approved is True else "rejected" if approved is False else "selected"
+            )
+            decision_id = canonical_hash(
+                {"request_id": request_id, "decision": decision}
+            )[:32]
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO workflow_decision_instances(
+                    decision_id, request_id, kind, outcome, approved,
+                    selected_option_id, reason, evidence_manifest_sha256,
+                    decided_by, decided_at, decision_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LEGACY_UNBOUND', ?, ?, ?)
+                """,
+                (
+                    decision_id,
+                    request_id,
+                    kind,
+                    outcome,
+                    None if approved is None else int(approved),
+                    None if selected is None else str(selected),
+                    str(decision.get("reason") or ""),
+                    str(decision.get("selected_by") or decision.get("source") or "legacy"),
+                    int(legacy["decided_at"]),
+                    json.dumps(decision, ensure_ascii=True, sort_keys=True),
+                ),
+            )
         rows = connection.execute(
             "SELECT singleton, last_completed_step, scheduler_generation "
             "FROM project_state"
@@ -592,16 +1029,72 @@ class SQLiteStateStore:
                 )
             except (AttributeError, json.JSONDecodeError):
                 prior_versioned = False
+        safe_payload = dict(_redact(payload or {}))
+        effect_hashes = self._domain_effect_hashes(connection)
+        safe_payload["effect_hashes_after"] = effect_hashes
+        safe_payload["aggregate_root_hash_after"] = canonical_hash(effect_hashes)
         return build_event_payload(
             project_id=str(before["project_id"]),
             revision=revision,
             event_type=event_type,
             created_at=created_at,
-            payload=_redact(payload or {}),
+            payload=safe_payload,
             before=self._state_from_row(before),
             after=self._state_from_row(after),
             force_snapshot=not prior_versioned,
         )
+
+    @staticmethod
+    def _domain_effect_hashes(connection: sqlite3.Connection) -> dict[str, str]:
+        def rows_hash(query: str) -> str:
+            rows = connection.execute(query).fetchall()
+            return canonical_hash([dict(row) for row in rows])
+
+        return {
+            "decision_requests": rows_hash(
+                "SELECT * FROM workflow_decision_requests ORDER BY gate_type, generation"
+            ),
+            "decision_instances": rows_hash(
+                "SELECT * FROM workflow_decision_instances ORDER BY request_id"
+            ),
+            "dirty_flags": rows_hash("SELECT * FROM dirty_flags ORDER BY flag"),
+            "dirty_causes": rows_hash(
+                "SELECT * FROM dirty_causes ORDER BY cause_revision, cause_id"
+            ),
+            "stage_checkpoints": rows_hash(
+                "SELECT * FROM stage_checkpoints ORDER BY stage_id, subtask"
+            ),
+            "checkpoint_history": rows_hash(
+                "SELECT * FROM stage_checkpoint_history ORDER BY completed_revision, checkpoint_id"
+            ),
+            "solver_jobs": rows_hash("SELECT * FROM solver_jobs ORDER BY job_id"),
+            "dirty_clear_receipts": rows_hash(
+                "SELECT * FROM dirty_flag_clear_receipts ORDER BY revision, flag"
+            ),
+        }
+
+    def aggregate_domain_root(self) -> dict[str, Any]:
+        if not self.path.is_file():
+            raise StateNotInitialized(f"workflow state does not exist: {self.path}")
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            effect_hashes = self._domain_effect_hashes(connection)
+        return {
+            "effect_hashes": effect_hashes,
+            "aggregate_root_hash": canonical_hash(effect_hashes),
+        }
+
+    def verify_aggregate_domain_root(self) -> bool:
+        events = self.events()
+        expected = None
+        for event in reversed(events):
+            envelope = event.payload.get(ENVELOPE_KEY)
+            if isinstance(envelope, dict) and envelope.get("aggregate_root_hash_after"):
+                expected = str(envelope["aggregate_root_hash_after"])
+                break
+        if expected is None:
+            return True
+        return self.aggregate_domain_root()["aggregate_root_hash"] == expected
 
     def initialize(
         self,
@@ -706,6 +1199,33 @@ class SQLiteStateStore:
                             json.dumps(receipt, ensure_ascii=True, sort_keys=True),
                         ),
                     )
+                    checkpoint_id = canonical_hash(
+                        {
+                            "stage_id": int(checkpoint["stage_id"]),
+                            "subtask": str(checkpoint["subtask"]),
+                            "revision": 1,
+                            "input": "MIGRATION_SEED",
+                            "output": "MIGRATION_SEED",
+                        }
+                    )[:32]
+                    connection.execute(
+                        """
+                        INSERT INTO stage_checkpoint_history(
+                            checkpoint_id, stage_id, subtask, source_step_id,
+                            completed_step_id, input_fingerprint,
+                            output_fingerprint, completed_revision, receipt_json
+                        ) VALUES (?, ?, ?, ?, ?, 'MIGRATION_SEED',
+                                  'MIGRATION_SEED', 1, ?)
+                        """,
+                        (
+                            checkpoint_id,
+                            checkpoint["stage_id"],
+                            checkpoint["subtask"],
+                            checkpoint["source_step_id"],
+                            checkpoint["completed_step_id"],
+                            json.dumps(receipt, ensure_ascii=True, sort_keys=True),
+                        ),
+                    )
             if contest_policy is not None:
                 connection.execute(
                     """
@@ -725,6 +1245,9 @@ class SQLiteStateStore:
                 )
             event_type = "PROJECT_IMPORTED" if imported else "PROJECT_CREATED"
             payload = _redact(import_payload or {})
+            effect_hashes = self._domain_effect_hashes(connection)
+            payload["effect_hashes_after"] = effect_hashes
+            payload["aggregate_root_hash_after"] = canonical_hash(effect_hashes)
             row = connection.execute(
                 "SELECT * FROM project_state WHERE singleton = 1"
             ).fetchone()
@@ -780,40 +1303,435 @@ class SQLiteStateStore:
             "delivery_reserve_seconds": row["delivery_reserve_seconds"],
         }
 
-    def decision(self, gate: str) -> dict[str, Any] | None:
+    @staticmethod
+    def _insert_decision_request(
+        connection: sqlite3.Connection,
+        request: dict[str, Any],
+        *,
+        created_at: int,
+    ) -> None:
+        required = {
+            "request_id",
+            "gate",
+            "generation",
+            "kind",
+            "type",
+            "requested_revision",
+            "subject_fingerprint",
+            "options_fingerprint",
+        }
+        missing = sorted(key for key in required if request.get(key) in {None, ""})
+        if missing:
+            raise InvalidTransition(
+                f"human decision request is missing fields: {', '.join(missing)}"
+            )
+        encoded = json.dumps(_redact(request), ensure_ascii=True, sort_keys=True)
+        prior = connection.execute(
+            "SELECT request_json FROM workflow_decision_requests WHERE request_id=?",
+            (str(request["request_id"]),),
+        ).fetchone()
+        if prior is not None:
+            if prior["request_json"] != encoded:
+                raise InvalidTransition("human decision request id was reused")
+            return
+        connection.execute(
+            """
+            INSERT INTO workflow_decision_requests(
+                request_id, gate_type, generation, kind, action_type,
+                requested_revision, subject_fingerprint, options_fingerprint,
+                status, created_at, request_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+            """,
+            (
+                str(request["request_id"]),
+                str(request["gate"]),
+                int(request["generation"]),
+                str(request["kind"]),
+                str(request["type"]),
+                int(request["requested_revision"]),
+                str(request["subject_fingerprint"]),
+                str(request["options_fingerprint"]),
+                int(created_at),
+                encoded,
+            ),
+        )
+
+    @staticmethod
+    def _decision_payload(row: sqlite3.Row) -> dict[str, Any]:
+        payload = json.loads(row["decision_json"])
+        payload.update(
+            request_id=row["request_id"],
+            decision_id=row["decision_id"],
+            generation=row["generation"],
+            gate=row["gate_type"],
+            kind=row["kind"],
+            outcome=row["outcome"],
+            subject_fingerprint=row["subject_fingerprint"],
+            options_fingerprint=row["options_fingerprint"],
+        )
+        if row["approved"] is not None:
+            payload["approved"] = bool(row["approved"])
+        return payload
+
+    @staticmethod
+    def _latest_decision_row(
+        connection: sqlite3.Connection, gate: str
+    ) -> sqlite3.Row | None:
+        return connection.execute(
+            """
+            SELECT r.request_id, r.gate_type, r.generation, r.kind,
+                   r.subject_fingerprint, r.options_fingerprint, r.request_json,
+                   d.decision_id, d.outcome, d.approved, d.decision_json
+            FROM workflow_decision_requests AS r
+            LEFT JOIN workflow_decision_instances AS d ON d.request_id=r.request_id
+            WHERE r.gate_type=?
+            ORDER BY r.generation DESC
+            LIMIT 1
+            """,
+            (gate,),
+        ).fetchone()
+
+    def next_decision_generation(self, gate: str) -> int:
         if not self.path.is_file():
-            return None
+            return 1
         with self._session() as connection:
             self._upgrade_schema(connection)
             row = connection.execute(
-                "SELECT decision_json FROM workflow_decisions WHERE gate = ?",
+                "SELECT COALESCE(MAX(generation), 0) AS generation "
+                "FROM workflow_decision_requests WHERE gate_type=?",
                 (str(gate),),
             ).fetchone()
-        return json.loads(row["decision_json"]) if row is not None else None
+        return int(row["generation"]) + 1
+
+    def decision_requests(self, gate: str | None = None) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            if gate is None:
+                rows = connection.execute(
+                    "SELECT * FROM workflow_decision_requests ORDER BY created_at, gate_type, generation"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM workflow_decision_requests WHERE gate_type=? "
+                    "ORDER BY generation",
+                    (str(gate),),
+                ).fetchall()
+        return [
+            {
+                **json.loads(row["request_json"]),
+                "status": row["status"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def decision_history(self, gate: str | None = None) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        query = """
+            SELECT r.request_id, r.gate_type, r.generation, r.kind,
+                   r.subject_fingerprint, r.options_fingerprint,
+                   d.decision_id, d.outcome, d.approved, d.decision_json
+            FROM workflow_decision_requests AS r
+            JOIN workflow_decision_instances AS d ON d.request_id=r.request_id
+        """
+        params: tuple[Any, ...] = ()
+        if gate is not None:
+            query += " WHERE r.gate_type=?"
+            params = (str(gate),)
+        query += " ORDER BY r.gate_type, r.generation"
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            rows = connection.execute(query, params).fetchall()
+        return [self._decision_payload(row) for row in rows]
+
+    def decision(self, gate: str, *, current_only: bool = True) -> dict[str, Any] | None:
+        if not self.path.is_file():
+            return None
+        gate = str(gate)
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            row = self._latest_decision_row(connection, gate)
+        if row is None or row["decision_id"] is None:
+            return None
+        if current_only and row["subject_fingerprint"] != "LEGACY_UNBOUND":
+            from .human_decisions import decision_fingerprints
+
+            request = json.loads(row["request_json"])
+            current_subject, current_options = decision_fingerprints(
+                self.project_dir,
+                gate,
+                tuple(request.get("evidence") or ()),
+            )
+            if (
+                current_subject != row["subject_fingerprint"]
+                or current_options != row["options_fingerprint"]
+            ):
+                return None
+        return self._decision_payload(row)
+
+    def assert_pending_decision_current(self, gate: str | None = None) -> dict[str, Any]:
+        state = self.load()
+        pending = state.pending_action or {}
+        pending_gate = str(pending.get("gate") or "")
+        if gate and pending_gate != str(gate):
+            raise InvalidTransition(
+                f"project is awaiting {pending_gate or 'no gate'}, not {gate}"
+            )
+        request = (pending.get("metadata") or {}).get("human_decision") or {}
+        if not request:
+            raise InvalidTransition("pending action has no decision request identity")
+        from .human_decisions import decision_fingerprints
+
+        subject, options = decision_fingerprints(
+            self.project_dir,
+            pending_gate,
+            tuple(request.get("evidence") or ()),
+        )
+        if subject != request.get("subject_fingerprint") or options != request.get(
+            "options_fingerprint"
+        ):
+            raise InvalidTransition(
+                "human decision request is stale because its bound evidence changed"
+            )
+        return dict(request)
+
+    @staticmethod
+    def _insert_decision_instance(
+        connection: sqlite3.Connection,
+        *,
+        request: sqlite3.Row,
+        decision: dict[str, Any],
+        decided_at: int,
+    ) -> dict[str, Any]:
+        safe = dict(_redact(decision))
+        request_id = str(request["request_id"])
+        safe.update(
+            gate=str(request["gate_type"]),
+            request_id=request_id,
+            generation=int(request["generation"]),
+            kind=str(request["kind"]),
+            subject_fingerprint=str(request["subject_fingerprint"]),
+            options_fingerprint=str(request["options_fingerprint"]),
+        )
+        selected = (
+            safe.get("selected_option_id")
+            or safe.get("selected_primary")
+            or safe.get("selected")
+        )
+        approved = safe.get("approved")
+        if request["kind"] == "approval" and not isinstance(approved, bool):
+            normalized = str(selected or "").lower()
+            if normalized.startswith(("approve", "allow", "override")):
+                approved = True
+            elif normalized.startswith(("reject", "deny")):
+                approved = False
+            else:
+                raise InvalidTransition("approval decisions require approved=true or false")
+            safe["approved"] = approved
+        outcome = (
+            "approved"
+            if approved is True
+            else "rejected"
+            if approved is False
+            else "answered"
+            if request["kind"] == "consultation"
+            else "selected"
+        )
+        encoded = json.dumps(safe, ensure_ascii=True, sort_keys=True)
+        prior = connection.execute(
+            "SELECT decision_id, outcome, decision_json FROM workflow_decision_instances WHERE request_id=?",
+            (request_id,),
+        ).fetchone()
+        if prior is not None:
+            prior_payload = json.loads(prior["decision_json"])
+            for keys in (
+                ("selected_option_id", "selected_primary", "selected"),
+                ("approved",),
+                ("answer", "response"),
+            ):
+                prior_value = next(
+                    (prior_payload.get(key) for key in keys if prior_payload.get(key) is not None),
+                    None,
+                )
+                current_value = next(
+                    (safe.get(key) for key in keys if safe.get(key) is not None),
+                    None,
+                )
+                if (
+                    prior_value is not None
+                    and current_value is not None
+                    and prior_value != current_value
+                ):
+                    raise InvalidTransition(
+                        "immutable decision already exists for this request"
+                    )
+            return {
+                **prior_payload,
+                "decision_id": prior["decision_id"],
+                "outcome": prior["outcome"],
+            }
+        refs = safe.get("artifact_refs") or ()
+        evidence_sha256 = canonical_hash(refs)
+        decision_id = canonical_hash(
+            {"request_id": request_id, "decision": safe, "decided_at": decided_at}
+        )[:32]
+        connection.execute(
+            """
+            INSERT INTO workflow_decision_instances(
+                decision_id, request_id, kind, outcome, approved,
+                selected_option_id, reason, evidence_manifest_sha256,
+                decided_by, decided_at, decision_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                decision_id,
+                request_id,
+                str(request["kind"]),
+                outcome,
+                None if approved is None else int(approved),
+                None if selected is None else str(selected),
+                str(safe.get("reason") or ""),
+                evidence_sha256,
+                str(safe.get("selected_by") or safe.get("source") or "unknown"),
+                int(decided_at),
+                encoded,
+            ),
+        )
+        connection.execute(
+            "UPDATE workflow_decision_requests SET status=? WHERE request_id=?",
+            ("rejected" if approved is False else "resolved", request_id),
+        )
+        return {**safe, "decision_id": decision_id, "outcome": outcome}
 
     def record_decision(self, gate: str, decision: dict[str, Any]) -> dict[str, Any]:
         gate = str(gate).strip()
         if not gate:
             raise ValueError("decision gate is required")
-        safe = _redact(decision)
-        encoded = json.dumps(safe, ensure_ascii=True, sort_keys=True)
-        decided_at = int(safe.get("selected_at") or safe.get("decided_epoch") or self._clock())
+        safe = dict(_redact(decision))
+        now = int(safe.get("selected_at") or safe.get("decided_epoch") or self._clock())
+        if self.path.is_file():
+            current_state = self.load()
+            if str((current_state.pending_action or {}).get("gate") or "") == gate:
+                self.resolve_human_decision(
+                    expected_revision=current_state.revision,
+                    resolution=safe,
+                    decision_record=safe,
+                )
+                history = self.decision_history(gate)
+                if not history:  # pragma: no cover - the transaction guarantees this
+                    raise InvalidTransition("decision was not persisted")
+                return history[-1]
         with self._session() as connection:
             self._upgrade_schema(connection)
             connection.execute("BEGIN IMMEDIATE")
-            prior = connection.execute(
-                "SELECT decision_json FROM workflow_decisions WHERE gate = ?",
-                (gate,),
+            state = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
             ).fetchone()
-            if prior is not None:
-                if prior["decision_json"] != encoded:
-                    raise ValueError(f"immutable workflow decision already exists for {gate}")
-                return json.loads(prior["decision_json"])
-            connection.execute(
-                "INSERT INTO workflow_decisions(gate, decided_at, decision_json) VALUES (?, ?, ?)",
-                (gate, decided_at, encoded),
+            pending = (
+                json.loads(state["pending_action_json"])
+                if state is not None and state["pending_action_json"]
+                else {}
             )
-        return safe
+            pending_request = (pending.get("metadata") or {}).get("human_decision") or {}
+            request_id = (
+                str(pending_request.get("request_id") or "")
+                if str(pending.get("gate") or "") == gate
+                else ""
+            )
+            request = (
+                connection.execute(
+                    "SELECT * FROM workflow_decision_requests WHERE request_id=?",
+                    (request_id,),
+                ).fetchone()
+                if request_id
+                else None
+            )
+            latest = self._latest_decision_row(connection, gate)
+            if request is None and latest is not None and latest["decision_id"] is not None:
+                prior = self._decision_payload(latest)
+                if all(prior.get(key) == value for key, value in safe.items()):
+                    return prior
+            if request is None:
+                from .human_decisions import build_decision_request
+
+                generation_row = connection.execute(
+                    "SELECT COALESCE(MAX(generation), 0) AS generation "
+                    "FROM workflow_decision_requests WHERE gate_type=?",
+                    (gate,),
+                ).fetchone()
+                built = build_decision_request(
+                    project_id=str(state["project_id"] if state is not None else self.project_dir.name),
+                    project_dir=self.project_dir,
+                    requested_revision=int(state["revision"] if state is not None else 0),
+                    generation=int(generation_row["generation"]) + 1,
+                    action={"type": f"{gate}_decision", "gate": gate},
+                    reason=str(safe.get("reason") or "direct decision record"),
+                    evidence=tuple(safe.get("candidate_evidence") or ()),
+                ).to_dict()
+                self._insert_decision_request(connection, built, created_at=now)
+                request = connection.execute(
+                    "SELECT * FROM workflow_decision_requests WHERE request_id=?",
+                    (built["request_id"],),
+                ).fetchone()
+            from .human_decisions import decision_fingerprints
+
+            current_subject, current_options = decision_fingerprints(
+                self.project_dir,
+                gate,
+                tuple(json.loads(request["request_json"]).get("evidence") or ()),
+            )
+            if request["subject_fingerprint"] != "LEGACY_UNBOUND" and (
+                current_subject != request["subject_fingerprint"]
+                or current_options != request["options_fingerprint"]
+            ):
+                raise InvalidTransition(
+                    "human decision request is stale because its bound evidence changed"
+                )
+            persisted = self._insert_decision_instance(
+                connection, request=request, decision=safe, decided_at=now
+            )
+            if state is not None:
+                revision = int(state["revision"]) + 1
+                connection.execute(
+                    "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? "
+                    "WHERE singleton=1",
+                    (revision, now, now),
+                )
+                after = connection.execute(
+                    "SELECT * FROM project_state WHERE singleton=1"
+                ).fetchone()
+                event_payload = self._versioned_event_payload(
+                    connection,
+                    before=state,
+                    after=after,
+                    revision=revision,
+                    event_type="HUMAN_DECISION_RECORDED",
+                    created_at=now,
+                    payload={
+                        "gate": gate,
+                        "request_id": persisted.get("request_id"),
+                        "decision_id": persisted.get("decision_id"),
+                        "generation": persisted.get("generation"),
+                        "resolution": persisted,
+                        "decision_recorded": True,
+                        "artifact_refs": list(persisted.get("artifact_refs") or ()),
+                    },
+                )
+                connection.execute(
+                    "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
+                    "VALUES (?, 'HUMAN_DECISION_RECORDED', ?, ?, ?, ?)",
+                    (
+                        revision,
+                        now,
+                        state["active_step"],
+                        state["attempt"],
+                        json.dumps(event_payload, ensure_ascii=True, sort_keys=True),
+                    ),
+                )
+            return persisted
 
     def resolve_human_decision(
         self,
@@ -822,7 +1740,7 @@ class SQLiteStateStore:
         resolution: dict[str, Any],
         decision_record: dict[str, Any] | None = None,
     ) -> WorkflowState:
-        """Atomically record a durable decision and clear its pending action."""
+        """Atomically record one immutable decision instance and advance its request."""
 
         now = int(self._clock())
         with self._session() as connection:
@@ -847,72 +1765,132 @@ class SQLiteStateStore:
             if pending is None:
                 raise InvalidTransition("project has no pending human decision")
             gate = str(resolution.get("gate") or pending.get("gate") or "").strip()
-            decision_refs: list[dict[str, Any]] = []
-            decision_sha256: str | None = None
-            if decision_record is not None:
-                if not gate:
-                    raise InvalidTransition("durable human decisions require a gate")
-                record_gate = str(decision_record.get("gate") or gate).strip()
-                if record_gate != gate:
-                    raise InvalidTransition(
-                        f"decision record gate {record_gate} does not match {gate}"
-                    )
-                record_selected = (
-                    decision_record.get("selected_option_id")
-                    or decision_record.get("selected_primary")
+            if not gate:
+                raise InvalidTransition("durable human decisions require a gate")
+            request_payload = (pending.get("metadata") or {}).get("human_decision") or {}
+            supplied_request_id = str(resolution.get("request_id") or "")
+            pending_request_id = str(request_payload.get("request_id") or "")
+            if (
+                supplied_request_id
+                and pending_request_id
+                and supplied_request_id != pending_request_id
+            ):
+                raise InvalidTransition(
+                    "resolution does not match the pending request id"
                 )
-                resolution_selected = (
-                    resolution.get("selected_option_id")
-                    or resolution.get("selected_primary")
-                    or resolution.get("selected")
-                )
-                if (
-                    record_selected is not None
-                    and resolution_selected is not None
-                    and str(record_selected) != str(resolution_selected)
-                ):
+            for field_name in (
+                "generation",
+                "subject_fingerprint",
+                "options_fingerprint",
+            ):
+                supplied_value = resolution.get(field_name)
+                expected_value = request_payload.get(field_name)
+                if supplied_value not in {None, "", expected_value}:
                     raise InvalidTransition(
-                        "decision record selection does not match the resolution"
+                        f"resolution does not match the pending {field_name}"
                     )
-                if (
-                    decision_record.get("answer") is not None
-                    and resolution.get("answer") is not None
-                    and str(decision_record["answer"]) != str(resolution["answer"])
-                ):
-                    raise InvalidTransition(
-                        "decision record answer does not match the resolution"
-                    )
-                safe_decision = _redact(decision_record)
-                decision_refs = list(safe_decision.get("artifact_refs") or ())
-                decision_sha256 = canonical_hash(safe_decision)
-                encoded = json.dumps(
-                    safe_decision, ensure_ascii=True, sort_keys=True
-                )
-                prior = connection.execute(
-                    "SELECT decision_json FROM workflow_decisions WHERE gate=?",
+            request_id = str(request_payload.get("request_id") or resolution.get("request_id") or "")
+            request = connection.execute(
+                "SELECT * FROM workflow_decision_requests WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            if request is None:
+                from .human_decisions import build_decision_request
+
+                generation_row = connection.execute(
+                    "SELECT COALESCE(MAX(generation), 0) AS generation "
+                    "FROM workflow_decision_requests WHERE gate_type=?",
                     (gate,),
                 ).fetchone()
-                if prior is not None and prior["decision_json"] != encoded:
-                    raise InvalidTransition(
-                        f"immutable workflow decision already exists for {gate}"
-                    )
-                if prior is None:
-                    decided_at = int(
-                        safe_decision.get("selected_at")
-                        or safe_decision.get("decided_epoch")
-                        or now
-                    )
-                    connection.execute(
-                        "INSERT INTO workflow_decisions(gate, decided_at, decision_json) "
-                        "VALUES (?, ?, ?)",
-                        (gate, decided_at, encoded),
-                    )
-            revision = expected_revision + 1
-            connection.execute(
-                "UPDATE project_state SET status=?, pending_action_json=NULL, "
-                "revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
-                (WorkflowStatus.READY.value, revision, now, now),
+                request_payload = build_decision_request(
+                    project_id=str(before["project_id"]),
+                    project_dir=self.project_dir,
+                    requested_revision=expected_revision,
+                    generation=int(generation_row["generation"]) + 1,
+                    action=pending,
+                    reason="compatibility request identity synthesized at resolution",
+                ).to_dict()
+                self._insert_decision_request(
+                    connection, request_payload, created_at=now
+                )
+                request_id = str(request_payload["request_id"])
+                request = connection.execute(
+                    "SELECT * FROM workflow_decision_requests WHERE request_id=?",
+                    (request_id,),
+                ).fetchone()
+            if request is None or str(request["gate_type"]) != gate:
+                raise InvalidTransition("pending human decision request is not registered")
+            from .human_decisions import decision_fingerprints
+
+            current_subject, current_options = decision_fingerprints(
+                self.project_dir, gate, tuple(request_payload.get("evidence") or ())
             )
+            if request["subject_fingerprint"] != "LEGACY_UNBOUND" and (
+                current_subject != request["subject_fingerprint"]
+                or current_options != request["options_fingerprint"]
+            ):
+                raise InvalidTransition(
+                    "human decision request is stale because its bound evidence changed"
+                )
+            safe_decision = {**dict(_redact(decision_record or {})), **dict(_redact(resolution))}
+            record_gate = str(safe_decision.get("gate") or gate).strip()
+            if record_gate != gate:
+                raise InvalidTransition(
+                    f"decision record gate {record_gate} does not match {gate}"
+                )
+            persisted = self._insert_decision_instance(
+                connection,
+                request=request,
+                decision=safe_decision,
+                decided_at=int(
+                    safe_decision.get("selected_at")
+                    or safe_decision.get("decided_epoch")
+                    or now
+                ),
+            )
+            decision_refs = list(persisted.get("artifact_refs") or ())
+            decision_sha256 = canonical_hash(persisted)
+            revision = expected_revision + 1
+            reopened_request: dict[str, Any] | None = None
+            if persisted.get("approved") is False:
+                from .human_decisions import build_decision_request
+
+                reopened_request = build_decision_request(
+                    project_id=str(before["project_id"]),
+                    project_dir=self.project_dir,
+                    requested_revision=revision,
+                    generation=int(request["generation"]) + 1,
+                    action=pending,
+                    reason={
+                        "code": "approval_rejected",
+                        "message": str(persisted.get("reason") or "Approval was rejected"),
+                        "evidence": list(request_payload.get("evidence") or ()),
+                    },
+                    evidence=tuple(request_payload.get("evidence") or ()),
+                ).to_dict()
+                self._insert_decision_request(
+                    connection, reopened_request, created_at=now
+                )
+                pending_metadata = dict(pending.get("metadata") or {})
+                pending_metadata["human_decision"] = reopened_request
+                reopened_pending = {**pending, "metadata": pending_metadata}
+                connection.execute(
+                    "UPDATE project_state SET status=?, pending_action_json=?, "
+                    "revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
+                    (
+                        WorkflowStatus.AWAITING_SELECTION.value,
+                        json.dumps(reopened_pending, ensure_ascii=True, sort_keys=True),
+                        revision,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                connection.execute(
+                    "UPDATE project_state SET status=?, pending_action_json=NULL, "
+                    "revision=?, updated_at=?, last_event_at=? WHERE singleton=1",
+                    (WorkflowStatus.READY.value, revision, now, now),
+                )
             after = connection.execute(
                 "SELECT * FROM project_state WHERE singleton=1"
             ).fetchone()
@@ -926,10 +1904,14 @@ class SQLiteStateStore:
                 payload={
                     "action_type": pending.get("type"),
                     "gate": gate or None,
-                    "resolution": resolution,
-                    "decision_recorded": decision_record is not None,
+                    "request_id": request_id,
+                    "decision_id": persisted.get("decision_id"),
+                    "generation": request["generation"],
+                    "resolution": persisted,
+                    "decision_recorded": True,
                     "decision_sha256": decision_sha256,
                     "artifact_refs": decision_refs,
+                    "reopened_request": reopened_request,
                 },
             )
             connection.execute(
@@ -967,6 +1949,13 @@ class SQLiteStateStore:
         unknown = set(changes) - _MUTABLE_COLUMNS
         if unknown:
             raise ValueError(f"unsupported state fields: {sorted(unknown)}")
+        current_artifact_fingerprint: str | None = None
+        if clear_dirty_stage is not None:
+            from .dirty import capture_artifact_manifest, manifest_fingerprint
+
+            current_artifact_fingerprint = manifest_fingerprint(
+                capture_artifact_manifest(self.project_dir)
+            )
         now = int(self._clock())
         with self._session() as connection:
             self._upgrade_schema(connection)
@@ -1008,6 +1997,26 @@ class SQLiteStateStore:
                 f"UPDATE project_state SET {assignments} WHERE singleton = 1",
                 tuple(values.values()),
             )
+            pending_for_request = changes.get("pending_action", _UNSET)
+            if isinstance(pending_for_request, dict):
+                request = (
+                    (pending_for_request.get("metadata") or {}).get("human_decision")
+                    or {}
+                )
+                required_request_fields = {
+                    "request_id",
+                    "gate",
+                    "generation",
+                    "kind",
+                    "type",
+                    "requested_revision",
+                    "subject_fingerprint",
+                    "options_fingerprint",
+                }
+                if request and required_request_fields <= set(request):
+                    self._insert_decision_request(
+                        connection, dict(request), created_at=now
+                    )
             if subtask_baseline is not _UNSET:
                 if subtask_baseline is None:
                     connection.execute(
@@ -1055,6 +2064,35 @@ class SQLiteStateStore:
             if stage_checkpoint is not None:
                 checkpoint = dict(stage_checkpoint)
                 receipt = _redact(dict(checkpoint.get("receipt") or {}))
+                checkpoint_id = canonical_hash(
+                    {
+                        "stage_id": int(checkpoint["stage_id"]),
+                        "subtask": str(checkpoint["subtask"]),
+                        "revision": revision,
+                        "input": str(checkpoint["input_fingerprint"]),
+                        "output": str(checkpoint["output_fingerprint"]),
+                    }
+                )[:32]
+                connection.execute(
+                    """
+                    INSERT INTO stage_checkpoint_history(
+                        checkpoint_id, stage_id, subtask, source_step_id,
+                        completed_step_id, input_fingerprint, output_fingerprint,
+                        completed_revision, receipt_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        checkpoint_id,
+                        int(checkpoint["stage_id"]),
+                        str(checkpoint["subtask"]),
+                        int(checkpoint["source_step_id"]),
+                        checkpoint.get("completed_step_id"),
+                        str(checkpoint["input_fingerprint"]),
+                        str(checkpoint["output_fingerprint"]),
+                        revision,
+                        json.dumps(receipt, ensure_ascii=True, sort_keys=True),
+                    ),
+                )
                 connection.execute(
                     """
                     INSERT INTO stage_checkpoints(
@@ -1104,6 +2142,35 @@ class SQLiteStateStore:
                     ),
                 )
             for dirty in dirty_changes or []:
+                cause_id = canonical_hash(
+                    {
+                        "revision": revision,
+                        "flag": str(dirty["flag"]),
+                        "owner_stage": int(dirty["owner_stage"]),
+                        "artifact": str(dirty["cause_artifact"]),
+                        "baseline": str(dirty["baseline_fingerprint"]),
+                        "current": str(dirty["current_fingerprint"]),
+                    }
+                )[:32]
+                connection.execute(
+                    """
+                    INSERT INTO dirty_causes(
+                        cause_id, flag, owner_stage, cause_revision,
+                        cause_artifact, baseline_fingerprint,
+                        current_fingerprint, classifier_contract_sha256
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cause_id,
+                        str(dirty["flag"]),
+                        int(dirty["owner_stage"]),
+                        revision,
+                        str(dirty["cause_artifact"]),
+                        str(dirty["baseline_fingerprint"]),
+                        str(dirty["current_fingerprint"]),
+                        str(dirty["classifier_contract_sha256"]),
+                    ),
+                )
                 connection.execute(
                     """
                     INSERT INTO dirty_flags(
@@ -1132,22 +2199,61 @@ class SQLiteStateStore:
             if clear_dirty_stage is not None:
                 clear = dict(clear_dirty_stage)
                 owner_stage = int(clear["owner_stage"])
+                if stage_checkpoint is None:
+                    raise InvalidTransition(
+                        "dirty flags can only be cleared with a Stage checkpoint"
+                    )
+                checkpoint = dict(stage_checkpoint)
+                success_receipt = dict(clear.get("success_receipt") or {})
+                if int(checkpoint.get("stage_id", -1)) != owner_stage:
+                    raise InvalidTransition(
+                        "dirty clear owner does not match the successful Stage checkpoint"
+                    )
+                if (
+                    success_receipt.get("schema_version")
+                    != "factory-stage-checkpoint-v1"
+                    or success_receipt.get("status") != "PASS"
+                    or int(success_receipt.get("stage", -1)) != owner_stage
+                ):
+                    raise InvalidTransition(
+                        "dirty clear requires a PASS factory Stage checkpoint receipt"
+                    )
+                cleared_fingerprint = str(clear["cleared_fingerprint"])
+                classifier_fingerprint = str(clear["classifier_contract_sha256"])
+                if (
+                    str(checkpoint.get("output_fingerprint")) != cleared_fingerprint
+                    or str(success_receipt.get("output_fingerprint"))
+                    != cleared_fingerprint
+                    or current_artifact_fingerprint != cleared_fingerprint
+                ):
+                    raise InvalidTransition(
+                        "dirty clear fingerprint is stale or does not match the checkpoint"
+                    )
+                if (
+                    str(success_receipt.get("classifier_contract_sha256"))
+                    != classifier_fingerprint
+                ):
+                    raise InvalidTransition(
+                        "dirty clear classifier does not match the checkpoint receipt"
+                    )
                 rows_to_clear = connection.execute(
                     "SELECT * FROM dirty_flags WHERE owner_stage = ? ORDER BY flag",
                     (owner_stage,),
                 ).fetchall()
                 for dirty_row in rows_to_clear:
+                    if dirty_row["classifier_contract_sha256"] != classifier_fingerprint:
+                        raise InvalidTransition(
+                            "dirty clear classifier does not match the dirty cause"
+                        )
                     receipt = {
                         "schema_version": "factory-dirty-clear-receipt-v1",
                         "flag": dirty_row["flag"],
                         "owner_stage": owner_stage,
                         "cause_revision": dirty_row["cause_revision"],
                         "cause_artifact": dirty_row["cause_artifact"],
-                        "cleared_fingerprint": str(clear["cleared_fingerprint"]),
-                        "classifier_contract_sha256": str(
-                            clear["classifier_contract_sha256"]
-                        ),
-                        "success_receipt": _redact(clear.get("success_receipt") or {}),
+                        "cleared_fingerprint": cleared_fingerprint,
+                        "classifier_contract_sha256": classifier_fingerprint,
+                        "success_receipt": _redact(success_receipt),
                     }
                     connection.execute(
                         """
@@ -1220,6 +2326,55 @@ class SQLiteStateStore:
             for row in rows
         ]
 
+    def record_projection_failure(
+        self,
+        *,
+        revision: int,
+        projector_name: str,
+        error_type: str,
+    ) -> None:
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            connection.execute(
+                """
+                INSERT INTO projection_failures(
+                    revision, projector_name, error_type, status, created_at
+                ) VALUES (?, ?, ?, 'pending', ?)
+                ON CONFLICT(revision, projector_name) DO UPDATE SET
+                    error_type=excluded.error_type,
+                    status='pending',
+                    created_at=excluded.created_at,
+                    resolved_at=NULL
+                """,
+                (
+                    int(revision),
+                    str(projector_name),
+                    str(error_type),
+                    int(self._clock()),
+                ),
+            )
+
+    def projection_failures(self, *, pending_only: bool = False) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        query = "SELECT * FROM projection_failures"
+        if pending_only:
+            query += " WHERE status='pending'"
+        query += " ORDER BY revision, projector_name"
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            rows = connection.execute(query).fetchall()
+        return [dict(row) for row in rows]
+
+    def resolve_projection_failure(self, *, revision: int, projector_name: str) -> None:
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            connection.execute(
+                "UPDATE projection_failures SET status='resolved', resolved_at=? "
+                "WHERE revision=? AND projector_name=?",
+                (int(self._clock()), int(revision), str(projector_name)),
+            )
+
     def save_projector_snapshot(
         self,
         projector_name: str,
@@ -1235,16 +2390,40 @@ class SQLiteStateStore:
             raise ValueError("invalid projector snapshot identity")
         with self._session() as connection:
             self._upgrade_schema(connection)
+            event_rows = connection.execute(
+                "SELECT revision, payload_json FROM events WHERE revision <= ? ORDER BY revision",
+                (int(through_revision),),
+            ).fetchall()
+            through_event_id = None
+            through_event_payload_sha256 = None
+            source_chain_root_sha256 = None
+            if event_rows:
+                payload_hashes: list[dict[str, Any]] = []
+                for event_row in event_rows:
+                    raw_payload = str(event_row["payload_json"])
+                    payload_sha = canonical_hash(json.loads(raw_payload))
+                    payload_hashes.append(
+                        {"revision": int(event_row["revision"]), "sha256": payload_sha}
+                    )
+                last_payload = json.loads(event_rows[-1]["payload_json"])
+                envelope = last_payload.get(ENVELOPE_KEY) or {}
+                through_event_id = envelope.get("event_id")
+                through_event_payload_sha256 = payload_hashes[-1]["sha256"]
+                source_chain_root_sha256 = canonical_hash(payload_hashes)
             connection.execute(
                 """
                 INSERT INTO projector_snapshots(
                     projector_name, projector_version, through_revision,
-                    state_hash, snapshot_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    state_hash, through_event_id, through_event_payload_sha256,
+                    source_chain_root_sha256, snapshot_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(projector_name) DO UPDATE SET
                     projector_version=excluded.projector_version,
                     through_revision=excluded.through_revision,
                     state_hash=excluded.state_hash,
+                    through_event_id=excluded.through_event_id,
+                    through_event_payload_sha256=excluded.through_event_payload_sha256,
+                    source_chain_root_sha256=excluded.source_chain_root_sha256,
                     snapshot_json=excluded.snapshot_json,
                     created_at=excluded.created_at
                 """,
@@ -1253,6 +2432,9 @@ class SQLiteStateStore:
                     projector_version,
                     through_revision,
                     state_hash,
+                    through_event_id,
+                    through_event_payload_sha256,
+                    source_chain_root_sha256,
                     json.dumps(_redact(snapshot), ensure_ascii=True, sort_keys=True),
                     int(self._clock()),
                 ),
@@ -1285,6 +2467,9 @@ class SQLiteStateStore:
             "projector_version": row["projector_version"],
             "through_revision": row["through_revision"],
             "state_hash": row["state_hash"],
+            "through_event_id": row["through_event_id"],
+            "through_event_payload_sha256": row["through_event_payload_sha256"],
+            "source_chain_root_sha256": row["source_chain_root_sha256"],
             "snapshot": json.loads(row["snapshot_json"]),
             "created_at": row["created_at"],
         }

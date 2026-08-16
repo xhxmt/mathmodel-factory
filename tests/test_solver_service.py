@@ -2,6 +2,8 @@ import os
 import time
 import io
 import json
+import base64
+import hashlib
 
 import pytest
 
@@ -321,6 +323,10 @@ def test_cloud_transport_rejects_missing_https_url_before_auth(tmp_path):
 def test_cloud_transport_forwards_provider_idempotency_key(tmp_path):
     script = tmp_path / "solve.py"
     script.write_text("print('done')\n", encoding="utf-8")
+    text_input = tmp_path / "data.txt"
+    text_input.write_text("alpha\n", encoding="utf-8")
+    binary_input = tmp_path / "matrix.bin"
+    binary_input.write_bytes(b"\x00\xff\x10")
     captured = {}
 
     class Response(io.BytesIO):
@@ -346,9 +352,23 @@ def test_cloud_transport_forwards_provider_idempotency_key(tmp_path):
             project_dir=tmp_path,
             runtime="python",
             script=script,
+            input_paths=(text_input, binary_input),
+            output_paths=("results/answer.json",),
+            seeds=("17", "23"),
         )
     )
 
-    assert captured["payload"]["idempotency_key"] == "a" * 64
+    payload = captured["payload"]
+    assert payload["idempotency_key"] == "a" * 64
+    assert payload["working_files"] == {"data.txt": "alpha\n"}
+    assert payload["working_files_base64"] == {
+        "matrix.bin": base64.b64encode(binary_input.read_bytes()).decode("ascii")
+    }
+    assert payload["requested_input_sha256"] == {
+        "data.txt": hashlib.sha256(text_input.read_bytes()).hexdigest(),
+        "matrix.bin": hashlib.sha256(binary_input.read_bytes()).hexdigest(),
+    }
+    assert payload["declared_outputs"] == ["results/answer.json"]
+    assert payload["seeds"] == ["17", "23"]
     assert submission.external_id == "cloud-job"
-    assert submission.status == "running"
+    assert submission.status == "queued"

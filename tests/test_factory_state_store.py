@@ -359,3 +359,31 @@ def test_v5_database_upgrades_to_step_scheduler_without_rewriting_events(tmp_pat
     assert [(event.revision, event.type) for event in store.events()] == [
         (created.revision, "PROJECT_CREATED")
     ]
+
+
+def test_v7_migration_never_treats_string_false_as_approval(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="v7", project_type="modeling")
+    connection = sqlite3.connect(store.path)
+    try:
+        connection.execute(
+            "INSERT INTO workflow_decisions(gate, decided_at, decision_json) "
+            "VALUES ('content_freeze', 10, ?)",
+            ('{"gate":"content_freeze","kind":"approval","approved":"false"}',),
+        )
+        connection.execute(
+            "UPDATE schema_info SET schema_version = 7 WHERE singleton = 1"
+        )
+        connection.execute(
+            "UPDATE project_state SET schema_version = 7 WHERE singleton = 1"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store.load()
+    decision = store.decision("content_freeze")
+
+    assert decision is not None
+    assert decision.get("approved") is not True
+    assert decision["outcome"] != "approved"

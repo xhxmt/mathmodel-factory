@@ -1039,6 +1039,7 @@ class FactoryEngine:
             )
         checkpoint_receipt = {
             "schema_version": "factory-stage-checkpoint-v1",
+            "status": "PASS",
             "stage": task.stage_id,
             "stage_name": task.stage_name,
             "subtask": task.subtask,
@@ -1205,7 +1206,11 @@ class FactoryEngine:
             action = decision.pending_action.to_dict()
             request = build_decision_request(
                 project_id=state.project_id,
+                project_dir=self.project_dir,
                 requested_revision=state.revision + 1,
+                generation=self.store.next_decision_generation(
+                    str(action.get("gate") or action.get("type") or "human_decision")
+                ),
                 action=action,
                 reason=decision.reason,
                 evidence=decision.evidence,
@@ -1344,7 +1349,11 @@ class FactoryEngine:
     ) -> WorkflowState:
         request = build_decision_request(
             project_id=state.project_id,
+            project_dir=self.project_dir,
             requested_revision=state.revision + 1,
+            generation=self.store.next_decision_generation(
+                str(action.get("gate") or action.get("type") or "human_decision")
+            ),
             action=action,
             reason=reason,
             evidence=evidence,

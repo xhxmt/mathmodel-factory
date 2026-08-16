@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from factory_core.domain import InvalidTransition, RevisionConflict, WorkflowStatus
+from factory_core.human_decisions import build_decision_request
 from factory_core.projections import write_compatibility_projections
 from factory_core.service import FactoryService, WorkerHandle
 from factory_core.storage import SQLiteStateStore
@@ -175,7 +176,8 @@ def test_service_resolves_ready_selection_before_resume(tmp_path):
         },
     )
 
-    resumed = service.resume(project, expected_revision=waiting.revision)
+    decided = store.load()
+    resumed = service.resume(project, expected_revision=decided.revision)
 
     assert resumed.status is WorkflowStatus.READY
     assert resumed.pending_action is None
@@ -208,7 +210,10 @@ def test_service_rejects_stale_revision_before_resolving_pending_action(tmp_path
     with pytest.raises(RevisionConflict):
         service.resume(project, expected_revision=waiting.revision - 1)
 
-    assert store.load().pending_action is not None
+    decided = store.load()
+    assert decided.pending_action is None
+    assert decided.status is WorkflowStatus.READY
+    assert store.decision("step3") is not None
 
 
 def test_resume_and_start_launches_worker_with_final_revision(tmp_path):
@@ -390,8 +395,9 @@ def test_resume_and_start_resolves_selection_before_worker_launch(tmp_path):
         },
     )
 
+    decided = store.load()
     running, _ = service.resume_and_start(
-        project, expected_revision=waiting.revision
+        project, expected_revision=decided.revision
     )
 
     assert running.status is WorkflowStatus.RUNNING
@@ -494,6 +500,57 @@ def test_resolve_and_start_stale_revision_does_not_write_or_launch(tmp_path):
             {"source": "test"},
             evidence_writer=lambda: writes.append(True),
             expected_revision=waiting.revision - 1,
+        )
+
+    assert writes == []
+    assert launcher.calls == []
+    assert store.load().pending_action is not None
+
+
+def test_artifact_first_rejects_foreign_request_before_writing(tmp_path):
+    launcher = RecordingWorkerLauncher()
+    service = FactoryService(tmp_path, worker_launcher=launcher)
+    state, _ = service.create_project("demo", "question", start=False)
+    project = tmp_path / "ongoing/demo"
+    options = project / "selection/step3_options.json"
+    options.parent.mkdir(parents=True)
+    options.write_text('{"options":[{"id":"m1"}]}\n', encoding="utf-8")
+    action = {"type": "step3_selection", "gate": "step3"}
+    request = build_decision_request(
+        project_id=state.project_id,
+        project_dir=project,
+        requested_revision=state.revision + 1,
+        generation=1,
+        action=action,
+        reason="choose a method",
+    )
+    pending_action = {
+        **action,
+        "metadata": {"human_decision": request.to_dict()},
+    }
+    store = SQLiteStateStore(project)
+    waiting = store.transition(
+        expected_revision=state.revision,
+        event_type="AWAITING_ACTION",
+        changes={
+            "status": WorkflowStatus.AWAITING_SELECTION,
+            "pending_action": pending_action,
+        },
+        payload={"action": request.to_dict(), "pending_action": pending_action},
+    )
+    writes = []
+
+    with pytest.raises(InvalidTransition, match="pending request id"):
+        service.resolve_and_start(
+            project,
+            {
+                "gate": "step3",
+                "selected_option_id": "m1",
+                "request_id": "foreign-request",
+            },
+            evidence_writer=lambda: writes.append(True),
+            expected_revision=waiting.revision,
+            artifact_first=True,
         )
 
     assert writes == []

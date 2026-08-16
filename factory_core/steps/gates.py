@@ -63,7 +63,8 @@ def prepare_human_gates(project: Path, step_id: int) -> PrepareResult:
 
         store = SQLiteStateStore(project)
         if store.exists and store.contest_policy() is not None:
-            if store.decision("content_freeze") is None:
+            content_freeze = store.decision("content_freeze")
+            if not (content_freeze and content_freeze.get("approved") is True):
                 options = project / "selection" / "content_freeze_options.json"
                 if not options.is_file():
                     build_content_freeze_options(project)

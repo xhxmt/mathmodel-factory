@@ -22,6 +22,15 @@
       <div class="diag-section-title mono">AUDIT TIMELINE · {{ coordinate }}</div>
       <div v-for="event in events" :key="event.event_id || event.revision" class="diag-event mono">
         r{{ event.revision }} · {{ event.type }} · {{ event.message }}
+        <template v-if="event.subject_stage || event.result_stage">
+          · {{ eventCoordinate(event, 'subject') }} → {{ eventCoordinate(event, 'result') }}
+        </template>
+      </div>
+    </div>
+    <div v-if="evidence.length" class="diag-events">
+      <div class="diag-section-title mono">EVIDENCE</div>
+      <div v-for="item in evidence" :key="item.path || JSON.stringify(item)" class="diag-event mono">
+        {{ item.path || item }}<template v-if="item.revision !== undefined"> · r{{ item.revision }}</template>
       </div>
     </div>
     <div v-if="recovery" class="diag-recovery">
@@ -62,6 +71,11 @@ export default {
     recovery() {
       return this.diagnostics?.recovery?.latest || null
     },
+    evidence() {
+      return Array.isArray(this.diagnostics?.status?.evidence)
+        ? this.diagnostics.status.evidence
+        : []
+    },
     coordinate() {
       const status = this.diagnostics?.status || {}
       const parts = []
@@ -78,7 +92,16 @@ export default {
       }
     },
   },
-  methods: { actionLabel },
+  methods: {
+    actionLabel,
+    eventCoordinate(event, prefix) {
+      const parts = []
+      if (event?.[`${prefix}_stage`]) parts.push(`Stage ${event[`${prefix}_stage`]}`)
+      if (event?.[`${prefix}_subtask`]) parts.push(event[`${prefix}_subtask`])
+      if (event?.[`${prefix}_step`] !== null && event?.[`${prefix}_step`] !== undefined) parts.push(`Step ${event[`${prefix}_step`]}`)
+      return parts.join('/') || 'project'
+    },
+  },
 }
 </script>
 

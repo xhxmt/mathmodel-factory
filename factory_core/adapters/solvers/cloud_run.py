@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import base64
+import hashlib
 from collections.abc import Callable
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -15,7 +17,7 @@ class CloudTransport(Protocol):
 
     def status(self, external_id: str) -> str: ...
 
-    def cancel(self, external_id: str) -> None: ...
+    def cancel(self, external_id: str) -> str | None: ...
 
 
 class CloudRunHttpTransport:
@@ -39,13 +41,33 @@ class CloudRunHttpTransport:
     def submit(self, request: SolverRequest) -> SolverSubmission:
         if request.args:
             raise ValueError("Cloud Run solver transport does not support argv")
+        working_files: dict[str, str] = {}
+        working_files_base64: dict[str, str] = {}
+        requested_input_sha256: dict[str, str] = {}
+        project = request.project_dir.resolve()
+        for input_path in request.input_paths:
+            resolved = input_path.resolve(strict=True)
+            try:
+                relative = resolved.relative_to(project).as_posix()
+            except ValueError as exc:
+                raise ValueError("cloud solver inputs must be inside the project") from exc
+            data = resolved.read_bytes()
+            requested_input_sha256[relative] = hashlib.sha256(data).hexdigest()
+            try:
+                working_files[relative] = data.decode("utf-8")
+            except UnicodeDecodeError:
+                working_files_base64[relative] = base64.b64encode(data).decode("ascii")
         submission_payload = {
             "job_id": request.job_id,
             "solver_type": request.runtime,
             "script_content": request.script.read_text(encoding="utf-8"),
             "script_name": request.script.name,
             "max_time": request.max_time_seconds,
-            "working_files": {},
+            "working_files": working_files,
+            "working_files_base64": working_files_base64,
+            "requested_input_sha256": requested_input_sha256,
+            "declared_outputs": list(request.output_paths),
+            "seeds": list(request.seeds),
             "env_vars": request.env,
         }
         if request.idempotency_key:
@@ -66,8 +88,10 @@ class CloudRunHttpTransport:
         payload = self._request_json("GET", f"/jobs/{external_id}/status")
         return self._normalize_status(str(payload.get("status") or "failed"))
 
-    def cancel(self, external_id: str) -> None:
-        self._request_json("DELETE", f"/jobs/{external_id}")
+    def cancel(self, external_id: str) -> str | None:
+        payload = self._request_json("DELETE", f"/jobs/{external_id}")
+        status = payload.get("status")
+        return self._normalize_status(str(status)) if status else None
 
     def _request_json(
         self, method: str, path: str, payload: dict | None = None
@@ -112,7 +136,12 @@ class CloudRunHttpTransport:
 
     @staticmethod
     def _normalize_status(status: str) -> str:
-        return "running" if status in {"queued", "submitted"} else status
+        aliases = {
+            "submitted": "submitting",
+            "succeeded": "completed",
+            "timed_out": "timeout",
+        }
+        return aliases.get(status, status)
 
     @staticmethod
     def _result_refs(payload: dict) -> dict[str, str]:
@@ -146,7 +175,8 @@ class CloudRunSolverBackend:
             return "failed"
         return self.transport.status(external_id)
 
-    def cancel(self, job: dict) -> None:
+    def cancel(self, job: dict) -> str | None:
         external_id = str(job.get("external_id") or "")
         if external_id:
-            self.transport.cancel(external_id)
+            return self.transport.cancel(external_id)
+        return None

@@ -1,7 +1,7 @@
 # 横向运行时基础设施收敛方案
 
-> 状态：**R0–R4 核心合同已实现，运营验收待完成；R5 Capability/Profile 延后**
-> （2026-08-14）。
+> 状态：**R0–R4 核心合同及 schema-v8 审计加固已实现，运营验收待完成；R5 Capability/Profile 延后**
+> （2026-08-16）。
 >
 > 本文描述在当前 10-Stage `stage_v1` 编排之上引入类型化 WorkflowEvent、纯读取
 > Projector、StageExecutionPipeline、Human Decision 和持久 Job 身份的运行合同；R0–R4
@@ -20,8 +20,9 @@
   的 reviewer-entry validation contract，不是数值型 workflow Step ID。
 - 升级前已经存在的 Native 项目保持 `step_v2`，直到操作者在停止且可迁移的状态显式执行
   `scheduler-activate`。Legacy Adapter 继续保持冻结兼容路径。
-- SQLite `events` 保持 append-only；schema v7 的所有新 transition 在旧 payload 外增加
-  `_workflow` 信封，记录 versioned state patch、稳定状态哈希、规范事件类型和结构化 reason。
+- SQLite `events` 保持 append-only；schema v8 的所有新 transition 写入 event-v2
+  `_workflow` 信封，记录 versioned state patch、前后状态哈希、主体/结果坐标、规范事件类型、
+  结构化 reason 和决策/dirty/checkpoint/Solver side-table aggregate root。
 - Native Web 状态、Action Center、恢复状态和审计时间线从 SQLite 事件纯投影；只有 Legacy
   或 Native 数据库不可读时才回退到 `diagnostics/status.json`、heartbeat 和日志。
 
@@ -218,8 +219,10 @@ HumanDecisionRequest(
 ```
 
 无可用决定通道、过期 revision、gate/request 不匹配或 fingerprint 改变时失败关闭。一次性批准
-只授权绑定的动作和 revision，不能永久关闭 freeze。当前 append-only `workflow_decisions`
-继续保存 authoritative decision JSON；Markdown/JSON 请求文件保持可重建投影。
+只授权绑定的动作、request generation、subject/options fingerprint 和 revision，不能永久关闭
+freeze。Schema v8 的 `workflow_decision_requests` 保存每代请求，
+`workflow_decision_instances` 保存不可变结果；拒绝保留并生成下一代请求。旧
+`workflow_decisions` 仅为冻结迁移来源，Markdown/JSON 请求文件保持可重建投影。
 
 ## 6. StageExecutionPipeline 与唯一状态写者
 

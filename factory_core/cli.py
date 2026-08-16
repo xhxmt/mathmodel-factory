@@ -353,6 +353,11 @@ def main(argv: list[str] | None = None) -> int:
                         replay_error = (
                             "replayed state differs from authoritative state"
                         )
+                    elif not store.verify_aggregate_domain_root():
+                        replay_matches = False
+                        replay_error = (
+                            "workflow domain tables differ from the recorded aggregate root"
+                        )
                 except ReplayIntegrityError as exc:
                     replay_matches = False
                     replay_error = str(exc)

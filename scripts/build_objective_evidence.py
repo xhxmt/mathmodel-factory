@@ -38,6 +38,7 @@ from scripts.objective_evidence import (  # noqa: E402
     canonical_hash,
     make_finding,
 )
+from factory_core.paper_sources import primary_paper_source  # noqa: E402
 
 
 BUILDER_VERSION = "objective-evidence-builder-v1"
@@ -146,8 +147,8 @@ def _finding(
 def _numeric_finding(project: Path, base: str, paths: list[str]) -> Any:
     from scripts.verify_numbers import collect_number_metrics
 
-    paper = project / f"{base}_paper.tex"
-    if not paper.is_file():
+    paper = primary_paper_source(project, base)
+    if paper is None:
         return _finding(
             project=project,
             input_paths=paths,
@@ -158,7 +159,7 @@ def _numeric_finding(project: Path, base: str, paths: list[str]) -> Any:
             severity="soft_alert",
             trust_level="heuristic",
             observed=None,
-            expected={"paper": f"{base}_paper.tex"},
+            expected={"paper": [f"{base}_paper.tex", "paper/paper.tex"]},
             message="paper source is unavailable",
             reason="missing",
         )
@@ -234,8 +235,8 @@ def _numeric_finding(project: Path, base: str, paths: list[str]) -> Any:
 def _symbol_finding(project: Path, base: str, paths: list[str]) -> Any:
     from scripts.verify_symbols import collect_symbol_metrics
 
-    paper = project / f"{base}_paper.tex"
-    if not paper.is_file():
+    paper = primary_paper_source(project, base)
+    if paper is None:
         return _finding(
             project=project,
             input_paths=paths,
@@ -319,14 +320,16 @@ def _symbol_finding(project: Path, base: str, paths: list[str]) -> Any:
 
 
 def _artifact_finding(project: Path, base: str, paths: list[str]) -> Any:
-    required = [
-        f"{base}_paper.tex",
-        "results",
-        "models",
-        "logs",
+    paper = primary_paper_source(project, base)
+    required = ["paper_source", "results", "models", "logs"]
+    present = [
+        *([paper.relative_to(project).as_posix()] if paper is not None else []),
+        *(item for item in required[1:] if (project / item).exists()),
     ]
-    present = [item for item in required if (project / item).exists()]
-    missing = [item for item in required if item not in present]
+    missing = [
+        *([] if paper is not None else ["paper_source"]),
+        *(item for item in required[1:] if not (project / item).exists()),
+    ]
     if missing:
         status, reason, message = "UNKNOWN", "missing", "core execution artifacts are missing"
     else:

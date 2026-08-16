@@ -6,7 +6,7 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 
 - Factory root: this repository
 - Project directories: `ongoing/{base}/` while running, `complete/{base}/` after delivery
-- Workflow state: new and explicitly migrated `native_v2` projects use schema-v7 `.factory/state.db` as the authoritative versioned state/event store. New events carry replay patches/hashes; new projects default to the versioned 10-Stage scheduler (`stage_v1`) and also persist the `contest_core_v1` clock, human decisions and Solver idempotency there. Step artifacts remain authoritative validation evidence. Older native projects retain `step_v2` until an explicit scheduler activation; unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
+- Workflow state: new and explicitly migrated `native_v2` projects use schema-v8 `.factory/state.db` as the authoritative versioned state/event store. New v2 events carry replay patches/hashes plus distinct subject/result coordinates and aggregate side-table roots; new projects default to the versioned 10-Stage scheduler (`stage_v1`) and also persist the `contest_core_v1` clock, generation-scoped human decision requests/instances, dirty/checkpoint history, projection failures, and Solver idempotency there. Step artifacts remain authoritative validation evidence. Older native projects retain `step_v2` until an explicit scheduler activation; unmigrated modeling projects retain frozen legacy file-state inference until explicitly migrated.
 - Local solver wrapper: `../../solver_submit.sh` from within a project directory (Python / Julia / Matlab / R / Gurobi). Submit with `--type`, `--max-time`, repeated `--input` / `--output` / `--seed`; inspect immutable two-stage evidence with `--status <jobid> --json`.
 - MinerU PDF → Markdown converter: `../../scripts/mineru_parse.py` (requires `MINERU_TOKEN` in repo `.env`)
 - Method library: `../../method_library/` combines the curated `index.json`
@@ -342,11 +342,13 @@ workflow database.
 ### Step 16: Final Compile + Judge + Appendix + Package
 
 Before Step 16 executes, new `contest_core_v1` projects require Human Gate 2:
-review the main conclusions, abstract, and core figures, then record the
-`content_freeze` decision in SQLite (Web or
+review the main conclusions, abstract, and core figures, then approve the
+current generation of the fingerprint-bound `content_freeze` request in SQLite (Web or
 `scripts/selection_gate.py approve-content-freeze`). After T−2h, an audit-driven
 reopen additionally requires an explicit `delivery_freeze_override`; the engine
 will not silently return to substantive modeling or paper work.
+An explicit rejection is an immutable rejected decision, keeps the workflow
+blocked, and opens a new request generation; it never satisfies the freeze.
 
 Step 16 is the workflow compatibility adapter between the independent audit
 subsystem and delivery. It invokes or reuses the audit for the current content

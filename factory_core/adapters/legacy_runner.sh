@@ -728,6 +728,7 @@ _infer_step_modeling() {
 infer_step() {
     local P="$1" base="$2"
     local paper="$P/${base}_paper.tex"
+    [[ -f "$paper" ]] || paper="$P/paper/paper.tex"
     local reopen_marker="$P/.step11_reopen_to_step10"
     local review_resume_step=0
     local review_requested_at=0

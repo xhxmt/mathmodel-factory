@@ -87,11 +87,11 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 这些运行输出会被 Git 自动忽略。
 
-## 最新更新（2026-08-12）
+## 最新更新（2026-08-16）
 
 当前 `main` 分支的近期变更集中在核心编排、Web 控制面、评测治理与仓库治理：
 
-- 新项目使用 `factory_core.FactoryEngine`、`contest_core_v1` 和 10-Stage `stage_v1` 调度；未显式配置时默认 74 小时，CLI/Web 可写入官方提交 deadline 作为权威时间。Stage/subtask/Step 兼容游标、可重放事件、T−6h content freeze、T−2h delivery freeze、人工决策及 Solver 幂等身份保存在项目内 schema-v7 `.factory/state.db`。
+- 新项目使用 `factory_core.FactoryEngine`、`contest_core_v1` 和 10-Stage `stage_v1` 调度；未显式配置时默认 74 小时，CLI/Web 可写入官方提交 deadline 作为权威时间。Stage/subtask/Step 兼容游标、v2 主体/结果事件信封、T−6h content freeze、T−2h delivery freeze、按 request/generation 绑定证据的人工决策及 Solver 幂等身份保存在项目内 schema-v8 `.factory/state.db`。
 - `run_paper.sh` 已降级为兼容启动器；原生 Stage 调度在内部继续调用 Step 0–16 lifecycle/validator，不调用冻结 Bash，冻结实现只服务未迁移或显式回滚的项目。
 - CLI、Web 和本地/Cloud Run 求解器通过同一 `FactoryService`、revision 与事件合同运行；云执行仍受全局 quarantine 限制。
 - Python、Web backend、Cloud 镜像和前端构建均有锁文件，运行时启动脚本不再动态安装依赖。

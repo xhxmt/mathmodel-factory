@@ -9,7 +9,8 @@ from typing import Any, Iterable, Mapping
 from .domain import WorkflowEvent, WorkflowState, WorkflowStatus
 
 
-EVENT_VERSION = 1
+EVENT_VERSION = 2
+SUPPORTED_EVENT_VERSIONS = {1, 2}
 REPLAY_STATE_VERSION = 1
 ENVELOPE_KEY = "_workflow"
 
@@ -187,14 +188,41 @@ def build_event_payload(
         "replay_state_version": REPLAY_STATE_VERSION,
         "state_patch_mode": patch_mode,
         "state_patch": patch,
+        "state_hash_before": canonical_hash(before_state) if before_state is not None else None,
         "state_hash_after": canonical_hash(after_state),
-        "scheduler_generation": after_state.get("scheduler_generation"),
-        "coordinate_authority": (
-            "stage" if after_state.get("scheduler_generation") == "stage_v1" else "step"
+        "scheduler_generation": (
+            before_state.get("scheduler_generation")
+            if before_state is not None
+            else after_state.get("scheduler_generation")
         ),
-        "stage_id": after_state.get("active_stage"),
-        "subtask": after_state.get("active_subtask"),
-        "source_step_id": after_state.get("source_step_id"),
+        "coordinate_authority": (
+            "stage"
+            if (
+                before_state.get("scheduler_generation")
+                if before_state is not None
+                else after_state.get("scheduler_generation")
+            )
+            == "stage_v1"
+            else "step"
+        ),
+        "subject_stage_id": before_state.get("active_stage") if before_state else None,
+        "subject_subtask": before_state.get("active_subtask") if before_state else None,
+        "subject_source_step_id": before_state.get("source_step_id") if before_state else None,
+        "result_stage_id": after_state.get("active_stage"),
+        "result_subtask": after_state.get("active_subtask"),
+        "result_source_step_id": after_state.get("source_step_id"),
+        # Compatibility aliases now describe the causal subject for v2.
+        "stage_id": before_state.get("active_stage") if before_state else after_state.get("active_stage"),
+        "subtask": before_state.get("active_subtask") if before_state else after_state.get("active_subtask"),
+        "source_step_id": before_state.get("source_step_id") if before_state else after_state.get("source_step_id"),
+        "request_id": safe_payload.get("request_id")
+        or (safe_payload.get("resolution") or {}).get("request_id"),
+        "decision_id": safe_payload.get("decision_id")
+        or (safe_payload.get("resolution") or {}).get("decision_id"),
+        "artifact_manifest_sha256": safe_payload.get("artifact_manifest_sha256")
+        or safe_payload.get("output_fingerprint"),
+        "effect_hashes_after": safe_payload.get("effect_hashes_after"),
+        "aggregate_root_hash_after": safe_payload.get("aggregate_root_hash_after"),
         "reason": normalize_reason(event_type, safe_payload).to_dict(),
         "side_effect_refs": side_effect_refs,
     }
@@ -212,7 +240,7 @@ def replay_events(
         envelope = event.payload.get(ENVELOPE_KEY)
         if not isinstance(envelope, dict):
             continue
-        if int(envelope.get("event_version", 0)) != EVENT_VERSION:
+        if int(envelope.get("event_version", 0)) not in SUPPORTED_EVENT_VERSIONS:
             raise ReplayIntegrityError(
                 f"unsupported workflow event version at revision {event.revision}"
             )
@@ -271,29 +299,64 @@ def project_action_center(events: Iterable[WorkflowEvent]) -> dict[str, Any]:
         ):
             action = event.payload.get("action") or event.payload.get("pending_action") or {}
             gate = str(action.get("gate") or event.payload.get("gate") or f"revision-{event.revision}")
+            request_id = str(
+                action.get("request_id")
+                or ((action.get("metadata") or {}).get("human_decision") or {}).get("request_id")
+                or f"{gate}:revision-{event.revision}"
+            )
             record = {
                 "gate": gate,
-                "request_id": action.get("request_id"),
+                "request_id": request_id,
+                "generation": action.get("generation"),
                 "kind": action.get("kind"),
                 "action_type": action.get("type"),
-                "requested_revision": event.revision,
+                "requested_revision": action.get("requested_revision", event.revision),
+                "subject_fingerprint": action.get("subject_fingerprint"),
+                "options_fingerprint": action.get("options_fingerprint"),
                 "reason": _reason(event),
             }
-            active[gate] = record
+            active[request_id] = record
             history.append({"status": "pending", **record})
         elif canonical == "HUMAN_DECISION_RECORDED":
             resolution = event.payload.get("resolution") or {}
             gate = str(resolution.get("gate") or event.payload.get("gate") or "")
-            if gate:
-                active.pop(gate, None)
+            request_id = str(
+                resolution.get("request_id")
+                or event.payload.get("request_id")
+                or ""
+            )
+            if request_id:
+                active.pop(request_id, None)
+            elif gate:
+                for key, record in list(active.items()):
+                    if record.get("gate") == gate:
+                        active.pop(key, None)
             history.append(
                 {
                     "status": "resolved",
                     "gate": gate or None,
+                    "request_id": request_id or None,
+                    "generation": resolution.get("generation")
+                    or event.payload.get("generation"),
                     "revision": event.revision,
                     "resolution": resolution,
                 }
             )
+            reopened = event.payload.get("reopened_request")
+            if isinstance(reopened, dict) and reopened.get("request_id"):
+                reopened_record = {
+                    "gate": reopened.get("gate"),
+                    "request_id": str(reopened["request_id"]),
+                    "generation": reopened.get("generation"),
+                    "kind": reopened.get("kind"),
+                    "action_type": reopened.get("type"),
+                    "requested_revision": reopened.get("requested_revision"),
+                    "subject_fingerprint": reopened.get("subject_fingerprint"),
+                    "options_fingerprint": reopened.get("options_fingerprint"),
+                    "reason": reopened.get("reason") or _reason(event),
+                }
+                active[str(reopened["request_id"])] = reopened_record
+                history.append({"status": "pending", **reopened_record})
     return {"pending": list(active.values()), "history": history}
 
 
@@ -342,8 +405,16 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
         if isinstance(envelope, dict):
             canonical = str(envelope.get("canonical_type") or canonical)
             event_id = envelope.get("event_id")
-            stage_id = envelope.get("stage_id") or stage_id
-            subtask = envelope.get("subtask") or subtask
+            stage_id = (
+                envelope.get("subject_stage_id")
+                if int(envelope.get("event_version", 1)) >= 2
+                else envelope.get("stage_id")
+            ) or stage_id
+            subtask = (
+                envelope.get("subject_subtask")
+                if int(envelope.get("event_version", 1)) >= 2
+                else envelope.get("subtask")
+            ) or subtask
             side_effect_refs = list(envelope.get("side_effect_refs") or ())
         timeline.append(
             {
@@ -356,6 +427,18 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
                 "attempt": event.attempt,
                 "stage": stage_id,
                 "subtask": subtask,
+                "subject_stage": stage_id,
+                "subject_subtask": subtask,
+                "subject_step": (
+                    envelope.get("subject_source_step_id")
+                    if isinstance(envelope, dict)
+                    else event.step
+                ),
+                "result_stage": envelope.get("result_stage_id") if isinstance(envelope, dict) else None,
+                "result_subtask": envelope.get("result_subtask") if isinstance(envelope, dict) else None,
+                "result_step": envelope.get("result_source_step_id") if isinstance(envelope, dict) else None,
+                "request_id": envelope.get("request_id") if isinstance(envelope, dict) else None,
+                "decision_id": envelope.get("decision_id") if isinstance(envelope, dict) else None,
                 "side_effect_refs": side_effect_refs,
                 "reason": _reason(event),
                 "ts": event.created_at,

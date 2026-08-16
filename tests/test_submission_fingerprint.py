@@ -75,6 +75,22 @@ def test_final_fingerprint_changes_for_every_review_or_delivery_input(
     assert submission_fingerprint(project, "demo") != before
 
 
+def test_final_fingerprint_binds_nested_paper_source(tmp_path: Path) -> None:
+    project = tmp_path / "demo"
+    make_submission(project)
+    (project / "demo_paper.tex").unlink()
+    nested = project / "paper" / "paper.tex"
+    write_file(nested, "\\begin{document}\nnested paper\\end{document}\n")
+    before = submission_fingerprint(project, "demo")
+
+    nested.write_text(
+        "\\begin{document}\nchanged nested paper\\end{document}\n",
+        encoding="utf-8",
+    )
+
+    assert submission_fingerprint(project, "demo") != before
+
+
 def test_fingerprint_recomputes_role_packets_instead_of_trusting_stale_manifests(
     tmp_path: Path,
 ) -> None:

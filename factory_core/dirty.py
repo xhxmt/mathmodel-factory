@@ -8,6 +8,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .paper_sources import discover_paper_sources
+
 
 DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v1"
 
@@ -48,6 +50,7 @@ _EXCLUDED_PARTS = {
     "judge_packets",
 }
 _TRACKED_ROOTS = {
+    "paper",
     "problem",
     "models",
     "results",
@@ -121,6 +124,10 @@ def _paper_semantics(text: str) -> dict[str, str]:
 
 def capture_artifact_manifest(project_dir: str | Path) -> dict[str, str]:
     project = Path(project_dir).resolve()
+    paper_sources = {
+        path.relative_to(project).as_posix()
+        for path in discover_paper_sources(project)
+    }
     manifest: dict[str, str] = {}
     for path in sorted(project.rglob("*")):
         if not path.is_file() or path.is_symlink():
@@ -133,9 +140,7 @@ def capture_artifact_manifest(project_dir: str | Path) -> dict[str, str]:
         except OSError:
             continue
         manifest[relative] = _sha256_bytes(data)
-        if path.suffix.lower() == ".tex" and (
-            path.name.endswith("_paper.tex") or relative == "paper/paper.tex"
-        ):
+        if relative in paper_sources:
             semantics = _paper_semantics(data.decode("utf-8", errors="replace"))
             for domain, fingerprint in semantics.items():
                 manifest[f"@paper:{relative}:{domain}"] = fingerprint

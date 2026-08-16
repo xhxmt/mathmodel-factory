@@ -59,10 +59,21 @@ class TransitionCoordinator:
         if self.projector is not None:
             try:
                 self.projector(self.project_dir, state)
-            except OSError as exc:
+            except Exception as exc:
+                projector_name = getattr(
+                    self.projector, "__qualname__", self.projector.__class__.__name__
+                )
+                try:
+                    self.store.record_projection_failure(
+                        revision=state.revision,
+                        projector_name=str(projector_name),
+                        error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    pass
                 warnings.warn(
                     f"workflow state committed at revision {state.revision}, "
-                    f"but compatibility projection failed: {exc}",
+                    f"but compatibility projection failed ({type(exc).__name__})",
                     RuntimeWarning,
                     stacklevel=2,
                 )

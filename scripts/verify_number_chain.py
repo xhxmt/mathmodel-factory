@@ -25,6 +25,11 @@ import json
 import glob
 from pathlib import Path
 
+if __package__ in {None, ""}:  # pragma: no cover - direct script execution
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from factory_core.paper_sources import primary_paper_source
+
 
 def _read_file(path):
     """读取文件，容错编码。"""
@@ -205,9 +210,10 @@ def match_number(val, target, tolerance=0.02):
 
 def collect_number_chain_metrics(project_dir, base_name):
     """收集数值链指标 dict；不打印。paper 缺失返回 None。"""
-    tex_path = os.path.join(project_dir, f'{base_name}_paper.tex')
-    if not os.path.exists(tex_path):
+    paper = primary_paper_source(project_dir, base_name)
+    if paper is None:
         return None
+    tex_path = str(paper)
 
     key_results = extract_key_results(project_dir)
     paper_numbers = extract_tex_numbers_detailed(tex_path)
@@ -330,8 +336,7 @@ def main():
     metrics = collect_number_chain_metrics(project_dir, base_name)
 
     if metrics is None:
-        tex_path = os.path.join(project_dir, f'{base_name}_paper.tex')
-        print(f"ERROR: {tex_path} not found")
+        print(f"ERROR: {base_name}_paper.tex or paper/paper.tex not found")
         sys.exit(3)
 
     _print_report(project_dir, metrics)

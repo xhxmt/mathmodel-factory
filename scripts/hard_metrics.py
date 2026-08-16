@@ -12,6 +12,12 @@ import glob
 import json
 import zipfile
 import subprocess
+from pathlib import Path
+
+if __package__ in {None, ""}:  # pragma: no cover - direct script execution
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from factory_core.paper_sources import primary_paper_source
 
 from verify_symbols import collect_symbol_metrics
 from verify_numbers import collect_number_metrics
@@ -150,8 +156,9 @@ def _safe(fn, *args, label=""):
 def collect_all(project_dir, base_name):
     """聚合所有 collect_* 成一行扁平 dict（去明细键）+ 派生指标。"""
     row = {"project": base_name}
+    paper = primary_paper_source(project_dir, base_name)
     cite = _safe(collect_citation_metrics,
-                 os.path.join(project_dir, f"{base_name}_paper.tex"),
+                 str(paper) if paper is not None else "",
                  os.path.join(project_dir, "references.bib"), label="citation")
     assum = _safe(collect_assumption_metrics,
                   os.path.join(project_dir, "assumption_ledger.md"), label="assumption")
@@ -256,10 +263,10 @@ def _discover_projects(parent):
     found = []
     for name in sorted(os.listdir(parent)):
         pdir = os.path.join(parent, name)
-        if os.path.isdir(pdir) and os.path.exists(os.path.join(pdir, f"{name}_paper.tex")):
+        if os.path.isdir(pdir) and primary_paper_source(pdir, name) is not None:
             found.append((pdir, name))
         elif os.path.isdir(pdir):
-            print(f"[hard_metrics] skip {name}: no {name}_paper.tex", file=sys.stderr)
+            print(f"[hard_metrics] skip {name}: no supported paper source", file=sys.stderr)
     return found
 
 

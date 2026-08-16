@@ -115,7 +115,7 @@ def test_artifact_layers_keep_receipts_as_machine_evidence():
     assert classify_artifact("checkpoint.md") is ArtifactLayer.REBUILDABLE_PROJECTION
 
 
-def test_store_persists_contest_policy_and_immutable_structured_decisions(tmp_path):
+def test_store_persists_contest_policy_and_append_only_decision_generations(tmp_path):
     store = SQLiteStateStore(tmp_path, clock=lambda: 1_000)
     policy = ContestPolicy.default(started_at=1_000)
     store.initialize(
@@ -136,14 +136,24 @@ def test_store_persists_contest_policy_and_immutable_structured_decisions(tmp_pa
     }
     store.record_decision("step3", decision)
     store.record_decision("step3", decision)
-    assert store.decision("step3") == decision
+    first = store.decision("step3")
+    assert first is not None
+    assert {key: first[key] for key in decision} == decision
+    assert first["generation"] == 1
 
-    with pytest.raises(ValueError, match="immutable"):
-        store.record_decision("step3", {**decision, "selected_primary": "m2"})
+    store.record_decision("step3", {**decision, "selected_primary": "m2"})
+    second = store.decision("step3")
+    assert second is not None
+    assert second["selected_primary"] == "m2"
+    assert second["generation"] == 2
+    assert len(store.decision_history("step3")) == 2
     connection = sqlite3.connect(store.path)
     try:
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-            connection.execute("DELETE FROM workflow_decisions WHERE gate='step3'")
+            connection.execute(
+                "DELETE FROM workflow_decision_instances WHERE decision_id=?",
+                (second["decision_id"],),
+            )
     finally:
         connection.close()
 

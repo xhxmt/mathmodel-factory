@@ -24,7 +24,7 @@
 - “任务图”页展示 Step 0 的 `problem-plan-v1` 问题专属 DAG；固定 Stage/Step 仍是调度权威，DAG 只表达题目内部的数据、参数、求解和验证依赖。
 - 建模方向与任务图 API 使用统一 `node-output-v1` / `ContentBlock` 协议，前端按注册的 `render_type` 渲染摘要、方法卡、DAG、提示和产物链接；后端不下发可执行 HTML。
 - 顶部行动中心持续聚合 Human Gate、deadline 风险、Solver 失败、未解决审计事项和交付阻塞。
-- `step3`、`content_freeze`、`delivery_freeze_override` 三类人工决策可在 Web 中完成，均携带当前 revision 并写入 append-only SQLite；CLI 路径始终保留。
+- `step3`、`content_freeze`、`delivery_freeze_override` 三类人工决策可在 Web 中完成，均携带当前 revision、request ID、generation 和 subject/options fingerprint 并写入 append-only SQLite；拒绝审批会保留拒绝结果并打开下一代请求，CLI 路径始终保留。
 - 证据驾驶舱汇总 canonical results、PRIMARY/AUXILIARY、Solver jobs/receipts、model/results/paper/final audits 与三角色状态。
 - 交付就绪中心按红黄绿列出 PDF、canonical results、附件、内容冻结、确定性检查、视觉页数、三角色、最终快照和原子 release；PDF/ZIP 只从已验证的 current release 下载。
 
@@ -126,7 +126,7 @@ python3 scripts/selection_gate.py select-step3 ongoing/<base_name> \
   --primary m2 --aux m1 --reason "Prefer the verified primary stream"
 ```
 
-决策以项目 SQLite 为权威，JSON/Markdown 仅为界面与 Agent 投影。Step 16
+决策以项目 SQLite 的 request/decision ledger 为权威，JSON/Markdown 仅为界面与 Agent 投影。Step 16
 前还会出现 `content_freeze` 人工节点；CLI 可运行：
 
 ```bash
@@ -135,7 +135,7 @@ python3 scripts/selection_gate.py approve-content-freeze ongoing/<base_name> \
 ```
 
 调试时可加 `--no-resume`。Web 提交选择或咨询回答时携带当前 project
-revision；过期页面会收到 `409`，不会写入旧决策或启动 worker。成功提交
+revision 和当前 request identity；过期页面会收到 `409`，不会写入旧决策或启动 worker。成功提交
 会解析 gate 并启动统一 Python worker。CLI 路径是现役合同，不能被 Web
 替代。
 

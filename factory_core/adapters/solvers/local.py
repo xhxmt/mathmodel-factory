@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .types import SolverRequest, SolverSubmission
@@ -78,14 +79,24 @@ class LocalSolverBackend:
             return "running"
         return "failed"
 
-    def cancel(self, job: dict) -> None:
+    def cancel(self, job: dict) -> str:
         pid = int(job.get("external_id") or 0)
         if not pid:
-            return
+            return "failed"
         try:
             os.killpg(pid, signal.SIGTERM)
         except (PermissionError, ProcessLookupError):
-            pass
+            return "failed" if self._pid_live(pid) else "cancelled"
+        for _attempt in range(20):
+            try:
+                reaped, _status = os.waitpid(pid, os.WNOHANG)
+                if reaped == pid:
+                    return "cancelled"
+            except ChildProcessError:
+                if not self._pid_live(pid):
+                    return "cancelled"
+            time.sleep(0.05)
+        return "cancelling"
 
     @staticmethod
     def _command(request: SolverRequest) -> list[str]:

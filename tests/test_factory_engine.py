@@ -501,6 +501,15 @@ def test_projection_failure_does_not_rollback_authoritative_transition(tmp_path)
 
     assert state.status is WorkflowStatus.COMPLETED
     assert store.load().status is WorkflowStatus.COMPLETED
+    failures = store.projection_failures(pending_only=True)
+    assert failures
+    assert {failure["error_type"] for failure in failures} == {"OSError"}
+    for failure in failures:
+        store.resolve_projection_failure(
+            revision=failure["revision"],
+            projector_name=failure["projector_name"],
+        )
+    assert store.projection_failures(pending_only=True) == []
 
 
 def test_engine_dispatches_native_step_lifecycle_without_legacy_handler(tmp_path):

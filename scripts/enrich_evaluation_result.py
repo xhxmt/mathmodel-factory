@@ -21,6 +21,18 @@ def _canonical_hash(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _optional_json_object(path: Path | None) -> dict[str, Any] | None:
+    """Load optional evidence without aborting diagnostic-result publication."""
+
+    if path is None or not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _objective_summary(path: Path | None) -> tuple[dict[str, Any], list[str]]:
     """Load and bind the objective bundle without making it a score gate."""
 
@@ -303,28 +315,29 @@ def main() -> int:
     args = parser.parse_args()
 
     aggregate_path = Path(args.aggregate_json)
-    precheck_path = Path(args.precheck)
     aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
-    precheck = json.loads(precheck_path.read_text(encoding="utf-8")) if precheck_path.is_file() else None
+    precheck = _optional_json_object(Path(args.precheck))
+    if precheck is None:
+        precheck = {
+            "passed": False,
+            "scoring_eligible": False,
+            "checks": [
+                {
+                    "id": "precheck_evidence",
+                    "ok": False,
+                    "severity": "error",
+                    "detail": "precheck JSON is missing, invalid, or not an object",
+                }
+            ],
+        }
     calibration_path = Path(args.calibration_report) if args.calibration_report else None
-    calibration = (
-        json.loads(calibration_path.read_text(encoding="utf-8"))
-        if calibration_path and calibration_path.is_file()
-        else None
-    )
+    calibration = _optional_json_object(calibration_path)
     objective, objective_errors = _objective_summary(
         Path(args.objective_evidence) if args.objective_evidence else None
     )
-    reliability = None
-    if args.reliability_report:
-        try:
-            reliability_value = json.loads(
-                Path(args.reliability_report).read_text(encoding="utf-8")
-            )
-            if isinstance(reliability_value, dict):
-                reliability = reliability_value
-        except (OSError, json.JSONDecodeError):
-            reliability = None
+    reliability = _optional_json_object(
+        Path(args.reliability_report) if args.reliability_report else None
+    )
     enriched = enrich_aggregate(
         aggregate,
         precheck=precheck,

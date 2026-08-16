@@ -19,7 +19,15 @@ from web.backend.ws import create_ws_router
 
 
 def load_main_module(tmp_path: Path):
-    sys.modules.pop("web.backend.main", None)
+    # Several compatibility tests install lightweight module doubles. Rebuild
+    # the real backend/FastAPI/Pydantic graph before asserting OpenAPI shape.
+    for module_name in list(sys.modules):
+        if module_name.startswith("web.backend."):
+            sys.modules.pop(module_name, None)
+        elif module_name == "fastapi" or module_name.startswith("fastapi."):
+            sys.modules.pop(module_name, None)
+        elif module_name == "pydantic" or module_name.startswith("pydantic."):
+            sys.modules.pop(module_name, None)
     os.environ["JWT_SECRET"] = "0123456789abcdef0123456789abcdef"
     os.environ["ADMIN_PASSWORD"] = "correct horse battery staple 42"
     os.environ["FACTORY_ROOT"] = str(tmp_path)

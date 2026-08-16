@@ -137,21 +137,40 @@ REQUEST_TMP_DIR=$(mktemp -d)
 chmod 700 "$REQUEST_TMP_DIR"
 trap 'rm -rf -- "$REQUEST_TMP_DIR"' EXIT
 WORKING_FILES_PATH="$REQUEST_TMP_DIR/working_files.json"
+WORKING_FILES_BASE64_PATH="$REQUEST_TMP_DIR/working_files_base64.json"
+INPUT_HASHES_PATH="$REQUEST_TMP_DIR/input_hashes.json"
 ENV_VARS_PATH="$REQUEST_TMP_DIR/env_vars.json"
 REQUEST_JSON_PATH="$REQUEST_TMP_DIR/request.json"
 printf '{}\n' > "$WORKING_FILES_PATH"
+printf '{}\n' > "$WORKING_FILES_BASE64_PATH"
+printf '{}\n' > "$INPUT_HASHES_PATH"
 printf '{}\n' > "$ENV_VARS_PATH"
 
 # Build working files through files so large inputs never enter argv.
 for file in "${WORKING_FILES[@]}"; do
     if [[ -f "$file" ]]; then
         filename=$(basename "$file")
-        next_path="$REQUEST_TMP_DIR/working_files.next.json"
-        jq --arg k "$filename" --rawfile v "$file" '. + {($k): $v}' \
-            "$WORKING_FILES_PATH" > "$next_path"
-        mv "$next_path" "$WORKING_FILES_PATH"
+        if LC_ALL=C grep -Iq . "$file"; then
+            next_path="$REQUEST_TMP_DIR/working_files.next.json"
+            jq --arg k "$filename" --rawfile v "$file" '. + {($k): $v}' \
+                "$WORKING_FILES_PATH" > "$next_path"
+            mv "$next_path" "$WORKING_FILES_PATH"
+        else
+            value_path="$REQUEST_TMP_DIR/working_file.base64"
+            base64 -w 0 "$file" > "$value_path"
+            next_path="$REQUEST_TMP_DIR/working_files_base64.next.json"
+            jq --arg k "$filename" --rawfile v "$value_path" '. + {($k): $v}' \
+                "$WORKING_FILES_BASE64_PATH" > "$next_path"
+            mv "$next_path" "$WORKING_FILES_BASE64_PATH"
+        fi
+        input_sha256=$(sha256sum "$file" | awk '{print $1}')
+        next_path="$REQUEST_TMP_DIR/input_hashes.next.json"
+        jq --arg k "$filename" --arg v "$input_sha256" '. + {($k): $v}' \
+            "$INPUT_HASHES_PATH" > "$next_path"
+        mv "$next_path" "$INPUT_HASHES_PATH"
     fi
 done
+unset input_sha256
 
 # Build env vars without carrying the assembled document in argv.
 for env_pair in "${ENV_VARS[@]}"; do
@@ -174,6 +193,8 @@ jq -n \
     --arg script_name "$SCRIPT_NAME" \
     --argjson max_time "$MAX_TIME" \
     --slurpfile working_files "$WORKING_FILES_PATH" \
+    --slurpfile working_files_base64 "$WORKING_FILES_BASE64_PATH" \
+    --slurpfile requested_input_sha256 "$INPUT_HASHES_PATH" \
     --slurpfile env_vars "$ENV_VARS_PATH" \
     '{
         job_id: $job_id,
@@ -182,6 +203,10 @@ jq -n \
         script_name: $script_name,
         max_time: $max_time,
         working_files: $working_files[0],
+        working_files_base64: $working_files_base64[0],
+        requested_input_sha256: $requested_input_sha256[0],
+        declared_outputs: [],
+        seeds: [],
         env_vars: $env_vars[0]
     }' > "$REQUEST_JSON_PATH"
 

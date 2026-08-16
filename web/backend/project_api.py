@@ -599,16 +599,36 @@ def _safe_upload_filename(filename: str) -> str:
     return name
 
 
+def _uploaded_problem_path(settings: Settings, value: str) -> Path:
+    try:
+        path = Path(value).resolve(strict=True)
+        path.relative_to(settings.uploads_dir.resolve())
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PROJECT_REQUEST_REQUIRES_UPLOADED_PROBLEM",
+        ) from exc
+    if not path.is_file() or path.suffix.lower() not in {".pdf", ".md"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PROJECT_REQUEST_REQUIRES_UPLOADED_PROBLEM",
+        )
+    return path
+
+
 def _find_paper(settings: Settings, project: Path, base_name: str) -> Path | None:
+    from factory_core.paper_sources import discover_paper_pdfs
+
     packaged = settings.papers_dir / f"{base_name}_paper.pdf"
     if packaged.is_file():
         return packaged
-    for candidate in sorted(project.glob("*_paper.pdf")):
-        return candidate
-    return None
+    papers = discover_paper_pdfs(project, base_name)
+    return papers[0] if papers else None
 
 
 def list_artifacts(project: Path) -> list[dict[str, Any]]:
+    from factory_core.paper_sources import discover_paper_pdfs, discover_paper_sources
+
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -629,9 +649,9 @@ def list_artifacts(project: Path) -> list[dict[str, Any]]:
         for rel in rels:
             add(project / rel, group)
 
-    for candidate in sorted(project.glob("*_paper.tex")):
+    for candidate in discover_paper_sources(project):
         add(candidate, "paper")
-    for candidate in sorted(project.glob("*_paper.pdf")):
+    for candidate in discover_paper_pdfs(project):
         add(candidate, "paper")
 
     for folder, group, exts in (
@@ -842,16 +862,6 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         if not file.filename:
             raise HTTPException(status_code=400, detail="Missing filename")
 
-        uploads_dir = settings.uploads_dir
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-        content = await file.read()
-        if len(content) > settings.max_upload_size:
-            raise HTTPException(
-                status_code=400,
-                detail=f"文件过大。最大支持 {settings.max_upload_size // (1024 * 1024)} MB",
-            )
-
-        timestamp = datetime.now(BEIJING_TZ).strftime("%Y%m%d_%H%M%S")
         try:
             filename = _safe_upload_filename(file.filename)
         except ValueError as exc:
@@ -866,11 +876,43 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                 detail="不支持的文件格式：支持 PDF、Markdown 或压缩包（.zip, .tar.gz, .tar.bz2, .tar.xz）",
             )
 
+        uploads_dir = settings.uploads_dir
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(BEIJING_TZ).strftime("%Y%m%d_%H%M%S")
+        upload_id = f"{timestamp}_{os.urandom(6).hex()}"
+        extract_dir = uploads_dir / f"{upload_id}_{Path(filename).stem}"
+        target = (
+            extract_dir / filename
+            if is_archive
+            else uploads_dir / f"{upload_id}_{filename}"
+        )
         if is_archive:
-            extract_dir = uploads_dir / f"{timestamp}_{Path(filename).stem}"
-            extract_dir.mkdir(parents=True, exist_ok=True)
-            archive_path = extract_dir / filename
-            archive_path.write_bytes(content)
+            extract_dir.mkdir(parents=True, exist_ok=False)
+        total_size = 0
+        try:
+            with target.open("xb") as handle:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total_size += len(chunk)
+                    if total_size > settings.max_upload_size:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=(
+                                "文件过大。最大支持 "
+                                f"{settings.max_upload_size // (1024 * 1024)} MB"
+                            ),
+                        )
+                    handle.write(chunk)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            if is_archive:
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            raise
+
+        if is_archive:
+            archive_path = target
             try:
                 extract_archive(archive_path, extract_dir)
                 archive_path.unlink(missing_ok=True)
@@ -883,7 +925,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                     "message": "压缩包上传并解压成功",
                     "file_path": str(problem_file),
                     "filename": problem_file.name,
-                    "size": len(content),
+                    "size": total_size,
                     "extracted_dir": str(extract_dir),
                     "archive_name": filename,
                 }
@@ -891,15 +933,14 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
-            safe_name = f"{timestamp}_{filename}"
-            file_path = uploads_dir / safe_name
-            file_path.write_bytes(content)
+            safe_name = target.name
+            file_path = target
             return {
                 "status": "ok",
                 "message": "文件上传成功",
                 "file_path": str(file_path),
                 "filename": safe_name,
-                "size": len(content),
+                "size": total_size,
             }
 
     @router.post("/api/projects/new")
@@ -940,9 +981,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
     ):
         if current_user.role == "admin":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ADMIN_USE_DIRECT_CREATE")
-        problem_path = Path(request.problem_path)
-        if not problem_path.exists():
-            raise HTTPException(status_code=400, detail=f"Problem file not found: {request.problem_path}")
+        problem_path = _uploaded_problem_path(settings, request.problem_path)
         try:
             record = store.create_project_request(
                 requester=current_user.username,
@@ -1300,16 +1339,27 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
 
         write_evidence.artifact_first = True  # type: ignore[attr-defined]
 
+        resolution = {
+            "source": "web",
+            "gate": decision.gate,
+            "selected_option_id": decision.selected_option_id.strip(),
+            "selected_aux_id": decision.selected_aux_id.strip(),
+            "reason": decision.reason.strip(),
+        }
+        request_identity = {
+            "request_id": decision.request_id,
+            "generation": decision.generation,
+            "subject_fingerprint": decision.subject_fingerprint,
+            "options_fingerprint": decision.options_fingerprint,
+        }
+        resolution.update(
+            {key: value for key, value in request_identity.items() if value is not None}
+        )
+
         try:
             FactoryService(settings.factory_root).resolve_and_start(
                 project,
-                {
-                    "source": "web",
-                    "gate": decision.gate,
-                    "selected_option_id": decision.selected_option_id.strip(),
-                    "selected_aux_id": decision.selected_aux_id.strip(),
-                    "reason": decision.reason.strip(),
-                },
+                resolution,
                 evidence_writer=write_evidence,
                 expected_revision=decision.expected_revision,
             )

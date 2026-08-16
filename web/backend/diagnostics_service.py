@@ -124,6 +124,10 @@ def build_project_diagnostics(
                             raise ReplayIntegrityError(
                                 "replayed state differs from authoritative state"
                             )
+                        if not store.verify_aggregate_domain_root():
+                            raise ReplayIntegrityError(
+                                "workflow domain tables differ from the recorded aggregate root"
+                            )
                     except ReplayIntegrityError as exc:
                         return {
                             "source": "workflow_events",

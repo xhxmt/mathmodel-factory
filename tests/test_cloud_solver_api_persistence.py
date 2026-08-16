@@ -52,6 +52,11 @@ class FakeStorageClient:
 
 def import_solver_api():
     sys.modules.pop("cloud.solver_api", None)
+    for module_name in list(sys.modules):
+        if module_name == "fastapi" or module_name.startswith("fastapi."):
+            sys.modules.pop(module_name, None)
+        elif module_name == "pydantic" or module_name.startswith("pydantic."):
+            sys.modules.pop(module_name, None)
     return importlib.import_module("cloud.solver_api")
 
 

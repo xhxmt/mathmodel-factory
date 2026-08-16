@@ -37,6 +37,11 @@ import re
 import sys
 from pathlib import Path
 
+if __package__ in {None, ""}:  # pragma: no cover - direct script execution
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from factory_core.paper_sources import primary_paper_source
+
 TOL_REL = 0.005          # 相对容差 0.5%（与 Gate 1 数字核对口径一致）
 XLSX_UNMATCHED_MAX = 0.15  # xlsx 数值单元格允许的最大不可追溯比例（派生列如占比%）
 HEADLINE_KEY_RE = re.compile(
@@ -199,12 +204,12 @@ def main() -> int:
         failures.append(f"缺少题目要求的附件: {', '.join(missing_files)}")
 
     # ── 2. 策略表存在性 ──────────────────────────────────────────
-    tex_path = project / f"{base}_paper.tex"
+    tex_path = primary_paper_source(project, base)
     tables_required = contract.get("strategy_tables") or []
     tables_missing = []
     if tables_required:
-        if not tex_path.is_file():
-            failures.append(f"论文 {tex_path.name} 不存在，无法核对策略表")
+        if tex_path is None:
+            failures.append("论文源文件不存在，无法核对策略表")
             tables_missing = [t.get("problem", "?") for t in tables_required]
         else:
             tex = read_text(tex_path)

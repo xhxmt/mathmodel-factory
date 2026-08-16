@@ -97,12 +97,18 @@ retained as validation and compatibility boundaries. New projects default to
 activation and may explicitly roll back while stopped and semantically clean.
 Do not delete, renumber, or merge the Step contracts.
 
-New projects persist a 74-hour contest policy in schema-v7 SQLite. Steps 0–15
+New projects persist a 74-hour contest policy in schema-v8 SQLite. Steps 0–15
 are capped at T−6h content freeze; Step 16 owns the six-hour terminal reserve
 and is capped at the final deadline. T−2h is delivery freeze: any audit-driven
 substantive reopen requires a separate human override. Retry sleeps are also
 budget checked. Historical/migrated projects without a contest-policy row stay
 unbounded for compatibility; do not synthesize an expired deadline for them.
+
+Schema v8 represents every Human Gate occurrence as an immutable request
+(`request_id`, gate, generation, subject/options fingerprints) and one optional
+append-only decision instance. A rejected Approval remains historical evidence,
+keeps the project awaiting action, and creates the next generation. Never infer
+approval from the existence of a decision row or a selected option string.
 
 The Legacy Adapter still snapshots itself under `logs/runner_snapshots/` so an
 active Step is insulated from edits. Do not add new scheduling, retry, recovery,

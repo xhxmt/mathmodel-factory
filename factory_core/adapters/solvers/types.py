@@ -14,6 +14,9 @@ class SolverRequest:
     args: tuple[str, ...] = ()
     max_time_seconds: int = 1_800
     env: dict[str, str] = field(default_factory=dict)
+    input_paths: tuple[Path, ...] = ()
+    output_paths: tuple[str, ...] = ()
+    seeds: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

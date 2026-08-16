@@ -259,7 +259,10 @@ def build_contest_dashboard(
                 {"file": name, "present": _project_file_exists(project, name)}
             )
     missing_attachments = [item["file"] for item in attachments if not item["present"]]
-    pdf = project / f"{project.name}_paper.pdf"
+    from factory_core.paper_sources import discover_paper_pdfs
+
+    paper_pdfs = discover_paper_pdfs(project)
+    pdf = paper_pdfs[0] if paper_pdfs else project / f"{project.name}_paper.pdf"
     final_checks = _json(project / "judge_outputs" / "final_paper_checks.json")
     hard_checks = [
         item for item in final_checks.get("checks", [])
@@ -273,6 +276,7 @@ def build_contest_dashboard(
     roles_pass = bool(role_statuses) and all(role_statuses.get(role) == "PASS" for role in ("math", "execution", "paper"))
     content_decision = store.decision("content_freeze") if state else None
     override_decision = store.decision("delivery_freeze_override") if state else None
+    content_approved = bool(content_decision and content_decision.get("approved") is True)
     release = resolve_current_release(papers_root, project.name)
     legacy_release_accepted = bool(
         not timing.get("configured")
@@ -299,9 +303,9 @@ def build_contest_dashboard(
         _check(
             "content_freeze",
             "内容冻结",
-            "pass" if content_decision or legacy_release_accepted else "pending",
+            "pass" if content_approved or legacy_release_accepted else "pending",
             "已人工确认主结论、摘要和核心图表"
-            if content_decision
+            if content_approved
             else "Legacy 项目：已由有效 Final Audit 与原子 release 覆盖"
             if legacy_release_accepted
             else "等待人工确认",
@@ -329,11 +333,20 @@ def build_contest_dashboard(
     pending_action = state.pending_action if state else None
     if pending_action:
         gate = str(pending_action.get("gate") or "")
+        request = ((pending_action.get("metadata") or {}).get("human_decision") or {})
+        request_id = str(request.get("request_id") or gate or "human")
+        generation = request.get("generation")
         actions.append({
-            "id": f"gate:{gate or 'human'}",
+            "id": f"gate:{request_id}",
             "severity": "critical",
             "title": "需要人工决策",
-            "summary": gate.replace("_", " ") or "待处理人工节点",
+            "summary": (
+                f"{gate.replace('_', ' ') or '待处理人工节点'}"
+                + (f" · 第 {generation} 代" if generation else "")
+            ),
+            "gate": gate or None,
+            "request_id": request.get("request_id"),
+            "generation": generation,
             "tab": "selection" if str(pending_action.get("type") or "").endswith("selection") else "consultation",
         })
     if timing.get("risk_level") in {"warning", "critical", "expired"}:

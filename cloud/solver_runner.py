@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import base64
 import re
 import signal
 import stat
@@ -10,7 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 
 MAX_JOB_ID_LENGTH = 64
@@ -41,7 +42,7 @@ THREAD_ENV_KEYS = {
     "NUMEXPR_MAX_THREADS",
 }
 SEED_ENV_KEYS = {"PYTHONHASHSEED", "SOLVER_RANDOM_SEED"}
-ALLOWED_ENV_KEYS = THREAD_ENV_KEYS | SEED_ENV_KEYS
+ALLOWED_ENV_KEYS = THREAD_ENV_KEYS | SEED_ENV_KEYS | {"FACTORY_SOLVER_JOB_ID"}
 RESULT_SUFFIXES = {".json", ".csv", ".txt", ".md", ".log", ".xlsx", ".png", ".pdf"}
 
 
@@ -84,7 +85,8 @@ def validate_env_vars(env_vars: Mapping[str, str] | None) -> dict[str, str]:
     for key, value in (env_vars or {}).items():
         if key not in ALLOWED_ENV_KEYS:
             raise InputValidationError(f"environment variable is not allowed: {key}")
-        if not isinstance(value, str) or len(value) > 32:
+        maximum_length = 64 if key == "FACTORY_SOLVER_JOB_ID" else 32
+        if not isinstance(value, str) or len(value) > maximum_length:
             raise InputValidationError(f"environment variable has an invalid value: {key}")
         if key in THREAD_ENV_KEYS:
             if not value.isdigit() or not 1 <= int(value) <= 4:
@@ -98,6 +100,8 @@ def validate_env_vars(env_vars: Mapping[str, str] | None) -> dict[str, str]:
             not value.isdigit() or not 0 <= int(value) <= 4_294_967_295
         ):
             raise InputValidationError("SOLVER_RANDOM_SEED must be a 32-bit integer")
+        elif key == "FACTORY_SOLVER_JOB_ID":
+            validate_job_id(value)
         validated[key] = value
     return validated
 
@@ -106,6 +110,7 @@ def validate_submission_files(
     script_name: str,
     script_content: str,
     working_files: Mapping[str, str] | None,
+    working_files_base64: Mapping[str, str] | None = None,
 ) -> None:
     script_path = validate_relative_path(script_name, allow_nested=False)
     script_bytes = len(script_content.encode("utf-8"))
@@ -113,7 +118,8 @@ def validate_submission_files(
         raise InputValidationError("script content is empty or exceeds the script-size limit")
 
     files = working_files or {}
-    if len(files) > MAX_WORKING_FILES:
+    binary_files = working_files_base64 or {}
+    if len(files) + len(binary_files) > MAX_WORKING_FILES:
         raise InputValidationError("working file count exceeds the limit")
 
     total_bytes = script_bytes
@@ -131,11 +137,34 @@ def validate_submission_files(
         total_bytes += content_bytes
         if total_bytes > MAX_INPUT_BYTES:
             raise InputValidationError("submitted files exceed the total-input limit")
+    for filename, content in binary_files.items():
+        normalized = str(validate_relative_path(filename, allow_nested=True))
+        if normalized in normalized_paths:
+            raise InputValidationError("submitted file paths must be unique")
+        normalized_paths.add(normalized)
+        if not isinstance(content, str):
+            raise InputValidationError("base64 working file content must be text")
+        try:
+            decoded = base64.b64decode(content.encode("ascii"), validate=True)
+        except (UnicodeEncodeError, ValueError) as exc:
+            raise InputValidationError("working file contains invalid base64") from exc
+        if len(decoded) > MAX_WORKING_FILE_BYTES:
+            raise InputValidationError("working file exceeds the single-file limit")
+        total_bytes += len(decoded)
+        if total_bytes > MAX_INPUT_BYTES:
+            raise InputValidationError("submitted files exceed the total-input limit")
 
 
 def _write_exclusive_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
     with path.open("x", encoding="utf-8") as handle:
+        handle.write(content)
+    path.chmod(0o444)
+
+
+def _write_exclusive_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    with path.open("xb") as handle:
         handle.write(content)
     path.chmod(0o444)
 
@@ -160,8 +189,11 @@ def prepare_workspace(
     script_name: str,
     script_content: str,
     working_files: Mapping[str, str] | None,
+    working_files_base64: Mapping[str, str] | None = None,
 ) -> tuple[Path, Path, Path, tuple[int, int] | None]:
-    validate_submission_files(script_name, script_content, working_files)
+    validate_submission_files(
+        script_name, script_content, working_files, working_files_base64
+    )
     job_root.mkdir(mode=0o755, parents=False, exist_ok=False)
     input_dir = job_root / "input"
     output_dir = job_root / "output"
@@ -174,6 +206,12 @@ def prepare_workspace(
     for filename, content in (working_files or {}).items():
         relative = validate_relative_path(filename, allow_nested=True)
         _write_exclusive_text(input_dir / str(relative), content)
+    for filename, content in (working_files_base64 or {}).items():
+        relative = validate_relative_path(filename, allow_nested=True)
+        _write_exclusive_bytes(
+            input_dir / str(relative),
+            base64.b64decode(content.encode("ascii"), validate=True),
+        )
 
     for directory, subdirectories, _filenames in os.walk(input_dir, topdown=False):
         Path(directory).chmod(0o555)
@@ -320,6 +358,8 @@ def run_solver(
     max_time: int,
     env_vars: Mapping[str, str] | None,
     identity: tuple[int, int] | None,
+    on_process_started: Callable[[subprocess.Popen[Any]], None] | None = None,
+    cancellation_requested: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     if solver_type != "python":
         raise InputValidationError(f"runtime is not available in this image: {solver_type}")
@@ -350,6 +390,7 @@ def run_solver(
     started_at = time.monotonic()
     limit_error: str | None = None
     timed_out = False
+    cancelled = False
 
     with stdout_path.open("x", encoding="utf-8") as stdout_file, stderr_path.open(
         "x", encoding="utf-8"
@@ -369,8 +410,14 @@ def run_solver(
             umask=0o077,
             **process_kwargs,
         )
+        if on_process_started is not None:
+            on_process_started(process)
         try:
             while process.poll() is None:
+                if cancellation_requested is not None and cancellation_requested():
+                    cancelled = True
+                    _terminate_process_group(process)
+                    break
                 elapsed = time.monotonic() - started_at
                 if elapsed > max_time:
                     timed_out = True
@@ -397,6 +444,14 @@ def run_solver(
                 _terminate_solver_identity(identity)
 
     duration = time.monotonic() - started_at
+    if cancelled:
+        return {
+            "status": "cancelled",
+            "exit_code": return_code,
+            "duration": duration,
+            "error_code": "CANCELLED_BY_REQUEST",
+            "error_message": "Solver execution was cancelled",
+        }
     if timed_out:
         return {
             "status": "timeout",

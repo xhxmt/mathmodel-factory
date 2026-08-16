@@ -19,12 +19,17 @@ timestamps. Database triggers reject event updates and deletes. Event payloads
 redact secret-, token-, password-, credential-, and API-key-shaped fields. New
 events retain their legacy type/payload fields and add a versioned `_workflow`
 envelope containing a canonical event type, structured Gate reason, replay-state
-patch, and SHA-256 of the stable post-transition state. A first event or a
-schema-v6 cutover event is a full replay snapshot; later events are merge patches.
+patch, SHA-256 of the stable pre/post-transition state, distinct subject/result
+Stage/subtask/Step coordinates, and an aggregate side-table root. A first event
+or an older-schema cutover event is a full replay snapshot; later events are
+merge patches. Event v1 remains replay-compatible; new writes use event v2.
 
-Schema v7 also stores Stage checkpoints and input baselines, machine-owned
-semantic dirty flags and clear receipts, an optional `contest_policy`, and
-append-only `workflow_decisions`. It adds versioned projector snapshots and
+Schema v8 also stores current and append-only historical Stage checkpoints,
+machine-owned semantic dirty causes/flags and classifier-bound clear receipts,
+an optional `contest_policy`, immutable Human Decision requests by generation,
+and append-only decision instances. Rejection opens a new request generation;
+only an explicit `approved=true` instance satisfies an Approval gate. It adds
+recoverable projection-failure records, source-bound projector snapshots and
 Solver job idempotency/request/Stage ownership columns. New projects receive `contest_core_v1`: a
 74-hour final deadline, T−6h content freeze, T−2h delivery freeze, and six-hour
 delivery reserve. Existing projects upgraded without a policy remain

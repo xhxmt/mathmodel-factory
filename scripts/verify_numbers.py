@@ -29,6 +29,11 @@ import hashlib
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
+if __package__ in {None, ""}:  # pragma: no cover - direct script execution
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from factory_core.paper_sources import primary_paper_source
+
 
 def compute_checksum(value: Any) -> str:
     """Compute MD5 checksum for a value."""
@@ -156,8 +161,8 @@ def number_matches(val: float, reference_numbers: set[float], tolerance: float =
 def collect_number_metrics(project_dir: str | Path, base_name: str) -> Dict[str, Any] | None:
     """Backward-compatible numeric metrics API consumed by hard_metrics.py."""
     project_dir = Path(project_dir)
-    tex_path = project_dir / f"{base_name}_paper.tex"
-    if not tex_path.exists():
+    tex_path = primary_paper_source(project_dir, base_name)
+    if tex_path is None:
         return None
 
     log_dir = project_dir / "logs"
@@ -461,9 +466,9 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
             value_sources.append((value, source_path, key, checksum))
 
     # Extract numbers from paper
-    paper_file = project_dir / f"{base_name}_paper.tex"
-    if not paper_file.exists():
-        print(f"✗ Paper file {paper_file} not found.", file=sys.stderr)
+    paper_file = primary_paper_source(project_dir, base_name)
+    if paper_file is None:
+        print("✗ Paper source file not found.", file=sys.stderr)
         return False
 
     paper_numbers = extract_numbers_from_tex(paper_file)
@@ -491,7 +496,7 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
     report_file = project_dir / "number_verification.md"
     with open(report_file, "w") as f:
         f.write(f"# Number Verification Report — {base_name}\n\n")
-        f.write(f"Paper: `{base_name}_paper.tex`\n")
+        f.write(f"Paper: `{paper_file.relative_to(project_dir).as_posix()}`\n")
         f.write(f"Manifest: `numbers_manifest.json`\n\n")
 
         if not untraced and not source_mismatches and not key_result_source_issues:
@@ -531,9 +536,9 @@ def update_manifest(project_dir: Path) -> None:
 
 def _legacy_verify(project_dir: Path, base_name: str) -> int:
     """Preserve the old positional CLI output used by existing tests/tools."""
-    tex_path = project_dir / f"{base_name}_paper.tex"
-    if not tex_path.exists():
-        print(f"ERROR: {tex_path} not found")
+    tex_path = primary_paper_source(project_dir, base_name)
+    if tex_path is None:
+        print(f"ERROR: {base_name}_paper.tex or paper/paper.tex not found")
         return 1
 
     display_tex_path = str(tex_path.resolve())

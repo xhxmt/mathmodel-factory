@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import shutil
@@ -41,6 +42,7 @@ try:  # Package import in tests; flat import in the container image.
         run_solver,
         validate_env_vars,
         validate_job_id,
+        validate_relative_path,
         validate_submission_files,
     )
 except ImportError:  # pragma: no cover - exercised by the Docker entrypoint.
@@ -64,6 +66,7 @@ except ImportError:  # pragma: no cover - exercised by the Docker entrypoint.
         run_solver,
         validate_env_vars,
         validate_job_id,
+        validate_relative_path,
         validate_submission_files,
     )
 
@@ -184,6 +187,8 @@ harden_shared_temp_directories()
 job_registry: Dict[str, Dict[str, Any]] = {}
 storage_client: Optional[Any] = None
 submission_lock = threading.Lock()
+job_control_lock = threading.Lock()
+job_controls: Dict[str, Dict[str, Any]] = {}
 
 
 class SolverRequest(BaseModel):
@@ -196,13 +201,37 @@ class SolverRequest(BaseModel):
     script_name: str = Field(default="solve.py", min_length=1, max_length=240)
     max_time: int = Field(default=1800, ge=1, le=MAX_EXECUTION_TIME)
     working_files: Optional[Dict[str, str]] = None
+    working_files_base64: Optional[Dict[str, str]] = None
+    requested_input_sha256: Dict[str, str] = Field(default_factory=dict)
+    declared_outputs: List[str] = Field(default_factory=list, max_length=256)
+    seeds: List[str] = Field(default_factory=list, max_length=64)
     env_vars: Optional[Dict[str, str]] = None
 
     @model_validator(mode="after")
     def validate_security_contract(self) -> "SolverRequest":
         if self.job_id is not None:
             validate_job_id(self.job_id)
-        validate_submission_files(self.script_name, self.script_content, self.working_files)
+        validate_submission_files(
+            self.script_name,
+            self.script_content,
+            self.working_files,
+            self.working_files_base64,
+        )
+        supplied_paths = set(self.working_files or {}) | set(
+            self.working_files_base64 or {}
+        )
+        if set(self.requested_input_sha256) != supplied_paths:
+            raise InputValidationError(
+                "requested input hashes must exactly cover all working files"
+            )
+        for path, sha256 in self.requested_input_sha256.items():
+            validate_relative_path(path, allow_nested=True)
+            if len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256):
+                raise InputValidationError("requested input SHA256 is invalid")
+        for path in self.declared_outputs:
+            validate_relative_path(path, allow_nested=True)
+        if any(not isinstance(seed, str) or len(seed) > 64 for seed in self.seeds):
+            raise InputValidationError("solver seeds are invalid")
         validate_env_vars(self.env_vars)
         return self
 
@@ -222,6 +251,10 @@ class JobStatus(BaseModel):
     error_message: Optional[str] = None
     gcs_prefix: Optional[str] = None
     manifest_url: Optional[str] = None
+    requested_input_sha256: Optional[Dict[str, str]] = None
+    observed_input_sha256: Optional[Dict[str, str]] = None
+    declared_outputs: Optional[List[str]] = None
+    seeds: Optional[List[str]] = None
 
 
 def solver_execution_enabled() -> bool:
@@ -358,6 +391,15 @@ def _mark_internal_failure(job_id: str) -> None:
 def execute_solver_job(job_id: str, request: SolverRequest) -> None:
     job_root = JOBS_DIR / job_id
     result_dir = RESULTS_DIR / job_id
+    with job_control_lock:
+        control = job_controls.setdefault(
+            job_id,
+            {
+                "cancel": threading.Event(),
+                "finished": threading.Event(),
+                "process": None,
+            },
+        )
     try:
         result_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
         input_dir, output_dir, script_path, identity = prepare_workspace(
@@ -365,9 +407,39 @@ def execute_solver_job(job_id: str, request: SolverRequest) -> None:
             request.script_name,
             request.script_content,
             request.working_files,
+            request.working_files_base64,
         )
+        observed_input_sha256 = {
+            relative: hashlib.sha256((input_dir / relative).read_bytes()).hexdigest()
+            for relative in sorted(request.requested_input_sha256)
+        }
+        if observed_input_sha256 != request.requested_input_sha256:
+            job_store.update(
+                job_id,
+                status="failed",
+                completed_at=time.time(),
+                error_code="INPUT_HASH_MISMATCH",
+                error_message="Observed solver inputs do not match the requested hashes",
+                observed_input_sha256=observed_input_sha256,
+            )
+            return
+        if control["cancel"].is_set():
+            job_store.update(
+                job_id,
+                status="cancelled",
+                completed_at=time.time(),
+                error_code="CANCELLED_BY_REQUEST",
+                error_message="Solver execution was cancelled before start",
+                observed_input_sha256=observed_input_sha256,
+            )
+            return
         started_at = time.time()
-        job_store.update(job_id, status="running", started_at=started_at)
+        job_store.update(
+            job_id,
+            status="running",
+            started_at=started_at,
+            observed_input_sha256=observed_input_sha256,
+        )
 
         stdout_path = result_dir / "stdout.log"
         stderr_path = result_dir / "stderr.log"
@@ -381,6 +453,8 @@ def execute_solver_job(job_id: str, request: SolverRequest) -> None:
             max_time=request.max_time,
             env_vars=request.env_vars,
             identity=identity,
+            on_process_started=lambda process: control.update(process=process),
+            cancellation_requested=control["cancel"].is_set,
         )
         completed_at = time.time()
         job = job_store.load(job_id) or {"job_id": job_id}
@@ -398,7 +472,21 @@ def execute_solver_job(job_id: str, request: SolverRequest) -> None:
 
         result_files: list[str] = []
         if outcome["error_code"] != "OUTPUT_LIMIT_EXCEEDED":
-            for local_path, relative_path in collect_output_files(output_dir):
+            collected_outputs = list(collect_output_files(output_dir))
+            observed_outputs = {
+                relative_path.as_posix() for _local_path, relative_path in collected_outputs
+            }
+            missing_outputs = sorted(set(request.declared_outputs) - observed_outputs)
+            if outcome["status"] == "completed" and missing_outputs:
+                job.update(
+                    status="failed",
+                    error_code="DECLARED_OUTPUT_MISSING",
+                    error_message=(
+                        "Solver completed without every declared output: "
+                        + ", ".join(missing_outputs[:8])
+                    ),
+                )
+            for local_path, relative_path in collected_outputs:
                 artifact_url = upload_to_gcs(
                     local_path,
                     f"jobs/{job_id}/outputs/{relative_path.as_posix()}",
@@ -423,6 +511,9 @@ def execute_solver_job(job_id: str, request: SolverRequest) -> None:
     finally:
         shutil.rmtree(job_root, ignore_errors=True)
         shutil.rmtree(result_dir, ignore_errors=True)
+        with job_control_lock:
+            control["process"] = None
+            control["finished"].set()
 
 
 @app.get("/health")
@@ -537,8 +628,18 @@ def submit_solver_job(
                 "result_files": None,
                 "error_code": None,
                 "error_message": None,
+                "requested_input_sha256": dict(request.requested_input_sha256),
+                "observed_input_sha256": None,
+                "declared_outputs": list(request.declared_outputs),
+                "seeds": list(request.seeds),
             }
         )
+        with job_control_lock:
+            job_controls[job_id] = {
+                "cancel": threading.Event(),
+                "finished": threading.Event(),
+                "process": None,
+            }
     background_tasks.add_task(execute_solver_job, job_id, request)
     logger.info("Submitted bounded solver job %s (%s)", job_id, solver_type)
     return JobStatus(**job)
@@ -568,14 +669,29 @@ def get_job_output(job_id: str, stream: str = "stdout") -> dict[str, str]:
 
 
 @app.delete("/jobs/{job_id}")
-def delete_job(job_id: str) -> dict[str, str]:
+def cancel_job(job_id: str) -> dict[str, str]:
     job_id = require_valid_job_id(job_id)
-    if not job_store.delete(job_id):
+    job = job_store.load(job_id)
+    if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
-    shutil.rmtree(RESULTS_DIR / job_id, ignore_errors=True)
-    logger.info("Deleted solver job %s", job_id)
-    return {"status": "deleted", "job_id": job_id}
+    if job.get("status") in {"completed", "failed", "cancelled", "timeout"}:
+        return {"status": str(job["status"]), "job_id": job_id}
+    with job_control_lock:
+        control = job_controls.get(job_id)
+    if control is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CANCELLATION_RECONCILIATION_REQUIRED",
+                "message": "The active process handle is not owned by this instance",
+            },
+        )
+    control["cancel"].set()
+    job_store.update(job_id, status="cancelling")
+    control["finished"].wait(timeout=5)
+    current = job_store.load(job_id) or {"status": "cancelling"}
+    logger.info("Cancellation requested for solver job %s", job_id)
+    return {"status": str(current.get("status") or "cancelling"), "job_id": job_id}
 
 
 @app.get("/jobs")

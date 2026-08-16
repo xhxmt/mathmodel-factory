@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import stat
+import threading
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,40 @@ print("bounded")
     result = json.loads((output_dir / "result.json").read_text(encoding="utf-8"))
     assert result == {"cwd": str(output_dir), "secret": None}
     assert (results / "stdout.log").read_text(encoding="utf-8").strip() == "bounded"
+
+
+def test_solver_cancellation_terminates_the_running_process(tmp_path, monkeypatch):
+    monkeypatch.delenv("SOLVER_RUN_UID", raising=False)
+    monkeypatch.delenv("SOLVER_RUN_GID", raising=False)
+    jobs = tmp_path / "jobs"
+    results = tmp_path / "results"
+    jobs.mkdir()
+    results.mkdir()
+    input_dir, output_dir, script_path, identity = solver_runner.prepare_workspace(
+        jobs / "cancel-job",
+        "solve.py",
+        "import time\ntime.sleep(30)\n",
+        {},
+    )
+    cancel = threading.Event()
+
+    outcome = solver_runner.run_solver(
+        "python",
+        script_path,
+        input_dir,
+        output_dir,
+        results / "stdout.log",
+        results / "stderr.log",
+        max_time=60,
+        env_vars={},
+        identity=identity,
+        on_process_started=lambda _process: cancel.set(),
+        cancellation_requested=cancel.is_set,
+    )
+
+    assert outcome["status"] == "cancelled"
+    assert outcome["error_code"] == "CANCELLED_BY_REQUEST"
+    assert outcome["duration"] < 5
 
 
 def test_solver_rejects_symbolic_link_output(tmp_path, monkeypatch):

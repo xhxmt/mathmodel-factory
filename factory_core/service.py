@@ -25,6 +25,7 @@ from .domain import (
 from .contest import ContestPolicy
 from .engine import FactoryEngine
 from .migration import LegacyInspector, MigrationReport, apply_migration
+from .human_decisions import validate_resolution
 from .projections import runtime_payload, write_compatibility_projections
 from .steps import build_native_registry
 from .adapters.solvers import SolverRequest, build_solver_backends
@@ -32,6 +33,16 @@ from .registry import SolverBackendRegistry
 from .storage import SQLiteStateStore
 from .transitions import TransitionCoordinator
 from .workflow_events import canonical_hash
+
+
+SOLVER_TERMINAL_STATUSES = {
+    "completed",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "timeout",
+    "timed_out",
+}
 from .workflow_events import project_runtime_diagnostics
 from .stages import (
     STAGE_CATALOG_VERSION,
@@ -408,7 +419,7 @@ class FactoryService:
         evidence_writer: Callable[[], Any],
         expected_revision: int | None = None,
         artifact_first: bool = False,
-    ) -> tuple[WorkflowState, WorkerHandle]:
+    ) -> tuple[WorkflowState, WorkerHandle | None]:
         """Commit evidence and a decision, then resume through the Native worker."""
         resolved_project = self.resolve_project(project)
         engine = self.engine(resolved_project)
@@ -420,6 +431,12 @@ class FactoryService:
             getattr(evidence_writer, "artifact_first", False)
         )
         if artifact_first:
+            # Artifact-first adapters (the Web human-review writer) must not
+            # mutate compatibility evidence for a stale or foreign request.
+            resolution = validate_resolution(pending.pending_action, resolution)
+            SQLiteStateStore(resolved_project).assert_pending_decision_current(
+                str((pending.pending_action or {}).get("gate") or "")
+            )
             decision_record = evidence_writer()
             if (
                 isinstance(decision_record, dict)
@@ -437,10 +454,14 @@ class FactoryService:
                     decision_record if isinstance(decision_record, dict) else None
                 ),
             )
+            if accepted.pending_action is not None:
+                return accepted, None
             return self.resume_and_start(
                 resolved_project, expected_revision=accepted.revision
             )
         accepted = engine.resolve_action(resolution, expected_revision=pending.revision)
+        if accepted.pending_action is not None:
+            return accepted, None
         try:
             evidence_writer()
         except Exception as exc:
@@ -763,6 +784,23 @@ class FactoryService:
             args=args,
             max_time_seconds=max_time_seconds,
             env={"FACTORY_SOLVER_JOB_ID": job_id},
+            input_paths=tuple(
+                (
+                    Path(value).resolve(strict=True)
+                    if Path(value).is_absolute()
+                    else (resolved / Path(value)).resolve(strict=True)
+                )
+                for value in input_paths
+            ),
+            output_paths=tuple(
+                (
+                    Path(value).resolve(strict=False).relative_to(resolved).as_posix()
+                    if Path(value).is_absolute()
+                    else (resolved / Path(value)).resolve(strict=False).relative_to(resolved).as_posix()
+                )
+                for value in output_paths
+            ),
+            seeds=tuple(str(seed) for seed in seeds),
         )
         try:
             submission = backend.submit(request)
@@ -851,7 +889,7 @@ class FactoryService:
         resolved = self.resolve_project(project)
         store = SQLiteStateStore(resolved)
         job = store.solver_job(job_id)
-        if job["status"] in {"completed", "failed", "timeout", "cancelled"}:
+        if job["status"] in SOLVER_TERMINAL_STATUSES:
             self._ensure_solver_completion_receipt(resolved, job)
             return job
         if job["status"] == "submitting":
@@ -867,11 +905,11 @@ class FactoryService:
                 )
             except RevisionConflict:
                 updated = store.solver_job(job_id)
-                if updated["status"] in {"completed", "failed", "timeout", "cancelled"}:
+                if updated["status"] in SOLVER_TERMINAL_STATUSES:
                     self._ensure_solver_completion_receipt(resolved, updated)
                 return updated
         updated = store.solver_job(job_id)
-        if updated["status"] in {"completed", "failed", "timeout", "cancelled"}:
+        if updated["status"] in SOLVER_TERMINAL_STATUSES:
             self._ensure_solver_completion_receipt(resolved, updated)
         return updated
 
@@ -884,7 +922,7 @@ class FactoryService:
     ) -> dict[str, Any]:
         while True:
             job = self.solver_status(project, job_id)
-            if job["status"] != "running":
+            if job["status"] in SOLVER_TERMINAL_STATUSES:
                 return job
             time.sleep(poll_seconds)
 
@@ -892,18 +930,23 @@ class FactoryService:
         resolved = self.resolve_project(project)
         store = SQLiteStateStore(resolved)
         job = store.solver_job(job_id)
-        self.solver_backends.get(job["backend"]).cancel(job)
+        observed = self.solver_backends.get(job["backend"]).cancel(job)
+        target_status = (
+            str(observed)
+            if isinstance(observed, str) and observed
+            else "cancelling"
+        )
         try:
             _workflow_coordinator(store).update_solver_job(
                 job_id,
                 expected_job_revision=int(job["job_revision"]),
-                status="cancelled",
+                status=target_status,
             )
         except RevisionConflict:
             updated = store.solver_job(job_id)
         else:
             updated = store.solver_job(job_id)
-        if updated["status"] in {"completed", "failed", "timeout", "cancelled"}:
+        if updated["status"] in SOLVER_TERMINAL_STATUSES:
             self._ensure_solver_completion_receipt(resolved, updated)
         return updated
 
@@ -943,6 +986,8 @@ class FactoryService:
                         or recorded.get("selected_auxiliary")
                         or ""
                     ),
+                    approved=recorded.get("approved"),
+                    request_id=recorded.get("request_id"),
                 )
             if not ready and store.contest_policy() is None:
                 ready = (

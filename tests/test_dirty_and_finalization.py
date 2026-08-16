@@ -14,8 +14,10 @@ from factory_core.dirty import (
     DirtyFlag,
     capture_artifact_manifest,
     classify_manifest_changes,
+    classifier_contract_sha256,
+    manifest_fingerprint,
 )
-from factory_core.domain import ExecutionResult, StepContext
+from factory_core.domain import ExecutionResult, InvalidTransition, StepContext
 from factory_core.finalization import (
     FinalizationSnapshotChanged,
     build_final_input_manifest,
@@ -84,6 +86,19 @@ def test_problem_plan_change_is_owned_by_understand_stage(tmp_path):
     ]
 
 
+def test_nested_paper_source_participates_in_dirty_classification(tmp_path):
+    paper = tmp_path / "paper" / "paper.tex"
+    paper.parent.mkdir()
+    paper.write_text("\\begin{document}$x=1$ alpha\\end{document}\n", encoding="utf-8")
+    before = capture_artifact_manifest(tmp_path)
+    assert "paper/paper.tex" in before
+
+    paper.write_text("\\begin{document}$x=2$ alpha\\end{document}\n", encoding="utf-8")
+    after = capture_artifact_manifest(tmp_path)
+
+    assert DirtyFlag.MATH in _flags(before, after)
+
+
 def test_dirty_flag_clear_requires_owner_stage_receipt_in_same_revision(tmp_path):
     store = SQLiteStateStore(tmp_path)
     state = store.initialize(project_id="demo", project_type="modeling")
@@ -98,28 +113,106 @@ def test_dirty_flag_clear_requires_owner_stage_receipt_in_same_revision(tmp_path
                 "cause_artifact": "results/canonical_results.json",
                 "baseline_fingerprint": "a" * 64,
                 "current_fingerprint": "b" * 64,
-                "classifier_contract_sha256": "c" * 64,
+                "classifier_contract_sha256": classifier_contract_sha256(),
             }
         ],
     )
     assert store.dirty_flags()[0]["cause_revision"] == dirty.revision
 
+    output_fingerprint = manifest_fingerprint(capture_artifact_manifest(tmp_path))
+    success_receipt = {
+        "schema_version": "factory-stage-checkpoint-v1",
+        "status": "PASS",
+        "stage": 4,
+        "output_fingerprint": output_fingerprint,
+        "classifier_contract_sha256": classifier_contract_sha256(),
+    }
     cleared = store.transition(
         expected_revision=dirty.revision,
         event_type="STAGE_SUCCEEDED_FOR_TEST",
         changes={},
+        stage_checkpoint={
+            "stage_id": 4,
+            "subtask": "canonical_solve",
+            "source_step_id": 7,
+            "completed_step_id": 7,
+            "input_fingerprint": output_fingerprint,
+            "output_fingerprint": output_fingerprint,
+            "receipt": success_receipt,
+        },
         clear_dirty_stage={
             "owner_stage": 4,
-            "cleared_fingerprint": "d" * 64,
-            "classifier_contract_sha256": "c" * 64,
-            "success_receipt": {"status": "PASS"},
+            "cleared_fingerprint": output_fingerprint,
+            "classifier_contract_sha256": classifier_contract_sha256(),
+            "success_receipt": success_receipt,
         },
     )
 
     assert store.dirty_flags() == []
     receipt = store.dirty_clear_receipts()[0]
     assert receipt["revision"] == cleared.revision
-    assert receipt["receipt"]["success_receipt"] == {"status": "PASS"}
+    assert receipt["receipt"]["success_receipt"] == success_receipt
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_stage", "fingerprint", "message"),
+    [
+        (5, None, "owner does not match"),
+        (4, "d" * 64, "fingerprint is stale"),
+    ],
+)
+def test_dirty_clear_rejects_wrong_owner_or_stale_fingerprint(
+    tmp_path, checkpoint_stage, fingerprint, message
+):
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="demo", project_type="modeling")
+    dirty = store.transition(
+        expected_revision=state.revision,
+        event_type="DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            {
+                "flag": "RESULT_DIRTY",
+                "owner_stage": 4,
+                "cause_artifact": "results/canonical_results.json",
+                "baseline_fingerprint": "a" * 64,
+                "current_fingerprint": "b" * 64,
+                "classifier_contract_sha256": classifier_contract_sha256(),
+            }
+        ],
+    )
+    current = manifest_fingerprint(capture_artifact_manifest(tmp_path))
+    output = fingerprint or current
+    receipt = {
+        "schema_version": "factory-stage-checkpoint-v1",
+        "status": "PASS",
+        "stage": checkpoint_stage,
+        "output_fingerprint": output,
+        "classifier_contract_sha256": classifier_contract_sha256(),
+    }
+
+    with pytest.raises(InvalidTransition, match=message):
+        store.transition(
+            expected_revision=dirty.revision,
+            event_type="INVALID_CLEAR_FOR_TEST",
+            changes={},
+            stage_checkpoint={
+                "stage_id": checkpoint_stage,
+                "subtask": "test",
+                "source_step_id": 7,
+                "completed_step_id": 7,
+                "input_fingerprint": current,
+                "output_fingerprint": output,
+                "receipt": receipt,
+            },
+            clear_dirty_stage={
+                "owner_stage": 4,
+                "cleared_fingerprint": output,
+                "classifier_contract_sha256": classifier_contract_sha256(),
+                "success_receipt": receipt,
+            },
+        )
+    assert store.load().revision == dirty.revision
 
 
 def test_final_input_manifest_detects_mutation_and_routes_owner(tmp_path):

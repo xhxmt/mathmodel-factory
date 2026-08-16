@@ -346,9 +346,16 @@ class ContentFreezeGuardStep:
         store = SQLiteStateStore(context.project_dir)
         if not store.exists or store.contest_policy() is None:
             return ValidationResult.valid(metadata={"content_freeze_required": False})
-        if store.decision("content_freeze") is not None:
+        decision = store.decision("content_freeze")
+        if decision is not None and decision.get("approved") is True:
             return ValidationResult.valid(
-                metadata={"content_freeze_required": True, "content_freeze": "approved"}
+                metadata={
+                    "content_freeze_required": True,
+                    "content_freeze": "approved",
+                    "request_id": decision.get("request_id"),
+                    "generation": decision.get("generation"),
+                    "subject_fingerprint": decision.get("subject_fingerprint"),
+                }
             )
         return ValidationResult.awaiting(
             prepare_human_gates(context.project_dir, 16).pending_action

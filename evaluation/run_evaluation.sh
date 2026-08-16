@@ -119,14 +119,14 @@ fi
 
 # ---- 2. ensure fresh PDF (parity with in-loop Step 13; best-effort) ----
 echo ">>> [2/5] compile_paper.sh (best-effort)"
-if [ -f "$PROJECT/${BASE}_paper.tex" ]; then
+if [ -f "$PROJECT/${BASE}_paper.tex" ] || [ -f "$PROJECT/paper/paper.tex" ]; then
   if "$REPO_ROOT/compile_paper.sh" "$PROJECT" "$BASE" >/dev/null 2>&1; then
     echo "    compiled ${BASE}_paper.pdf"
   else
     echo "    WARN: compile failed; judging from .tex text"
   fi
 else
-  echo "    WARN: ${BASE}_paper.tex not found"
+  echo "    WARN: ${BASE}_paper.tex and paper/paper.tex not found"
 fi
 
 # ---- 3. objective, hash-bound evidence bundle -----------------------------

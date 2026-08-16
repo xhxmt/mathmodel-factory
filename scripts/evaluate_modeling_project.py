@@ -22,6 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import workflow_state
+from factory_core.paper_sources import primary_paper_source, discover_paper_pdfs
 
 
 METHOD_PATH_RE = re.compile(r"method_library/[A-Za-z0-9_./-]+\.md")
@@ -433,8 +434,9 @@ def evaluate(project: Path, root: Path) -> Evaluation:
         severity="warning" if "VERDICT: SKIP" in quality_detail else "error",
     )
 
-    paper_tex = project / f"{base}_paper.tex"
-    paper_pdf = project / f"{base}_paper.pdf"
+    paper_tex = primary_paper_source(project, base)
+    project_pdfs = discover_paper_pdfs(project, base)
+    paper_pdf = project_pdfs[0] if project_pdfs else project / f"{base}_paper.pdf"
     from factory_core.delivery.release import resolve_current_release
 
     release = resolve_current_release(root / "papers", base)
@@ -446,7 +448,16 @@ def evaluate(project: Path, root: Path) -> Evaluation:
         if release is not None
         else root / "papers" / f"{base}_submission.zip"
     )
-    ev.add("paper_tex", paper_tex.is_file() and "ABSTRACT_PLACEHOLDER" not in read_text(paper_tex), "present without placeholder" if paper_tex.is_file() else "missing")
+    ev.add(
+        "paper_tex",
+        paper_tex is not None
+        and "ABSTRACT_PLACEHOLDER" not in read_text(paper_tex),
+        (
+            f"{paper_tex.relative_to(project)} present without placeholder"
+            if paper_tex is not None
+            else "missing"
+        ),
+    )
     ev.add("project_pdf", paper_pdf.is_file() and paper_pdf.stat().st_size > 0, str(paper_pdf))
     ev.add("papers_pdf", papers_pdf.is_file() and papers_pdf.stat().st_size > 0, str(papers_pdf))
     ok_zip, zip_detail = zip_ok(submission_zip)

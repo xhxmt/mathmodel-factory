@@ -235,6 +235,8 @@ def render_step3_request(payload: dict[str, Any]) -> str:
 
 def read_selection_request(project_path: Path, gate: str = "step3") -> dict[str, Any]:
     options = _load_json(project_path / "selection" / f"{gate}_options.json", {})
+    if not isinstance(options, dict):
+        options = {}
     decision = None
     sqlite_authoritative = False
     try:
@@ -244,14 +246,19 @@ def read_selection_request(project_path: Path, gate: str = "step3") -> dict[str,
         if store.exists:
             sqlite_authoritative = store.contest_policy() is not None
             decision = store.decision(gate)
+            state = store.load()
+            pending = state.pending_action or {}
+            if str(pending.get("gate") or "") == gate:
+                options["request"] = dict(
+                    ((pending.get("metadata") or {}).get("human_decision") or {})
+                )
+            options["decision_history"] = store.decision_history(gate)
     except (OSError, RuntimeError):
         decision = None
     if decision is None and not sqlite_authoritative:
         decision = _load_json(
             project_path / "selection" / f"{gate}_decision.json", None
         )
-    if not isinstance(options, dict):
-        options = {}
     options["decision"] = decision if isinstance(decision, dict) else None
     options["selected_option_id"] = options["decision"].get("selected_option_id", "") if options["decision"] else ""
     return options
@@ -299,6 +306,28 @@ def write_selection_decision(
         ),
         "confirmations": [str(item) for item in (confirmations or []) if str(item)],
     }
+    if gate in {"content_freeze", "delivery_freeze_override"}:
+        decision["kind"] = "approval"
+        decision["approved"] = not selected_option_id.lower().startswith(
+            ("reject", "deny")
+        )
+    try:
+        from factory_core.storage import SQLiteStateStore
+
+        request_store = SQLiteStateStore(project_path)
+        if request_store.exists:
+            state = request_store.load()
+            if str((state.pending_action or {}).get("gate") or "") == gate:
+                request = request_store.assert_pending_decision_current(gate)
+                for key in (
+                    "request_id",
+                    "generation",
+                    "subject_fingerprint",
+                    "options_fingerprint",
+                ):
+                    decision[key] = request.get(key)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise SelectionError(f"Could not bind decision request: {exc}") from exc
     decision_store = None
     if persist_store:
         try:
@@ -306,17 +335,6 @@ def write_selection_decision(
 
             candidate_store = SQLiteStateStore(project_path)
             if candidate_store.exists:
-                prior = candidate_store.decision(gate)
-                if prior is not None:
-                    prior_core = {
-                        key: value
-                        for key, value in prior.items()
-                        if key != "artifact_refs"
-                    }
-                    if prior_core != decision:
-                        raise SelectionError(
-                            f"Immutable workflow decision already exists for {gate}"
-                        )
                 decision_store = candidate_store
         except SelectionError:
             raise
@@ -360,7 +378,14 @@ def build_content_freeze_options(
                 "family": "human_release_gate",
                 "recommended_aux": "NONE",
                 "evidence": ["paper.tex", "figures", "tables"],
-            }
+            },
+            {
+                "id": "reject_content_freeze",
+                "title": "Reject and keep content open",
+                "family": "human_release_gate",
+                "recommended_aux": "NONE",
+                "evidence": ["paper.tex", "figures", "tables"],
+            },
         ],
         "message": (
             "Review the main conclusions, abstract, and core figures before "

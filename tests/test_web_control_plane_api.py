@@ -139,6 +139,13 @@ def load_main_module(factory_root=None, auth_db_file=None):
     return importlib.import_module("web.backend.main")
 
 
+def _uploaded_problem(tmp_path):
+    problem = tmp_path / "uploads" / "problem.pdf"
+    problem.parent.mkdir(parents=True, exist_ok=True)
+    problem.write_text("problem", encoding="utf-8")
+    return problem
+
+
 def test_project_action_raises_on_failed_control_command(monkeypatch):
     mod = load_main_module()
 
@@ -783,8 +790,7 @@ def test_user_new_project_requires_project_request(tmp_path):
 def test_user_can_submit_and_list_own_project_request(tmp_path):
     mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
     _install_auth_store(mod)
-    problem = tmp_path / "problem.pdf"
-    problem.write_text("problem", encoding="utf-8")
+    problem = _uploaded_problem(tmp_path)
     alice = mod.UserInfo(username="alice", role="user", status="active")
 
     created = asyncio.run(
@@ -805,11 +811,36 @@ def test_user_can_submit_and_list_own_project_request(tmp_path):
     assert [item.id for item in listed] == [created.id]
 
 
+def test_user_project_request_rejects_server_local_problem_path(tmp_path):
+    mod = load_main_module(
+        factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db"
+    )
+    _install_auth_store(mod)
+    problem = tmp_path / "server-local.pdf"
+    problem.write_text("problem", encoding="utf-8")
+    alice = mod.UserInfo(username="alice", role="user", status="active")
+
+    with pytest.raises(mod.HTTPException) as raised:
+        asyncio.run(
+            mod.create_project_request(
+                mod.ProjectRequestCreate(
+                    base_name="alice_project",
+                    problem_path=str(problem),
+                    no_start=False,
+                    consult=False,
+                ),
+                current_user=alice,
+            )
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "PROJECT_REQUEST_REQUIRES_UPLOADED_PROBLEM"
+
+
 def test_admin_approves_project_request_launches_and_grants_acl(tmp_path, monkeypatch):
     mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
     _install_auth_store(mod)
-    problem = tmp_path / "problem.pdf"
-    problem.write_text("problem", encoding="utf-8")
+    problem = _uploaded_problem(tmp_path)
     alice = mod.UserInfo(username="alice", role="user", status="active")
     admin = mod.UserInfo(username="admin", role="admin", status="active")
     created = asyncio.run(
@@ -851,8 +882,7 @@ def test_admin_approves_project_request_launches_and_grants_acl(tmp_path, monkey
 def test_admin_cannot_approve_project_request_after_it_is_processed(tmp_path, monkeypatch):
     mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
     _install_auth_store(mod)
-    problem = tmp_path / "problem.pdf"
-    problem.write_text("problem", encoding="utf-8")
+    problem = _uploaded_problem(tmp_path)
     alice = mod.UserInfo(username="alice", role="user", status="active")
     admin = mod.UserInfo(username="admin", role="admin", status="active")
     created = asyncio.run(
@@ -915,8 +945,7 @@ def test_admin_cannot_approve_project_request_after_it_is_processed(tmp_path, mo
 def test_failed_project_request_launch_marks_failed(tmp_path, monkeypatch):
     mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
     _install_auth_store(mod)
-    problem = tmp_path / "problem.pdf"
-    problem.write_text("problem", encoding="utf-8")
+    problem = _uploaded_problem(tmp_path)
     alice = mod.UserInfo(username="alice", role="user", status="active")
     admin = mod.UserInfo(username="admin", role="admin", status="active")
     created = asyncio.run(

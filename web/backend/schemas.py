@@ -1,6 +1,6 @@
 try:
-    from pydantic import BaseModel, field_validator
-except ModuleNotFoundError:  # pragma: no cover - lightweight unit tests may run without pydantic installed
+    from pydantic import BaseModel, Field, field_validator
+except ImportError:  # pragma: no cover - lightweight unit tests may run without full pydantic
     class BaseModel:
         def __init__(self, **kwargs):
             for key, value in kwargs.items():
@@ -14,6 +14,9 @@ except ModuleNotFoundError:  # pragma: no cover - lightweight unit tests may run
             return fn
 
         return _wrap
+
+    def Field(default=None, *, default_factory=None, **_kwargs):
+        return default_factory() if default_factory is not None else default
 
 
 class UserInfo(BaseModel):
@@ -72,15 +75,15 @@ class LocalEnvFileStatus(BaseModel):
     exists: bool = False
     mode: str | None = None
     secure_mode: bool = False
-    sensitive_keys: list[str] = []
+    sensitive_keys: list[str] = Field(default_factory=list)
 
 
 class OpsSecretsStatus(BaseModel):
     project_id: str = ""
     gcloud_path: str = ""
     loader: str = ""
-    secrets: list[SecretBindingStatus] = []
-    local_config: list[LocalEnvFileStatus] = []
+    secrets: list[SecretBindingStatus] = Field(default_factory=list)
+    local_config: list[LocalEnvFileStatus] = Field(default_factory=list)
 
 
 class AuditLogResponse(BaseModel):
@@ -90,7 +93,7 @@ class AuditLogResponse(BaseModel):
     target_type: str
     target_id: str
     created_at: int
-    metadata: dict = {}
+    metadata: dict = Field(default_factory=dict)
 
 
 class DeliveryOverrideIssueRequest(BaseModel):
@@ -241,8 +244,8 @@ class ProjectStatus(BaseModel):
     remaining_seconds: int | None = None
     reason_code: str = ""
     reason_summary: str = ""
-    suggested_actions: list[str] = []
-    evidence: list[dict] = []
+    suggested_actions: list[str] = Field(default_factory=list)
+    evidence: list[dict] = Field(default_factory=list)
     diagnostic_reason_code: str | None = None
     diagnostic_badge: str | None = None
     diagnostic_priority: int = 999
@@ -263,16 +266,16 @@ class ShowcaseAudience(BaseModel):
     username: str | None = None
     display_name: str = ""
     status: str = ""
-    base_names: list[str] = []
+    base_names: list[str] = Field(default_factory=list)
 
 
 class ShowcaseAdminConfig(BaseModel):
-    candidates: list[ShowcasePaper] = []
-    audiences: list[ShowcaseAudience] = []
+    candidates: list[ShowcasePaper] = Field(default_factory=list)
+    audiences: list[ShowcaseAudience] = Field(default_factory=list)
 
 
 class ShowcaseVisibilityUpdate(BaseModel):
-    base_names: list[str] = []
+    base_names: list[str] = Field(default_factory=list)
 
 
 class ConsultationRequest(BaseModel):
@@ -302,8 +305,12 @@ class SelectionDecisionRequest(BaseModel):
     selected_option_id: str
     selected_aux_id: str = ""
     reason: str = ""
-    confirmations: list[str] = []
+    confirmations: list[str] = Field(default_factory=list)
     expected_revision: int | None = None
+    request_id: str | None = None
+    generation: int | None = None
+    subject_fingerprint: str | None = None
+    options_fingerprint: str | None = None
 
 
 class ModelEntry(BaseModel):

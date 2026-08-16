@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import hashlib
 from pathlib import Path
 
 
@@ -323,6 +324,9 @@ def test_gcp_solver_client_handles_large_working_files_without_argv_overflow(tmp
     payload = json.loads(request_capture.read_text(encoding="utf-8"))
     assert payload["script_content"] == "print('ok')\n"
     assert payload["working_files"][working_file.name] == "x" * 300_000
+    assert payload["requested_input_sha256"] == {
+        working_file.name: hashlib.sha256(working_file.read_bytes()).hexdigest()
+    }
 
 
 def test_direct_cloud_client_rejects_runtime_not_in_capability_manifest(tmp_path):

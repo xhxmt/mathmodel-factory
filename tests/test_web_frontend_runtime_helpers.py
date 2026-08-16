@@ -25,6 +25,19 @@ def test_cloud_accelerator_does_not_invent_runtime_fallbacks():
     assert "python, julia" not in component
 
 
+def test_selection_request_binding_does_not_hide_gate_controls():
+    component = (
+        REPO_ROOT / "web" / "frontend" / "src" / "components" / "SelectionPanel.vue"
+    ).read_text(encoding="utf-8")
+
+    available_branch = component.index("<template v-else>")
+    request_binding = component.index('class="request-binding mono"')
+    gate_controls = component.index('<template v-if="gate === \'step3\'">')
+
+    assert available_branch < request_binding < gate_controls
+    assert '<template v-else-if="gate === \'step3\'">' not in component
+
+
 def test_authenticated_startup_survives_model_load_failure():
     result = run_node(
         """

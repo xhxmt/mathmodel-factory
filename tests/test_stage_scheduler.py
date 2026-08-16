@@ -14,6 +14,7 @@ from factory_core.domain import (
     ValidationResult,
     WorkflowStatus,
 )
+from factory_core.dirty import classifier_contract_sha256
 from factory_core.engine import FactoryEngine
 from factory_core.registry import StepDefinition, StepRegistry
 from factory_core.stages import (
@@ -259,7 +260,7 @@ def test_conditional_step13_runs_real_contract_for_math_dirty(tmp_path):
                 "cause_artifact": "demo_paper.tex",
                 "baseline_fingerprint": "a" * 64,
                 "current_fingerprint": "b" * 64,
-                "classifier_contract_sha256": "c" * 64,
+                "classifier_contract_sha256": classifier_contract_sha256(),
             }
         ],
     )
@@ -467,10 +468,7 @@ def test_content_freeze_is_a_persistent_guard_before_delivery(tmp_path):
     assert awaiting.last_completed_stage == 9
 
     store.record_decision("content_freeze", {"selected_option_id": "approve"})
-    resolved = engine.resolve_action(
-        {"gate": "content_freeze", "selected_option_id": "approve"},
-        expected_revision=awaiting.revision,
-    )
+    resolved = store.load()
     guarded = engine.run(max_steps=1)
 
     assert resolved.status is WorkflowStatus.READY

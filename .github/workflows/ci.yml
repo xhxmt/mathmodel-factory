@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --extra web --group dev --locked
+      - run: uv run python -m compileall -q factory_core cloud web/backend
+      - run: >-
+          uv run pytest -q
+          --ignore=tests/test_cloud_solver_security.py
+          --ignore=tests/test_cloud_solver_api_persistence.py
+          --ignore=tests/test_web_control_plane_api.py
+          --ignore=tests/test_cumcm2025a_exact_oracle.py
+          --ignore=tests/test_cumcm2025a_occlusion_model.py
+      - run: git diff --check
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - run: uv sync --extra web --group dev --locked
+      - run: uv run pytest -q tests/test_web_control_plane_api.py tests/test_control_plane_uploads.py tests/test_web_frontend_runtime_helpers.py
+      - run: npm ci
+        working-directory: web/frontend
+      - run: npm run build
+        working-directory: web/frontend
+
+  cloud:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --extra cloud --group dev --locked
+      - run: >-
+          uv run pytest -q
+          tests/test_cloud_solver_security.py
+          tests/test_cloud_solver_api_persistence.py
+          tests/test_cloud_solver_routing.py
+          tests/test_solver_service.py
+          tests/test_cumcm2025a_exact_oracle.py
+          tests/test_cumcm2025a_occlusion_model.py

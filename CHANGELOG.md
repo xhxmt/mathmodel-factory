@@ -6,7 +6,10 @@
 
 ### 新增
 
-- 新增 schema-v7 横向运行时收敛合同：append-only 事件带可重放 state patch/hash 和结构化 Gate reason；Native Action Center、恢复状态、诊断与审计时间线由纯 Projector 生成；Selection、Approval、Consultation 统一为 Human Decision 父合同并保持子类型校验；Stage lifecycle 只返回 `StageOutcome`，所有工作流写入集中到 `TransitionCoordinator`。
+- 新增 schema-v8 审计加固合同：Human Decision 拆分为按 gate/request/generation 和 subject/options fingerprint 绑定的不可变请求与结果，拒绝审批会保留并开启下一代；event-v2 同时记录完成主体与迁移结果坐标，并用 aggregate root 绑定决策、dirty、checkpoint 与 Solver side table；dirty cause 和 Stage checkpoint 增加 append-only 历史，投影失败可记录、诊断和恢复。
+- 论文源发现统一支持根目录 `{base}_paper.tex` 与 `paper/paper.tex`，dirty tracking、提交 fingerprint、Web artifact/PDF 发现和 `compile_paper.sh` 使用同一合同。
+- Cloud Solver 请求传输精确输入字节与 SHA-256、声明输出和 seeds，保留 queued/submitting/running 状态并执行实际进程取消；Web 上传改为限额分块写入，普通用户项目申请只接受上传目录内的 PDF/Markdown。
+- 新增 GitHub Actions `CI` 工作流，分离 core、Web（含前端构建）与 Cloud/数值依赖测试；分支保护仍由仓库管理员在 GitHub 侧把这些检查设为 required。
 - Solver Job 新增稳定 `idempotency_key`、回执 `request_sha256`、Stage/subtask/revision/attempt 所有权和唯一约束；Cloud provider 接收幂等键并支持按持久 job ID 对账，本地无法证明提交状态时失败关闭而不盲目重提。
 - Web 人工 Gate 采用“证据文件原子 rename + fingerprint → SQLite decision/state/event 同事务”顺序；诊断页直接展示 Native 调度坐标、Recovery Status 与 Audit Timeline，并标记已发布但尚未入账的 orphan decision artifact。
 - 新增授权 HMML 完整数据集：保留原始 JSON/Markdown 与来源哈希，确定性展开 97 个可引用方法文档；与现有 21 个精编条目组成双登记表，方法召回升级为“层级分支粗选 → 叶方法细排 → 数据/证据复排”。

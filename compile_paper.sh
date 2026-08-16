@@ -11,19 +11,31 @@ export TEXINPUTS="${FACTORY_DIR}/latex_templates:${TEXINPUTS:-}"
 
 cd "$PROJECT"
 
+TEX_SOURCE="${BASE}_paper.tex"
+if [[ ! -f "$TEX_SOURCE" && -f "paper/paper.tex" ]]; then
+    TEX_SOURCE="paper/paper.tex"
+fi
+if [[ ! -f "$TEX_SOURCE" ]]; then
+    echo "❌ 编译失败：未找到 ${BASE}_paper.tex 或 paper/paper.tex" >&2
+    exit 1
+fi
+JOB_NAME="${BASE}_paper"
+TEX_DIR="$(dirname "$TEX_SOURCE")"
+export TEXINPUTS="${PROJECT}/${TEX_DIR}:${TEXINPUTS}"
+
 # 创建编译日志目录
 mkdir -p logs/compilation
 
 # 检测编译引擎
 ENGINE="pdflatex"
-if grep -qE '\\documentclass\s*(\[[^]]*\])?\s*\{(ctex|cumcmthesis|mcmthesis)' "${BASE}_paper.tex" 2>/dev/null \
-   || grep -q '\\usepackage{xeCJK}' "${BASE}_paper.tex" 2>/dev/null; then
+if grep -qE '\\documentclass\s*(\[[^]]*\])?\s*\{(ctex|cumcmthesis|mcmthesis)' "$TEX_SOURCE" 2>/dev/null \
+   || grep -q '\\usepackage{xeCJK}' "$TEX_SOURCE" 2>/dev/null; then
     ENGINE="xelatex"
 fi
 echo "$(date '+%Y-%m-%d %H:%M:%S') - 使用编译引擎: $ENGINE" >> logs/compilation/compile.log
 
 # 第一次编译（生成 .aux）
-if ! "$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" > logs/compilation/pass1.log 2>&1; then
+if ! "$ENGINE" -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass1.log 2>&1; then
     echo "❌ 编译失败：第一次 $ENGINE 编译出错" >&2
     echo "" >&2
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
@@ -77,14 +89,14 @@ if [[ -f "${BASE}_paper.aux" ]] && grep -q '\\bibdata' "${BASE}_paper.aux" 2>/de
 fi
 
 # 第二次编译（处理引用）
-if ! "$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" > logs/compilation/pass2.log 2>&1; then
+if ! "$ENGINE" -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass2.log 2>&1; then
     echo "❌ 编译失败：第二次 $ENGINE 编译出错" >&2
     echo "💡 日志: $(pwd)/logs/compilation/pass2.log" >&2
     exit 1
 fi
 
 # 第三次编译（最终化）
-if ! "$ENGINE" -interaction=nonstopmode "${BASE}_paper.tex" > logs/compilation/pass3.log 2>&1; then
+if ! "$ENGINE" -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass3.log 2>&1; then
     echo "❌ 编译失败：第三次 $ENGINE 编译出错" >&2
     echo "💡 日志: $(pwd)/logs/compilation/pass3.log" >&2
     exit 1
