@@ -103,6 +103,25 @@ class FinalAuditService:
         project = context.project_dir.resolve()
         base = project.name
 
+        from ..storage import SQLiteStateStore
+
+        decision_store = SQLiteStateStore(project)
+        if decision_store.exists and decision_store.contest_policy() is not None:
+            content_freeze = decision_store.decision("content_freeze")
+            if not (
+                content_freeze is not None
+                and content_freeze.get("approved") is True
+                and (content_freeze.get("receipt_verification") or {}).get("valid")
+                is True
+            ):
+                return self._failure(
+                    project,
+                    decision="CONTENT_FREEZE_EVIDENCE_INVALID",
+                    status=AuditStatus.FAIL,
+                    error_class="PERMANENT_CONTENT_FREEZE_RECEIPT",
+                    returncode=2,
+                )
+
         if self._has_stub(project) or self._unresolved_blocking(project):
             return self._failure(
                 project,

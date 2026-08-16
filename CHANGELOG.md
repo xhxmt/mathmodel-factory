@@ -6,6 +6,9 @@
 
 ### 新增
 
+- 新增 `LatexCompileContract`、`-recorder`/`.fls` 输入对账和按命令插入位置生成的展开文档流。静态依赖解析与编译统一使用“主文件目录 → 项目工作目录”搜索顺序；缺失、循环、动态依赖或 declared/observed 项目输入不一致均失败关闭。数字、数字链和符号检查共享展开流，因此跨文件章节状态、插入顺序与 use-before-definition 坐标不再丢失。
+- 新增 `submission-bundle-manifest-v1`：最终 PDF、活动 LaTeX 源/参考文献、显式允许的模型/结果/图表和声明附件形成唯一成员集合；final input、Judge packet、submission fingerprint、final acceptance receipt、打包器和 release verifier 绑定同一 manifest。打包拒绝符号链接/越界路径，并在写 ZIP 后逐成员复核中央目录、大小与 SHA-256。
+- 新增 Human Decision receipt 读取时强制验证：路径、普通文件/符号链接、大小、SHA-256、schema、request/decision/gate/generation 和数据库决定正文必须一致；Approval receipt 缺失或篡改后 Gate 与 Final Audit 失败关闭，Web diagnostics 显示 `DECISION_RECEIPT_MISMATCH`。
 - 新增 schema-v8 审计加固合同：Human Decision 拆分为按 gate/request/generation 和 subject/options fingerprint 绑定的不可变请求与结果；每个决定生成 `.factory/decisions/<gate>/<request>/<decision>.json` 内容寻址 receipt，固定 selection/human-review 文件仅作兼容投影。内容冻结拒绝会清除 pending、失效 Stage 9 之后的 checkpoint 并回到 Stage 9，修复完成后才生成绑定新内容的下一代请求；陈旧的开放请求也可原子标记为 superseded 并重新绑定。
 - 新增统一递归 LaTeX 依赖图：从权威论文入口解析 `input`、`include`、`subfile`、`bibliography` 与 `addbibresource`，报告循环/缺失依赖并排除未引用草稿；content freeze、dirty 语义分类、提交/final fingerprint、数字/符号/数值链审计、Judge packet、Web artifact browser 与 submission package 共享活动源合同。
 - event-v2 同时记录完成主体与迁移结果坐标，并用 aggregate root 绑定 contest policy、project config、决策、dirty、checkpoint 与 Solver side table；dirty cause 和 Stage checkpoint 增加 append-only 历史，投影失败可记录、诊断和恢复。
@@ -74,6 +77,7 @@
 
 ### 修复
 
+- 修复 submission ZIP 递归纳入未冻结 `paper/draft.tex`、LaTeX 子文件按错误目录优先级解析、模块化论文数字链丢失父章节状态，以及决定 receipt 删除/篡改后仍可通过 Approval Gate 的四项审计阻断问题；内容冻结拒绝现在记录规范 `WORK_REOPENED` recovery 事件与失效 checkpoint 清单。
 - Web 相对时间格式化同时接受 Unix 秒级/毫秒级时间戳、数字字符串和日期字符串，避免 Solver Jobs 返回整数 `requested_at` 时触发渲染异常并使“求解任务”页整体空白；窄屏任务行改用三行自适应布局，完整保留状态、耗时、时间与 receipt 入口。
 - Web 八阶段流程下钻区提高标题对比度，并为已完成、运行中和待处理步骤使用与状态底色匹配的前景色，避免步骤文字与实心状态背景同色而不可读。
 - Web 审计事项解析在找到首张 issue 表后会于表尾停止，避免把后续增量审计表的 `Severity` 列误读为 `Status`，从而在已完成 Final Audit 的项目行动中心虚报未解决事项。

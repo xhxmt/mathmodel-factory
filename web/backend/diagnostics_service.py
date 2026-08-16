@@ -25,6 +25,7 @@ from factory_core.workflow_events import (
 
 PRIORITY = {
     "WORKFLOW_REPLAY_MISMATCH": 0,
+    "DECISION_RECEIPT_MISMATCH": 0,
     "CONSULTATION_PENDING": 1,
     "AWAITING_STEP8_5": 2,
     "VERIFY_OUTPUT_FAILED": 3,
@@ -36,6 +37,7 @@ PRIORITY = {
 
 BADGES = {
     "WORKFLOW_REPLAY_MISMATCH": "事件重放异常",
+    "DECISION_RECEIPT_MISMATCH": "决策凭据损坏",
     "CONSULTATION_PENDING": "等待人工",
     "AWAITING_STEP8_5": "等待 8.5 门禁",
     "VERIFY_OUTPUT_FAILED": "验证失败待重试",
@@ -163,6 +165,36 @@ def build_project_diagnostics(
                             "orphaned_artifacts": [],
                         }
                 projected = project_runtime_diagnostics(native_events, native_state)
+                receipt_mismatches = []
+                for decision in store.decision_history():
+                    verification = decision.get("receipt_verification") or {}
+                    if verification.get("valid") is True:
+                        continue
+                    receipt_mismatches.append(
+                        {
+                            "gate": decision.get("gate"),
+                            "request_id": decision.get("request_id"),
+                            "decision_id": decision.get("decision_id"),
+                            "path": verification.get("path"),
+                            "errors": verification.get("errors") or [],
+                        }
+                    )
+                projected["decision_receipt_mismatches"] = receipt_mismatches
+                if receipt_mismatches:
+                    projected["status"].update(
+                        reason_code="DECISION_RECEIPT_MISMATCH",
+                        reason_summary=(
+                            "A committed human decision has missing, tampered, or "
+                            "identity-mismatched receipt evidence"
+                        ),
+                        evidence=[
+                            {
+                                "kind": "decision_receipt",
+                                **item,
+                            }
+                            for item in receipt_mismatches
+                        ],
+                    )
                 orphaned = []
                 for path in sorted((project / "selection").glob("*_decision.json")):
                     gate = path.name.removesuffix("_decision.json")

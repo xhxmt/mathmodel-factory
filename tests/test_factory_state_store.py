@@ -382,8 +382,9 @@ def test_v7_migration_never_treats_string_false_as_approval(tmp_path):
         connection.close()
 
     store.load()
-    decision = store.decision("content_freeze")
+    decision = store.decision_history("content_freeze")[0]
 
-    assert decision is not None
     assert decision.get("approved") is not True
     assert decision["outcome"] != "approved"
+    assert decision["receipt_verification"]["valid"] is False
+    assert store.decision("content_freeze") is None

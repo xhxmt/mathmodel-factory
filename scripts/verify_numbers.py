@@ -32,7 +32,7 @@ from typing import Dict, List, Tuple, Any
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factory_core.paper_sources import primary_paper_source, resolve_latex_dependency_graph
+from factory_core.paper_sources import expand_latex_document, primary_paper_source
 
 
 def compute_checksum(value: Any) -> str:
@@ -105,12 +105,45 @@ def extract_tex_numbers_from_project(
     project_dir: str | Path, base_name: str
 ) -> List[Dict[str, Any]]:
     project = Path(project_dir).resolve()
-    graph = resolve_latex_dependency_graph(project, base_name)
+    expanded = expand_latex_document(project, base_name)
     combined: List[Dict[str, Any]] = []
-    for source in graph.sources:
-        relative = source.relative_to(project).as_posix()
-        for entry in extract_tex_numbers(source):
-            combined.append({**entry, "source": relative})
+    in_document = False
+    for line in expanded.lines:
+        text = line.text
+        if r"\begin{document}" in text:
+            in_document = True
+            text = text.split(r"\begin{document}", 1)[1]
+        if not in_document or text.strip().startswith("%"):
+            continue
+        content = _strip_non_content_latex(text)
+        for match in re.finditer(r'-?\d[\d,]*\.?\d*%?', content):
+            num_str = match.group()
+            if re.match(r'^(19|20)\d{2}$', num_str):
+                continue
+            clean = num_str.replace(',', '').rstrip('%')
+            try:
+                value = float(clean)
+            except ValueError:
+                continue
+            if value == 0 or (
+                value == int(value) and 1 <= value <= 20 and '.' not in num_str
+            ):
+                continue
+            original_start = text.find(num_str)
+            if original_start < 0:
+                original_start = match.start()
+            start = max(0, original_start - 40)
+            end = min(len(text), original_start + len(num_str) + 40)
+            combined.append(
+                {
+                    "number": num_str,
+                    "value": value,
+                    "is_pct": num_str.endswith('%'),
+                    "context": text[start:end].strip(),
+                    "source": line.source.relative_to(project).as_posix(),
+                    "source_line": line.source_line,
+                }
+            )
     return combined
 
 
@@ -385,60 +418,65 @@ def extract_numbers_from_tex(
     Returns:
         [(line_number, context, value), ...]
     """
-    numbers = []
+    with open(tex_file) as handle:
+        lines = [
+            (line_num, "", line)
+            for line_num, line in enumerate(handle, start=1)
+        ]
+    return _extract_numbers_from_lines(lines, assume_document=assume_document)
 
+
+def _extract_numbers_from_lines(
+    lines: List[Tuple[int, str, str]], *, assume_document: bool = False
+) -> List[Tuple[int, str, float]]:
+    """Scan one already ordered document stream while preserving its state."""
+
+    numbers: List[Tuple[int, str, float]] = []
     in_document = assume_document
     in_references = False
     in_tikzpicture = False
+    for line_num, source_label, line in lines:
+        if r"\begin{document}" in line:
+            in_document = True
+            line = line.split(r"\begin{document}", 1)[1]
+        if not in_document:
+            continue
+        if r"\begin{tikzpicture}" in line:
+            in_tikzpicture = True
+            continue
+        if r"\end{tikzpicture}" in line:
+            in_tikzpicture = False
+            continue
+        if in_tikzpicture:
+            continue
+        if r"\section{参考文献}" in line or r"\begin{thebibliography}" in line:
+            in_references = True
+        if r"\appendix" in line:
+            in_references = False
+            continue
+        if in_references or line.strip().startswith('%'):
+            continue
 
-    with open(tex_file) as f:
-        for line_num, line in enumerate(f, start=1):
-            if r"\begin{document}" in line:
-                in_document = True
-                line = line.split(r"\begin{document}", 1)[1]
-            if not in_document:
-                continue
-            if r"\begin{tikzpicture}" in line:
-                in_tikzpicture = True
-                continue
-            if r"\end{tikzpicture}" in line:
-                in_tikzpicture = False
-                continue
-            if in_tikzpicture:
-                continue
-            if r"\section{参考文献}" in line or r"\begin{thebibliography}" in line:
-                in_references = True
-            if r"\appendix" in line:
-                in_references = False
-                continue
-            if in_references:
-                continue
-
-            # Skip comments
-            if line.strip().startswith('%'):
-                continue
-
-            line_for_numbers = _strip_non_content_latex(line)
-
-            # Find numbers in text (not in commands)
-            # Match patterns like: 187.2, 0.0478, $x = 42$, etc.
-            pattern = r'(?<![a-zA-Z])-?\d+\.?\d*(?:[eE][+-]?\d+)?%?'
-            for match in re.finditer(pattern, line_for_numbers):
-                try:
-                    raw = match.group(0)
-                    clean = raw.rstrip('%')
-                    value = float(clean)
-                    if (
-                        value == int(value)
-                        and "." not in clean
-                        and "e" not in clean.lower()
-                        and (1 <= value <= 20 or 1900 <= value <= 2099 or value == 100)
-                    ):
-                        continue
-                    context = line.strip()[:60]
-                    numbers.append((line_num, context, value))
-                except ValueError:
-                    pass
+        line_for_numbers = _strip_non_content_latex(line)
+        pattern = r'(?<![a-zA-Z])-?\d+\.?\d*(?:[eE][+-]?\d+)?%?'
+        for match in re.finditer(pattern, line_for_numbers):
+            try:
+                raw = match.group(0)
+                clean = raw.rstrip('%')
+                value = float(clean)
+                if (
+                    value == int(value)
+                    and "." not in clean
+                    and "e" not in clean.lower()
+                    and (1 <= value <= 20 or 1900 <= value <= 2099 or value == 100)
+                ):
+                    continue
+                context = line.strip()[:60]
+                if source_label:
+                    context = f"{source_label}: {context}"
+                numbers.append((line_num, context, value))
+            except ValueError:
+                pass
 
     return numbers
 
@@ -447,24 +485,16 @@ def extract_numbers_from_project(
     project_dir: Path, base_name: str
 ) -> List[Tuple[int, str, float]]:
     project = project_dir.resolve()
-    graph = resolve_latex_dependency_graph(project, base_name)
-    roots = set(graph.roots)
-    combined: List[Tuple[int, str, float]] = []
-    line_offset = 0
-    for source in graph.sources:
-        relative = source.relative_to(project).as_posix()
-        entries = extract_numbers_from_tex(
-            source, assume_document=source not in roots
+    expanded = expand_latex_document(project, base_name)
+    lines = [
+        (
+            expanded_line,
+            f"{line.source.relative_to(project).as_posix()}:{line.source_line}",
+            line.text,
         )
-        combined.extend(
-            (line_offset + line_number, f"{relative}: {context}", value)
-            for line_number, context, value in entries
-        )
-        try:
-            line_offset += len(source.read_text(encoding="utf-8").splitlines()) + 1
-        except OSError:
-            line_offset += 1
-    return combined
+        for expanded_line, line in enumerate(expanded.lines, start=1)
+    ]
+    return _extract_numbers_from_lines(lines)
 
 
 def verify_paper(project_dir: Path, base_name: str) -> bool:

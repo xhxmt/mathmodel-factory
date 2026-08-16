@@ -386,14 +386,16 @@ class FakeCommandRunner:
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text('{"status":"VALID"}\n', encoding="utf-8")
         elif script.endswith("package_submission.py"):
+            from factory_core.submission_bundle import submission_bundle_manifest
+
             output = Path(args[-1])
             output.parent.mkdir(parents=True, exist_ok=True)
+            bundle = submission_bundle_manifest(project, project.name)
             with zipfile.ZipFile(output, "w") as archive:
-                archive.write(
-                    project / f"{project.name}_paper.pdf",
-                    f"{project.name}_paper.pdf",
-                )
-                archive.writestr("fixture.txt", "ok")
+                for item in bundle["members"]:
+                    archive.write(
+                        project / item["source_path"], item["archive_path"]
+                    )
         return self._ok(project, label)
 
     def run(self, project, argv, *, label, **_kwargs):

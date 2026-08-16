@@ -628,7 +628,10 @@ def _find_paper(settings: Settings, project: Path, base_name: str) -> Path | Non
 
 
 def list_artifacts(project: Path) -> list[dict[str, Any]]:
-    from factory_core.paper_sources import discover_paper_pdfs, discover_paper_sources
+    from factory_core.paper_sources import (
+        discover_paper_pdfs,
+        resolve_latex_dependency_graph,
+    )
 
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -650,7 +653,8 @@ def list_artifacts(project: Path) -> list[dict[str, Any]]:
         for rel in rels:
             add(project / rel, group)
 
-    for candidate in discover_paper_sources(project):
+    dependency_graph = resolve_latex_dependency_graph(project)
+    for candidate in dependency_graph.files:
         add(candidate, "paper")
     for candidate in discover_paper_pdfs(project):
         add(candidate, "paper")

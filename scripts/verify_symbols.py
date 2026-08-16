@@ -31,7 +31,7 @@ from pathlib import Path
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factory_core.paper_sources import primary_paper_source, resolve_latex_dependency_graph
+from factory_core.paper_sources import expand_latex_document, primary_paper_source
 
 
 # ── symbol normalization ──────────────────────────────────────────────────────
@@ -207,6 +207,12 @@ def extract_used_symbols(paper_path: str):
     with open(paper_path, encoding='utf-8') as f:
         text = f.read()
 
+    return extract_used_symbols_from_text(text)
+
+
+def extract_used_symbols_from_text(text: str):
+    """Extract symbols from one already ordered paper stream."""
+
     # For .tex: drop preamble before \begin{document}
     doc_start = text.find(r'\begin{document}')
     if doc_start >= 0:
@@ -280,45 +286,28 @@ def extract_used_symbols(paper_path: str):
 
 def extract_used_symbols_from_project(project_dir, base_name):
     project = Path(project_dir).resolve()
-    graph = resolve_latex_dependency_graph(project, base_name)
-    used = set()
-    first_use = {}
-    line_offset = 0
-    for source in graph.sources:
-        source_used, source_first = extract_used_symbols(str(source))
-        used.update(source_used)
-        for symbol, line in source_first.items():
-            first_use.setdefault(symbol, line_offset + line)
-        try:
-            line_offset += len(source.read_text(encoding='utf-8').splitlines()) + 1
-        except OSError:
-            line_offset += 1
-    return used, first_use
+    expanded = expand_latex_document(project, base_name)
+    return extract_used_symbols_from_text(expanded.text)
 
 
 def find_symbol_table_line_in_project(project_dir, base_name) -> int:
     project = Path(project_dir).resolve()
-    graph = resolve_latex_dependency_graph(project, base_name)
-    line_offset = 0
-    for source in graph.sources:
-        line = find_symbol_table_line(str(source))
-        if line > 0:
-            return line_offset + line
-        try:
-            line_offset += len(source.read_text(encoding='utf-8').splitlines()) + 1
-        except OSError:
-            line_offset += 1
-    return -1
+    expanded = expand_latex_document(project, base_name)
+    return find_symbol_table_line_in_text(expanded.text)
 
 
 def find_symbol_table_line(paper_path: str) -> int:
     """Return the line number where the symbol-table section starts in the
     paper (for use-before-def heuristic), or -1."""
     with open(paper_path, encoding='utf-8') as f:
-        for i, line in enumerate(f, 1):
-            if re.search(r'符号\s*说明|符号\s*表|变量\s*说明|notation|nomenclature',
-                         line, re.IGNORECASE):
-                return i
+        return find_symbol_table_line_in_text(f.read())
+
+
+def find_symbol_table_line_in_text(text: str) -> int:
+    for i, line in enumerate(text.splitlines(), 1):
+        if re.search(r'符号\s*说明|符号\s*表|变量\s*说明|notation|nomenclature',
+                     line, re.IGNORECASE):
+            return i
     return -1
 
 

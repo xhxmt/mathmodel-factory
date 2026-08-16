@@ -445,6 +445,9 @@ def test_stage_scheduler_rejects_wrong_catalog_version(tmp_path):
 
 
 def test_content_freeze_is_a_persistent_guard_before_delivery(tmp_path):
+    (tmp_path / f"{tmp_path.name}_paper.tex").write_text(
+        "\\begin{document}ready\\end{document}\n", encoding="utf-8"
+    )
     registry, _lifecycles = stage_registry(content_guard=ContentFreezeGuardStep())
     store = SQLiteStateStore(tmp_path)
     policy = ContestPolicy.default(started_at=store.now_epoch())

@@ -244,6 +244,9 @@ def test_engine_rejects_step_that_finishes_after_content_freeze(tmp_path):
 
 
 def test_delivery_prepare_requires_sqlite_backed_content_freeze_decision(tmp_path):
+    (tmp_path / f"{tmp_path.name}_paper.tex").write_text(
+        "\\begin{document}ready\\end{document}\n", encoding="utf-8"
+    )
     policy = ContestPolicy.default(started_at=1_000)
     store = SQLiteStateStore(tmp_path, clock=lambda: 2_000)
     store.initialize(

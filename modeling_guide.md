@@ -129,8 +129,17 @@ Use the local compile helper:
 ../../compile_paper.sh "$(pwd)" your_base_name
 ```
 
-It runs `pdflatex`, `bibtex` when needed, then two more `pdflatex`
-passes. For competitions that require specific document classes:
+It resolves one active root (`<base>_paper.tex`, otherwise
+`paper/paper.tex`), fixes the search order to the root directory followed by
+the project directory, runs `pdflatex`/`xelatex`, `bibtex` when needed, then
+two more engine passes. Every engine pass uses `-recorder`; the final
+`logs/compilation/latex_inputs.json` must prove that project-local inputs read
+by TeX exactly match the declared dependency graph. Missing, cyclic, dynamic,
+symlinked, out-of-project, or recorder-mismatched inputs are fatal. Do not hide
+an input behind a filename macro; use literal `\input`, `\include`, `\subfile`,
+`\bibliography`, `\addbibresource`, `\includegraphics`, or
+`\lstinputlisting` paths. For competitions that require specific document
+classes:
 
 - US contest (MCM/ICM): use `mcmthesis` or the contest's published
   template. Keep page count under the contest limit (currently 25 pages

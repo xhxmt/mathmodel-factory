@@ -60,16 +60,28 @@ def _write_approved_audit(project: Path, snapshot_id: str) -> None:
 def _project(root: Path, base: str, snapshot_id: str) -> Path:
     project = root / "ongoing" / base
     project.mkdir(parents=True, exist_ok=True)
+    (project / f"{base}_paper.tex").write_text(
+        "\\begin{document}approved\\end{document}\n", encoding="utf-8"
+    )
     (project / f"{base}_paper.pdf").write_bytes(b"%PDF audited\n")
+    (project / "models").mkdir()
+    (project / "models/solve.py").write_text("pass\n", encoding="utf-8")
+    (project / "results").mkdir()
+    (project / "results/result.json").write_text("{}\n", encoding="utf-8")
     _write_approved_audit(project, snapshot_id)
     return project
 
 
 def _package(project: Path, base: str):
     def build(output: Path) -> bool:
+        from factory_core.submission_bundle import submission_bundle_manifest
+
+        manifest = submission_bundle_manifest(project, base)
         with zipfile.ZipFile(output, "w") as archive:
-            archive.write(project / f"{base}_paper.pdf", f"{base}_paper.pdf")
-            archive.writestr("models/solve.py", "pass\n")
+            for item in manifest["members"]:
+                archive.write(
+                    project / item["source_path"], item["archive_path"]
+                )
         return True
 
     return build
@@ -158,14 +170,13 @@ def test_release_recovery_is_idempotent_and_repairs_legacy_aliases(
 def test_publish_current_audit_uses_the_approved_snapshot(tmp_path: Path) -> None:
     snapshot_id = "e" * 64
     project = _project(tmp_path, "demo", snapshot_id)
-    (project / "models").mkdir()
-    (project / "models/solve.py").write_text("pass\n", encoding="utf-8")
-    (project / "results").mkdir()
-    (project / "results/result.json").write_text("{}\n", encoding="utf-8")
-    (tmp_path / "scripts").mkdir()
-    shutil.copyfile(
-        Path(__file__).resolve().parents[1] / "scripts/package_submission.py",
-        tmp_path / "scripts/package_submission.py",
+    shutil.copytree(
+        Path(__file__).resolve().parents[1] / "scripts",
+        tmp_path / "scripts",
+    )
+    shutil.copytree(
+        Path(__file__).resolve().parents[1] / "factory_core",
+        tmp_path / "factory_core",
     )
 
     release = publish_current_audit(project, tmp_path)

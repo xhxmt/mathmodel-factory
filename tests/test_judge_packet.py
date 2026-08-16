@@ -2,7 +2,9 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 
+from factory_core.paper_sources import LatexDependencyError
 from scripts.judge_packet import build_packets
 
 
@@ -91,27 +93,15 @@ def test_packet_manifest_has_stable_hashes_and_context(tmp_path):
     assert first_manifest["completeness"]["requirements"][1]["id"] == "problem_statement"
 
 
-def test_packet_omits_symlink_targets_outside_project_root(tmp_path):
+def test_packet_rejects_symlink_targets_outside_project_root(tmp_path):
     project = tmp_path / "demo"
     project.mkdir()
     secret = tmp_path / "outside-secret.tex"
     secret.write_text("OUTSIDE_PROJECT_SECRET", encoding="utf-8")
     (project / "demo_paper.tex").symlink_to(secret)
 
-    manifests = build_packets(project, base_name="demo")
-
-    for role in ("paper", "math", "execution"):
-        manifest = manifests[role]
-        item = next(entry for entry in manifest["files"] if entry["path"] == "demo_paper.tex")
-        context = (project / "judge_packets" / role / "context.txt").read_text(
-            encoding="utf-8"
-        )
-        assert item == {
-            "path": "demo_paper.tex",
-            "status": "omitted",
-            "reason": "outside_project_root",
-        }
-        assert "OUTSIDE_PROJECT_SECRET" not in context
+    with pytest.raises(LatexDependencyError, match="missing_root"):
+        build_packets(project, base_name="demo")
 
 
 def test_chunk_ids_bind_role_path_and_exact_included_text(tmp_path):
@@ -145,19 +135,14 @@ def test_chunk_ids_bind_role_path_and_exact_included_text(tmp_path):
     assert paper_item["source_line_end"] == 2
 
 
-def test_packet_allows_symlink_targets_that_remain_inside_project_root(tmp_path):
+def test_packet_rejects_symlink_targets_inside_project_root(tmp_path):
     project = tmp_path / "demo"
     project.mkdir()
     _write(project, "paper/source.tex", "IN_PROJECT_PAPER")
     (project / "demo_paper.tex").symlink_to(project / "paper/source.tex")
 
-    manifest = build_packets(project, base_name="demo")["paper"]
-    item = next(entry for entry in manifest["files"] if entry["path"] == "demo_paper.tex")
-    context = (project / "judge_packets/paper/context.txt").read_text(encoding="utf-8")
-
-    assert item["status"] == "included"
-    assert item["sha256"] == hashlib.sha256(b"IN_PROJECT_PAPER").hexdigest()
-    assert "IN_PROJECT_PAPER" in context
+    with pytest.raises(LatexDependencyError, match="missing_root"):
+        build_packets(project, base_name="demo")
 
 
 def test_execution_context_prioritizes_results_before_large_model_code(tmp_path):

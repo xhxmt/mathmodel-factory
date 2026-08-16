@@ -107,8 +107,13 @@ unbounded for compatibility; do not synthesize an expired deadline for them.
 Schema v8 represents every Human Gate occurrence as an immutable request
 (`request_id`, gate, generation, subject/options fingerprints) and one optional
 append-only decision instance. A rejected Approval remains historical evidence,
-keeps the project awaiting action, and creates the next generation. Never infer
-approval from the existence of a decision row or a selected option string.
+but content-freeze rejection clears the pending action, invalidates downstream
+checkpoints, records `WORK_REOPENED`, and returns to Stage 9. The next
+generation is created only when repaired work reaches the Gate again. Never
+infer approval from the existence of a decision row or a selected option
+string. Current Approval decisions also require a verified immutable receipt;
+missing, symlinked, hash-mismatched, or identity-mismatched evidence fails
+closed.
 
 The Legacy Adapter still snapshots itself under `logs/runner_snapshots/` so an
 active Step is insulated from edits. Do not add new scheduling, retry, recovery,
@@ -300,7 +305,9 @@ Important project files include:
 - `.factory/audits/profiles/**`: non-delivery `model` / `results` / `paper` snapshots and attempts.
 - `.factory/audits/latest.json`: current `profile=final` audit record used by delivery.
 - `judge_outputs/final_paper_checks.json`: hash-bound final paper/provenance check report.
-- `judge_outputs/final_acceptance_receipt.json`: binds the approved snapshot to PDF, checks, visual gate, decision route, and judgment or override receipt.
+- `judge_outputs/final_acceptance_receipt.json`: binds the approved snapshot to PDF, checks, visual gate, decision route, judgment or override receipt, and the exact `submission-bundle-manifest-v1` identity.
+- `logs/compilation/latex_inputs.json`: compiler-recorder proof that project-local TeX inputs equal the declared `LatexCompileContract` dependency graph.
+- `.factory/finalization/submission_bundle_manifest.json`: exact, path-safe ZIP member list with size and SHA-256; unreferenced `paper/` drafts are excluded.
 - `judge_evaluation.md`: Step-13 `PRECHECK_PASS` control file until the final audit replaces it with the full aggregate verdict.
 - `judge_packets/**`, `judge_outputs/**`: isolated evidence manifests, strict role outputs, aggregate JSON, and final-submission fingerprint. Each manifest carries `judge-packet-completeness-v1`; required evidence that is missing, truncated, or omitted forces the role to `INDETERMINATE`, while non-critical truncation must remain visible in `limitations`.
 

@@ -117,6 +117,9 @@ def test_native_diagnostics_reports_orphaned_decision_projection(tmp_path):
 
 
 def test_prior_rejected_decision_projection_is_not_orphaned(tmp_path):
+    (tmp_path / f"{tmp_path.name}_paper.tex").write_text(
+        "\\begin{document}draft\\end{document}\n", encoding="utf-8"
+    )
     store = SQLiteStateStore(tmp_path, clock=lambda: 100)
     initial = store.initialize(project_id="demo", project_type="modeling")
     rejected = store.record_decision(
@@ -172,6 +175,37 @@ def test_prior_rejected_decision_projection_is_not_orphaned(tmp_path):
     )
 
     assert diag["orphaned_artifacts"] == []
+
+
+def test_diagnostics_exposes_decision_receipt_mismatch(tmp_path):
+    (tmp_path / f"{tmp_path.name}_paper.tex").write_text(
+        "\\begin{document}approved\\end{document}\n", encoding="utf-8"
+    )
+    store = SQLiteStateStore(tmp_path, clock=lambda: 100)
+    store.initialize(project_id="demo", project_type="modeling")
+    decision = store.record_decision(
+        "content_freeze",
+        {
+            "selected_option_id": "approve_content_freeze",
+            "approved": True,
+            "selected_at": 100,
+        },
+    )
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    receipt.write_text("tampered\n", encoding="utf-8")
+
+    diag = build_project_diagnostics(
+        tmp_path,
+        "demo",
+        is_running=False,
+        consultation_pending=False,
+        consultation_gate=None,
+    )
+
+    assert diag["status"]["reason_code"] == "DECISION_RECEIPT_MISMATCH"
+    assert diag["decision_receipt_mismatches"][0]["request_id"] == decision[
+        "request_id"
+    ]
 
 
 def test_native_diagnostics_fails_closed_on_replay_hash_mismatch(tmp_path):

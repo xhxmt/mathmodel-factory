@@ -168,7 +168,7 @@ def test_final_judge_current_requires_the_same_nonempty_pdf(tmp_path: Path) -> N
     assert final_judge_is_current(project, "demo") is False
 
 
-def test_external_submission_asset_symlinks_are_not_hashed(tmp_path: Path) -> None:
+def test_external_submission_asset_symlinks_fail_closed(tmp_path: Path) -> None:
     project = tmp_path / "demo"
     make_submission(project)
     external = tmp_path / "outside"
@@ -183,13 +183,8 @@ def test_external_submission_asset_symlinks_are_not_hashed(tmp_path: Path) -> No
     os.symlink(external / "table.csv", project / "tables/main.csv")
     os.symlink(external / "figure.png", project / "figures/main.png")
 
-    payload = submission_fingerprint_payload(project, "demo")
-    assert [asset["path"] for asset in payload["submission_assets"]] == ["demo_paper.tex"]
-    before = submission_fingerprint(project, "demo")
-    write_file(external / "references.bib", "changed outside refs\n")
-    write_file(external / "table.csv", "changed outside table\n")
-    write_file(external / "figure.png", b"changed outside figure")
-    assert submission_fingerprint(project, "demo") == before
+    with pytest.raises(ValueError, match="symlink"):
+        submission_fingerprint_payload(project, "demo")
 
 
 def make_evaluator_factory(root: Path) -> None:

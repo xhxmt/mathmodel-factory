@@ -1466,7 +1466,18 @@ class SQLiteStateStore:
         with self._session() as connection:
             self._upgrade_schema(connection)
             rows = connection.execute(query, params).fetchall()
-        return [self._decision_payload(row) for row in rows]
+        return [
+            self._with_decision_receipt_verification(self._decision_payload(row))
+            for row in rows
+        ]
+
+    def _with_decision_receipt_verification(
+        self, decision: dict[str, Any]
+    ) -> dict[str, Any]:
+        from .decision_receipts import verify_decision_receipt
+
+        verification = verify_decision_receipt(self.project_dir, decision)
+        return {**decision, "receipt_verification": verification.to_dict()}
 
     def decision_for_request(self, request_id: str) -> dict[str, Any] | None:
         """Return immutable history by request identity, independent of Gate currency."""
@@ -1486,7 +1497,11 @@ class SQLiteStateStore:
                 """,
                 (str(request_id),),
             ).fetchone()
-        return self._decision_payload(row) if row is not None else None
+        return (
+            self._with_decision_receipt_verification(self._decision_payload(row))
+            if row is not None
+            else None
+        )
 
     def decision(self, gate: str, *, current_only: bool = True) -> dict[str, Any] | None:
         if not self.path.is_file():
@@ -1511,7 +1526,12 @@ class SQLiteStateStore:
                 or current_options != row["options_fingerprint"]
             ):
                 return None
-        return self._decision_payload(row)
+        payload = self._with_decision_receipt_verification(
+            self._decision_payload(row)
+        )
+        if not payload["receipt_verification"]["valid"]:
+            return None
+        return payload
 
     def assert_pending_decision_current(self, gate: str | None = None) -> dict[str, Any]:
         state = self.load()
@@ -2098,16 +2118,19 @@ class SQLiteStateStore:
                 raise InvalidTransition("pending human decision request is not registered")
             from .human_decisions import decision_fingerprints
 
-            current_subject, current_options = decision_fingerprints(
-                self.project_dir, gate, tuple(request_payload.get("evidence") or ())
-            )
-            if request["subject_fingerprint"] != "LEGACY_UNBOUND" and (
-                current_subject != request["subject_fingerprint"]
-                or current_options != request["options_fingerprint"]
-            ):
-                raise InvalidTransition(
-                    "human decision request is stale because its bound evidence changed"
+            if request["subject_fingerprint"] != "LEGACY_UNBOUND":
+                current_subject, current_options = decision_fingerprints(
+                    self.project_dir,
+                    gate,
+                    tuple(request_payload.get("evidence") or ()),
                 )
+                if (
+                    current_subject != request["subject_fingerprint"]
+                    or current_options != request["options_fingerprint"]
+                ):
+                    raise InvalidTransition(
+                        "human decision request is stale because its bound evidence changed"
+                    )
             safe_decision = {**dict(_redact(decision_record or {})), **dict(_redact(resolution))}
             record_gate = str(safe_decision.get("gate") or gate).strip()
             if record_gate != gate:
@@ -2129,6 +2152,7 @@ class SQLiteStateStore:
             revision = expected_revision + 1
             reopened_request: dict[str, Any] | None = None
             reopen_after_step: int | None = None
+            invalidated_checkpoints: list[dict[str, Any]] = []
             if persisted.get("approved") is False and gate == "content_freeze":
                 reopen_after_step = int(before["last_completed_step"])
                 reopen_after_stage = int(before["last_completed_stage"])
@@ -2137,6 +2161,20 @@ class SQLiteStateStore:
                 # the repaired content has a fresh fingerprint.
                 reopen_after_step = min(reopen_after_step, 13)
                 reopen_after_stage = min(reopen_after_stage, 8)
+                invalidated_checkpoints = [
+                    {
+                        "stage_id": int(row["stage_id"]),
+                        "subtask": str(row["subtask"]),
+                        "source_step_id": row["source_step_id"],
+                    }
+                    for row in connection.execute(
+                        "SELECT stage_id, subtask, source_step_id "
+                        "FROM stage_checkpoints WHERE source_step_id > ? "
+                        "OR (completed_step_id IS NULL AND source_step_id >= ?) "
+                        "ORDER BY stage_id, subtask",
+                        (reopen_after_step, reopen_after_step),
+                    ).fetchall()
+                ]
                 connection.execute(
                     "DELETE FROM stage_checkpoints WHERE source_step_id > ? "
                     "OR (completed_step_id IS NULL AND source_step_id >= ?)",
@@ -2203,12 +2241,18 @@ class SQLiteStateStore:
             after = connection.execute(
                 "SELECT * FROM project_state WHERE singleton=1"
             ).fetchone()
+            resolved_event_type = (
+                "WORK_REOPENED"
+                if persisted.get("approved") is False
+                and gate == "content_freeze"
+                else "ACTION_RESOLVED"
+            )
             event_payload = self._versioned_event_payload(
                 connection,
                 before=before,
                 after=after,
                 revision=revision,
-                event_type="ACTION_RESOLVED",
+                event_type=resolved_event_type,
                 created_at=now,
                 payload={
                     "action_type": pending.get("type"),
@@ -2223,13 +2267,23 @@ class SQLiteStateStore:
                     "reopened_request": reopened_request,
                     "reopen_after_step": reopen_after_step,
                     "reopen_stage": 9 if gate == "content_freeze" and reopen_after_step is not None else None,
+                    "stage": 9 if reopen_after_step is not None else None,
+                    "subtask": "content_freeze_guard" if reopen_after_step is not None else None,
+                    "decision": "rejected" if reopen_after_step is not None else None,
+                    "invalidated_checkpoints": invalidated_checkpoints,
+                    "next_task": (
+                        "repair content and rerun Stage 9 before requesting Gate 2"
+                        if reopen_after_step is not None
+                        else None
+                    ),
                 },
             )
             connection.execute(
                 "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
-                "VALUES (?, 'ACTION_RESOLVED', ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     revision,
+                    resolved_event_type,
                     now,
                     before["active_step"],
                     before["attempt"],

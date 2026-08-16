@@ -355,6 +355,7 @@ class ContentFreezeGuardStep:
                     "request_id": decision.get("request_id"),
                     "generation": decision.get("generation"),
                     "subject_fingerprint": decision.get("subject_fingerprint"),
+                    "receipt_verification": decision.get("receipt_verification"),
                 }
             )
         return ValidationResult.awaiting(

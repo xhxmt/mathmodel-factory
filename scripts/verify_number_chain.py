@@ -28,7 +28,7 @@ from pathlib import Path
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factory_core.paper_sources import primary_paper_source, resolve_latex_dependency_graph
+from factory_core.paper_sources import expand_latex_document, primary_paper_source
 
 
 def _read_file(path):
@@ -122,16 +122,31 @@ def extract_tex_numbers_detailed(tex_path):
     if not text:
         return []
 
+    return _extract_tex_numbers_detailed_text(text)
+
+
+def _blank_preserving_newlines(match):
+    return "\n" * match.group(0).count("\n")
+
+
+def _extract_tex_numbers_detailed_text(text):
+    """Scan one expanded stream so parent section state reaches child files."""
+
     # 去除preamble
     doc_start = text.find(r'\begin{document}')
     if doc_start >= 0:
-        text = text[doc_start:]
+        text = "\n" * text[:doc_start].count("\n") + text[doc_start:]
 
     # 去除非正文内容
     for env in ('tabular', 'lstlisting', 'verbatim', 'minted', 'figure', 'table'):
-        text = re.sub(rf'\\begin\{{{env}\*?\}}.*?\\end\{{{env}\*?\}}', ' ', text, flags=re.DOTALL)
-    text = re.sub(r'<table>.*?</table>', ' ', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'```.*?```', ' ', text, flags=re.DOTALL)
+        text = re.sub(
+            rf'\\begin\{{{env}\*?\}}.*?\\end\{{{env}\*?\}}',
+            _blank_preserving_newlines,
+            text,
+            flags=re.DOTALL,
+        )
+    text = re.sub(r'<table>.*?</table>', _blank_preserving_newlines, text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'```.*?```', _blank_preserving_newlines, text, flags=re.DOTALL)
     text = re.sub(r'\\(?:label|ref|cite[tp]?)\{[^}]*\}', '', text)
 
     results = []
@@ -185,6 +200,7 @@ def extract_tex_numbers_detailed(tex_path):
                 'section': current_section,
                 'context': context,
                 'in_conclusion': in_conclusion,
+                '_expanded_line': i,
             })
 
     return results
@@ -215,13 +231,17 @@ def collect_number_chain_metrics(project_dir, base_name):
         return None
     key_results = extract_key_results(project_dir)
     project = Path(project_dir).resolve()
-    graph = resolve_latex_dependency_graph(project, base_name)
+    expanded = expand_latex_document(project, base_name)
     paper_numbers = []
-    for source in graph.sources:
-        relative = source.relative_to(project).as_posix()
-        paper_numbers.extend(
-            {**entry, "source": relative}
-            for entry in extract_tex_numbers_detailed(str(source))
+    for entry in _extract_tex_numbers_detailed_text(expanded.text):
+        expanded_line = int(entry.pop("_expanded_line"))
+        origin = expanded.lines[expanded_line - 1]
+        paper_numbers.append(
+            {
+                **entry,
+                "source": origin.source.relative_to(project).as_posix(),
+                "source_line": origin.source_line,
+            }
         )
 
     if not key_results:

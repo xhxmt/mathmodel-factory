@@ -12,7 +12,10 @@ from pathlib import Path
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factory_core.paper_sources import resolve_latex_dependency_graph
+from factory_core.paper_sources import (
+    require_safe_latex_dependencies,
+    resolve_latex_dependency_graph,
+)
 
 try:
     from scripts.claim_graph import (
@@ -196,6 +199,22 @@ def _paper_priority(project: Path, path: Path, base_name: str) -> tuple[int, str
     return priority, relative
 
 
+def _packet_dependency_graph(project: Path, base_name: str):
+    """Allow an explicitly incomplete packet, but never an unsafe paper root."""
+
+    graph = resolve_latex_dependency_graph(project, base_name)
+    lexical_roots = (
+        project / f"{base_name}_paper.tex",
+        project / "paper/paper.tex",
+        *sorted(project.glob("*_paper.tex")),
+    )
+    if graph.roots:
+        return require_safe_latex_dependencies(project, base_name)
+    if any(path.exists() or path.is_symlink() for path in lexical_roots):
+        return require_safe_latex_dependencies(project, base_name)
+    return graph
+
+
 def _math_priority(project: Path, path: Path, base_name: str) -> tuple[int, str]:
     relative = path.relative_to(project).as_posix()
     if relative in {
@@ -230,7 +249,7 @@ def _selected_paths(
     project: Path, base_name: str, registry: dict[str, object]
 ) -> dict[str, list[Path]]:
     files = _project_files(project)
-    dependency_graph = resolve_latex_dependency_graph(project, base_name)
+    dependency_graph = _packet_dependency_graph(project, base_name)
     paper_source_names = {
         path.relative_to(project).as_posix() for path in dependency_graph.sources
     }
@@ -327,7 +346,7 @@ def _role_requirements(
     silently treated as sufficient evidence.
     """
 
-    dependency_graph = resolve_latex_dependency_graph(project, base_name)
+    dependency_graph = _packet_dependency_graph(project, base_name)
     selected_names = {_relative(project, path) for path in paths}
     final_paper_sources = [
         _relative(project, path)
@@ -665,6 +684,7 @@ def _manifest(
     requirements: list[dict[str, object]],
     registry: dict[str, object],
     objective_evidence: Path | None = None,
+    submission_bundle: dict[str, object] | None = None,
 ) -> dict:
     context_limit = EXECUTION_CONTEXT_BYTES if role == "execution" else MAX_CONTEXT_BYTES
     status_counts = {
@@ -692,6 +712,8 @@ def _manifest(
     objective_record = _objective_record(project, objective_evidence)
     if objective_record is not None:
         manifest["objective_evidence"] = objective_record
+    if submission_bundle is not None:
+        manifest["submission_bundle"] = submission_bundle
     canonical = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     manifest["packet_fingerprint"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return manifest
@@ -722,6 +744,18 @@ def packet_payloads(
     base_name = base_name or project.name
     registry = build_claim_registry(project, base_name)
     selected = _selected_paths(project, base_name, registry)
+    bundle_identity = None
+    if (project / f"{base_name}_paper.pdf").is_file():
+        from factory_core.submission_bundle import submission_bundle_manifest
+
+        bundle = submission_bundle_manifest(project, base_name)
+        bundle_identity = {
+            "schema_version": bundle["schema_version"],
+            "manifest_sha256": bundle["manifest_sha256"],
+            "archive_paths": [
+                item["archive_path"] for item in bundle["members"]
+            ],
+        }
     result: dict[str, dict] = {}
     for role, paths in selected.items():
         requirements = _role_requirements(project, role, paths, base_name, registry)
@@ -736,6 +770,7 @@ def packet_payloads(
                 requirements,
                 registry,
                 objective_evidence=objective_evidence,
+                submission_bundle=bundle_identity,
             ),
         }
     return result

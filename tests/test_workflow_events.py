@@ -614,3 +614,77 @@ def test_aggregate_domain_root_detects_project_config_divergence(tmp_path):
         )
 
     assert store.verify_aggregate_domain_root() is False
+
+
+def _record_content_freeze_approval(tmp_path):
+    paper = tmp_path / f"{tmp_path.name}_paper.tex"
+    paper.write_text("\\begin{document}approved\\end{document}\n", encoding="utf-8")
+    store = SQLiteStateStore(tmp_path, clock=lambda: 100)
+    store.initialize(project_id="demo", project_type="modeling")
+    decision = store.record_decision(
+        "content_freeze",
+        {
+            "selected_option_id": "approve_content_freeze",
+            "approved": True,
+            "selected_at": 100,
+        },
+    )
+    return store, decision
+
+
+def test_deleted_content_freeze_receipt_blocks_gate(tmp_path):
+    store, decision = _record_content_freeze_approval(tmp_path)
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    receipt.unlink()
+
+    assert store.decision("content_freeze") is None
+    verification = store.decision_history("content_freeze")[0][
+        "receipt_verification"
+    ]
+    assert verification["valid"] is False
+    assert any("missing" in error for error in verification["errors"])
+
+
+def test_tampered_content_freeze_receipt_blocks_gate(tmp_path):
+    store, decision = _record_content_freeze_approval(tmp_path)
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    receipt.write_text('{"approved":false}\n', encoding="utf-8")
+
+    assert store.decision("content_freeze") is None
+    verification = store.decision_history("content_freeze")[0][
+        "receipt_verification"
+    ]
+    assert "decision receipt SHA-256 mismatch" in verification["errors"]
+
+
+def test_receipt_request_identity_must_match_database(tmp_path):
+    from factory_core.decision_receipts import verify_decision_receipt
+
+    _store, decision = _record_content_freeze_approval(tmp_path)
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    payload["request_id"] = "wrong-request"
+    receipt.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    rebound = {
+        **decision,
+        "artifact_refs": [artifact_ref(tmp_path, receipt)],
+    }
+
+    verification = verify_decision_receipt(tmp_path, rebound)
+
+    assert verification.valid is False
+    assert "decision receipt request_id mismatch" in verification.errors
+
+
+def test_receipt_symlink_is_rejected(tmp_path):
+    store, decision = _record_content_freeze_approval(tmp_path)
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    target = receipt.with_suffix(".saved.json")
+    receipt.rename(target)
+    receipt.symlink_to(target)
+
+    assert store.decision("content_freeze") is None
+    verification = store.decision_history("content_freeze")[0][
+        "receipt_verification"
+    ]
+    assert any("symlink" in error for error in verification["errors"])

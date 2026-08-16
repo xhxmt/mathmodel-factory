@@ -84,11 +84,12 @@ def publish_current(project: Path, root: Path) -> None:
     ).strip()
 
     def package(output: Path) -> bool:
+        from factory_core.submission_bundle import submission_bundle_manifest
+
+        bundle = submission_bundle_manifest(project, project.name)
         with zipfile.ZipFile(output, "w") as archive:
-            archive.write(
-                project / f"{project.name}_paper.pdf",
-                f"{project.name}_paper.pdf",
-            )
+            for item in bundle["members"]:
+                archive.write(project / item["source_path"], item["archive_path"])
         return True
 
     ReleasePublisher(root / "papers").publish(

@@ -330,7 +330,9 @@ def project_action_center(events: Iterable[WorkflowEvent]) -> dict[str, Any]:
             }
             active[request_id] = record
             history.append({"status": "pending", **record})
-        elif canonical == "HUMAN_DECISION_RECORDED":
+        elif canonical in {"HUMAN_DECISION_RECORDED", "WORK_REOPENED"} and isinstance(
+            event.payload.get("resolution"), dict
+        ):
             resolution = event.payload.get("resolution") or {}
             gate = str(resolution.get("gate") or event.payload.get("gate") or "")
             request_id = str(

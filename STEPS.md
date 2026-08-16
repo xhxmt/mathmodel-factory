@@ -347,8 +347,11 @@ current generation of the fingerprint-bound `content_freeze` request in SQLite (
 `scripts/selection_gate.py approve-content-freeze`). After T−2h, an audit-driven
 reopen additionally requires an explicit `delivery_freeze_override`; the engine
 will not silently return to substantive modeling or paper work.
-An explicit rejection is an immutable rejected decision, keeps the workflow
-blocked, and opens a new request generation; it never satisfies the freeze.
+An explicit rejection is an immutable rejected decision and never satisfies
+the freeze. Content-freeze rejection clears the pending action, records a
+`WORK_REOPENED` recovery effect, invalidates downstream checkpoints, and
+returns to Stage 9. A new request generation is created only after repaired
+content reruns the owning work and reaches Gate 2 again.
 
 Step 16 is the workflow compatibility adapter between the independent audit
 subsystem and delivery. It invokes or reuses the audit for the current content
@@ -363,7 +366,9 @@ forbids reuse of the old audit/acceptance receipt.
 
 Produce:
 - a freshly compiled `{base}_paper.pdf` (via `../../compile_paper.sh`); compilation failure is fatal and may not fall back to an older PDF
+- `logs/compilation/latex_inputs.json` with `status=PASS`; declared active LaTeX inputs must exactly equal project-local inputs observed through the engine recorder
 - a fresh final-submission Gate-2 result whose `judge_outputs/final_submission.sha256` matches all current math / execution / paper packet fingerprints, role prompts, checker/evaluator implementation, Judge model registry/config selection, final paper-check report, paper assets, and the exact compiled PDF bytes. The PDF hash is a delivery-consistency binding, not evidence that the text-only LLM inspected its rendered appearance. Delivery manifests use the `2026-08-09.atomic_release_v7` contract.
+- `.factory/finalization/submission_bundle_manifest.json` using `submission-bundle-manifest-v1`; the ZIP central directory and every member byte must match this manifest exactly, and no unreferenced `paper/` source may be packaged
 - code appendix integrated as `paper/appendix_code.tex` or `\inputminted{}` chunks
 - `papers/releases/{base}/{snapshot}/` — immutable release containing the exact audited PDF, submission ZIP, delivery manifest, final acceptance receipt, audit result, and audit snapshot
 - `papers/{base}/current.json` — the sole authoritative current-release pointer, switched with one atomic replace only after every release artifact verifies

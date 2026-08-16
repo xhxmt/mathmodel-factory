@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .domain import InvalidTransition
-from .paper_sources import resolve_latex_dependency_graph
+from .paper_sources import require_safe_latex_dependencies
 from .workflow_events import canonical_hash
 
 
@@ -125,7 +125,9 @@ def decision_fingerprints(
     subject_paths: set[Path] = set()
     subject_metadata: list[dict[str, Any]] = []
     if gate == "content_freeze":
-        dependency_graph = resolve_latex_dependency_graph(project)
+        # Human approval is meaningful only when every active source can be
+        # resolved to an exact, compiler-aligned input identity.
+        dependency_graph = require_safe_latex_dependencies(project)
         subject_paths.update(dependency_graph.files)
         subject_metadata.append(
             {

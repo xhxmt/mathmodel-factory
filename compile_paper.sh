@@ -1,41 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT="${1:?Usage: $0 <project_dir> <base_name>}"
+PROJECT="$(realpath "${1:?Usage: $0 <project_dir> <base_name>}")"
 BASE="${2:?Usage: $0 <project_dir> <base_name>}"
 
 # Make factory-vendored classes/styles (cumcmthesis.cls, abstract_placeholder.sty)
 # resolvable from any project directory. Trailing colon keeps default paths.
 FACTORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export TEXINPUTS="${FACTORY_DIR}/latex_templates:${TEXINPUTS:-}"
-
-cd "$PROJECT"
-
-TEX_SOURCE="${BASE}_paper.tex"
-if [[ ! -f "$TEX_SOURCE" && -f "paper/paper.tex" ]]; then
-    TEX_SOURCE="paper/paper.tex"
-fi
-if [[ ! -f "$TEX_SOURCE" ]]; then
-    echo "❌ 编译失败：未找到 ${BASE}_paper.tex 或 paper/paper.tex" >&2
+if ! mapfile -t LATEX_CONTRACT < <(
+    python3 "$FACTORY_DIR/scripts/latex_dependency_guard.py" \
+        "$PROJECT" "$BASE" --contract-lines
+); then
+    echo "❌ 编译失败：LaTeX 依赖合同不完整" >&2
     exit 1
 fi
-JOB_NAME="${BASE}_paper"
-TEX_DIR="$(dirname "$TEX_SOURCE")"
-export TEXINPUTS="${PROJECT}/${TEX_DIR}:${TEXINPUTS}"
+if [[ "${#LATEX_CONTRACT[@]}" -lt 4 ]]; then
+    echo "❌ 编译失败：无法读取 LaTeX 编译合同" >&2
+    exit 1
+fi
+TEX_SOURCE="${LATEX_CONTRACT[0]}"
+ENGINE="${LATEX_CONTRACT[1]}"
+JOB_NAME="${LATEX_CONTRACT[2]}"
+SEARCH_PATHS=()
+for relative in "${LATEX_CONTRACT[@]:3}"; do
+    if [[ "$relative" == "." ]]; then
+        SEARCH_PATHS+=("$PROJECT")
+    else
+        SEARCH_PATHS+=("$PROJECT/$relative")
+    fi
+done
+SEARCH_PATHS+=("$FACTORY_DIR/latex_templates")
+JOINED_SEARCH_PATHS="$(IFS=:; echo "${SEARCH_PATHS[*]}")"
+export TEXINPUTS="${JOINED_SEARCH_PATHS}:${TEXINPUTS:-}"
+export BIBINPUTS="${JOINED_SEARCH_PATHS}:${BIBINPUTS:-}"
+
+cd "$PROJECT"
 
 # 创建编译日志目录
 mkdir -p logs/compilation
 
-# 检测编译引擎
-ENGINE="pdflatex"
-if grep -qE '\\documentclass\s*(\[[^]]*\])?\s*\{(ctex|cumcmthesis|mcmthesis)' "$TEX_SOURCE" 2>/dev/null \
-   || grep -q '\\usepackage{xeCJK}' "$TEX_SOURCE" 2>/dev/null; then
-    ENGINE="xelatex"
-fi
 echo "$(date '+%Y-%m-%d %H:%M:%S') - 使用编译引擎: $ENGINE" >> logs/compilation/compile.log
 
 # 第一次编译（生成 .aux）
-if ! "$ENGINE" -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass1.log 2>&1; then
+if ! "$ENGINE" -recorder -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass1.log 2>&1; then
     echo "❌ 编译失败：第一次 $ENGINE 编译出错" >&2
     echo "" >&2
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
@@ -89,16 +96,24 @@ if [[ -f "${BASE}_paper.aux" ]] && grep -q '\\bibdata' "${BASE}_paper.aux" 2>/de
 fi
 
 # 第二次编译（处理引用）
-if ! "$ENGINE" -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass2.log 2>&1; then
+if ! "$ENGINE" -recorder -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass2.log 2>&1; then
     echo "❌ 编译失败：第二次 $ENGINE 编译出错" >&2
     echo "💡 日志: $(pwd)/logs/compilation/pass2.log" >&2
     exit 1
 fi
 
 # 第三次编译（最终化）
-if ! "$ENGINE" -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass3.log 2>&1; then
+if ! "$ENGINE" -recorder -interaction=nonstopmode -jobname="$JOB_NAME" "$TEX_SOURCE" > logs/compilation/pass3.log 2>&1; then
     echo "❌ 编译失败：第三次 $ENGINE 编译出错" >&2
     echo "💡 日志: $(pwd)/logs/compilation/pass3.log" >&2
+    exit 1
+fi
+
+if ! python3 "$FACTORY_DIR/scripts/latex_dependency_guard.py" \
+    "$PROJECT" "$BASE" \
+    --fls "$PROJECT/${JOB_NAME}.fls" \
+    --output "$PROJECT/logs/compilation/latex_inputs.json"; then
+    echo "❌ 编译失败：实际读取的项目文件与已冻结 LaTeX 依赖不一致" >&2
     exit 1
 fi
 

@@ -9,7 +9,7 @@ from .domain import AuditSnapshot
 from .persistence import atomic_write_json, utc_now
 
 
-SCHEMA_VERSION = "final-acceptance-receipt-v1"
+SCHEMA_VERSION = "final-acceptance-receipt-v2"
 RECEIPT_PATH = Path("judge_outputs/final_acceptance_receipt.json")
 
 
@@ -74,7 +74,16 @@ def build_final_acceptance_receipt(
         "status": status,
         "snapshot_id": snapshot.snapshot_id,
         "snapshot_identity_sha256": _canonical_hash(snapshot.identity),
+        "submission_bundle": {},
         "artifacts": artifacts,
+    }
+    from ..submission_bundle import submission_bundle_manifest
+
+    bundle = submission_bundle_manifest(project, project.name)
+    receipt["submission_bundle"] = {
+        "schema_version": bundle["schema_version"],
+        "manifest_sha256": bundle["manifest_sha256"],
+        "member_count": len(bundle["members"]),
     }
     receipt["content_sha256"] = _canonical_hash(receipt)
     atomic_write_json(project / RECEIPT_PATH, receipt)
@@ -114,6 +123,20 @@ def verify_final_acceptance_receipt(
             errors.append("final acceptance receipt does not bind the current snapshot")
         if receipt.get("snapshot_identity_sha256") != _canonical_hash(snapshot.identity):
             errors.append("final acceptance snapshot identity changed")
+
+    try:
+        from ..submission_bundle import submission_bundle_manifest
+
+        current_bundle = submission_bundle_manifest(project, project.name)
+        expected_bundle = {
+            "schema_version": current_bundle["schema_version"],
+            "manifest_sha256": current_bundle["manifest_sha256"],
+            "member_count": len(current_bundle["members"]),
+        }
+        if receipt.get("submission_bundle") != expected_bundle:
+            errors.append("final acceptance submission bundle changed")
+    except (OSError, ValueError) as exc:
+        errors.append(f"final acceptance submission bundle is invalid: {exc}")
 
     artifacts = receipt.get("artifacts")
     if not isinstance(artifacts, dict):

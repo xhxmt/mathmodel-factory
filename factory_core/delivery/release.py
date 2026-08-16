@@ -431,3 +431,12 @@ class ReleasePublisher:
                 raise ValueError("submission zip does not contain the final PDF")
             if hashlib.sha256(archive.read(member)).hexdigest() != _sha256(project_pdf):
                 raise ValueError("submission zip PDF differs from the audited PDF")
+        from ..submission_bundle import (
+            submission_bundle_manifest,
+            verify_zip_against_manifest,
+        )
+
+        project = project_pdf.parent.resolve()
+        verify_zip_against_manifest(
+            path, submission_bundle_manifest(project, base)
+        )

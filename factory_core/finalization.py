@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v1"
+FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v2"
 
 
 class FinalizationSnapshotChanged(RuntimeError):
@@ -43,9 +43,11 @@ def _canonical_hash(value: object) -> str:
 
 
 def _input_paths(project: Path) -> list[Path]:
-    from scripts.submission_fingerprint import submission_files
+    from .submission_bundle import submission_bundle_paths
 
-    paths = set(submission_files(project, project.name))
+    paths = set(
+        submission_bundle_paths(project, project.name, require_pdf=False)
+    )
     for relative in (
         "problem/problem_brief.md",
         "problem/problem_plan.json",
@@ -79,6 +81,11 @@ def _input_paths(project: Path) -> list[Path]:
 
 def build_final_input_manifest(project_dir: str | Path) -> FinalInputSnapshot:
     project = Path(project_dir).resolve()
+    from .submission_bundle import submission_bundle_manifest
+
+    planned_bundle = submission_bundle_manifest(
+        project, project.name, require_pdf=False
+    )
     files = [
         {
             "path": path.relative_to(project).as_posix(),
@@ -91,6 +98,7 @@ def build_final_input_manifest(project_dir: str | Path) -> FinalInputSnapshot:
         "schema_version": FINAL_INPUT_MANIFEST_SCHEMA,
         "base": project.name,
         "files": files,
+        "planned_submission_bundle": planned_bundle,
     }
     fingerprint = _canonical_hash(identity)
     manifest = {**identity, "fingerprint": fingerprint}
@@ -130,10 +138,21 @@ def verify_final_input_snapshot(
         for path in set(current_records) | set(expected_records)
         if current_records.get(path) != expected_records.get(path)
     )
+    from .submission_bundle import submission_bundle_manifest
+
+    current_bundle = submission_bundle_manifest(
+        project, project.name, require_pdf=False
+    )
+    if (
+        current_bundle != snapshot.manifest.get("planned_submission_bundle")
+        and not changed
+    ):
+        changed.append("<submission-bundle-manifest>")
     identity = {
         "schema_version": FINAL_INPUT_MANIFEST_SCHEMA,
         "base": project.name,
         "files": [current_records[path] for path in sorted(current_records)],
+        "planned_submission_bundle": current_bundle,
     }
     if _canonical_hash(identity) != snapshot.fingerprint and not changed:
         changed = ["<manifest-identity>"]

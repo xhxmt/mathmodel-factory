@@ -1,205 +1,95 @@
 #!/usr/bin/env python3
-"""Create a Modeling Factory submission bundle.
-
-The bundle is intentionally reproducibility-oriented: final PDF, LaTeX source,
-problem brief, model code, results, figures, tables, references, and audit logs.
-It excludes runner traces, caches, temporary files, and raw MinerU sidecars unless
-they are needed as ordinary source files.
-"""
+"""Create and verify the exact manifest-bound final submission ZIP."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import tempfile
 import zipfile
 from pathlib import Path
+import sys
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-SKIP_DIR_NAMES = {
-    ".git",
-    ".pytest_cache",
-    "__pycache__",
-    ".runner.lock",
-    "runner_snapshots",
-    "source.mineru",
-}
-
-SKIP_SUFFIXES = {
-    ".aux",
-    ".bbl",
-    ".blg",
-    ".log",
-    ".out",
-    ".toc",
-    ".fls",
-    ".fdb_latexmk",
-    ".synctex.gz",
-    ".pyc",
-}
-
-TOP_LEVEL_FILES = {
-    "abstract_draft.md",
-    "assumption_ledger.md",
-    "audit_issue_ledger.md",
-    "chosen_method.md",
-    "citation_audit.md",
-    "code_review.md",
-    "derobotification.md",
-    "evaluation.md",
-    "judge_evaluation.md",
-    "method_decision.md",
-    "model.md",
-    "modeling_guide.md",
-    "references.bib",
-    "research_brief.md",
-    "review_comments.md",
-    "revision_summary.md",
-    "sensitivity_report.md",
-    "solve_log.md",
-    "symbol_table.md",
-    "viability_gate.md",
-    "viable_streams.md",
-    "visualization_log.md",
-}
-
-INCLUDE_DIRS = {
-    "data/raw",
-    "figures",
-    "models",
-    "paper",
-    "problem",
-    "results",
-    "scripts",
-    "style",
-    "tables",
-}
-
-
-def should_skip(path: Path, rel: Path) -> bool:
-    if rel.parts[:2] == ("paper", "archive"):
-        return True
-    if any(part in SKIP_DIR_NAMES for part in rel.parts):
-        return True
-    if path.name.startswith(".runner") or path.name in {".heartbeat", ".killed", ".review_state.json"}:
-        return True
-    if path.suffix.lower() in SKIP_SUFFIXES:
-        return True
-    if path.name.endswith("~") or path.name.startswith(".#"):
-        return True
-    return False
-
-
-def declared_delivery_files(project: Path) -> set[str]:
-    contract = project / "problem" / "deliverables.json"
-    if not contract.is_file():
-        return set()
-    try:
-        value = json.loads(contract.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Invalid deliverables contract: {exc}") from exc
-    attachments = value.get("attachments") if isinstance(value, dict) else None
-    if not isinstance(attachments, list):
-        raise ValueError("deliverables attachments must be an array")
-    declared: set[str] = set()
-    for index, attachment in enumerate(attachments):
-        relative = attachment.get("file") if isinstance(attachment, dict) else None
-        if not isinstance(relative, str) or not relative.strip():
-            raise ValueError(f"deliverables attachment {index} has no file")
-        candidate = Path(relative)
-        if candidate.is_absolute() or ".." in candidate.parts:
-            raise ValueError(f"deliverables attachment escapes project: {relative}")
-        resolved = (project / candidate).resolve()
-        try:
-            resolved.relative_to(project.resolve())
-        except ValueError as exc:
-            raise ValueError(
-                f"deliverables attachment escapes project: {relative}"
-            ) from exc
-        if not resolved.is_file():
-            raise ValueError(f"declared deliverable is missing: {relative}")
-        declared.add(candidate.as_posix())
-    return declared
-
-
-def should_include(
-    path: Path, rel: Path, base: str, declared: set[str] | None = None
-) -> bool:
-    rel_posix = rel.as_posix()
-    if rel_posix in (declared or set()):
-        return True
-    if rel.name in {f"{base}_paper.pdf", f"{base}_paper.tex"}:
-        return True
-    if rel.parent == Path(".") and (rel.name in TOP_LEVEL_FILES or rel.name.startswith("m") and rel.suffix in {".md", ".json", ".csv"}):
-        return True
-    for dirname in INCLUDE_DIRS:
-        if rel_posix == dirname or rel_posix.startswith(dirname + "/"):
-            return True
-    return False
+from factory_core.submission_bundle import (
+    declared_delivery_files,
+    submission_bundle_manifest,
+    verify_zip_against_manifest,
+)
 
 
 def iter_bundle_files(project: Path, base: str) -> list[tuple[Path, str]]:
-    files: list[tuple[Path, str]] = []
-    declared = declared_delivery_files(project)
-    for root, dirs, names in os.walk(project):
-        root_path = Path(root)
-        rel_root = root_path.relative_to(project)
-        dirs[:] = [dirname for dirname in dirs if dirname not in SKIP_DIR_NAMES]
-        for name in names:
-            path = root_path / name
-            rel = rel_root / name if rel_root != Path(".") else Path(name)
-            if should_skip(path, rel) or not should_include(
-                path, rel, base, declared
-            ):
-                continue
-            files.append((path, rel.as_posix()))
-    return sorted(files, key=lambda item: item[1])
+    """Compatibility view backed by the authoritative bundle manifest."""
+
+    project = project.resolve()
+    manifest = submission_bundle_manifest(project, base)
+    return [
+        (project / item["source_path"], item["archive_path"])
+        for item in manifest["members"]
+    ]
+
+
+def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("project", help="Project directory, usually complete/<base> or ongoing/<base>.")
-    parser.add_argument("base", help="Project base name.")
-    parser.add_argument("output", help="Output zip path.")
+    parser.add_argument("project")
+    parser.add_argument("base")
+    parser.add_argument("output")
     args = parser.parse_args()
 
     project = Path(args.project).resolve()
     output = Path(args.output).resolve()
-    base = args.base
-
     if not project.is_dir():
         raise SystemExit(f"Project directory not found: {project}")
-    pdf = project / f"{base}_paper.pdf"
-    if not pdf.is_file():
-        raise SystemExit(f"Final PDF not found: {pdf}")
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output.with_suffix(output.suffix + ".tmp")
-    if tmp.exists():
-        tmp.unlink()
-
     try:
-        files = iter_bundle_files(project, base)
-    except ValueError as exc:
+        manifest = submission_bundle_manifest(project, args.base)
+    except (OSError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
-    if not any(arc == f"{base}_paper.pdf" for _path, arc in files):
-        raise SystemExit(f"Final PDF was not selected for packaging: {pdf}")
-    if not any(arc.startswith("models/") for _path, arc in files):
+    members = manifest["members"]
+    names = {str(item["archive_path"]) for item in members}
+    if f"{args.base}_paper.pdf" not in names:
+        raise SystemExit("Final PDF was not selected for packaging")
+    if not any(name.startswith("models/") for name in names):
         raise SystemExit("No model code selected for packaging")
-    if not any(arc.startswith("results/") for _path, arc in files):
+    if not any(name.startswith("results/") for name in names):
         raise SystemExit("No results selected for packaging")
 
-    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path, arcname in files:
-            zf.write(path, arcname)
-
-    with zipfile.ZipFile(tmp) as zf:
-        bad = zf.testzip()
-        if bad:
-            raise SystemExit(f"Zip integrity check failed at member: {bad}")
-
-    tmp.replace(output)
-    print(f"Wrote {output} ({len(files)} files)")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for item in members:
+                archive.write(project / item["source_path"], item["archive_path"])
+        verify_zip_against_manifest(temporary, manifest)
+        os.replace(temporary, output)
+        _atomic_write_json(
+            project / ".factory/finalization/submission_bundle_manifest.json",
+            manifest,
+        )
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    print(
+        f"Wrote {output} ({len(members)} files, manifest {manifest['manifest_sha256']})"
+    )
     return 0
 
 

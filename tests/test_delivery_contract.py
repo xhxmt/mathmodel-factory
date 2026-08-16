@@ -132,8 +132,12 @@ def make_current_contract_project(project: Path, *, overridden: bool = False) ->
     write_file(root / "method_library" / "demo.md", "# demo\n")
 
     def package(output: Path) -> bool:
+        from factory_core.submission_bundle import submission_bundle_manifest
+
+        bundle = submission_bundle_manifest(project, base)
         with zipfile.ZipFile(output, "w") as archive:
-            archive.write(project / f"{base}_paper.pdf", f"{base}_paper.pdf")
+            for item in bundle["members"]:
+                archive.write(project / item["source_path"], item["archive_path"])
         return True
 
     ReleasePublisher(root / "papers").publish(

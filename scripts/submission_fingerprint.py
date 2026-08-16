@@ -16,9 +16,10 @@ if __package__ in (None, ""):
 from scripts.judge_packet import packet_fingerprints
 from scripts.model_dispatch_config import get_model_entry, get_step_model_ids
 from factory_core.paper_sources import discover_paper_dependencies
+from factory_core.submission_bundle import submission_bundle_manifest
 
 
-FINGERPRINT_VERSION = 8
+FINGERPRINT_VERSION = 9
 EVALUATOR_CONTRACT_VERSION = 6
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -131,6 +132,11 @@ def evaluator_contract_payload(
         "factory_core/steps/catalog.py",
         "factory_core/steps/specialized.py",
         "factory_core/steps/validators.py",
+        "factory_core/paper_sources.py",
+        "factory_core/submission_bundle.py",
+        "compile_paper.sh",
+        "scripts/latex_dependency_guard.py",
+        "scripts/package_submission.py",
         "scripts/claim_graph.py",
         "scripts/verify_numbers.py",
         "scripts/verify_symbols.py",
@@ -237,6 +243,28 @@ def _objective_evidence_record(project: Path) -> dict[str, object] | None:
     }
 
 
+def _latex_input_verification_record(project: Path) -> dict[str, object]:
+    relative = "logs/compilation/latex_inputs.json"
+    candidate = project / relative
+    if not _contained_file(project, candidate):
+        return {"path": relative, "exists": False}
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    return {
+        "path": relative,
+        "exists": True,
+        "size": candidate.stat().st_size,
+        "sha256": _sha256(candidate),
+        "schema_version": payload.get("schema_version"),
+        "status": payload.get("status"),
+        "dependency_manifest_sha256": payload.get(
+            "dependency_manifest_sha256"
+        ),
+    }
+
+
 def submission_fingerprint_payload(
     project: Path,
     base: str | None = None,
@@ -252,6 +280,7 @@ def submission_fingerprint_payload(
         "base": resolved_base,
         "judge_packet_fingerprints": packet_fingerprints(project, resolved_base),
         "objective_evidence": _objective_evidence_record(project),
+        "latex_input_verification": _latex_input_verification_record(project),
         "evaluator_contract": evaluator_contract_payload(
             resolved_base, policy_mode=policy_mode
         ),
@@ -274,6 +303,7 @@ def submission_fingerprint_payload(
         "submission_assets": [
             _file_record(project, path) for path in submission_files(project, resolved_base)
         ],
+        "submission_bundle": submission_bundle_manifest(project, resolved_base),
         "reviewed_pdf": _pdf_record(project, resolved_base),
     }
 
