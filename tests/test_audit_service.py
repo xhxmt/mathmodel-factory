@@ -9,6 +9,8 @@ from factory_core.audit import AuditStatus, FinalAuditService
 from factory_core.cli import build_parser
 from factory_core.domain import ExecutionResult, StepContext
 from factory_core.governance.overrides import SQLiteOverrideProvider
+from factory_core.contest import ContestPolicy
+from factory_core.storage import SQLiteStateStore
 from web.backend.auth_store import AuthStore
 
 
@@ -151,6 +153,49 @@ def test_final_audit_writes_snapshot_without_publishing(tmp_path: Path) -> None:
         args for script, args in runner.calls if script.endswith("judge_decision_router.py")
     )
     assert router_args[router_args.index("--policy-mode") + 1] == "enforce"
+
+
+def test_content_freeze_receipt_removed_during_judge_blocks_acceptance(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    context = make_context(project)
+    store = SQLiteStateStore(project, clock=lambda: 2_000)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        contest_policy=ContestPolicy.default(started_at=1_000).to_dict(),
+    )
+    decision = store.record_decision(
+        "content_freeze",
+        {
+            "selected_option_id": "approve_content_freeze",
+            "approved": True,
+            "selected_at": 2_000,
+        },
+    )
+    receipt = project / decision["artifact_refs"][0]["path"]
+
+    class ReceiptDeletingJudge(PassingJudge):
+        def execute_prepared(self, context):
+            receipt.unlink()
+            return super().execute_prepared(context)
+
+    service = FinalAuditService(
+        root,
+        ReceiptDeletingJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "7" * 64,
+    )
+
+    outcome = service.run(context)
+
+    assert outcome.record.status is AuditStatus.INDETERMINATE
+    assert outcome.record.error_class == "PERMANENT_FINAL_ACCEPTANCE_RECEIPT"
+    assert outcome.record.delivery_allowed is False
 
 
 def test_final_audit_reuses_valid_pass_for_same_snapshot(

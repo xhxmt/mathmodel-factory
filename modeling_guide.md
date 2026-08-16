@@ -131,11 +131,17 @@ Use the local compile helper:
 
 It resolves one active root (`<base>_paper.tex`, otherwise
 `paper/paper.tex`), fixes the search order to the root directory followed by
-the project directory, runs `pdflatex`/`xelatex`, `bibtex` when needed, then
-two more engine passes. Every engine pass uses `-recorder`; the final
-`logs/compilation/latex_inputs.json` must prove that project-local inputs read
-by TeX exactly match the declared dependency graph. Missing, cyclic, dynamic,
-symlinked, out-of-project, or recorder-mismatched inputs are fatal. Do not hide
+the project directory, runs `pdflatex`/`xelatex`, selects exactly one of
+BibTeX/Biber when needed, then runs two more engine passes. Stale AUX/BCF/BBL
+state is removed before pass one, and any bibliography backend failure or
+unresolved citation is fatal. Every engine pass uses `-recorder`; the final
+`logs/compilation/latex_inputs.json` must prove that all three passes share the
+same declared project-input identity. External reads are accepted only from
+controlled TeX/font runtime roots; project symlinks and all other external or
+undeclared inputs fail closed. `logs/compilation/bibliography_build_receipt.json`
+binds backend/version, first-pass AUX/BCF, `.bib`, project `.bst`, and the
+generated `.bbl`. Missing, cyclic, dynamic, symlinked, out-of-project, or
+recorder-mismatched inputs are fatal. Do not hide
 an input behind a filename macro; use literal `\input`, `\include`, `\subfile`,
 `\bibliography`, `\addbibresource`, `\includegraphics`, or
 `\lstinputlisting` paths. For competitions that require specific document

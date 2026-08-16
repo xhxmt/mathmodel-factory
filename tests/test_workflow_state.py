@@ -29,6 +29,18 @@ def mark_final_judge_current(project: Path, base: str) -> None:
         project / "judge_outputs/final_paper_checks.json",
         '{"schema_version":"final-paper-checks-v1","checks":[],"hard_failures":[]}\n',
     )
+    write_file(project / "logs/compilation/pass3.log", "")
+    write_file(project / "logs/compilation/bibliography_backend.log", "")
+    from factory_core.bibliography import build_bibliography_receipt
+
+    build_bibliography_receipt(
+        project,
+        base,
+        backend="none",
+        backend_version="",
+        backend_log="logs/compilation/bibliography_backend.log",
+        final_log="logs/compilation/pass3.log",
+    )
     fingerprint = submission_fingerprint(project, base, policy_mode="enforce")
     identity = submission_fingerprint_payload(project, base, policy_mode="enforce")
     write_file(

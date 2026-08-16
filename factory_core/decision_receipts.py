@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -30,12 +31,57 @@ class DecisionReceiptVerification:
         }
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def _read_contained_once(project: Path, relative: Path) -> bytes:
+    """Read one regular file through an O_NOFOLLOW descriptor chain."""
+
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(project, directory_flags)
+    try:
+        for component in relative.parts[:-1]:
+            next_descriptor = os.open(
+                component,
+                directory_flags | nofollow,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        file_descriptor = os.open(
+            relative.parts[-1], os.O_RDONLY | nofollow, dir_fd=descriptor
+        )
+        try:
+            before = os.fstat(file_descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise OSError("receipt is not a regular file")
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(file_descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            after = os.fstat(file_descriptor)
+            if (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            ) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            ):
+                raise OSError("receipt changed while it was being read")
+            data = b"".join(chunks)
+            if len(data) != after.st_size:
+                raise OSError("receipt size changed while it was being read")
+            return data
+        finally:
+            os.close(file_descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _decision_identity(decision: Mapping[str, Any]) -> dict[str, Any]:
@@ -100,30 +146,23 @@ def verify_decision_receipt(
         return DecisionReceiptVerification(
             False, tuple(errors + ["decision receipt escapes project"]), path=relative
         )
-    cursor = project
-    for component in path_relative.parts:
-        cursor = cursor / component
-        if cursor.is_symlink():
-            errors.append("decision receipt is or traverses a symlink")
-            break
-    if not lexical.is_file():
-        errors.append("decision receipt is missing or not a regular file")
-        return DecisionReceiptVerification(False, tuple(errors), path=relative)
     try:
-        lexical.resolve(strict=True).relative_to(project)
-    except (OSError, ValueError):
-        errors.append("decision receipt resolves outside project")
+        data = _read_contained_once(project, path_relative)
+    except OSError:
+        errors.append(
+            "decision receipt is missing, non-regular, or traverses a symlink"
+        )
         return DecisionReceiptVerification(False, tuple(errors), path=relative)
 
-    actual_size = lexical.stat().st_size
-    actual_sha256 = _sha256(lexical)
+    actual_size = len(data)
+    actual_sha256 = hashlib.sha256(data).hexdigest()
     if reference.get("size") != actual_size:
         errors.append("decision receipt size mismatch")
     if reference.get("sha256") != actual_sha256:
         errors.append("decision receipt SHA-256 mismatch")
     try:
-        receipt = json.loads(lexical.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        receipt = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         errors.append("decision receipt JSON is invalid")
         return DecisionReceiptVerification(
             False, tuple(errors), path=relative, sha256=actual_sha256
@@ -156,3 +195,48 @@ def verify_decision_receipt(
     return DecisionReceiptVerification(
         not errors, tuple(errors), path=relative, sha256=actual_sha256
     )
+
+
+def verified_approval_receipts(
+    project_dir: str | Path,
+    *,
+    require_content_freeze: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Return exact current approval receipts consumed by finalization."""
+
+    project = Path(project_dir).resolve()
+    from .storage import SQLiteStateStore
+
+    store = SQLiteStateStore(project)
+    if not store.exists:
+        return []
+    if require_content_freeze is None:
+        require_content_freeze = store.contest_policy() is not None
+    records: list[dict[str, Any]] = []
+    for gate in ("content_freeze", "delivery_freeze_override"):
+        decision = store.decision(gate)
+        if decision is None or decision.get("approved") is not True:
+            if gate == "content_freeze" and require_content_freeze:
+                raise ValueError("verified content-freeze approval receipt is required")
+            continue
+        verification = verify_decision_receipt(project, decision)
+        if not verification.valid:
+            raise ValueError(
+                f"{gate} approval receipt is invalid: "
+                + "; ".join(verification.errors)
+            )
+        reference = decision["artifact_refs"][0]
+        records.append(
+            {
+                "gate": gate,
+                "request_id": decision.get("request_id"),
+                "decision_id": decision.get("decision_id"),
+                "generation": decision.get("generation"),
+                "path": reference.get("path"),
+                "size": reference.get("size"),
+                "sha256": reference.get("sha256"),
+                "subject_fingerprint": decision.get("subject_fingerprint"),
+                "options_fingerprint": decision.get("options_fingerprint"),
+            }
+        )
+    return records

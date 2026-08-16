@@ -21,6 +21,9 @@ from factory_core.submission_bundle import (
 )
 
 
+_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+
+
 def iter_bundle_files(project: Path, base: str) -> list[tuple[Path, str]]:
     """Compatibility view backed by the authoritative bundle manifest."""
 
@@ -45,6 +48,17 @@ def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise
+
+
+def _write_deterministic_member(
+    archive: zipfile.ZipFile, source: Path, archive_path: str
+) -> None:
+    info = zipfile.ZipInfo(archive_path, date_time=_ZIP_TIMESTAMP)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.create_system = 3
+    info.external_attr = 0o100644 << 16
+    info.flag_bits |= 0x800
+    archive.writestr(info, source.read_bytes())
 
 
 def main() -> int:
@@ -77,7 +91,11 @@ def main() -> int:
     try:
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for item in members:
-                archive.write(project / item["source_path"], item["archive_path"])
+                _write_deterministic_member(
+                    archive,
+                    project / item["source_path"],
+                    item["archive_path"],
+                )
         verify_zip_against_manifest(temporary, manifest)
         os.replace(temporary, output)
         _atomic_write_json(

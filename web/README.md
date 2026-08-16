@@ -26,7 +26,7 @@
 - 顶部行动中心持续聚合 Human Gate、deadline 风险、Solver 失败、未解决审计事项和交付阻塞。
 - `step3`、`content_freeze`、`delivery_freeze_override` 三类人工决策可在 Web 中完成，均携带当前 revision、request ID、generation 和 subject/options fingerprint 并写入 append-only SQLite；拒绝审批会保留拒绝结果并打开下一代请求，CLI 路径始终保留。
 - 证据驾驶舱汇总 canonical results、PRIMARY/AUXILIARY、Solver jobs/receipts、model/results/paper/final audits 与三角色状态。
-- 论文 artifact 分组来自完整活动 LaTeX dependency graph（含嵌套 bibliography）；决定 receipt 的缺失、符号链接、哈希或身份不一致显示为 `DECISION_RECEIPT_MISMATCH`，Approval Gate 不会继续放行。
+- 论文 artifact 分组来自完整活动 LaTeX dependency graph（含嵌套 bibliography）；决定 receipt 的缺失、符号链接、哈希或身份不一致显示为 `DECISION_RECEIPT_MISMATCH`，Approval Gate 不会继续放行。缺失 receipt 只能通过 `scripts/decision_receipt_repair.py <project> <request_id>` 从不可变 SQLite 决定重建，且重建字节必须匹配原 SHA-256；已有损坏证据不会被覆盖。
 - 交付就绪中心按红黄绿列出 PDF、canonical results、附件、内容冻结、确定性检查、视觉页数、三角色、最终快照和原子 release；PDF/ZIP 只从已验证的 current release 下载。
 
 ## 本地启动

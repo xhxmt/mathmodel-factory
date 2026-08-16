@@ -19,6 +19,7 @@ from factory_core.steps.prompt_step import PromptStep
 from factory_core.steps.specialized import DeliveryStep, JudgeStep, ParallelProposalStep
 from factory_core.steps.validators import NativeArtifactValidator
 from factory_core.storage import SQLiteStateStore
+from factory_core.delivery.release import ReleasePublisher
 
 
 class RecordingBackend:
@@ -1058,6 +1059,7 @@ def test_fake_backends_drive_native_steps_zero_through_sixteen(tmp_path):
         runner=FakeCommandRunner(),
         validator_factory=lambda _root, _step: AlwaysValidValidator(),
         fingerprinter=lambda _project, _base: "0" * 64,
+        release_publisher=ReleasePublisher(tmp_path / "papers"),
     )
     store = SQLiteStateStore(project)
     store.initialize(project_id=project.name, project_type="modeling")

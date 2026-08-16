@@ -211,6 +211,22 @@ class FinalAuditService:
                     returncode=2,
                 )
 
+        if self.fingerprinter is None:
+            from ..bibliography import verify_bibliography_receipt
+
+            bibliography_valid, bibliography_errors, _ = (
+                verify_bibliography_receipt(project, base)
+            )
+            if not bibliography_valid:
+                return self._failure(
+                    project,
+                    decision="BIBLIOGRAPHY_EVIDENCE_INVALID",
+                    status=AuditStatus.FAIL,
+                    error_class="PERMANENT_BIBLIOGRAPHY_RECEIPT",
+                    returncode=2,
+                    evidence={"bibliography_errors": bibliography_errors},
+                )
+
         acceptance_checks, acceptance = self._run_acceptance_checks(project)
         if acceptance is not None:
             return self._failure(
@@ -397,7 +413,19 @@ class FinalAuditService:
         if override and (decision != "PASS" or not judge_completed):
             self._record_override_decision(project, decision, judge_result.metadata)
 
-        current_snapshot = self._snapshot(project)
+        try:
+            current_snapshot = self._snapshot(project)
+        except (OSError, ValueError) as exc:
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision="CONTENT_FREEZE_EVIDENCE_INVALID",
+                status=AuditStatus.INDETERMINATE,
+                error_class="PERMANENT_CONTENT_FREEZE_RECEIPT",
+                returncode=2,
+                judge_completed=judge_completed,
+                evidence={"approval_error": str(exc)},
+            )
         if current_snapshot.snapshot_id != snapshot.snapshot_id:
             return self._failure(
                 project,

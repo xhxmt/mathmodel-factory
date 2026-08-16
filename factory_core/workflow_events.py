@@ -392,6 +392,18 @@ def project_recovery_status(events: Iterable[WorkflowEvent]) -> dict[str, Any]:
             "CHECKPOINT_INVALIDATED",
         }:
             continue
+        resume_after_step = event.payload.get("resume_after_step")
+        if resume_after_step is None:
+            resume_after_step = event.payload.get("reopen_after_step")
+        invalidated = list(event.payload.get("invalidated_checkpoints") or ())
+        recovery_target = {
+            "resume_after_step": resume_after_step,
+            "stage": event.payload.get("reopen_stage")
+            or event.payload.get("stage"),
+            "subtask": event.payload.get("subtask"),
+            "invalidated_checkpoints": invalidated,
+            "next_task": event.payload.get("next_task"),
+        }
         record = {
             "revision": event.revision,
             "event_type": event.type,
@@ -400,7 +412,11 @@ def project_recovery_status(events: Iterable[WorkflowEvent]) -> dict[str, Any]:
             "stage": event.payload.get("stage"),
             "subtask": event.payload.get("subtask"),
             "decision": event.payload.get("decision"),
-            "resume_after_step": event.payload.get("resume_after_step"),
+            "resume_after_step": resume_after_step,
+            "reopen_after_step": event.payload.get("reopen_after_step"),
+            "invalidated_checkpoints": invalidated,
+            "next_task": event.payload.get("next_task"),
+            "recovery_target": recovery_target,
             "reason": _reason(event),
         }
         latest = record

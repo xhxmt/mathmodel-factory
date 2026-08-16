@@ -27,6 +27,7 @@ jobs:
       - run: uv run python -m compileall -q factory_core cloud web/backend
       - run: >-
           uv run pytest -q
+          -m "not latex"
           --ignore=tests/test_cloud_solver_monitor.py
           --ignore=tests/test_cloud_solver_security.py
           --ignore=tests/test_cloud_solver_api_persistence.py
@@ -36,6 +37,25 @@ jobs:
           --ignore=tests/test_cumcm2025a_exact_oracle.py
           --ignore=tests/test_cumcm2025a_occlusion_model.py
       - run: git diff --check
+
+  latex:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y --no-install-recommends
+          texlive-latex-base texlive-latex-extra texlive-bibtex-extra
+          texlive-xetex biber
+      - run: uv sync --group dev --locked
+      - run: command -v pdflatex && command -v xelatex && command -v bibtex && command -v biber
+      - run: uv run pytest -q -m latex --strict-markers
 
   web:
     runs-on: ubuntu-latest

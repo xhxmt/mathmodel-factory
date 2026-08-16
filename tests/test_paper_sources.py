@@ -6,7 +6,10 @@ from factory_core.paper_sources import (
     primary_paper_source,
     require_safe_latex_dependencies,
     resolve_latex_dependency_graph,
+    verify_latex_recorder_inputs,
 )
+from factory_core.bibliography import verify_bibliography_receipt
+from factory_core.submission_bundle import submission_bundle_paths
 from factory_core.finalization import (
     FinalizationSnapshotChanged,
     build_final_input_manifest,
@@ -278,6 +281,7 @@ def test_dynamic_latex_dependency_fails_content_freeze(tmp_path):
         decision_fingerprints(project, "content_freeze")
 
 
+@pytest.mark.latex
 @pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex unavailable")
 def test_fls_observed_inputs_match_dependency_manifest(tmp_path):
     project = tmp_path / "demo"
@@ -307,8 +311,11 @@ def test_fls_observed_inputs_match_dependency_manifest(tmp_path):
     )
     assert verification["status"] == "PASS"
     assert verification["declared_latex_inputs"] == verification["observed_latex_inputs"]
+    assert verification["all_passes_share_input_identity"] is True
+    assert len(verification["passes"]) == 3
 
 
+@pytest.mark.latex
 @pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex unavailable")
 def test_compiler_cannot_read_unfingerprinted_project_source(tmp_path):
     project = tmp_path / "demo"
@@ -332,3 +339,306 @@ def test_compiler_cannot_read_unfingerprinted_project_source(tmp_path):
 
     assert result.returncode != 0
     assert "实际读取的项目文件" in result.stderr
+
+
+def test_recorder_reports_forbidden_external_input(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    root.parent.mkdir(parents=True)
+    root.write_text("\\begin{document}ok\\end{document}\n", encoding="utf-8")
+    fls = project / "demo_paper.fls"
+    fls.write_text(
+        f"INPUT {root}\nINPUT /tmp/outside-secret.txt\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="external_forbidden"):
+        verify_latex_recorder_inputs(project, "demo", fls)
+
+
+def test_allowed_texmf_runtime_inputs_pass(tmp_path):
+    runtime = Path("/usr/share/texlive/texmf-dist/tex/latex/base/article.cls")
+    if not runtime.is_file():
+        pytest.skip("system TeX runtime fixture unavailable")
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    root.parent.mkdir(parents=True)
+    root.write_text("\\begin{document}ok\\end{document}\n", encoding="utf-8")
+    fls = project / "demo_paper.fls"
+    fls.write_text(f"INPUT {root}\nINPUT {runtime}\n", encoding="utf-8")
+
+    verification = verify_latex_recorder_inputs(project, "demo", fls)
+
+    assert verification["status"] == "PASS"
+    assert any(
+        item["category"] == "external_tex_runtime_allowed"
+        for item in verification["passes"][0]["inputs"]
+    )
+
+
+@pytest.mark.latex
+@pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex unavailable")
+def test_compiler_rejects_absolute_external_verbatim_input(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    root.parent.mkdir(parents=True)
+    outside = tmp_path.parent / "outside-secret.txt"
+    outside.write_text("OUTSIDE SECRET\n", encoding="utf-8")
+    root.write_text(
+        "\\documentclass{article}\n"
+        "\\usepackage{fancyvrb}\n"
+        "\\begin{document}\n"
+        f"\\VerbatimInput{{{outside}}}\n"
+        "\\end{document}\n",
+        encoding="utf-8",
+    )
+    repository = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [str(repository / "compile_paper.sh"), str(project), "demo"],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+
+
+@pytest.mark.latex
+@pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex unavailable")
+def test_compiler_rejects_project_symlink_input(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    root.parent.mkdir(parents=True)
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("OUTSIDE SECRET\n", encoding="utf-8")
+    (project / "paper/leak.txt").symlink_to(outside)
+    root.write_text(
+        "\\documentclass{article}\n"
+        "\\usepackage{fancyvrb}\n"
+        "\\begin{document}\\VerbatimInput{leak.txt}\\end{document}\n",
+        encoding="utf-8",
+    )
+    repository = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [str(repository / "compile_paper.sh"), str(project), "demo"],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+
+
+@pytest.mark.latex
+@pytest.mark.skipif(shutil.which("bibtex") is None, reason="bibtex unavailable")
+def test_stale_bbl_cannot_survive_bibtex_failure(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    bib = project / "paper/refs.bib"
+    root.parent.mkdir(parents=True)
+    root.write_text(
+        "\\documentclass{article}\n"
+        "\\begin{document}\\cite{x}"
+        "\\bibliographystyle{plain}\\bibliography{refs}\\end{document}\n",
+        encoding="utf-8",
+    )
+    bib.write_text("@article{x,title={Current},author={A},year={2026}}\n", encoding="utf-8")
+    stale = project / "demo_paper.bbl"
+    stale.write_text("STALE REFERENCE TITLE\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "bibtex"
+    fake.write_text("#!/bin/sh\necho injected failure >&2\nexit 9\n", encoding="utf-8")
+    fake.chmod(0o755)
+    repository = Path(__file__).resolve().parents[1]
+    env = __import__("os").environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    result = subprocess.run(
+        [str(repository / "compile_paper.sh"), str(project), "demo"],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "BibTeX 执行失败" in result.stderr
+    assert not stale.exists()
+
+
+@pytest.mark.latex
+@pytest.mark.skipif(shutil.which("bibtex") is None, reason="bibtex unavailable")
+def test_bibliography_receipt_matches_generated_bbl(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    bib = project / "paper/refs.bib"
+    root.parent.mkdir(parents=True)
+    root.write_text(
+        "\\documentclass{article}\n"
+        "\\begin{document}\\cite{x}"
+        "\\bibliographystyle{plain}\\bibliography{refs}\\end{document}\n",
+        encoding="utf-8",
+    )
+    bib.write_text(
+        "@article{x,title={Current},author={Author},journal={Journal},year={2026}}\n",
+        encoding="utf-8",
+    )
+    repository = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [str(repository / "compile_paper.sh"), str(project), "demo"],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    valid, errors, receipt = verify_bibliography_receipt(project, "demo")
+    assert valid, errors
+    assert receipt is not None
+    assert receipt["backend"] == "bibtex"
+    assert receipt["generated_bbl"]["sha256"]
+    (project / "demo_paper.bbl").write_text("tampered bibliography\n", encoding="utf-8")
+    valid_after, errors_after, _ = verify_bibliography_receipt(project, "demo")
+    assert valid_after is False
+    assert any("bibliography evidence changed" in error for error in errors_after)
+
+
+@pytest.mark.latex
+@pytest.mark.skipif(shutil.which("biber") is None, reason="biber unavailable")
+def test_addbibresource_requires_biber_success(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    bib = project / "paper/refs.bib"
+    root.parent.mkdir(parents=True)
+    root.write_text(
+        "\\documentclass{article}\n"
+        "\\usepackage[backend=biber]{biblatex}\n"
+        "\\addbibresource{refs.bib}\n"
+        "\\begin{document}\\cite{x}\\printbibliography\\end{document}\n",
+        encoding="utf-8",
+    )
+    bib.write_text(
+        "@article{x,title={Current},author={Author},year={2026}}\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "biber"
+    fake.write_text("#!/bin/sh\necho injected biber failure >&2\nexit 12\n", encoding="utf-8")
+    fake.chmod(0o755)
+    repository = Path(__file__).resolve().parents[1]
+    env = __import__("os").environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    result = subprocess.run(
+        [str(repository / "compile_paper.sh"), str(project), "demo"],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "Biber 执行失败" in result.stderr
+    assert not (project / "demo_paper.bbl").exists()
+
+
+@pytest.mark.latex
+@pytest.mark.skipif(shutil.which("biber") is None, reason="biber unavailable")
+def test_biber_receipt_matches_generated_bbl(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    bib = project / "paper/refs.bib"
+    root.parent.mkdir(parents=True)
+    root.write_text(
+        "\\documentclass{article}\n"
+        "\\usepackage[backend=biber]{biblatex}\n"
+        "\\addbibresource{refs.bib}\n"
+        "\\begin{document}\\cite{x}\\printbibliography\\end{document}\n",
+        encoding="utf-8",
+    )
+    bib.write_text(
+        "@article{x,title={Current},author={Author},year={2026}}\n",
+        encoding="utf-8",
+    )
+    repository = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [str(repository / "compile_paper.sh"), str(project), "demo"],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    valid, errors, receipt = verify_bibliography_receipt(project, "demo")
+    assert valid, errors
+    assert receipt is not None
+    assert receipt["backend"] == "biber"
+    assert receipt["control_input"]["path"].endswith("pass1.bcf")
+
+
+@pytest.mark.latex
+@pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex unavailable")
+def test_unresolved_citations_block_compilation(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    root.parent.mkdir(parents=True)
+    root.write_text(
+        "\\documentclass{article}\n"
+        "\\begin{document}Missing citation \\cite{missing}.\\end{document}\n",
+        encoding="utf-8",
+    )
+    repository = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [str(repository / "compile_paper.sh"), str(project), "demo"],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "bibliography 构建证据" in result.stderr
+
+
+def test_custom_bst_is_bound_and_packaged(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    bib = project / "paper/refs.bib"
+    bst = project / "paper/custom.bst"
+    root.parent.mkdir(parents=True)
+    root.write_text(
+        "\\documentclass{article}\n"
+        "\\begin{document}\\cite{x}"
+        "\\bibliographystyle{custom}\\bibliography{refs}\\end{document}\n",
+        encoding="utf-8",
+    )
+    bib.write_text("@article{x,title={X}}\n", encoding="utf-8")
+    bst.write_text("ENTRY {} {} {}\nREAD\n", encoding="utf-8")
+
+    graph = require_safe_latex_dependencies(project, "demo")
+
+    assert graph.bibliography_styles == (bst,)
+    assert bst in graph.files
+    assert bst in submission_bundle_paths(project, "demo", require_pdf=False)
+
+
+def test_verbatim_and_iffalse_examples_are_not_dependencies(tmp_path):
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    root.parent.mkdir(parents=True)
+    root.write_text(
+        "\\begin{document}\n"
+        "\\begin{verbatim}\\input{missing-example}\\end{verbatim}\n"
+        "\\iffalse\\input{missing-disabled}\\fi\n"
+        "\\end{document}\n",
+        encoding="utf-8",
+    )
+
+    graph = require_safe_latex_dependencies(project, "demo")
+
+    assert graph.diagnostics == ()

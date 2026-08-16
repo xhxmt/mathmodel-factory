@@ -40,6 +40,18 @@ def make_current_contract_project(project: Path, *, overridden: bool = False) ->
         project / "judge_outputs/judgment_receipt.json",
         '{"status":"VALID"}\n',
     )
+    write_file(project / "logs/compilation/pass3.log", "")
+    write_file(project / "logs/compilation/bibliography_backend.log", "")
+    from factory_core.bibliography import build_bibliography_receipt
+
+    build_bibliography_receipt(
+        project,
+        base,
+        backend="none",
+        backend_version="",
+        backend_log="logs/compilation/bibliography_backend.log",
+        final_log="logs/compilation/pass3.log",
+    )
     if overridden:
         write_file(
             project / "judge_evaluation.md",

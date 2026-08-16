@@ -39,7 +39,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project")
     parser.add_argument("base")
-    parser.add_argument("--fls")
+    parser.add_argument("--fls", action="append", default=[])
+    parser.add_argument("--allowed-runtime-root", action="append", default=[])
     parser.add_argument("--output")
     parser.add_argument("--contract-lines", action="store_true")
     args = parser.parse_args()
@@ -53,6 +54,7 @@ def main() -> int:
             print(contract.root_source.relative_to(project).as_posix())
             print(contract.engine)
             print(contract.job_name)
+            print(contract.bibliography_backend)
             for search_root in contract.search_roots:
                 relative = search_root.relative_to(project).as_posix()
                 print(relative or ".")
@@ -60,7 +62,10 @@ def main() -> int:
         payload: dict[str, object]
         if args.fls:
             payload = verify_latex_recorder_inputs(
-                project, args.base, Path(args.fls)
+                project,
+                args.base,
+                [Path(path) for path in args.fls],
+                allowed_runtime_roots=args.allowed_runtime_root,
             )
         else:
             payload = {

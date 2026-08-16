@@ -10,6 +10,8 @@ import pytest
 from factory_core.audit.acceptance import build_final_acceptance_receipt
 from factory_core.audit.domain import AuditSnapshot
 from factory_core.delivery.release import ReleasePublisher, resolve_current_release
+from factory_core.contest import ContestPolicy
+from factory_core.storage import SQLiteStateStore
 from scripts.publish_release import publish_current_audit
 
 
@@ -87,6 +89,24 @@ def _package(project: Path, base: str):
     return build
 
 
+def _approve_content_freeze(project: Path) -> dict[str, object]:
+    policy = ContestPolicy.default(started_at=1_000)
+    store = SQLiteStateStore(project, clock=lambda: 2_000)
+    store.initialize(
+        project_id=project.name,
+        project_type="modeling",
+        contest_policy=policy.to_dict(),
+    )
+    return store.record_decision(
+        "content_freeze",
+        {
+            "selected_option_id": "approve_content_freeze",
+            "approved": True,
+            "selected_at": 2_000,
+        },
+    )
+
+
 def test_atomic_release_flips_one_verified_current_pointer(tmp_path: Path) -> None:
     snapshot_id = "a" * 64
     project = _project(tmp_path, "demo", snapshot_id)
@@ -105,6 +125,55 @@ def test_atomic_release_flips_one_verified_current_pointer(tmp_path: Path) -> No
     assert current.paper.read_bytes() == project.joinpath("demo_paper.pdf").read_bytes()
     assert result.pointer == tmp_path / "papers/demo/current.json"
     assert (tmp_path / "papers/demo_paper.pdf").read_bytes() == current.paper.read_bytes()
+
+
+def test_release_contains_verified_human_approval_receipt(tmp_path: Path) -> None:
+    snapshot_id = "9" * 64
+    project = _project(tmp_path, "demo", snapshot_id)
+    decision = _approve_content_freeze(project)
+    _write_approved_audit(project, snapshot_id)
+
+    release = ReleasePublisher(tmp_path / "papers").publish(
+        project,
+        snapshot_id,
+        status="PASS",
+        package_builder=_package(project, "demo"),
+    )
+
+    key = f"approval_content_freeze_{decision['decision_id']}"
+    copied = release.release_dir / f"{key}.json"
+    assert copied.read_bytes() == project.joinpath(
+        decision["artifact_refs"][0]["path"]
+    ).read_bytes()
+    manifest = json.loads(release.manifest.read_text(encoding="utf-8"))
+    assert manifest["evidence_artifacts"][key] == f"{key}.json"
+    assert resolve_current_release(tmp_path / "papers", "demo") is not None
+
+
+def test_content_freeze_receipt_tampered_during_packaging_blocks_release(
+    tmp_path: Path,
+) -> None:
+    snapshot_id = "8" * 64
+    project = _project(tmp_path, "demo", snapshot_id)
+    decision = _approve_content_freeze(project)
+    _write_approved_audit(project, snapshot_id)
+    receipt = project / decision["artifact_refs"][0]["path"]
+    package = _package(project, "demo")
+
+    def tampering_package(output: Path) -> bool:
+        built = package(output)
+        receipt.write_text('{"tampered":true}\n', encoding="utf-8")
+        return built
+
+    with pytest.raises(ValueError, match="acceptance receipt|approval receipt"):
+        ReleasePublisher(tmp_path / "papers").publish(
+            project,
+            snapshot_id,
+            status="PASS",
+            package_builder=tampering_package,
+        )
+
+    assert not (tmp_path / "papers/demo/current.json").exists()
 
 
 def test_failed_release_keeps_previous_current_release(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ from ..adapters.infrastructure.commands import CommandRunner
 from ..adapters.models.backends import build_model_backends
 from ..adapters.models.dispatcher import ModelDispatcher
 from ..registry import StepDefinition, StepRegistry
+from ..delivery.release import ReleasePublisher
 from .catalog import STEP_CONTRACTS
 from .prompt_step import PromptStep
 from .prompting import PromptRenderer
@@ -31,6 +32,7 @@ def build_native_registry(
     runner: CommandRunner | None = None,
     validator_factory: Callable[[Path, int], object] | None = None,
     fingerprinter: Callable[[Path, str], str] | None = None,
+    release_publisher: ReleasePublisher | None = None,
 ) -> StepRegistry:
     root = Path(factory_root).resolve()
     renderer = renderer or PromptRenderer(root)
@@ -64,7 +66,13 @@ def build_native_registry(
             if judge_step is None:
                 raise RuntimeError("judge Step must be registered before delivery Step")
             step = DeliveryStep(
-                contract, root, judge_step, validator, runner, fingerprinter
+                contract,
+                root,
+                judge_step,
+                validator,
+                runner,
+                fingerprinter,
+                release_publisher=release_publisher,
             )
         else:
             if prompt_step is None:

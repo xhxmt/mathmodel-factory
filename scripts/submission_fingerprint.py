@@ -17,10 +17,11 @@ from scripts.judge_packet import packet_fingerprints
 from scripts.model_dispatch_config import get_model_entry, get_step_model_ids
 from factory_core.paper_sources import discover_paper_dependencies
 from factory_core.submission_bundle import submission_bundle_manifest
+from factory_core.bibliography import bibliography_evidence_record
 
 
-FINGERPRINT_VERSION = 9
-EVALUATOR_CONTRACT_VERSION = 6
+FINGERPRINT_VERSION = 10
+EVALUATOR_CONTRACT_VERSION = 7
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -167,6 +168,37 @@ def evaluator_contract_payload(
         "prompts/judges/execution_auditor.txt",
         "prompts/judges/paper_reviewer.txt",
     )
+    finalization_files = (
+        "factory_core/finalization.py",
+        "factory_core/delivery/release.py",
+        "factory_core/audit/acceptance.py",
+        "factory_core/submission_bundle.py",
+        "factory_core/bibliography.py",
+        "scripts/package_submission.py",
+        "scripts/submission_fingerprint.py",
+        "scripts/verify_number_chain.py",
+    )
+    governance_files = (
+        "factory_core/decision_receipts.py",
+        "factory_core/storage.py",
+        "factory_core/human_decisions.py",
+        "factory_core/workflow_events.py",
+        "scripts/decision_receipt_repair.py",
+    )
+
+    def contract_group(version: int, paths: tuple[str, ...]) -> dict[str, object]:
+        records = {
+            relative: _versioned_file_record(root, relative) for relative in paths
+        }
+        return {
+            "version": version,
+            "files": records,
+            "contract_sha256": hashlib.sha256(
+                json.dumps(records, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
+        }
     return {
         "version": EVALUATOR_CONTRACT_VERSION,
         "role_schemas": {
@@ -183,6 +215,8 @@ def evaluator_contract_payload(
             relative: _versioned_file_record(root, relative)
             for relative in implementation_files
         },
+        "finalization_contract": contract_group(1, finalization_files),
+        "governance_contract": contract_group(1, governance_files),
         "prompts": {
             relative: _versioned_file_record(root, relative)
             for relative in prompt_files
@@ -275,12 +309,17 @@ def submission_fingerprint_payload(
 
     project = project.resolve()
     resolved_base = base or project.name
+    from factory_core.decision_receipts import verified_approval_receipts
+
     return {
         "version": FINGERPRINT_VERSION,
         "base": resolved_base,
         "judge_packet_fingerprints": packet_fingerprints(project, resolved_base),
         "objective_evidence": _objective_evidence_record(project),
         "latex_input_verification": _latex_input_verification_record(project),
+        "bibliography_build": bibliography_evidence_record(
+            project, resolved_base
+        ),
         "evaluator_contract": evaluator_contract_payload(
             resolved_base, policy_mode=policy_mode
         ),
@@ -304,6 +343,7 @@ def submission_fingerprint_payload(
             _file_record(project, path) for path in submission_files(project, resolved_base)
         ],
         "submission_bundle": submission_bundle_manifest(project, resolved_base),
+        "approval_receipts": verified_approval_receipts(project),
         "reviewed_pdf": _pdf_record(project, resolved_base),
     }
 

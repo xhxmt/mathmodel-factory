@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import subprocess
 import sys
@@ -158,3 +159,31 @@ def test_zip_members_exactly_match_bundle_manifest(tmp_path):
         assert set(archive.namelist()) == {
             item["archive_path"] for item in manifest["members"]
         }
+
+
+def test_release_zip_is_reproducible_for_identical_manifest(tmp_path):
+    _complete_bundle_project(tmp_path)
+    first = tmp_path.parent / "first.zip"
+    second = tmp_path.parent / "second.zip"
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts/package_submission.py"),
+        str(tmp_path),
+        "demo",
+    ]
+
+    first_result = subprocess.run(
+        [*command, str(first)], cwd=REPO_ROOT, capture_output=True, text=True
+    )
+    assert first_result.returncode == 0, first_result.stdout + first_result.stderr
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            path.touch()
+    second_result = subprocess.run(
+        [*command, str(second)], cwd=REPO_ROOT, capture_output=True, text=True
+    )
+    assert second_result.returncode == 0, second_result.stdout + second_result.stderr
+
+    assert hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(
+        second.read_bytes()
+    ).digest()

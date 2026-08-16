@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v2"
+FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v3"
 
 
 class FinalizationSnapshotChanged(RuntimeError):
@@ -81,6 +81,7 @@ def _input_paths(project: Path) -> list[Path]:
 
 def build_final_input_manifest(project_dir: str | Path) -> FinalInputSnapshot:
     project = Path(project_dir).resolve()
+    from .decision_receipts import verified_approval_receipts
     from .submission_bundle import submission_bundle_manifest
 
     planned_bundle = submission_bundle_manifest(
@@ -99,6 +100,7 @@ def build_final_input_manifest(project_dir: str | Path) -> FinalInputSnapshot:
         "base": project.name,
         "files": files,
         "planned_submission_bundle": planned_bundle,
+        "approval_receipts": verified_approval_receipts(project),
     }
     fingerprint = _canonical_hash(identity)
     manifest = {**identity, "fingerprint": fingerprint}
@@ -139,6 +141,7 @@ def verify_final_input_snapshot(
         if current_records.get(path) != expected_records.get(path)
     )
     from .submission_bundle import submission_bundle_manifest
+    from .decision_receipts import verified_approval_receipts
 
     current_bundle = submission_bundle_manifest(
         project, project.name, require_pdf=False
@@ -148,11 +151,21 @@ def verify_final_input_snapshot(
         and not changed
     ):
         changed.append("<submission-bundle-manifest>")
+    try:
+        current_approvals = verified_approval_receipts(project)
+    except ValueError as exc:
+        raise FinalizationSnapshotChanged(["<approval-receipts>"]) from exc
+    if (
+        current_approvals != snapshot.manifest.get("approval_receipts")
+        and not changed
+    ):
+        changed.append("<approval-receipts>")
     identity = {
         "schema_version": FINAL_INPUT_MANIFEST_SCHEMA,
         "base": project.name,
         "files": [current_records[path] for path in sorted(current_records)],
         "planned_submission_bundle": current_bundle,
+        "approval_receipts": current_approvals,
     }
     if _canonical_hash(identity) != snapshot.fingerprint and not changed:
         changed = ["<manifest-identity>"]

@@ -41,6 +41,18 @@
         <template v-if="recovery.resume_after_step !== null && recovery.resume_after_step !== undefined">
           · resume after Step {{ recovery.resume_after_step }}
         </template>
+        <template v-if="recovery.recovery_target?.stage">
+          · Stage {{ recovery.recovery_target.stage }}
+        </template>
+        <template v-if="recovery.recovery_target?.subtask">
+          / {{ recovery.recovery_target.subtask }}
+        </template>
+        <template v-if="recovery.invalidated_checkpoints?.length">
+          · invalidate {{ recovery.invalidated_checkpoints.length }} checkpoint(s)
+        </template>
+      </div>
+      <div v-if="recovery.next_task" class="diag-event mono">
+        NEXT · {{ recovery.next_task }}
       </div>
     </div>
   </section>
@@ -88,7 +100,7 @@ export default {
       const code = this.diagnostics?.status?.reason_code
       return {
         'is-warn': code === 'NO_LOG_PROGRESS' || code === 'LOCK_STALE_RECLAIMED',
-        'is-block': code === 'AWAITING_STEP8_5' || code === 'VERIFY_OUTPUT_FAILED' || code === 'CONSULTATION_PENDING' || code === 'HUMAN_DECISION_REQUIRED' || code === 'ORPHANED_DECISION_ARTIFACT' || code === 'WORKFLOW_REPLAY_MISMATCH' || String(code || '').startsWith('PERMANENT_'),
+        'is-block': code === 'AWAITING_STEP8_5' || code === 'VERIFY_OUTPUT_FAILED' || code === 'CONSULTATION_PENDING' || code === 'HUMAN_DECISION_REQUIRED' || code === 'ORPHANED_DECISION_ARTIFACT' || code === 'DECISION_RECEIPT_MISMATCH' || code === 'WORKFLOW_REPLAY_MISMATCH' || String(code || '').startsWith('PERMANENT_'),
       }
     },
   },

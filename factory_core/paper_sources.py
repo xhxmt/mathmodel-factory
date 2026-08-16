@@ -4,42 +4,63 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
 
-LATEX_COMPILE_CONTRACT_SCHEMA = "factory-latex-compile-contract-v1"
-LATEX_DEPENDENCY_SCHEMA = "factory-latex-dependency-graph-v2"
+LATEX_COMPILE_CONTRACT_SCHEMA = "factory-latex-compile-contract-v2"
+LATEX_DEPENDENCY_SCHEMA = "factory-latex-dependency-graph-v3"
 LATEX_EXPANDED_DOCUMENT_SCHEMA = "factory-latex-expanded-document-v1"
+LATEX_RECORDER_SCHEMA = "factory-latex-recorder-verification-v2"
 
 _DEPENDENCY_RE = re.compile(
     r"\\(?P<command>input|include|subfile|bibliography|addbibresource|"
-    r"includegraphics|lstinputlisting|usepackage|RequirePackage|documentclass)"
+    r"includegraphics|lstinputlisting|bibliographystyle|"
+    r"usepackage|RequirePackage|documentclass)"
     r"\s*(?:\[[^\]]*\]\s*)?\{(?P<target>[^{}]+)\}",
     re.IGNORECASE,
 )
 _SOURCE_COMMANDS = {"input", "include", "subfile"}
 _BIBLIOGRAPHY_COMMANDS = {"bibliography", "addbibresource"}
-_OPTIONAL_EXTERNAL_COMMANDS = {"usepackage", "requirepackage", "documentclass"}
+_BIBLIOGRAPHY_STYLE_COMMANDS = {"bibliographystyle"}
+_OPTIONAL_EXTERNAL_COMMANDS = {
+    "usepackage",
+    "requirepackage",
+    "documentclass",
+    "bibliographystyle",
+}
 _RESOURCE_SUFFIXES = {
     "includegraphics": ("", ".pdf", ".png", ".jpg", ".jpeg", ".eps"),
     "lstinputlisting": ("",),
     "usepackage": (".sty",),
     "requirepackage": (".sty",),
     "documentclass": (".cls",),
+    "bibliographystyle": (".bst",),
 }
 _GENERATED_INPUT_SUFFIXES = {
     ".aux",
     ".bbl",
+    ".bcf",
     ".blg",
     ".fls",
     ".fdb_latexmk",
     ".log",
     ".out",
+    ".run.xml",
     ".toc",
     ".synctex.gz",
 }
+_INACTIVE_ENVIRONMENTS = ("verbatim", "Verbatim", "lstlisting", "minted")
+_DEFAULT_RUNTIME_ROOTS = (
+    Path("/etc/texmf"),
+    Path("/usr/share/texlive"),
+    Path("/usr/share/texmf"),
+    Path("/usr/local/share/texmf"),
+    Path("/var/lib/texmf"),
+    Path("/usr/share/fonts"),
+    Path("/var/cache/fontconfig"),
+)
 
 
 class LatexDependencyError(ValueError):
@@ -62,6 +83,7 @@ class LatexCompileContract:
     search_roots: tuple[Path, ...]
     engine: str
     job_name: str
+    bibliography_backend: str = "none"
 
     def manifest(self) -> dict[str, Any]:
         def relative(path: Path | None) -> str | None:
@@ -76,6 +98,7 @@ class LatexCompileContract:
             "search_roots": [relative(path) or "." for path in self.search_roots],
             "engine": self.engine,
             "job_name": self.job_name,
+            "bibliography_backend": self.bibliography_backend,
             "dependency_policy": "declared-project-inputs-equal-recorder-inputs",
         }
 
@@ -125,6 +148,7 @@ class LatexDependencyGraph:
     roots: tuple[Path, ...]
     sources: tuple[Path, ...]
     bibliographies: tuple[Path, ...]
+    bibliography_styles: tuple[Path, ...]
     resources: tuple[Path, ...]
     edges: tuple[LatexDependencyEdge, ...]
     diagnostics: tuple[LatexDependencyDiagnostic, ...]
@@ -132,7 +156,13 @@ class LatexDependencyGraph:
     @property
     def files(self) -> tuple[Path, ...]:
         return _unique_contained_files(
-            self.project, (*self.sources, *self.bibliographies, *self.resources)
+            self.project,
+            (
+                *self.sources,
+                *self.bibliographies,
+                *self.bibliography_styles,
+                *self.resources,
+            ),
         )
 
     @property
@@ -152,6 +182,10 @@ class LatexDependencyGraph:
             "bibliographies": [
                 path.relative_to(self.project).as_posix()
                 for path in self.bibliographies
+            ],
+            "bibliography_styles": [
+                path.relative_to(self.project).as_posix()
+                for path in self.bibliography_styles
             ],
             "resources": [
                 path.relative_to(self.project).as_posix() for path in self.resources
@@ -249,6 +283,32 @@ def _mask_comments(text: str) -> str:
     )
 
 
+def _mask_inactive_regions(text: str) -> str:
+    """Mask common non-executed/code-example regions without moving offsets."""
+
+    masked = text
+    for environment in _INACTIVE_ENVIRONMENTS:
+        pattern = re.compile(
+            rf"\\begin\{{{re.escape(environment)}\}}.*?"
+            rf"\\end\{{{re.escape(environment)}\}}",
+            re.DOTALL,
+        )
+        masked = pattern.sub(
+            lambda match: re.sub(r"[^\n]", " ", match.group(0)), masked
+        )
+    masked = re.sub(
+        r"\\iffalse\b.*?\\fi\b",
+        lambda match: re.sub(r"[^\n]", " ", match.group(0)),
+        masked,
+        flags=re.DOTALL,
+    )
+    return masked
+
+
+def _masked_source(text: str) -> str:
+    return _mask_comments(_mask_inactive_regions(text))
+
+
 def _engine_for_source(source: Path | None) -> str:
     if source is None:
         return "pdflatex"
@@ -330,6 +390,8 @@ def _command_suffixes(command: str) -> tuple[str, ...]:
         return (".tex",)
     if command in _BIBLIOGRAPHY_COMMANDS:
         return (".bib",)
+    if command in _BIBLIOGRAPHY_STYLE_COMMANDS:
+        return (".bst",)
     return _RESOURCE_SUFFIXES.get(command, ("",))
 
 
@@ -348,11 +410,13 @@ def resolve_latex_dependency_graph(
     roots = (contract.root_source,) if contract.root_source is not None else ()
     sources: list[Path] = []
     bibliographies: list[Path] = []
+    bibliography_styles: list[Path] = []
     resources: list[Path] = []
     edges: list[LatexDependencyEdge] = []
     diagnostics: list[LatexDependencyDiagnostic] = []
     visited: set[Path] = set()
     visiting: set[Path] = set()
+    bibliography_backends: set[str] = set()
 
     def diagnostic(
         code: str, source: Path, command: str, requested: str, message: str
@@ -368,7 +432,7 @@ def resolve_latex_dependency_graph(
         visiting.add(source)
         sources.append(source)
         try:
-            text = _mask_comments(
+            text = _masked_source(
                 source.read_text(encoding="utf-8", errors="replace")
             )
         except OSError as exc:
@@ -377,6 +441,10 @@ def resolve_latex_dependency_graph(
             return
         for match in _DEPENDENCY_RE.finditer(text):
             command = match.group("command").lower()
+            if command == "bibliography":
+                bibliography_backends.add("bibtex")
+            elif command == "addbibresource":
+                bibliography_backends.add("biber")
             requested_values = (
                 match.group("target").split(",")
                 if command in {"bibliography", "usepackage", "requirepackage"}
@@ -421,18 +489,32 @@ def resolve_latex_dependency_graph(
                 elif command in _BIBLIOGRAPHY_COMMANDS:
                     if target not in bibliographies:
                         bibliographies.append(target)
+                elif command in _BIBLIOGRAPHY_STYLE_COMMANDS:
+                    if target not in bibliography_styles:
+                        bibliography_styles.append(target)
                 elif target not in resources:
                     resources.append(target)
         visiting.discard(source)
 
     for root in roots:
         visit(root)
+    if len(bibliography_backends) > 1 and roots:
+        diagnostic(
+            "mixed_bibliography_backends",
+            roots[0],
+            "bibliography",
+            ",".join(sorted(bibliography_backends)),
+            "A paper must use exactly one bibliography backend",
+        )
+    backend = next(iter(bibliography_backends), "none")
+    contract = replace(contract, bibliography_backend=backend)
     return LatexDependencyGraph(
         project=project,
         contract=contract,
         roots=roots,
         sources=tuple(sources),
         bibliographies=tuple(bibliographies),
+        bibliography_styles=tuple(bibliography_styles),
         resources=tuple(resources),
         edges=tuple(edges),
         diagnostics=tuple(diagnostics),
@@ -478,7 +560,7 @@ def expand_latex_document(
     def visit(source: Path) -> None:
         text = source.read_text(encoding="utf-8", errors="replace")
         for line_number, line in enumerate(text.splitlines(), start=1):
-            masked = _mask_comments(line)
+            masked = _masked_source(line)
             cursor = 0
             matched_source_command = False
             for match in _DEPENDENCY_RE.finditer(masked):
@@ -515,14 +597,53 @@ def expand_latex_document(
     return ExpandedLatexDocument(graph.project, graph, tuple(expanded))
 
 
-def observed_latex_inputs(
-    project_dir: str | Path, fls_path: str | Path
-) -> tuple[Path, ...]:
-    """Return ordinary project inputs recorded by TeX's ``-recorder`` output."""
+def _runtime_roots(extra_roots: Iterable[str | Path] = ()) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    repository_templates = Path(__file__).resolve().parents[1] / "latex_templates"
+    for candidate in (*_DEFAULT_RUNTIME_ROOTS, repository_templates, *extra_roots):
+        lexical = Path(os.path.abspath(candidate))
+        if lexical.exists() and lexical not in roots:
+            roots.append(lexical)
+    return tuple(roots)
+
+
+def _under_any(path: Path, roots: Iterable[Path]) -> bool:
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _project_path_has_symlink(project: Path, lexical: Path) -> bool:
+    try:
+        relative = lexical.relative_to(project)
+    except ValueError:
+        return False
+    cursor = project
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            return True
+    return False
+
+
+def classify_latex_recorder_inputs(
+    project_dir: str | Path,
+    fls_path: str | Path,
+    *,
+    declared_inputs: Iterable[Path] = (),
+    allowed_runtime_roots: Iterable[str | Path] = (),
+) -> tuple[dict[str, Any], ...]:
+    """Classify every recorder input; forbidden paths are never discarded."""
 
     project = Path(project_dir).resolve()
+    declared = {path.resolve(strict=True) for path in declared_inputs}
+    runtime_roots = _runtime_roots(allowed_runtime_roots)
     fls = Path(fls_path)
-    observed: list[Path] = []
+    records: dict[tuple[str, str], dict[str, Any]] = {}
     for raw_line in fls.read_text(encoding="utf-8", errors="replace").splitlines():
         if not raw_line.startswith("INPUT "):
             continue
@@ -532,36 +653,135 @@ def observed_latex_inputs(
             candidate = project / candidate
         lexical = Path(os.path.abspath(candidate))
         try:
-            lexical.relative_to(project)
+            relative = lexical.relative_to(project)
         except ValueError:
-            continue
-        if any(
-            lexical.name.endswith(suffix) for suffix in _GENERATED_INPUT_SUFFIXES
-        ):
-            continue
-        if lexical.suffix.lower() in {".pdf"} and lexical.name.endswith("_paper.pdf"):
-            continue
-        if not _contained_regular_file(project, lexical):
-            continue
-        resolved = lexical.resolve(strict=True)
-        if resolved not in observed:
-            observed.append(resolved)
-    return tuple(sorted(observed, key=lambda path: path.relative_to(project).as_posix()))
+            relative = None
+
+        resolved = lexical.resolve(strict=False)
+        if relative is not None:
+            display = relative.as_posix()
+            if _project_path_has_symlink(project, lexical):
+                category = "project_symlink_forbidden"
+            elif any(
+                lexical.name.endswith(suffix)
+                for suffix in _GENERATED_INPUT_SUFFIXES
+            ) or relative.parts[:2] == (".factory", "tex-runtime"):
+                category = "generated_allowed"
+            elif not _contained_regular_file(project, lexical):
+                category = "project_nonregular_forbidden"
+            elif resolved in declared:
+                category = "project_regular_declared"
+            else:
+                category = "project_regular_undeclared"
+        else:
+            display = lexical.as_posix()
+            lexical_allowed = _under_any(lexical, runtime_roots)
+            resolved_allowed = _under_any(resolved, runtime_roots)
+            category = (
+                "external_tex_runtime_allowed"
+                if lexical_allowed and resolved_allowed and lexical.is_file()
+                else "external_forbidden"
+            )
+        records[(category, display)] = {
+            "path": display,
+            "category": category,
+        }
+    return tuple(records[key] for key in sorted(records))
+
+
+def observed_latex_inputs(
+    project_dir: str | Path, fls_path: str | Path
+) -> tuple[Path, ...]:
+    """Return ordinary project inputs while refusing unsafe recorder entries."""
+
+    project = Path(project_dir).resolve()
+    records = classify_latex_recorder_inputs(project, fls_path)
+    forbidden = [
+        record
+        for record in records
+        if str(record["category"]).endswith("forbidden")
+    ]
+    if forbidden:
+        raise ValueError(f"LaTeX recorder contains forbidden inputs: {forbidden}")
+    observed = [
+        (project / str(record["path"])).resolve(strict=True)
+        for record in records
+        if record["category"]
+        in {"project_regular_declared", "project_regular_undeclared"}
+    ]
+    return tuple(sorted(set(observed), key=lambda path: path.relative_to(project).as_posix()))
 
 
 def verify_latex_recorder_inputs(
     project_dir: str | Path,
     base_name: str | None,
-    fls_path: str | Path,
+    fls_path: str | Path | Iterable[str | Path],
+    *,
+    allowed_runtime_roots: Iterable[str | Path] = (),
 ) -> dict[str, Any]:
     graph = require_safe_latex_dependencies(project_dir, base_name)
     project = graph.project
     declared = set(graph.declared_compile_inputs)
-    observed = set(observed_latex_inputs(project, fls_path))
-    undeclared = sorted(observed - declared, key=lambda path: path.relative_to(project).as_posix())
-    unread = sorted(declared - observed, key=lambda path: path.relative_to(project).as_posix())
+    fls_paths = (
+        (Path(fls_path),)
+        if isinstance(fls_path, (str, Path))
+        else tuple(Path(path) for path in fls_path)
+    )
+    if not fls_paths:
+        raise ValueError("at least one LaTeX recorder file is required")
+    pass_records: list[dict[str, Any]] = []
+    union_observed: set[Path] = set()
+    forbidden: list[dict[str, Any]] = []
+    identities: list[tuple[str, ...]] = []
+    for index, path in enumerate(fls_paths, start=1):
+        classified = classify_latex_recorder_inputs(
+            project,
+            path,
+            declared_inputs=declared,
+            allowed_runtime_roots=allowed_runtime_roots,
+        )
+        observed = {
+            (project / str(record["path"])).resolve(strict=True)
+            for record in classified
+            if record["category"] == "project_regular_declared"
+        }
+        union_observed.update(observed)
+        bad = [
+            dict(record)
+            for record in classified
+            if record["category"]
+            in {
+                "project_regular_undeclared",
+                "project_symlink_forbidden",
+                "project_nonregular_forbidden",
+                "external_forbidden",
+            }
+        ]
+        forbidden.extend({**record, "pass": index} for record in bad)
+        identity = tuple(
+            sorted(path.relative_to(project).as_posix() for path in observed)
+        )
+        identities.append(identity)
+        pass_records.append(
+            {
+                "pass": index,
+                "fls": path.as_posix(),
+                "project_input_identity": list(identity),
+                "inputs": list(classified),
+            }
+        )
+    undeclared = sorted(
+        {
+            project / str(item["path"])
+            for item in forbidden
+            if item["category"] == "project_regular_undeclared"
+        },
+        key=lambda path: path.relative_to(project).as_posix(),
+    )
+    unread = sorted(declared - union_observed, key=lambda path: path.relative_to(project).as_posix())
+    pass_identity_mismatch = len(set(identities)) > 1
     payload = {
-        "schema_version": "factory-latex-recorder-verification-v1",
+        "schema_version": LATEX_RECORDER_SCHEMA,
         "compile_contract": graph.contract.manifest(),
         "dependency_manifest_sha256": hashlib.sha256(
             json.dumps(graph.manifest(), sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -570,17 +790,26 @@ def verify_latex_recorder_inputs(
             path.relative_to(project).as_posix() for path in sorted(declared)
         ],
         "observed_latex_inputs": [
-            path.relative_to(project).as_posix() for path in sorted(observed)
+            path.relative_to(project).as_posix() for path in sorted(union_observed)
         ],
         "undeclared_inputs": [path.relative_to(project).as_posix() for path in undeclared],
         "declared_but_unread": [path.relative_to(project).as_posix() for path in unread],
-        "status": "PASS" if not undeclared and not unread else "FAIL",
+        "forbidden_inputs": forbidden,
+        "all_passes_share_input_identity": not pass_identity_mismatch,
+        "passes": pass_records,
+        "status": (
+            "PASS"
+            if not forbidden and not undeclared and not unread and not pass_identity_mismatch
+            else "FAIL"
+        ),
     }
     if payload["status"] != "PASS":
         raise ValueError(
             "LaTeX recorder input mismatch: "
             f"undeclared={payload['undeclared_inputs']}, "
-            f"unread={payload['declared_but_unread']}"
+            f"unread={payload['declared_but_unread']}, "
+            f"forbidden={payload['forbidden_inputs']}, "
+            f"pass_identity_mismatch={pass_identity_mismatch}"
         )
     return payload
 

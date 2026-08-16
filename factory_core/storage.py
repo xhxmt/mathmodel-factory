@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import time
@@ -1532,6 +1533,132 @@ class SQLiteStateStore:
         if not payload["receipt_verification"]["valid"]:
             return None
         return payload
+
+    def repair_decision_receipt(self, request_id: str) -> dict[str, Any]:
+        """Recreate a missing receipt only when bytes match the persisted hash."""
+
+        import hashlib
+
+        request_id = str(request_id).strip()
+        if not request_id or not self.path.is_file():
+            raise InvalidTransition("decision request does not exist")
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            row = connection.execute(
+                """
+                SELECT r.request_id, r.gate_type, r.generation, r.kind,
+                       r.subject_fingerprint, r.options_fingerprint,
+                       r.request_json, d.decision_id, d.outcome, d.approved,
+                       d.decided_at, d.decision_json
+                FROM workflow_decision_requests AS r
+                JOIN workflow_decision_instances AS d ON d.request_id=r.request_id
+                WHERE r.request_id=?
+                """,
+                (request_id,),
+            ).fetchone()
+        if row is None:
+            raise InvalidTransition("resolved decision request does not exist")
+        decision_json = json.loads(row["decision_json"])
+        references = decision_json.get("artifact_refs") or []
+        if len(references) != 1 or not isinstance(references[0], dict):
+            raise InvalidTransition("decision has no unique immutable receipt reference")
+        reference = references[0]
+        receipt = {
+            "schema_version": "factory-human-decision-receipt-v1",
+            "decision_id": str(row["decision_id"]),
+            "request_id": str(row["request_id"]),
+            "gate": str(row["gate_type"]),
+            "generation": int(row["generation"]),
+            "kind": str(row["kind"]),
+            "outcome": str(row["outcome"]),
+            "approved": (
+                None if row["approved"] is None else bool(row["approved"])
+            ),
+            "decided_at": int(row["decided_at"]),
+            "subject_fingerprint": str(row["subject_fingerprint"]),
+            "options_fingerprint": str(row["options_fingerprint"]),
+            "decision": self._decision_identity_payload(decision_json),
+            "projection_refs": list(decision_json.get("projection_refs") or ()),
+        }
+        encoded = (
+            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        if reference.get("size") != len(encoded) or reference.get(
+            "sha256"
+        ) != hashlib.sha256(encoded).hexdigest():
+            raise InvalidTransition(
+                "persisted decision cannot reproduce the original receipt hash"
+            )
+        relative = reference.get("path")
+        expected_gate = re.sub(r"[^A-Za-z0-9._-]", "_", str(row["gate_type"]))
+        expected = Path(
+            ".factory",
+            "decisions",
+            expected_gate,
+            request_id,
+            f"{row['decision_id']}.json",
+        )
+        if (
+            not isinstance(relative, str)
+            or Path(relative).is_absolute()
+            or Path(relative) != expected
+            or ".." in Path(relative).parts
+        ):
+            raise InvalidTransition("decision receipt path does not match identity")
+        target = self.project_dir / expected
+        if target.exists() or target.is_symlink():
+            from .decision_receipts import verify_decision_receipt
+
+            verification = verify_decision_receipt(
+                self.project_dir, self._decision_payload(row)
+            )
+            if verification.valid:
+                return {"status": "already_valid", **verification.to_dict()}
+            raise InvalidTransition(
+                "receipt path already exists but is invalid; refusing to overwrite evidence"
+            )
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow
+        directory_descriptor = os.open(self.project_dir, directory_flags)
+        try:
+            for component in expected.parts[:-1]:
+                try:
+                    next_descriptor = os.open(
+                        component, directory_flags, dir_fd=directory_descriptor
+                    )
+                except FileNotFoundError:
+                    os.mkdir(component, 0o700, dir_fd=directory_descriptor)
+                    next_descriptor = os.open(
+                        component, directory_flags, dir_fd=directory_descriptor
+                    )
+                os.close(directory_descriptor)
+                directory_descriptor = next_descriptor
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow
+            descriptor = os.open(
+                expected.name, flags, 0o600, dir_fd=directory_descriptor
+            )
+            try:
+                with os.fdopen(descriptor, "wb", closefd=True) as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except BaseException:
+                os.unlink(expected.name, dir_fd=directory_descriptor)
+                raise
+        except BaseException:
+            raise
+        finally:
+            os.close(directory_descriptor)
+        from .decision_receipts import verify_decision_receipt
+
+        verification = verify_decision_receipt(
+            self.project_dir, self._decision_payload(row)
+        )
+        if not verification.valid:
+            raise InvalidTransition(
+                "reconstructed receipt did not pass immutable verification"
+            )
+        return {"status": "repaired", **verification.to_dict()}
 
     def assert_pending_decision_current(self, gate: str | None = None) -> dict[str, Any]:
         state = self.load()

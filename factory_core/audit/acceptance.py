@@ -9,7 +9,7 @@ from .domain import AuditSnapshot
 from .persistence import atomic_write_json, utc_now
 
 
-SCHEMA_VERSION = "final-acceptance-receipt-v2"
+SCHEMA_VERSION = "final-acceptance-receipt-v3"
 RECEIPT_PATH = Path("judge_outputs/final_acceptance_receipt.json")
 
 
@@ -52,12 +52,41 @@ def build_final_acceptance_receipt(
     override_receipt: str | None = None,
 ) -> dict[str, object]:
     project = project.resolve()
+    from ..decision_receipts import verified_approval_receipts
+
+    approvals = verified_approval_receipts(project)
+    production_snapshot = snapshot.identity.get("source") != "injected_fingerprinter"
+    if production_snapshot and snapshot.identity.get("approval_receipts") != approvals:
+        raise ValueError("audit snapshot approval receipt identity changed")
     artifacts = {
         "pdf": _record(project, f"{project.name}_paper.pdf"),
         "paper_checks": _record(project, "judge_outputs/final_paper_checks.json"),
         "visual_gate": _record(project, "judge_outputs/visual_gate.json"),
         "decision_route": _record(project, "judge_outputs/decision_route.json"),
     }
+    if production_snapshot:
+        from ..bibliography import (
+            BIBLIOGRAPHY_RECEIPT_PATH,
+            verify_bibliography_receipt,
+        )
+
+        bibliography_valid, bibliography_errors, _ = verify_bibliography_receipt(
+            project, project.name
+        )
+        if not bibliography_valid:
+            raise ValueError(
+                "bibliography build evidence is invalid: "
+                + "; ".join(bibliography_errors)
+            )
+        from ..bibliography import bibliography_evidence_record
+
+        if snapshot.identity.get("bibliography_build") != bibliography_evidence_record(
+            project, project.name
+        ):
+            raise ValueError("audit snapshot bibliography evidence changed")
+        artifacts["bibliography_build_receipt"] = _record(
+            project, BIBLIOGRAPHY_RECEIPT_PATH.as_posix()
+        )
     if status == "PASS":
         artifacts["judgment_receipt"] = _record(
             project, "judge_outputs/judgment_receipt.json"
@@ -75,6 +104,8 @@ def build_final_acceptance_receipt(
         "snapshot_id": snapshot.snapshot_id,
         "snapshot_identity_sha256": _canonical_hash(snapshot.identity),
         "submission_bundle": {},
+        "bibliography_build_required": production_snapshot,
+        "approval_receipts": approvals,
         "artifacts": artifacts,
     }
     from ..submission_bundle import submission_bundle_manifest
@@ -125,6 +156,21 @@ def verify_final_acceptance_receipt(
             errors.append("final acceptance snapshot identity changed")
 
     try:
+        from ..decision_receipts import verified_approval_receipts
+
+        current_approvals = verified_approval_receipts(project)
+        if receipt.get("approval_receipts") != current_approvals:
+            errors.append("final acceptance approval receipts changed")
+        if snapshot is not None and snapshot.identity.get(
+            "source"
+        ) != "injected_fingerprinter" and snapshot.identity.get(
+            "approval_receipts"
+        ) != current_approvals:
+            errors.append("audit snapshot does not bind current approval receipts")
+    except (OSError, ValueError) as exc:
+        errors.append(f"final acceptance approval receipt is invalid: {exc}")
+
+    try:
         from ..submission_bundle import submission_bundle_manifest
 
         current_bundle = submission_bundle_manifest(project, project.name)
@@ -143,6 +189,21 @@ def verify_final_acceptance_receipt(
         errors.append("final acceptance artifacts are invalid")
         return False, errors
     required = {"pdf", "paper_checks", "visual_gate", "decision_route"}
+    if receipt.get("bibliography_build_required") is True:
+        required.add("bibliography_build_receipt")
+        try:
+            from ..bibliography import verify_bibliography_receipt
+
+            bibliography_valid, bibliography_errors, _ = (
+                verify_bibliography_receipt(project, project.name)
+            )
+            if not bibliography_valid:
+                errors.append(
+                    "final acceptance bibliography evidence is invalid: "
+                    + "; ".join(bibliography_errors)
+                )
+        except (OSError, ValueError) as exc:
+            errors.append(f"final acceptance bibliography verification failed: {exc}")
     if receipt.get("status") == "PASS":
         required.add("judgment_receipt")
     elif receipt.get("status") == "OVERRIDDEN":

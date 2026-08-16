@@ -30,6 +30,7 @@ from factory_core.workflow_events import (
     ENVELOPE_KEY,
     ReplayIntegrityError,
     project_action_center,
+    project_recovery_status,
     replay_events,
     replay_state,
 )
@@ -188,6 +189,11 @@ def test_reject_edit_reenter_gate_and_approve(tmp_path):
     assert len(history) == 1
     assert history[0]["approved"] is False
     assert project_action_center(store.events())["pending"] == []
+    recovery = project_recovery_status(store.events())["latest"]
+    assert recovery["resume_after_step"] == 13
+    assert recovery["recovery_target"]["stage"] == 9
+    assert recovery["recovery_target"]["subtask"] == "content_freeze_guard"
+    assert recovery["next_task"].startswith("repair content")
 
     paper.write_text(
         "\\begin{document}repaired conclusions\\end{document}\n",
@@ -688,3 +694,70 @@ def test_receipt_symlink_is_rejected(tmp_path):
         "receipt_verification"
     ]
     assert any("symlink" in error for error in verification["errors"])
+
+
+def test_missing_decision_receipt_can_be_repaired_from_immutable_database(
+    tmp_path,
+):
+    store, decision = _record_content_freeze_approval(tmp_path)
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    original = receipt.read_bytes()
+    receipt.unlink()
+
+    result = store.repair_decision_receipt(decision["request_id"])
+
+    assert result["status"] == "repaired"
+    assert receipt.read_bytes() == original
+    assert store.decision("content_freeze") is not None
+
+
+def test_final_input_snapshot_binds_content_freeze_receipt(tmp_path):
+    from factory_core.finalization import (
+        FinalizationSnapshotChanged,
+        build_final_input_manifest,
+        verify_final_input_snapshot,
+    )
+
+    _store, decision = _record_content_freeze_approval(tmp_path)
+    snapshot = build_final_input_manifest(tmp_path)
+    assert snapshot.manifest["approval_receipts"][0]["decision_id"] == decision[
+        "decision_id"
+    ]
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    receipt.unlink()
+
+    with pytest.raises(FinalizationSnapshotChanged) as raised:
+        verify_final_input_snapshot(tmp_path, snapshot)
+
+    assert raised.value.changed_paths == ["<approval-receipts>"]
+
+
+def test_decision_receipt_repair_refuses_to_overwrite_corrupt_evidence(tmp_path):
+    from factory_core.domain import InvalidTransition
+
+    store, decision = _record_content_freeze_approval(tmp_path)
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    receipt.write_text('{"corrupt":true}\n', encoding="utf-8")
+
+    with pytest.raises(InvalidTransition, match="refusing to overwrite"):
+        store.repair_decision_receipt(decision["request_id"])
+
+
+def test_decision_receipt_repair_refuses_symlinked_evidence_directory(tmp_path):
+    store, decision = _record_content_freeze_approval(tmp_path)
+    receipt = tmp_path / decision["artifact_refs"][0]["path"]
+    receipt.unlink()
+    request_dir = receipt.parent
+    gate_dir = request_dir.parent
+    decisions_dir = gate_dir.parent
+    request_dir.rmdir()
+    gate_dir.rmdir()
+    decisions_dir.rmdir()
+    outside = tmp_path / "outside-receipts"
+    outside.mkdir()
+    decisions_dir.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        store.repair_decision_receipt(decision["request_id"])
+
+    assert list(outside.iterdir()) == []

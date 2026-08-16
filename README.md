@@ -58,7 +58,7 @@ cd web
 - 安装并认证 `claude` CLI（如果使用 Claude 备用路由）。
 - Python 3 环境，使用本仓库目录下 `.venv` 虚拟环境中的依赖项。
 - `uv` 用于按 `uv.lock` 创建 Python 环境；Node.js/npm 用于按 `web/frontend/package-lock.json` 创建 Web 前端环境。
-- LaTeX 工具链：`xelatex`、`pdflatex` 和 `bibtex`。
+- LaTeX 工具链：`xelatex`、`pdflatex`、`bibtex` 和 `biber`；CI 使用独立 `latex` 作业执行真实三轮 recorder 与 bibliography 反例测试，禁止因工具缺失跳过。
 - 至少一套用于项目代码的实用求解器技术栈，通常为带有 `numpy`、`scipy`、`pandas` 和 `matplotlib` 的 Python 环境。
 - 当前生产部署通过 GCP Secret Manager 和 `scripts/load_secrets.sh` 注入 MinerU、模型 API、JWT 与管理员凭据；本地 `.env` 只应保留非敏感配置。
 - 可选：如果项目需要，可安装 Julia、MATLAB/Octave、R、Gurobi 或其他求解器。

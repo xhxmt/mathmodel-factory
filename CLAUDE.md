@@ -343,7 +343,7 @@ Follow `modeling_guide.md`:
 - Tables: `booktabs`, right-aligned numeric columns, compact labels.
 - Symbols: every variable and parameter used in the model must appear in `symbol_table.md` and the paper's symbol table.
 - LaTeX: CUMCM/MCM-style sections, with abstract filled only at Step 14.
-- Compilation: use `compile_paper.sh`; it selects `xelatex` for `ctex`, `cumcmthesis`, `mcmthesis`, or `xeCJK`.
+- Compilation: use `compile_paper.sh`; it selects `xelatex` for `ctex`, `cumcmthesis`, `mcmthesis`, or `xeCJK`, sanitizes TeX search paths, runs without shell escape, verifies all three recorder files, and emits `bibliography-build-receipt-v1`. BibTeX/Biber failures, stale `.bbl` reuse, unresolved citations, project symlinks, and non-runtime external reads are fatal.
 
 ## Web Control Plane Contract
 

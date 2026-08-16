@@ -6,6 +6,10 @@
 
 ### 新增
 
+- LaTeX 构建证据升级为三轮 recorder 与 bibliography 双合同：所有 `.fls` 输入分类为已声明项目文件、未声明项目文件、项目符号链接、受控 TeX runtime、禁止外部文件或允许生成物，异常路径不再静默过滤；编译清理继承的 TeX/BibTeX 搜索环境，启用 `-no-shell-escape`/严格 `openin_any`，并要求三轮项目输入身份一致。
+- 新增 `bibliography-build-receipt-v1`：编译前清除当前 job 的旧 `.bbl`/控制文件，按 `\\bibliography` 或 `\\addbibresource` 唯一选择 BibTeX/Biber，任何 backend 失败或未解析 citation 均终止；receipt 绑定 backend 版本、首轮 AUX/BCF、`.bib`、项目 `.bst` 与生成 `.bbl`。最终 fingerprint、acceptance 与 evaluator 合同同时绑定该证据。
+- 最终发布链现在在 Final Audit 开始、acceptance 构建及 release pointer 切换前验证实际消费的人工 Approval receipt；不可变 release 会复制这些 receipt 并纳入 delivery manifest。决定 receipt 改为 `O_NOFOLLOW` 单次字节读取，并新增 `scripts/decision_receipt_repair.py`，仅当 SQLite 可重建字节与原 SHA-256 完全一致时恢复缺失文件。
+- CI 新增固定 TeX Live/BibTeX/Biber 的 `latex` 作业，真实编译、外部读取、符号链接、旧 `.bbl`、Biber 和未解析引用反例不得因工具缺失跳过。提交 ZIP 使用固定时间戳、权限和成员顺序，可从同一 manifest 确定性重建。
 - 新增 `LatexCompileContract`、`-recorder`/`.fls` 输入对账和按命令插入位置生成的展开文档流。静态依赖解析与编译统一使用“主文件目录 → 项目工作目录”搜索顺序；缺失、循环、动态依赖或 declared/observed 项目输入不一致均失败关闭。数字、数字链和符号检查共享展开流，因此跨文件章节状态、插入顺序与 use-before-definition 坐标不再丢失。
 - 新增 `submission-bundle-manifest-v1`：最终 PDF、活动 LaTeX 源/参考文献、显式允许的模型/结果/图表和声明附件形成唯一成员集合；final input、Judge packet、submission fingerprint、final acceptance receipt、打包器和 release verifier 绑定同一 manifest。打包拒绝符号链接/越界路径，并在写 ZIP 后逐成员复核中央目录、大小与 SHA-256。
 - 新增 Human Decision receipt 读取时强制验证：路径、普通文件/符号链接、大小、SHA-256、schema、request/decision/gate/generation 和数据库决定正文必须一致；Approval receipt 缺失或篡改后 Gate 与 Final Audit 失败关闭，Web diagnostics 显示 `DECISION_RECEIPT_MISMATCH`。
@@ -13,7 +17,7 @@
 - 新增统一递归 LaTeX 依赖图：从权威论文入口解析 `input`、`include`、`subfile`、`bibliography` 与 `addbibresource`，报告循环/缺失依赖并排除未引用草稿；content freeze、dirty 语义分类、提交/final fingerprint、数字/符号/数值链审计、Judge packet、Web artifact browser 与 submission package 共享活动源合同。
 - event-v2 同时记录完成主体与迁移结果坐标，并用 aggregate root 绑定 contest policy、project config、决策、dirty、checkpoint 与 Solver side table；dirty cause 和 Stage checkpoint 增加 append-only 历史，投影失败可记录、诊断和恢复。
 - Cloud Solver 请求传输精确输入字节与 SHA-256、声明输出和 seeds，保留 queued/submitting/running 状态并执行实际进程取消；Web 上传改为限额分块写入，普通用户项目申请只接受上传目录内的 PDF/Markdown。
-- 新增 GitHub Actions `CI` 工作流，分离 core、Web（含前端构建）与 Cloud/数值依赖测试；`main` 分支保护要求 PR、分支最新且 `CI / core`、`CI / web`、`CI / cloud` 全部通过，并阻止 force push 与分支删除。
+- 新增 GitHub Actions `CI` 工作流，分离 core、LaTeX、Web（含前端构建）与 Cloud/数值依赖测试；`main` 分支保护要求 PR、分支最新且所有 required checks 通过，并阻止 force push 与分支删除。
 - Solver Job 新增稳定 `idempotency_key`、回执 `request_sha256`、Stage/subtask/revision/attempt 所有权和唯一约束；Cloud provider 接收幂等键并支持按持久 job ID 对账，本地无法证明提交状态时失败关闭而不盲目重提。
 - Web 人工 Gate 采用“证据文件原子 rename + fingerprint → SQLite decision/state/event 同事务”顺序；诊断页直接展示 Native 调度坐标、Recovery Status 与 Audit Timeline，并标记已发布但尚未入账的 orphan decision artifact。
 - 新增授权 HMML 完整数据集：保留原始 JSON/Markdown 与来源哈希，确定性展开 97 个可引用方法文档；与现有 21 个精编条目组成双登记表，方法召回升级为“层级分支粗选 → 叶方法细排 → 数据/证据复排”。

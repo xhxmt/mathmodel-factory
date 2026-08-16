@@ -366,11 +366,12 @@ forbids reuse of the old audit/acceptance receipt.
 
 Produce:
 - a freshly compiled `{base}_paper.pdf` (via `../../compile_paper.sh`); compilation failure is fatal and may not fall back to an older PDF
-- `logs/compilation/latex_inputs.json` with `status=PASS`; declared active LaTeX inputs must exactly equal project-local inputs observed through the engine recorder
+- `logs/compilation/latex_inputs.json` with `status=PASS`; all three engine recorder files must share the same declared project-input identity, and every external input must be classified under a controlled TeX/font runtime root
+- `logs/compilation/bibliography_build_receipt.json` using `bibliography-build-receipt-v1`; BibTeX/Biber backend/version, first-pass AUX/BCF, `.bib`, project `.bst`, generated `.bbl`, and zero unresolved citations must verify
 - a fresh final-submission Gate-2 result whose `judge_outputs/final_submission.sha256` matches all current math / execution / paper packet fingerprints, role prompts, checker/evaluator implementation, Judge model registry/config selection, final paper-check report, paper assets, and the exact compiled PDF bytes. The PDF hash is a delivery-consistency binding, not evidence that the text-only LLM inspected its rendered appearance. Delivery manifests use the `2026-08-09.atomic_release_v7` contract.
 - `.factory/finalization/submission_bundle_manifest.json` using `submission-bundle-manifest-v1`; the ZIP central directory and every member byte must match this manifest exactly, and no unreferenced `paper/` source may be packaged
 - code appendix integrated as `paper/appendix_code.tex` or `\inputminted{}` chunks
-- `papers/releases/{base}/{snapshot}/` — immutable release containing the exact audited PDF, submission ZIP, delivery manifest, final acceptance receipt, audit result, and audit snapshot
+- `papers/releases/{base}/{snapshot}/` — immutable release containing the exact audited PDF, deterministic submission ZIP, delivery manifest, final acceptance receipt, audit result, audit snapshot, and every verified human Approval receipt consumed by the release
 - `papers/{base}/current.json` — the sole authoritative current-release pointer, switched with one atomic replace only after every release artifact verifies
 - `papers/{base}_paper.pdf` and `papers/{base}_submission.zip` — compatibility aliases repaired from the current release; consumers must prefer `current.json`
 - `scripts/cleanup_project_artifacts.py` invoked before final snapshot construction to prune rebuildable intermediates
@@ -382,7 +383,7 @@ snapshot mutation during judging, then creates a judgment receipt and final
 acceptance receipt. `FINAL_AUDIT_MAX_PAGES` or machine-readable
 `problem/deliverables.json` `max_pages` configures the page limit. A compile
 failure, hard check failure, visual failure, non-PASS, INDETERMINATE, malformed
-receipt, or stale fingerprint blocks normal delivery. Submission packaging is
+receipt, missing/changed human approval, bibliography mismatch, or stale fingerprint blocks normal delivery. Submission packaging is
 prepared and verified inside a same-filesystem staging release; failure leaves
 the previous `current.json` untouched. After an allowed audit result and
 successful atomic publication, the runner moves the project from `ongoing/` to

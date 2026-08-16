@@ -21,6 +21,13 @@ from ..audit.persistence import atomic_write_json
 RELEASE_MANIFEST_SCHEMA = "paper-factory-release-v1"
 RELEASE_POINTER_SCHEMA = "paper-factory-release-pointer-v1"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_CORE_RELEASE_ARTIFACTS = {
+    "paper": "paper.pdf",
+    "submission_zip": "submission.zip",
+    "final_audit_receipt": "final_audit_receipt.json",
+    "audit_result": "audit_result.json",
+    "audit_snapshot": "audit_snapshot.json",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -63,6 +70,26 @@ def _fsync_dir(path: Path) -> None:
         os.close(descriptor)
 
 
+def _expected_release_artifacts(manifest: dict[str, object]) -> dict[str, str]:
+    expected = dict(_CORE_RELEASE_ARTIFACTS)
+    evidence = manifest.get("evidence_artifacts")
+    if evidence is None:
+        evidence = manifest.get("authorization_artifacts") or {}
+    if not isinstance(evidence, dict):
+        raise ValueError("release evidence artifact map is invalid")
+    for name, filename in evidence.items():
+        if (
+            not isinstance(name, str)
+            or not isinstance(filename, str)
+            or not re.fullmatch(r"[A-Za-z0-9._-]+", name)
+            or Path(filename).name != filename
+            or not filename.endswith(".json")
+        ):
+            raise ValueError("release authorization artifact name is invalid")
+        expected[name] = filename
+    return expected
+
+
 @dataclass(frozen=True)
 class ReleaseResult:
     release_id: str
@@ -103,13 +130,7 @@ def resolve_current_release(papers_root: Path, base: str) -> ReleaseResult | Non
             or pointer.get("manifest_sha256") != _sha256(manifest_path)
         ):
             return None
-        expected = {
-            "paper": "paper.pdf",
-            "submission_zip": "submission.zip",
-            "final_audit_receipt": "final_audit_receipt.json",
-            "audit_result": "audit_result.json",
-            "audit_snapshot": "audit_snapshot.json",
-        }
+        expected = _expected_release_artifacts(manifest)
         artifacts = manifest.get("artifacts")
         if not isinstance(artifacts, dict) or set(artifacts) != set(expected):
             return None
@@ -197,9 +218,15 @@ class ReleasePublisher:
                     raise ValueError(
                         "immutable release exists with a different audit status"
                     )
+                self._assert_sources_match_release(
+                    project, snapshot_id, status, existing
+                )
                 check()
                 self._sync_legacy_aliases(base, existing)
                 check()
+                self._assert_sources_match_release(
+                    project, snapshot_id, status, existing
+                )
                 self._write_pointer(base, existing)
                 return existing
 
@@ -235,6 +262,16 @@ class ReleasePublisher:
                     "snapshot_id": snapshot_id,
                     "status": status,
                     "artifacts": artifacts,
+                    "evidence_artifacts": {
+                        name: f"{name}.json"
+                        for name in sources
+                        if name
+                        not in {
+                            "final_audit_receipt",
+                            "audit_result",
+                            "audit_snapshot",
+                        }
+                    },
                 }
                 manifest["content_sha256"] = _canonical_hash(manifest)
                 atomic_write_json(staging / "delivery_manifest.json", manifest)
@@ -250,8 +287,14 @@ class ReleasePublisher:
                 if result is None:
                     raise RuntimeError("committed release failed integrity verification")
                 check()
+                self._assert_sources_match_release(
+                    project, snapshot_id, status, result
+                )
                 self._sync_legacy_aliases(base, result)
                 check()
+                self._assert_sources_match_release(
+                    project, snapshot_id, status, result
+                )
                 self._write_pointer(base, result)
                 return result
             finally:
@@ -283,13 +326,7 @@ class ReleasePublisher:
                 or declared != _canonical_hash(unsigned)
             ):
                 return None
-            expected = {
-                "paper": "paper.pdf",
-                "submission_zip": "submission.zip",
-                "final_audit_receipt": "final_audit_receipt.json",
-                "audit_result": "audit_result.json",
-                "audit_snapshot": "audit_snapshot.json",
-            }
+            expected = _expected_release_artifacts(value)
             artifacts = value.get("artifacts")
             if not isinstance(artifacts, dict) or set(artifacts) != set(expected):
                 return None
@@ -405,6 +442,73 @@ class ReleasePublisher:
             raise ValueError(
                 "final acceptance receipt is stale or invalid: " + "; ".join(errors)
             )
+        try:
+            acceptance_value = json.loads(
+                sources["final_audit_receipt"].read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"final acceptance receipt cannot be read: {exc}") from exc
+        approval_records = acceptance_value.get("approval_receipts") or []
+        if not isinstance(approval_records, list):
+            raise ValueError("final acceptance approval receipt list is invalid")
+        for record in approval_records:
+            if not isinstance(record, dict):
+                raise ValueError("final acceptance approval receipt record is invalid")
+            gate = re.sub(r"[^A-Za-z0-9._-]", "_", str(record.get("gate") or ""))
+            decision_id = re.sub(
+                r"[^A-Za-z0-9._-]", "_", str(record.get("decision_id") or "")
+            )
+            relative = record.get("path")
+            if not gate or not decision_id or not isinstance(relative, str):
+                raise ValueError("final acceptance approval receipt identity is invalid")
+            key = f"approval_{gate}_{decision_id}"
+            source = project / relative
+            if (
+                Path(relative).is_absolute()
+                or ".." in Path(relative).parts
+                or not source.is_file()
+                or source.is_symlink()
+                or source.stat().st_size != record.get("size")
+                or _sha256(source) != record.get("sha256")
+            ):
+                raise ValueError(f"approval receipt changed before release: {gate}")
+            sources[key] = source
+        bibliography_record = (acceptance_value.get("artifacts") or {}).get(
+            "bibliography_build_receipt"
+        )
+        if bibliography_record is not None:
+            if not isinstance(bibliography_record, dict) or not isinstance(
+                bibliography_record.get("path"), str
+            ):
+                raise ValueError("bibliography build receipt record is invalid")
+            bibliography_source = project / str(bibliography_record["path"])
+            if (
+                not bibliography_source.is_file()
+                or bibliography_source.is_symlink()
+                or bibliography_source.stat().st_size
+                != bibliography_record.get("bytes")
+                or _sha256(bibliography_source)
+                != bibliography_record.get("sha256")
+            ):
+                raise ValueError("bibliography build receipt changed before release")
+            sources["bibliography_build_evidence"] = bibliography_source
+        if status == "OVERRIDDEN":
+            override_record = (acceptance_value.get("artifacts") or {}).get(
+                "override_receipt"
+            )
+            if not isinstance(override_record, dict) or not isinstance(
+                override_record.get("path"), str
+            ):
+                raise ValueError("override release has no bound authorization receipt")
+            override_source = project / str(override_record["path"])
+            if (
+                not override_source.is_file()
+                or override_source.is_symlink()
+                or override_source.stat().st_size != override_record.get("bytes")
+                or _sha256(override_source) != override_record.get("sha256")
+            ):
+                raise ValueError("delivery override receipt changed before release")
+            sources["delivery_override_authorization"] = override_source
         identity = snapshot.identity
         if not (
             isinstance(identity, dict)
@@ -418,6 +522,24 @@ class ReleasePublisher:
             if current != snapshot_id:
                 raise ValueError("project content changed after Final Audit")
         return sources
+
+    @classmethod
+    def _assert_sources_match_release(
+        cls,
+        project: Path,
+        snapshot_id: str,
+        status: str,
+        release: ReleaseResult,
+    ) -> None:
+        """Recheck approvals immediately before the atomic pointer switch."""
+
+        current = cls._validate_sources(project, snapshot_id, status)
+        for name, source in current.items():
+            copied = release.release_dir / f"{name}.json"
+            if not copied.is_file() or _sha256(copied) != _sha256(source):
+                raise ValueError(
+                    f"release evidence changed before pointer switch: {name}"
+                )
 
     @staticmethod
     def _validate_zip(path: Path, project_pdf: Path, base: str) -> None:
