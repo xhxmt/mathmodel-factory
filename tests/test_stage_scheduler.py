@@ -14,7 +14,11 @@ from factory_core.domain import (
     ValidationResult,
     WorkflowStatus,
 )
-from factory_core.dirty import classifier_contract_sha256
+from factory_core.dirty import (
+    capture_artifact_manifest,
+    classifier_contract_sha256,
+    manifest_fingerprint,
+)
 from factory_core.engine import FactoryEngine
 from factory_core.registry import StepDefinition, StepRegistry
 from factory_core.stages import (
@@ -23,6 +27,7 @@ from factory_core.stages import (
     STAGE_SCHEDULER_GENERATION,
     STEP_SCHEDULER_GENERATION,
     projected_stage_cursor,
+    resume_after_step_for_stage,
     stage_catalog_payload,
     stage_for_step,
 )
@@ -63,6 +68,22 @@ class ReviewerGateLifecycle(Lifecycle):
             "# gate\n\nVERDICT: PASS\n", encoding="utf-8"
         )
         return ExecutionResult.succeeded()
+
+
+class RecoverCompleteLifecycle(Lifecycle):
+    def __init__(self, *, evidence=("recovered-artifact.md",), **metadata):
+        super().__init__()
+        self.evidence = tuple(evidence)
+        self.metadata = metadata
+        self.recover_calls = 0
+
+    def recover(self, _context, _error):
+        self.recover_calls += 1
+        return RecoveryDecision(
+            RecoveryDisposition.COMPLETE,
+            evidence=self.evidence,
+            metadata=self.metadata,
+        )
 
 
 def stage_registry(*, overrides=None, gate=None, skip=None, content_guard=None):
@@ -133,6 +154,31 @@ def trust_seeded_reviewer_gate(store, project):
     )
 
 
+def interrupt_stage_task(store, project, *, stage, subtask, source_step):
+    manifest = capture_artifact_manifest(project)
+    state = store.load()
+    return store.transition(
+        expected_revision=state.revision,
+        event_type="INTERRUPTED_AFTER_VALID_OUTPUT_FOR_TEST",
+        changes={
+            "status": WorkflowStatus.INTERRUPTED,
+            "active_step": source_step,
+            "active_stage": stage,
+            "active_subtask": subtask,
+            "source_step_id": source_step,
+            "attempt": 1,
+        },
+        subtask_baseline={
+            "stage_id": stage,
+            "subtask": subtask,
+            "source_step_id": source_step,
+            "input_fingerprint": manifest_fingerprint(manifest),
+            "manifest": manifest,
+        },
+        event_step=source_step,
+    )
+
+
 def test_stage_catalog_covers_every_step_exactly_once_and_preserves_budgets():
     payload = stage_catalog_payload()
 
@@ -146,6 +192,18 @@ def test_stage_catalog_covers_every_step_exactly_once_and_preserves_budgets():
     assert sorted(mapped) == list(range(17))
     assert len(mapped) == len(set(mapped))
     assert stage_for_step(13).id == 8
+    assert [resume_after_step_for_stage(stage) for stage in range(1, 11)] == [
+        -1,
+        1,
+        3,
+        4,
+        5,
+        7,
+        8,
+        10,
+        13,
+        15,
+    ]
     reviewer_gate = next(
         subtask
         for stage in STAGE_CONTRACTS
@@ -215,6 +273,136 @@ def test_reviewer_entry_gate_is_resumable_without_advancing_step_cursor(tmp_path
     assert after_gate.last_completed_stage == 6
     assert after_gate.active_stage == 7
     assert after_gate.source_step_id == 9
+
+
+def test_stage_recovery_complete_promotes_checkpoint(tmp_path):
+    artifact = tmp_path / "recovered-artifact.md"
+    artifact.write_text("valid\n", encoding="utf-8")
+    lifecycle = RecoverCompleteLifecycle(validation_marker="preserved")
+    registry, _lifecycles = stage_registry(overrides={4: lifecycle})
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=3,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    interrupt_stage_task(
+        store,
+        tmp_path,
+        stage=3,
+        subtask="model_construction",
+        source_step=4,
+    )
+
+    recovered = FactoryEngine(
+        tmp_path, store=store, registry=registry
+    ).recover()
+
+    checkpoint = next(
+        item
+        for item in store.stage_checkpoints()
+        if item["stage_id"] == 3 and item["subtask"] == "model_construction"
+    )
+    assert recovered.status is WorkflowStatus.READY
+    assert recovered.last_completed_step == 4
+    assert recovered.last_completed_stage == 3
+    assert recovered.active_stage == 4
+    assert checkpoint["receipt"]["validation"]["validation_marker"] == "preserved"
+    assert checkpoint["receipt"]["result"]["recovered"] is True
+    assert lifecycle.calls == []
+    assert lifecycle.recover_calls == 1
+    assert len(
+        [
+            event
+            for event in store.events()
+            if event.type == "STEP_SUCCEEDED"
+            and event.payload.get("subtask") == "model_construction"
+        ]
+    ) == 1
+
+
+def test_reviewer_entry_gate_complete_recovery(tmp_path):
+    for name in ("reviewer_entry_map.md", "anchor_figure_plan.md"):
+        (tmp_path / name).write_text("# ready\n", encoding="utf-8")
+    (tmp_path / "entry_gate.md").write_text(
+        "# gate\n\nVERDICT: PASS\n", encoding="utf-8"
+    )
+    lifecycle = RecoverCompleteLifecycle(evidence=("entry_gate.md",))
+    registry, _lifecycles = stage_registry(gate=lifecycle)
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=8,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    interrupt_stage_task(
+        store,
+        tmp_path,
+        stage=6,
+        subtask="reviewer_entry_gate",
+        source_step=8,
+    )
+
+    recovered = FactoryEngine(
+        tmp_path, store=store, registry=registry
+    ).recover()
+
+    checkpoints = [
+        item
+        for item in store.stage_checkpoints()
+        if item["stage_id"] == 6 and item["subtask"] == "reviewer_entry_gate"
+    ]
+    assert len(checkpoints) == 1
+    assert recovered.last_completed_step == 8
+    assert recovered.last_completed_stage == 6
+    assert recovered.active_stage == 7
+    assert recovered.active_step == 9
+    assert checkpoints[0]["receipt"]["validation"]["step8_5"]["ready"] is True
+    assert lifecycle.calls == []
+
+
+def test_content_freeze_guard_complete_recovery(tmp_path):
+    lifecycle = RecoverCompleteLifecycle(
+        evidence=("recovered-artifact.md",),
+        request_id="request-1",
+        decision_id="decision-1",
+    )
+    (tmp_path / "recovered-artifact.md").write_text("approved\n", encoding="utf-8")
+    registry, _lifecycles = stage_registry(content_guard=lifecycle)
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=15,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    interrupt_stage_task(
+        store,
+        tmp_path,
+        stage=10,
+        subtask="content_freeze_guard",
+        source_step=16,
+    )
+
+    recovered = FactoryEngine(
+        tmp_path, store=store, registry=registry
+    ).recover()
+
+    checkpoint = next(
+        item
+        for item in store.stage_checkpoints()
+        if item["stage_id"] == 10 and item["subtask"] == "content_freeze_guard"
+    )
+    assert recovered.status is WorkflowStatus.READY
+    assert recovered.last_completed_step == 15
+    assert recovered.last_completed_stage == 9
+    assert recovered.active_stage == 10
+    assert recovered.active_subtask == "delivery"
+    assert checkpoint["receipt"]["validation"]["request_id"] == "request-1"
+    assert checkpoint["receipt"]["result"]["decision_id"] == "decision-1"
+    assert lifecycle.calls == []
 
 
 def test_conditional_step13_skips_only_when_no_semantic_dirty_flag(tmp_path):
@@ -301,6 +489,25 @@ class RewriteProseOnce(Lifecycle):
         return ExecutionResult.succeeded()
 
 
+class RewriteProblemPlanOnce(Lifecycle):
+    def __init__(self, *, also_results=False):
+        super().__init__()
+        self.also_results = also_results
+
+    def execute(self, context):
+        self.calls.append(context.attempt)
+        if len(self.calls) == 1:
+            plan = context.project_dir / "problem" / "problem_plan.json"
+            plan.write_text('{"revision": 2}\n', encoding="utf-8")
+            if self.also_results:
+                results = context.project_dir / "results"
+                results.mkdir(exist_ok=True)
+                (results / "canonical_results.json").write_text(
+                    '{"value": 2}\n', encoding="utf-8"
+                )
+        return ExecutionResult.succeeded()
+
+
 class DeleteProtectedIssue(Lifecycle):
     def execute(self, context):
         self.calls.append(context.attempt)
@@ -370,6 +577,84 @@ def test_final_prose_math_change_reopens_stage8_and_invalidates_downstream(tmp_p
         checkpoint["completed_step_id"] in {None} or checkpoint["completed_step_id"] <= 11
         for checkpoint in store.stage_checkpoints()
     )
+
+
+def _late_problem_plan_reopen(tmp_path, *, also_results=False):
+    problem = tmp_path / "problem"
+    problem.mkdir()
+    (problem / "problem_plan.json").write_text(
+        '{"revision": 1}\n', encoding="utf-8"
+    )
+    if also_results:
+        results = tmp_path / "results"
+        results.mkdir()
+        (results / "canonical_results.json").write_text(
+            '{"value": 1}\n', encoding="utf-8"
+        )
+    rewrite = RewriteProblemPlanOnce(also_results=also_results)
+    registry, _lifecycles = stage_registry(overrides={14: rewrite})
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=13,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    trust_seeded_reviewer_gate(store, tmp_path)
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+    state = engine.run(max_steps=1)
+    reopen = next(
+        event for event in store.events() if event.type == "STAGE_SEMANTIC_REOPENED"
+    )
+    return engine, store, state, reopen
+
+
+def test_late_problem_plan_change_reopens_stage_1(tmp_path):
+    _engine, _store, state, reopen = _late_problem_plan_reopen(tmp_path)
+
+    assert reopen.payload["semantic_owner_stage"] == 1
+    assert reopen.payload["resume_after_step"] == -1
+    assert state.last_completed_step == 0
+    assert state.last_completed_stage == 0
+    assert state.active_stage == 1
+    assert state.active_subtask == "research_and_viability"
+
+
+def test_semantic_reopen_uses_earliest_dirty_owner(tmp_path):
+    _engine, store, _state, reopen = _late_problem_plan_reopen(
+        tmp_path, also_results=True
+    )
+
+    assert reopen.payload["dirty_owner_stages"] == [1, 4]
+    assert reopen.payload["semantic_owner_stage"] == 1
+    assert reopen.payload["resume_after_step"] == -1
+    assert {(item["flag"], item["owner_stage"]) for item in store.dirty_flags()} == {
+        ("MODEL_DIRTY", 1),
+        ("RESULT_DIRTY", 4),
+    }
+
+
+def test_stage_1_checkpoint_clears_problem_plan_dirty(tmp_path):
+    engine, store, _state, _reopen = _late_problem_plan_reopen(tmp_path)
+
+    completed_stage_1 = engine.run(max_steps=1)
+
+    assert completed_stage_1.last_completed_step == 1
+    assert completed_stage_1.last_completed_stage == 1
+    assert store.dirty_flags() == []
+    receipt = store.dirty_clear_receipts()[-1]
+    assert receipt["flag"] == "MODEL_DIRTY"
+    assert receipt["owner_stage"] == 1
+    assert receipt["receipt"]["success_receipt"]["stage"] == 1
+
+
+def test_semantic_reopen_invalidates_all_downstream_checkpoints(tmp_path):
+    _engine, store, _state, _reopen = _late_problem_plan_reopen(tmp_path)
+
+    checkpoints = store.stage_checkpoints()
+    assert [(item["stage_id"], item["subtask"]) for item in checkpoints] == [
+        (1, "problem_setup")
+    ]
 
 
 def test_final_prose_change_does_not_stale_valid_conditional_skip(tmp_path):

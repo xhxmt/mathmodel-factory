@@ -305,7 +305,9 @@ def _mask_inactive_regions(text: str) -> str:
     return masked
 
 
-def _masked_source(text: str) -> str:
+def mask_inactive_latex(text: str) -> str:
+    """Mask comments and inactive example regions while preserving positions."""
+
     return _mask_comments(_mask_inactive_regions(text))
 
 
@@ -432,7 +434,7 @@ def resolve_latex_dependency_graph(
         visiting.add(source)
         sources.append(source)
         try:
-            text = _masked_source(
+            text = mask_inactive_latex(
                 source.read_text(encoding="utf-8", errors="replace")
             )
         except OSError as exc:
@@ -560,7 +562,7 @@ def expand_latex_document(
     def visit(source: Path) -> None:
         text = source.read_text(encoding="utf-8", errors="replace")
         for line_number, line in enumerate(text.splitlines(), start=1):
-            masked = _masked_source(line)
+            masked = mask_inactive_latex(line)
             cursor = 0
             matched_source_command = False
             for match in _DEPENDENCY_RE.finditer(masked):

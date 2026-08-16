@@ -81,6 +81,7 @@
 
 ### 修复
 
+- 修复 `stage_v1` 三项合并阻断边界：中断后 COMPLETE 恢复改用携带完整 metadata 的真实 validation/execution 领域对象并幂等晋升 checkpoint；活动 LaTeX 宏、单位及计数器定义变化纳入数学语义指纹；语义重开依据全部 dirty cause 的最早 `owner_stage`，并从 Stage catalog 推导 Step 恢复边界，因此后期修改 `problem/problem_plan.json` 会回到 Stage 1 且只能由 Stage 1 成功 receipt 清除。
 - 修复 submission ZIP 递归纳入未冻结 `paper/draft.tex`、LaTeX 子文件按错误目录优先级解析、模块化论文数字链丢失父章节状态，以及决定 receipt 删除/篡改后仍可通过 Approval Gate 的四项审计阻断问题；内容冻结拒绝现在记录规范 `WORK_REOPENED` recovery 事件与失效 checkpoint 清单。
 - Web 相对时间格式化同时接受 Unix 秒级/毫秒级时间戳、数字字符串和日期字符串，避免 Solver Jobs 返回整数 `requested_at` 时触发渲染异常并使“求解任务”页整体空白；窄屏任务行改用三行自适应布局，完整保留状态、耗时、时间与 receipt 入口。
 - Web 八阶段流程下钻区提高标题对比度，并为已完成、运行中和待处理步骤使用与状态底色匹配的前景色，避免步骤文字与实心状态背景同色而不可读。

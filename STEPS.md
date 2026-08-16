@@ -284,6 +284,10 @@ invoke the math Agent. It writes a
 `SKIPPED_NO_MATH_SEMANTIC_CHANGE` receipt bound to the current authored-artifact
 fingerprint, checker contract, dirty-classifier contract, and
 `delivery_allowed: false`. An unknown change fails closed as math/result dirty;
+changes to active `newcommand`/`renewcommand`/`providecommand`/`def` and related
+math, unit, or counter definitions fail closed as `MATH_DIRTY`, including
+definitions reached through `input`/`include`, even when non-use cannot be
+proved safely;
 the old `step_v2` scheduler continues to execute the Step 13 lifecycle directly.
 
 Execution consistency has already been checked by the Step-5/6 `results`
@@ -329,7 +333,8 @@ Single-step polish bundle (formerly three separate steps in the social-science v
 
 Step 14 / Step 15 changes to model, mathematics, canonical results, source
 mapping, or core numerical claims set semantic dirty state, reopen the owning
-Stage, and force Step 13 again. Pure prose/citation/format changes may retain a
+Stage using the earliest dirty cause owner and a resume boundary derived from
+the Stage catalog, and force Step 13 again. Pure prose/citation/format changes may retain a
 valid classifier-bound skip/precheck checkpoint, but never authorize delivery.
 Do not treat `PRECHECK_PASS` or a skip receipt as the delivered-paper verdict.
 

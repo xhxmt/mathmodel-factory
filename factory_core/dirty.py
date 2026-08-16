@@ -8,10 +8,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .paper_sources import resolve_latex_dependency_graph
+from .paper_sources import mask_inactive_latex, resolve_latex_dependency_graph
 
 
-DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v1"
+DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v2"
 
 
 class DirtyFlag(str, Enum):
@@ -76,6 +76,14 @@ _MATH_RE = re.compile(
 )
 _CITATION_RE = re.compile(r"\\(?:cite|citep|citet|autocite)\*?(?:\[[^]]*\])?\{[^}]+\}")
 _LATEX_COMMAND_RE = re.compile(r"\\[A-Za-z@]+\*?(?:\[[^]]*\])?")
+_MATH_DEFINITION_RE = re.compile(
+    r"\\(?P<command>DeclareMathOperator|DeclareRobustCommand|DeclareSIUnit|"
+    r"DeclarePairedDelimiterXPP|DeclarePairedDelimiterX|DeclarePairedDelimiter|"
+    r"providecommand|renewcommand|newcommand|newcounter|setcounter|addtocounter|"
+    r"counterwithin|numberwithin|gdef|edef|xdef|def|let)"
+    r"(?P<star>\*)?(?![A-Za-z@])"
+)
+_DEF_STYLE_COMMANDS = {"def", "gdef", "edef", "xdef"}
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -105,8 +113,73 @@ def _tracked(relative: str, path: Path) -> bool:
     return any(relative == root or relative.startswith(root + "/") for root in _TRACKED_ROOTS)
 
 
+def _balanced_group_end(
+    text: str, start: int, opening: str, closing: str
+) -> int | None:
+    if start >= len(text) or text[start] != opening:
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        character = text[index]
+        if character == opening and (index == 0 or text[index - 1] != "\\"):
+            depth += 1
+        elif character == closing and (index == 0 or text[index - 1] != "\\"):
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
+def _skip_space(text: str, position: int) -> int:
+    while position < len(text) and text[position].isspace():
+        position += 1
+    return position
+
+
+def _math_definition_chunks(text: str) -> list[str]:
+    """Extract authored definitions that may alter rendered mathematics.
+
+    Definitions are included even when their macro is not currently referenced.
+    Proving non-use across TeX expansion is not reliable enough for a workflow
+    skip decision, so an active definition change intentionally fails closed.
+    """
+
+    source = mask_inactive_latex(text)
+    chunks: list[str] = []
+    for match in _MATH_DEFINITION_RE.finditer(source):
+        command = match.group("command")
+        position = _skip_space(source, match.end())
+        if command in _DEF_STYLE_COMMANDS:
+            body_start = source.find("{", position)
+            end = (
+                _balanced_group_end(source, body_start, "{", "}")
+                if body_start >= 0
+                else None
+            )
+        else:
+            if position < len(source) and source[position] == "{":
+                position = _balanced_group_end(source, position, "{", "}") or position
+            else:
+                macro = re.match(r"\\[A-Za-z@]+", source[position:])
+                if macro is None:
+                    continue
+                position += macro.end()
+            position = _skip_space(source, position)
+            while position < len(source) and source[position] == "[":
+                position = _balanced_group_end(source, position, "[", "]") or position
+                position = _skip_space(source, position)
+            end = _balanced_group_end(source, position, "{", "}")
+        if end is None:
+            end = source.find("\n", match.end())
+            if end < 0:
+                end = len(source)
+        chunks.append(re.sub(r"\s+", " ", source[match.start():end]).strip())
+    return chunks
+
+
 def _paper_semantics(text: str) -> dict[str, str]:
     math_chunks = _MATH_RE.findall(text)
+    math_definitions = _math_definition_chunks(text)
     citations = _CITATION_RE.findall(text)
     without_math = _MATH_RE.sub(" ", text)
     without_citations = _CITATION_RE.sub(" ", without_math)
@@ -115,7 +188,9 @@ def _paper_semantics(text: str) -> dict[str, str]:
     prose = re.sub(r"\s+", " ", prose).strip()
     format_only = re.sub(r"\s+", " ", without_math).strip()
     return {
-        "math": _canonical_hash(math_chunks),
+        "math": _canonical_hash(
+            {"formulas": math_chunks, "definitions": math_definitions}
+        ),
         "citation": _canonical_hash(citations),
         "prose": _sha256_bytes(prose.encode("utf-8", errors="replace")),
         "format": _sha256_bytes(format_only.encode("utf-8", errors="replace")),

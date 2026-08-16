@@ -136,6 +136,18 @@ def stage_for_step(step_id: int) -> StageContract:
         raise KeyError(f"Step {step_id} is not mapped to a Stage") from exc
 
 
+def resume_after_step_for_stage(stage_id: int) -> int:
+    """Derive the Step cursor immediately before a Stage owns the workflow.
+
+    Semantic reopen boundaries must follow the Stage catalog rather than a
+    second hand-maintained Stage-to-Step mapping.  Stage 1 therefore resumes
+    after Step -1, Stage 3 after Step 3, and so on.
+    """
+
+    stage = stage_for_id(stage_id)
+    return min(subtask.source_step_id for subtask in stage.subtasks) - 1
+
+
 def subtask_for_key(key: str) -> tuple[StageContract, StageSubtaskContract]:
     try:
         return _SUBTASK_BY_KEY[str(key)]

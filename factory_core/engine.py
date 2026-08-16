@@ -19,6 +19,7 @@ from .dirty import (
     semantic_flags,
 )
 from .domain import (
+    ExecutionResult,
     InvalidTransition,
     PendingAction,
     RecoveryDisposition,
@@ -28,6 +29,7 @@ from .domain import (
     StepError,
     StepContext,
     TERMINAL_STATUSES,
+    ValidationResult,
     WorkflowState,
     WorkflowStatus,
 )
@@ -41,6 +43,7 @@ from .stages import (
     STEP_SCHEDULER_GENERATION,
     completed_stage_for_step,
     next_stage_subtask,
+    resume_after_step_for_stage,
     stage_for_id,
     subtask_for_key,
 )
@@ -867,26 +870,24 @@ class FactoryEngine:
                 event_step=task.source_step_id,
             )
         semantic_reopen_target: int | None = None
+        semantic_owner_stage: int | None = None
         semantic_reason = ""
-        if task.stage_id > 3 and DirtyFlag.MODEL.value in new_flags:
-            semantic_reopen_target = 3
-            semantic_reason = f"Stage {task.stage_id} changed the model contract"
-        elif task.stage_id > 4 and DirtyFlag.RESULT.value in new_flags:
-            semantic_reopen_target = 4
-            semantic_reason = f"Stage {task.stage_id} changed canonical result semantics"
-        elif task.stage_id > 6 and DirtyFlag.VISUAL.value in new_flags:
-            semantic_reopen_target = 7
-            semantic_reason = f"Stage {task.stage_id} changed reviewer-entry visuals"
-        elif task.stage_id > 8 and DirtyFlag.MATH.value in new_flags:
-            semantic_reopen_target = 10
-            semantic_reason = f"Stage {task.stage_id} changed paper mathematics"
-        elif task.stage_id > 9 and new_flags & {
-            DirtyFlag.PROSE.value,
-            DirtyFlag.CITATION.value,
-            DirtyFlag.FORMAT.value,
-        }:
-            semantic_reopen_target = 13
-            semantic_reason = "FINALIZE changed final-prose-owned content"
+        upstream_owners = sorted(
+            {
+                int(item["owner_stage"])
+                for item in dirty_changes
+                if int(item["owner_stage"]) < task.stage_id
+            }
+        )
+        if upstream_owners:
+            semantic_owner_stage = upstream_owners[0]
+            semantic_reopen_target = resume_after_step_for_stage(
+                semantic_owner_stage
+            )
+            semantic_reason = (
+                f"Stage {task.stage_id} changed content owned by "
+                f"Stage {semantic_owner_stage}"
+            )
 
         if semantic_reopen_target is not None:
             if not self._stage_semantic_reopen_allowed(task.stage_id):
@@ -905,6 +906,7 @@ class FactoryEngine:
                         "stage": task.stage_id,
                         "subtask": task.subtask,
                         "resume_after_step": semantic_reopen_target,
+                        "semantic_owner_stage": semantic_owner_stage,
                         "reason": semantic_reason,
                     },
                     dirty_changes=dirty_changes,
@@ -931,6 +933,8 @@ class FactoryEngine:
                     "stage": task.stage_id,
                     "subtask": task.subtask,
                     "resume_after_step": semantic_reopen_target,
+                    "semantic_owner_stage": semantic_owner_stage,
+                    "dirty_owner_stages": upstream_owners,
                     "reason": semantic_reason,
                     "dirty_flags": sorted(new_flags),
                 },
@@ -1242,20 +1246,19 @@ class FactoryEngine:
                     f"step {definition.id} cannot recover through earlier step {completed_step}"
                 )
             if stage_task is not None:
+                validation = ValidationResult.valid(
+                    *decision.evidence,
+                    metadata=decision.metadata,
+                )
+                result = ExecutionResult.succeeded(
+                    **{**decision.metadata, "recovered": True}
+                )
                 recovered = self._complete_stage_task(
                     state,
                     state.runner_lease_id if enforce_lease else None,
                     stage_task,
-                    validation=type(
-                        "RecoveredValidation",
-                        (),
-                        {"evidence": decision.evidence},
-                    )(),
-                    result=type(
-                        "RecoveredResult",
-                        (),
-                        {"metadata": {"recovered": True, **decision.metadata}},
-                    )(),
+                    validation=validation,
+                    result=result,
                 )
                 if recovered.status is WorkflowStatus.RUNNING:
                     return self._transition(

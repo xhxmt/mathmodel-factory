@@ -99,6 +99,82 @@ def test_nested_paper_source_participates_in_dirty_classification(tmp_path):
     assert DirtyFlag.MATH in _flags(before, after)
 
 
+def _macro_change_flags(tmp_path, before_definition, after_definition, formula):
+    paper = tmp_path / "paper" / "paper.tex"
+    paper.parent.mkdir(parents=True, exist_ok=True)
+    paper.write_text(
+        f"{before_definition}\n\\begin{{document}}{formula}\\end{{document}}\n",
+        encoding="utf-8",
+    )
+    before = capture_artifact_manifest(tmp_path)
+    paper.write_text(
+        f"{after_definition}\n\\begin{{document}}{formula}\\end{{document}}\n",
+        encoding="utf-8",
+    )
+    return _flags(before, capture_artifact_manifest(tmp_path))
+
+
+def test_newcommand_value_change_marks_math_dirty(tmp_path):
+    flags = _macro_change_flags(
+        tmp_path,
+        r"\newcommand{\coef}{1}",
+        r"\newcommand{\coef}{2}",
+        r"$x=\coef$",
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
+def test_renewcommand_change_marks_math_dirty(tmp_path):
+    flags = _macro_change_flags(
+        tmp_path,
+        r"\newcommand{\coef}{1}\renewcommand{\coef}{2}",
+        r"\newcommand{\coef}{1}\renewcommand{\coef}{3}",
+        r"$x=\coef$",
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
+def test_def_change_marks_math_dirty(tmp_path):
+    flags = _macro_change_flags(
+        tmp_path,
+        r"\def\coef{1}",
+        r"\def\coef{2}",
+        r"$x=\coef$",
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
+def test_included_macro_file_change_marks_math_dirty(tmp_path):
+    paper = tmp_path / "paper" / "paper.tex"
+    macros = tmp_path / "paper" / "macros.tex"
+    paper.parent.mkdir(parents=True)
+    paper.write_text(
+        r"\input{macros}\begin{document}$x=\coef$\end{document}" + "\n",
+        encoding="utf-8",
+    )
+    macros.write_text(r"\newcommand{\coef}{1}" + "\n", encoding="utf-8")
+    before = capture_artifact_manifest(tmp_path)
+
+    macros.write_text(r"\newcommand{\coef}{2}" + "\n", encoding="utf-8")
+    after = capture_artifact_manifest(tmp_path)
+
+    assert DirtyFlag.MATH in _flags(before, after)
+
+
+def test_unused_macro_change_classification_fails_closed(tmp_path):
+    flags = _macro_change_flags(
+        tmp_path,
+        r"\providecommand{\unused}{1}",
+        r"\providecommand{\unused}{2}",
+        r"$x=1$",
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
 def test_dirty_classifier_preserves_each_recursive_source_cause(tmp_path):
     paper = tmp_path / "paper" / "paper.tex"
     first = tmp_path / "paper" / "sections" / "first.tex"
