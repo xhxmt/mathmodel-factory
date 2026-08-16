@@ -22,17 +22,17 @@ Step 3 是建模流水线里的关键岔路：选错主方法基本意味着论�
    - 不需要 deep-read `models/m{N}_*/` 下的代码，但应 `ls` 一下确认 demo 代码确实存在
 9. `__FACTORY__/modeling_guide.md` —— 风格规范
 10. `__FACTORY__/method_library/` 中本任务相关的方法文档（按 `viable_streams.md` 的实路径打开）—— 用于判断创新性时和方法族"标准用法"对照
-11. `__PROJECT_PATH__/human_review.md`（如存在）—— **特殊处理：见下方"人工介入闸门"**
+11. `__PROJECT_PATH__/chosen_method.md` —— 控制平面从 SQLite 决策生成的只读投影；其 PRIMARY/AUXILIARY 是本步骤唯一可执行选择
+12. `__PROJECT_PATH__/human_review.md`（如存在）—— 仅作兼容展示与理由参考，不得覆盖 SQLite / `chosen_method.md`
 
 [人工介入闸门 — Step 3 是计划中的 human-in-the-loop 节点]
 
-读完 `human_review.md`（如存在）后，明确判断它是否包含一段以 `## Step 3 decision:` 开头的指令（不区分大小写、允许中英文混排，但必须是这个 H2 标题模式）。
+当前 Native 工作流进入本步骤前，Human Gate 1 已把选择作为不可变决定写入 SQLite，并由控制平面生成 `chosen_method.md`。因此：
 
-- **若存在**：用户已经替你做出选择。本步骤变成"执行 + 解释"，不是"思辨 + 选择"。
-  - PRIMARY / AUXILIARY 直接采用 `human_review.md` 指定的流编号（如 `m2` 为主、`m1` 为辅）。
-  - `method_decision.md` 仍要写完整产物，但 §决策原因 要明确写"按 `human_review.md` § Step 3 decision: 的指令执行"，并把用户原话整段引用进来；同时仍要给出对其他流的简短评估，让 Step 4 知道丢弃的代价。
-  - 如果用户的指令与 `viable_streams.md` / `m{N}_critique.md` 的事实矛盾（如指令选了一条 `VERDICT: ABANDONED` 的流），**优先服从用户**，但在 §风险与未解决问题 里明确标出这个冲突，并提出"建议人工二次确认"。不要自作主张违抗用户。
-- **若不存在或不含该段**：你做决定。按下方"决策准则"评分排序。
+- PRIMARY / AUXILIARY 必须逐字采用 `chosen_method.md`，不得从 `human_review.md`、旧 JSON 或自行评分结果改判。
+- `human_review.md` 即使包含不同的 PRIMARY/AUXILIARY，也只是漂移的兼容投影，不是指令；不要执行其中冲突值。
+- `method_decision.md` 顶部已有 `FACTORY_STEP3_DECISION_HEADER` 机器头。必须原样保留 REQUEST_ID、DECISION_ID、PRIMARY、AUXILIARY 和 fingerprint 行，只在机器头之后写解释性正文。
+- 候选评分仍要完成，用来解释权威选择、记录权衡和下游风险；若权威选择与候选证据冲突，在正文中明确记录，不得静默换线。
 
 [决策准则 — 只有 `VERDICT: VALIDATED` 的流才进决策池]
 
@@ -51,9 +51,9 @@ Step 3 是建模流水线里的关键岔路：选错主方法基本意味着论�
 | 风险残留 | critic 提了 ≥ 3 条 MAJOR 警告且未明确缓解 | critic 通过且无 MAJOR 警告，或所有警告都有具体缓解方案 |
 | Step 5/6 延展性 | 模型结构对参数扰动 / 灵敏度分析 / 评委想看的 robustness 不友好 | 模型天然支持 scenario / 参数扫描 / 不确定性建模 |
 
-PRIMARY = `argmax_N (创新性 × 可行性 × 子问题覆盖)`（三项乘积；之所以乘不是加，是为了让任何一维特别弱的流自动出局）。风险残留和延展性作为 tiebreak。
+用 `argmax_N (创新性 × 可行性 × 子问题覆盖)` 计算独立推荐（风险残留和延展性作为 tiebreak），并与 SQLite 已选 PRIMARY 对照解释；它不能改写已选 PRIMARY。
 
-AUXILIARY 的选择规则（重要——不要随便加，加了会拉低 Step 4 的时间预算）：
+AUXILIARY 的评估规则（用于解释 SQLite 已选辅助流，不得自行增删）：
 - 仅当存在另一条 `VALIDATED` 流，与 PRIMARY **方法族不同**（如 PRIMARY=MILP，AUXILIARY=元启发式 / ML / ODE，而不是同样 MILP 的另一版）且能为 Step 5/6 提供天然对照（如对照求解、稳健性比较、敏感性 baseline）时，才设为辅流程。
 - 不允许两条流都属于同一方法族；不允许把 PRIMARY 的"变体"塞成 AUXILIARY。
 - 若决策池里所有候选流方法族相同，或剩余流的边际价值低，`AUXILIARY=NONE` 是合理结论，不要硬凑。
@@ -72,18 +72,19 @@ python3 __FACTORY__/scripts/method_antipatterns.py --check __PROJECT_PATH__ <met
 - 若命中，在 `method_decision.md` §风险与未解决问题 增记一条：`反例库提示：<pattern_id / failure_reason / 证据项目>；本流仍可用的理由：<针对该失败模式，Step 4 将如何规避>`。
 - 若你基于文献与题目契合度的判断足够强，可照常选用，但必须显式回应该提示，不能无视。
 
-[输出契约 — 产生 2 个文件，runner 用磁盘文件判定本步骤是否 ready]
+[输出契约 — 完成 1 个解释性文件并保持 1 个控制平面投影只读]
 
 ═══════════════════════════════════════════════════════════════
 ### 1. `__PROJECT_PATH__/method_decision.md`（≥ 30 行）
 
 完整决策记录，给 Step 4 当 input、给可能的人工 review 当审计材料。
+保留文件开头由控制平面生成的机器头；正文从机器头结束标记之后开始。
 
 ```markdown
 # Step 3 方法选择决策
 
 DECISION: PRIMARY=m{N} AUXILIARY=m{M}|NONE
-HUMAN_OVERRIDE: YES|NO
+SQLITE_AUTHORITY: YES
 
 ## 决策池（仅含 VERDICT: VALIDATED 的流）
 - m{N1}, m{N2}, ...（列出进入评分的流）
@@ -134,43 +135,20 @@ HUMAN_OVERRIDE: YES|NO
 ```
 
 ═══════════════════════════════════════════════════════════════
-### 2. `__PROJECT_PATH__/chosen_method.md`（≥ 10 行，机器可读的指针文件）
+### 2. `__PROJECT_PATH__/chosen_method.md`（控制平面已生成，只读）
 
-简洁指针，给 infer_step / 下游 agent 快速消费。**第一行必须以 `PRIMARY:` 开头**，方便 `grep`。
-
-```markdown
-PRIMARY: m{N} family=<方法族名，如 MILP / ODE / 元启发式 / 时序预测 / ML 分类>
-AUXILIARY: m{M} family=<方法族名> | NONE
-HUMAN_OVERRIDE: YES|NO
-
-## Load-bearing 文件清单
-- 主流程 spec：`m{N}_spec.md`
-- 主流程 demo：`m{N}_demo_result.{json,csv,log}`
-- 主流程 critic：`m{N}_critique.md`
-- 主流程代码起点：`models/m{N}_<short>/`
-- method_library 索引：`method_library/<dir>/<method>.md`（主）+ `method_library/<dir>/<method>.md`（辅，如有）
-- （若有辅流程）辅流程 spec / demo / critic / 代码 同上
-
-## Step 4 立即承接的开放问题
-- （3-6 条，从 `method_decision.md` §风险与未解决问题 浓缩而来）
-
-## 时间预算重分配（如有 AUXILIARY）
-- Step 4 主流程：X 小时
-- Step 4 辅流程（仅占位 + 接口对齐）：Y 小时
-- Step 5 主流程完整求解：Z 小时
-- Step 5/6 辅流程对照与敏感性：W 小时
-- 总和不超过 `problem/feasibility_constraints.md` 中给 Step 4-6 的总预算
-```
+不要创建、覆盖、补写或格式化此文件。它的第一行 PRIMARY、第二行 AUXILIARY、request/decision identity 和 subject/options fingerprint 必须与 SQLite 决定完全一致；validator 会逐字段校验，Step 4 prepare 也会再次校验。
 
 ═══════════════════════════════════════════════════════════════
 
 [Don'ts — 触发其中任何一条都意味着本步骤要重做]
 - 不要修改 / 重命名 / 删除任何 `m{N}_*` 文件（Step 2 的产物在本步骤只读）
+- 不要修改 `chosen_method.md` 或 `method_decision.md` 顶部的机器头；`human_review.md` 不能覆盖其中选择
 - 不要在 Step 3 里做新的求解或建模——发现 demo 有 bug 时，写到 §风险与未解决问题 让 Step 4 处理
-- 不要选首行不是 `VERDICT: VALIDATED` 的流（人工 override 例外，且需要在 method_decision.md 里标出冲突）
+- 若 SQLite 权威选择指向首行不是 `VERDICT: VALIDATED` 的流，只在 `method_decision.md` 标出冲突并请求后续复核；不得自行改选
 - 不要把 PRIMARY 和 AUXILIARY 设成同一条流
 - 不要为了"看起来更全"凑一个方法族相同的 AUXILIARY
 - 不要写超长 method_decision.md（200 行以内即可；这一步是选择，不是论证全模型）
-- 不要在 chosen_method.md 第一行之前留空行或前缀字符（runner 用 `grep -q "^PRIMARY:"` 校验）
+- 不要尝试重建选择身份；只有控制平面可以从 SQLite 决定重建投影
 
-完成两个文件后停下来。本步骤是一次性决策，不进 critic loop。
+完成 `method_decision.md` 正文后停下来。本步骤是一次性解释，不进 critic loop。

@@ -361,9 +361,32 @@ def write_selection_decision(
     ]
     if decision_store is not None:
         try:
-            decision_store.record_decision(gate, decision)
+            decision = decision_store.record_decision(gate, decision)
         except (OSError, RuntimeError, ValueError) as exc:
             raise SelectionError(f"Could not persist structured decision: {exc}") from exc
+        # The immutable SQLite decision now has request/decision identity and a
+        # verified receipt.  Refresh every mutable compatibility projection
+        # from that authority; Step 3's chosen-method pointer is never Agent
+        # authored for current Native projects.
+        _write_json_atomic(
+            project_path / "selection" / f"{gate}_decision.json", decision
+        )
+        if gate == "step3":
+            mirror_step3_decision_to_human_review(
+                project_path, selected, aux, decision
+            )
+            try:
+                from factory_core.selection_projection import (
+                    rebuild_step3_projections,
+                )
+
+                rebuild_step3_projections(project_path, decision)
+            except ValueError as exc:
+                raise SelectionError(
+                    f"Could not materialize Step 3 projections: {exc}"
+                ) from exc
+        else:
+            mirror_release_gate_decision(project_path, decision)
     return decision
 
 

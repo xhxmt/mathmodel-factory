@@ -8,10 +8,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .artifact_ownership import artifact_ownership
 from .paper_sources import mask_inactive_latex, resolve_latex_dependency_graph
 
 
-DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v2"
+DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v3"
 
 
 class DirtyFlag(str, Enum):
@@ -56,6 +57,9 @@ _TRACKED_ROOTS = {
     "results",
     "figures",
     "tables",
+    "scripts",
+    "style",
+    "data/raw",
     "data/final",
     "run_state/solver_jobs",
     "selection/decisions",
@@ -65,6 +69,7 @@ _TRACKED_TOP_SUFFIXES = {".md", ".tex", ".json", ".bib", ".csv", ".xlsx"}
 _IGNORED_NAMES = {
     "checkpoint.md",
     "delivery_manifest.json",
+    "human_review.md",
     "numbers_manifest.json",
     "status.json",
 }
@@ -77,13 +82,25 @@ _MATH_RE = re.compile(
 _CITATION_RE = re.compile(r"\\(?:cite|citep|citet|autocite)\*?(?:\[[^]]*\])?\{[^}]+\}")
 _LATEX_COMMAND_RE = re.compile(r"\\[A-Za-z@]+\*?(?:\[[^]]*\])?")
 _MATH_DEFINITION_RE = re.compile(
-    r"\\(?P<command>DeclareMathOperator|DeclareRobustCommand|DeclareSIUnit|"
-    r"DeclarePairedDelimiterXPP|DeclarePairedDelimiterX|DeclarePairedDelimiter|"
-    r"providecommand|renewcommand|newcommand|newcounter|setcounter|addtocounter|"
-    r"counterwithin|numberwithin|gdef|edef|xdef|def|let)"
-    r"(?P<star>\*)?(?![A-Za-z@])"
+    r"\\(?P<command>"
+    # LaTeX2e/xparse definitions are matched by definition family rather than
+    # a command-name whitelist.  This intentionally includes new definition
+    # families without requiring a classifier release for each package.
+    r"(?:new|renew|provide|declare|define)[A-Za-z@]+|"
+    # TeX primitives and aliases.
+    r"(?:global)?(?:long)?(?:outer)?(?:g|e|x)?def|let|"
+    # expl3 variable/control-sequence constructors and setters.
+    r"[A-Za-z]+_(?:new|set|gset|const|generate)(?::[A-Za-z]+)?|"
+    # Macro-valued math helpers and counter definitions/assignments.
+    r"pgfmath[A-Za-z@]*macro|(?:new|set|addto|counterwithin|numberwithin)[A-Za-z@]*counter"
+    r")(?P<star>\*)?(?![A-Za-z@])",
+    re.IGNORECASE,
 )
-_DEF_STYLE_COMMANDS = {"def", "gdef", "edef", "xdef"}
+_DEF_STYLE_RE = re.compile(
+    r"^(?:(?:global)?(?:long)?(?:outer)?(?:g|e|x)?def|let|"
+    r"[A-Za-z]+_(?:new|set|gset|const|generate)(?::[A-Za-z]+)?)$",
+    re.IGNORECASE,
+)
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -99,7 +116,14 @@ def _canonical_hash(value: object) -> str:
 
 def classifier_contract_sha256() -> str:
     source = Path(__file__).read_bytes()
-    return _sha256_bytes(DIRTY_CLASSIFIER_SCHEMA.encode("ascii") + b"\0" + source)
+    ownership = Path(__file__).with_name("artifact_ownership.py").read_bytes()
+    return _sha256_bytes(
+        DIRTY_CLASSIFIER_SCHEMA.encode("ascii")
+        + b"\0"
+        + source
+        + b"\0"
+        + ownership
+    )
 
 
 def _tracked(relative: str, path: Path) -> bool:
@@ -149,7 +173,7 @@ def _math_definition_chunks(text: str) -> list[str]:
     for match in _MATH_DEFINITION_RE.finditer(source):
         command = match.group("command")
         position = _skip_space(source, match.end())
-        if command in _DEF_STYLE_COMMANDS:
+        if _DEF_STYLE_RE.match(command):
             body_start = source.find("{", position)
             end = (
                 _balanced_group_end(source, body_start, "{", "}")
@@ -165,10 +189,24 @@ def _math_definition_chunks(text: str) -> list[str]:
                     continue
                 position += macro.end()
             position = _skip_space(source, position)
-            while position < len(source) and source[position] == "[":
-                position = _balanced_group_end(source, position, "[", "]") or position
-                position = _skip_space(source, position)
-            end = _balanced_group_end(source, position, "{", "}")
+            end = position
+            consumed_group = False
+            # Consume the complete definition invocation, not merely its first
+            # group.  xparse/environment definitions commonly place the value
+            # in the third or fourth braced group.
+            while position < len(source) and source[position] in "[{":
+                opening = source[position]
+                closing = "]" if opening == "[" else "}"
+                group_end = _balanced_group_end(
+                    source, position, opening, closing
+                )
+                if group_end is None:
+                    break
+                consumed_group = True
+                end = group_end
+                position = _skip_space(source, group_end)
+            if not consumed_group:
+                end = None
         if end is None:
             end = source.find("\n", match.end())
             if end < 0:
@@ -297,51 +335,17 @@ def classify_manifest_changes(
         ):
             paper_raw_changes.add(artifact)
             continue
-        lowered = artifact.lower()
-        if lowered == "problem/problem_plan.json":
-            remember(_change(DirtyFlag.MODEL, 1, artifact, before, after))
-        elif lowered.startswith("models/") or lowered in {
-            "model.md",
-            "quality_contract.json",
-            "symbol_table.md",
-            "assumption_ledger.md",
-            "modeling_scope_gate.md",
-            "claim_registry.json",
-        }:
-            remember(_change(DirtyFlag.MODEL, 3, artifact, before, after))
-        elif (
-            (
-                lowered.startswith("results/")
-                and (
-                    Path(lowered).name
-                    in {"canonical_results.json", "values.json", "invariants.json"}
-                    or any(
-                        token in lowered
-                        for token in (
-                            "provenance",
-                            "source_mapping",
-                            "adopted_objective",
-                            "decision_variable",
-                            "solver_evidence",
-                        )
-                    )
+        ownership = artifact_ownership(artifact)
+        if ownership is not None:
+            remember(
+                _change(
+                    DirtyFlag(ownership.dirty_flag),
+                    ownership.owner_stage,
+                    artifact,
+                    before,
+                    after,
                 )
             )
-            or lowered.startswith("run_state/solver_jobs/")
-            or lowered.startswith(".factory/solver_receipts/")
-            or lowered == "solve_log.md"
-        ):
-            remember(_change(DirtyFlag.RESULT, 4, artifact, before, after))
-        elif lowered.startswith("results/"):
-            remember(_change(DirtyFlag.FORMAT, 9, artifact, before, after))
-        elif lowered.startswith("figures/") or lowered == "visualization_log.md":
-            remember(_change(DirtyFlag.VISUAL, 6, artifact, before, after))
-        elif lowered.endswith(".bib") or "citation" in lowered:
-            remember(_change(DirtyFlag.CITATION, 9, artifact, before, after))
-        elif lowered.startswith("tables/") or lowered.startswith("style/"):
-            remember(_change(DirtyFlag.FORMAT, 9, artifact, before, after))
-        elif lowered.endswith(".md"):
-            remember(_change(DirtyFlag.PROSE, 9, artifact, before, after))
         else:
             # Unknown authored changes fail closed. Both flags are intentional:
             # the upstream result owner must re-attest, and the math preflight

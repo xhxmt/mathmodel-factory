@@ -114,10 +114,16 @@ A stream is **ready** when `m{N}_spec.md` ≥ 30 lines AND a `m{N}_demo_result.*
 ### Step 3: Method Selection (human intervention point)
 
 Produce:
-- `method_decision.md` — one validated stream promoted to primary, one validated stream optionally promoted to auxiliary/contrast; rationale grounded in `m{N}_critique.md` files and `problem/feasibility_constraints.md`
-- `chosen_method.md` — symbolic-link-style summary: which `m{N}_*` files are now load-bearing for Step 4+
+- `method_decision.md` — explanation of the SQLite selection, with a machine-verifiable header binding request ID, decision ID, primary/auxiliary IDs, and subject/options fingerprints; the Agent edits only the explanatory body
+- `chosen_method.md` — deterministic control-plane projection of the current SQLite decision; Agents must not author or override it
 
-**Human gate**: if `human_review.md` exists in the project root and contains a `## Step 3 decision:` section, that decision is authoritative. Otherwise the decider agent picks the validated stream with the best innovation × feasibility product (not pure feasibility — evaluators expect creativity).
+**Human gate**: the immutable SQLite `step3` decision is authoritative. The
+selection service validates bound candidate evidence, persists the decision
+receipt, and regenerates `chosen_method.md` plus the machine header in
+`method_decision.md`. Step 3 validation and Step 4 prepare both reject any
+projection mismatch or stale candidate fingerprint. `human_review.md` and the
+selection JSON remain rebuildable compatibility projections and never override
+SQLite.
 
 ### Step 4: Full Model Construction
 
@@ -283,11 +289,13 @@ When none of those three semantic dirty flags is present, `stage_v1` does not
 invoke the math Agent. It writes a
 `SKIPPED_NO_MATH_SEMANTIC_CHANGE` receipt bound to the current authored-artifact
 fingerprint, checker contract, dirty-classifier contract, and
-`delivery_allowed: false`. An unknown change fails closed as math/result dirty;
-changes to active `newcommand`/`renewcommand`/`providecommand`/`def` and related
-math, unit, or counter definitions fail closed as `MATH_DIRTY`, including
-definitions reached through `input`/`include`, even when non-use cannot be
-proved safely;
+`delivery_allowed: false`. An unknown change fails closed as math/result dirty.
+Changes to any recognized macro/environment definition family in active LaTeX
+sources fail closed as `MATH_DIRTY`, including LaTeX2e/xparse command and
+environment definitions, TeX primitives, expl3 constructors/setters, PGF math
+macros, units, counters, and definitions reached through `input`/`include`;
+the classifier may downgrade only when deterministic analysis proves the
+change cannot affect math;
 the old `step_v2` scheduler continues to execute the Step 13 lifecycle directly.
 
 Execution consistency has already been checked by the Step-5/6 `results`
@@ -363,8 +371,9 @@ subsystem and delivery. It invokes or reuses the audit for the current content
 snapshot, then performs delivery mutations only when the result is `PASS` or an
 administrator-issued, exact-snapshot `deliver_snapshot` authorization produces
 an `OVERRIDDEN` audit result. Native and Legacy adapters use this same path.
-Stage 10 runs cleanup before building the canonical authored final-input
-manifest. From `FINAL_SNAPSHOT_CREATED` until the atomic current-pointer switch,
+Stage 10 runs cleanup before building the canonical authored
+`factory-final-input-manifest-v4`, which binds the shared artifact-ownership
+schema. From `FINAL_SNAPSHOT_CREATED` until the atomic current-pointer switch,
 that manifest is rechecked at audit and publisher boundaries; any mutation
 records `FINALIZATION_ABORTED_SNAPSHOT_CHANGED`, reopens the owning Stage, and
 forbids reuse of the old audit/acceptance receipt.
@@ -374,7 +383,7 @@ Produce:
 - `logs/compilation/latex_inputs.json` with `status=PASS`; all three engine recorder files must share the same declared project-input identity, and every external input must be classified under a controlled TeX/font runtime root
 - `logs/compilation/bibliography_build_receipt.json` using `bibliography-build-receipt-v1`; BibTeX/Biber backend/version, first-pass AUX/BCF, `.bib`, project `.bst`, generated `.bbl`, and zero unresolved citations must verify
 - a fresh final-submission Gate-2 result whose `judge_outputs/final_submission.sha256` matches all current math / execution / paper packet fingerprints, role prompts, checker/evaluator implementation, Judge model registry/config selection, final paper-check report, paper assets, and the exact compiled PDF bytes. The PDF hash is a delivery-consistency binding, not evidence that the text-only LLM inspected its rendered appearance. Delivery manifests use the `2026-08-09.atomic_release_v7` contract.
-- `.factory/finalization/submission_bundle_manifest.json` using `submission-bundle-manifest-v1`; the ZIP central directory and every member byte must match this manifest exactly, and no unreferenced `paper/` source may be packaged
+- `.factory/finalization/submission_bundle_manifest.json` using `submission-bundle-manifest-v2`; each member carries its shared-registry owner/domain, the ZIP central directory and every member byte must match this manifest exactly, and no unreferenced `paper/` source may be packaged
 - code appendix integrated as `paper/appendix_code.tex` or `\inputminted{}` chunks
 - `papers/releases/{base}/{snapshot}/` — immutable release containing the exact audited PDF, deterministic submission ZIP, delivery manifest, final acceptance receipt, audit result, audit snapshot, and every verified human Approval receipt consumed by the release
 - `papers/{base}/current.json` — the sole authoritative current-release pointer, switched with one atomic replace only after every release artifact verifies

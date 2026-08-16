@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from factory_core.domain import InvalidTransition, RevisionConflict, WorkflowStatus
+from factory_core.dirty import capture_artifact_manifest, manifest_fingerprint
 from factory_core.human_decisions import build_decision_request
 from factory_core.projections import write_compatibility_projections
 from factory_core.service import FactoryService, WorkerHandle
@@ -111,6 +112,84 @@ def test_legacy_rollback_cannot_bypass_unresolved_stage_dirty_flags(tmp_path):
 
     assert store.load().revision == dirty.revision
     assert store.load().scheduler_generation == "stage_v1"
+
+
+def _seed_stage_cursor_baseline(store, project):
+    manifest = capture_artifact_manifest(project)
+    state = store.load()
+    return store.transition(
+        expected_revision=state.revision,
+        event_type="STAGE_SELECTED_FOR_ROLLBACK_TEST",
+        changes={
+            "active_step": 0,
+            "active_stage": 1,
+            "active_subtask": "problem_setup",
+            "source_step_id": 0,
+            "attempt": 0,
+        },
+        subtask_baseline={
+            "stage_id": 1,
+            "subtask": "problem_setup",
+            "source_step_id": 0,
+            "input_fingerprint": manifest_fingerprint(manifest),
+            "manifest": manifest,
+        },
+    )
+
+
+def test_deactivate_rejects_manifest_drift_without_dirty_row(tmp_path):
+    service = FactoryService(tmp_path)
+    service.create_project("demo", "question", start=False)
+    project = tmp_path / "ongoing" / "demo"
+    store = SQLiteStateStore(project)
+    selected = _seed_stage_cursor_baseline(store, project)
+    problem = project / "problem" / "problem_brief.md"
+    problem.parent.mkdir(parents=True, exist_ok=True)
+    problem.write_text("mutated after baseline\n", encoding="utf-8")
+
+    with pytest.raises(InvalidTransition, match="manifest drifted"):
+        service.rollback_migration("demo")
+
+    assert store.load().revision == selected.revision
+    assert store.dirty_flags() == []
+
+
+def test_rollback_guard_uses_stage_cursor_baseline(tmp_path):
+    service = FactoryService(tmp_path)
+    service.create_project("demo", "question", start=False)
+    project = tmp_path / "ongoing" / "demo"
+    store = SQLiteStateStore(project)
+    selected = _seed_stage_cursor_baseline(store, project)
+    chosen = project / "chosen_method.md"
+    chosen.write_text("PRIMARY: m2\n", encoding="utf-8")
+
+    with pytest.raises(InvalidTransition, match="manifest drifted"):
+        service.rollback_stage_scheduler(
+            "demo", expected_revision=selected.revision
+        )
+
+    assert store.load().scheduler_generation == "stage_v1"
+
+
+def test_legacy_rollback_rejects_failed_mutating_stage(tmp_path):
+    service = FactoryService(tmp_path)
+    service.create_project("demo", "question", start=False)
+    project = tmp_path / "ongoing" / "demo"
+    store = SQLiteStateStore(project)
+    selected = _seed_stage_cursor_baseline(store, project)
+    failed = store.transition(
+        expected_revision=selected.revision,
+        event_type="FAILED_MUTATING_STAGE_FOR_TEST",
+        changes={"status": WorkflowStatus.FAILED, "attempt": 1},
+    )
+    problem = project / "problem" / "problem_brief.md"
+    problem.parent.mkdir(parents=True, exist_ok=True)
+    problem.write_text("failed attempt mutation\n", encoding="utf-8")
+
+    with pytest.raises(InvalidTransition, match="execution attempt started"):
+        service.rollback_migration("demo")
+
+    assert store.load().revision == failed.revision
 
 
 def test_service_and_web_action_share_revision_and_event_contract(tmp_path):

@@ -137,7 +137,20 @@ business truth. Solver/audit receipts, hashes, fingerprints, and final
 acceptance are immutable machine evidence. Checkpoint, method summaries, solve
 logs, verification summaries, and Web status are rebuildable projections.
 Step-3 and content-freeze decisions are read from SQLite first; their JSON and
-Markdown forms are projections.
+Markdown forms are projections. For current Native projects,
+`chosen_method.md` is generated from the immutable SQLite Step-3 decision and
+`method_decision.md` carries the same machine-verifiable identity header. Step 3
+validation and Step 4 prepare both verify the receipt, current candidate
+fingerprints, and every projection identity field; `human_review.md` cannot
+override them.
+
+Artifact responsibility is centralized in
+`factory_core/artifact_ownership.py`. Dirty classification, semantic reopen,
+Finalization recovery, Judge missing-evidence routing, Web diagnostics, and
+final/submission manifests must consume that registry rather than add local
+path-owner conditionals. Scheduler/control-mode rollback shares one guard that
+rejects active attempts, unresolved dirty/projection state, pending Finalization
+snapshots, and any current manifest drift from `stage_cursor_input`.
 
 Native failure events preserve execution and validation metadata such as the
 failed check, role, backend, report, and missing artifact paths. A model process
@@ -305,7 +318,7 @@ Important project files include:
 - `.factory/audits/profiles/**`: non-delivery `model` / `results` / `paper` snapshots and attempts.
 - `.factory/audits/latest.json`: current `profile=final` audit record used by delivery.
 - `judge_outputs/final_paper_checks.json`: hash-bound final paper/provenance check report.
-- `judge_outputs/final_acceptance_receipt.json`: binds the approved snapshot to PDF, checks, visual gate, decision route, judgment or override receipt, and the exact `submission-bundle-manifest-v1` identity.
+- `judge_outputs/final_acceptance_receipt.json`: binds the approved snapshot to PDF, checks, visual gate, decision route, judgment or override receipt, and the exact `submission-bundle-manifest-v2` identity.
 - `logs/compilation/latex_inputs.json`: compiler-recorder proof that project-local TeX inputs equal the declared `LatexCompileContract` dependency graph.
 - `.factory/finalization/submission_bundle_manifest.json`: exact, path-safe ZIP member list with size and SHA-256; unreferenced `paper/` drafts are excluded.
 - `judge_evaluation.md`: Step-13 `PRECHECK_PASS` control file until the final audit replaces it with the full aggregate verdict.

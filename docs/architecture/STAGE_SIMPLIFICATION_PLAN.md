@@ -63,7 +63,10 @@ Step 0 作为 `UNDERSTAND` 内的题面解析与归一化 checkpoint 保留。�
 
 候选生成、批评和方法选择属于同一个 `MODEL_TOURNAMENT`，但 Human Gate 1 仍是持久等待状态。
 选择决定继续写入 SQLite append-only decision；`method_decision.md` 与 `chosen_method.md` 仍是
-可重建投影，不能反向覆盖权威选择。
+可重建投影，不能反向覆盖权威选择。控制平面确定性生成 `chosen_method.md`，并在
+`method_decision.md` 写入 request/decision/primary/auxiliary/subject/options 机器头；Step 3
+validator 与 Step 4 prepare 共享同一验证器，重新核验当前候选 evidence fingerprint 和决定
+receipt。`human_review.md` 即使被改写，也不参与权威选择解析。
 
 ### 4.3 Step 6 + Step 7
 
@@ -204,6 +207,12 @@ dirty flag 不能只靠 Agent 自报。实现时应由受控写入范围、结�
 - 纯引用、样式、图像布局和普通叙事变化分别标记对应的非数学 flag；
 - 无法可靠分类时失败关闭为数学/结果 dirty，而不是推定干净。
 
+业务 owner 由唯一的 `factory-artifact-ownership-v1` registry 决定，覆盖问题合同、候选流、
+方法选择投影、模型合同、采用结果、敏感性/评价、阅卷入口、论文审阅和最终文字产物。
+dirty classifier、语义重开、Finalization snapshot 变化、Judge packet 缺件路由、Web 诊断和
+final/submission input manifest 共同读取这张表；flag 的语义分类不能反向覆盖更早的业务 owner。
+Stage 子任务永久失败时，也必须在同一失败事务中把 baseline delta 写入 dirty cause。
+
 每个 dirty flag 必须持久化：
 
 ```text
@@ -289,6 +298,9 @@ release 目录和原子 current pointer；审计系统仍不得自行发布。
    Stage 调度。
 7. Legacy 项目继续由 Legacy Adapter 读取，不因本计划自动获得新状态或 `CURRENT_PASS`；Stage
    项目存在未清语义 dirty flag 时不得通过整体回滚到 Legacy 绕过责任 Stage 复验。
+   所有 scheduler/control-mode 回滚共享同一 fail-closed guard：拒绝已开始的 attempt，复算
+   `stage_cursor_input` baseline 与当前 manifest，拒绝 pending Finalization snapshot、未解决
+   projection failure 或 Step-3 projection drift。
 8. Web 的 8 个比赛阶段保持稳定，并始终从当前 subtask 的 `source_step_id` 投影，不从
    Stage ID 投影。例如 Stage 7 的 draft subtask 显示 Phase 5，audit subtask 显示 Phase 6。
    10-Stage 主要用于高级诊断、恢复和事件展示。

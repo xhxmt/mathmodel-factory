@@ -10,6 +10,7 @@ from factory_core.audit.domain import (
     AuditSnapshot,
     AuditStatus,
 )
+from factory_core.artifact_ownership import artifact_owner_stage
 from factory_core.dirty import (
     DirtyFlag,
     capture_artifact_manifest,
@@ -175,6 +176,137 @@ def test_unused_macro_change_classification_fails_closed(tmp_path):
     assert DirtyFlag.MATH in flags
 
 
+@pytest.mark.parametrize(
+    ("before_definition", "after_definition"),
+    [
+        (
+            r"\NewDocumentCommand{\coef}{}{1}",
+            r"\NewDocumentCommand{\coef}{}{2}",
+        ),
+        (
+            r"\RenewDocumentCommand{\coef}{}{1}",
+            r"\RenewDocumentCommand{\coef}{}{2}",
+        ),
+        (
+            r"\ProvideDocumentCommand{\coef}{}{1}",
+            r"\ProvideDocumentCommand{\coef}{}{2}",
+        ),
+        (
+            r"\DeclareDocumentCommand{\coef}{}{1}",
+            r"\DeclareDocumentCommand{\coef}{}{2}",
+        ),
+    ],
+)
+def test_document_command_definition_change_marks_math_dirty(
+    tmp_path, before_definition, after_definition
+):
+    flags = _macro_change_flags(
+        tmp_path, before_definition, after_definition, r"$x=\coef$"
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
+def test_new_environment_change_marks_math_dirty(tmp_path):
+    flags = _macro_change_flags(
+        tmp_path,
+        r"\newenvironment{scaled}{\def\coef{1}}{}",
+        r"\newenvironment{scaled}{\def\coef{2}}{}",
+        r"$x=\coef$",
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
+def test_expl3_command_definition_change_marks_math_dirty(tmp_path):
+    flags = _macro_change_flags(
+        tmp_path,
+        r"\cs_new:Npn \coef { 1 }",
+        r"\cs_set:Npn \coef { 2 }",
+        r"$x=\coef$",
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
+def test_pgfmath_macro_change_marks_math_dirty(tmp_path):
+    flags = _macro_change_flags(
+        tmp_path,
+        r"\pgfmathsetmacro{\coef}{1}",
+        r"\pgfmathsetmacro{\coef}{2}",
+        r"$x=\coef$",
+    )
+
+    assert DirtyFlag.MATH in flags
+
+
+def test_included_xparse_macro_change_marks_math_dirty(tmp_path):
+    paper = tmp_path / "paper" / "paper.tex"
+    macros = tmp_path / "paper" / "macros.tex"
+    paper.parent.mkdir(parents=True)
+    paper.write_text(
+        r"\input{macros}\begin{document}$x=\coef$\end{document}" + "\n",
+        encoding="utf-8",
+    )
+    macros.write_text(
+        r"\NewDocumentCommand{\coef}{}{1}" + "\n", encoding="utf-8"
+    )
+    before = capture_artifact_manifest(tmp_path)
+    macros.write_text(
+        r"\NewDocumentCommand{\coef}{}{2}" + "\n", encoding="utf-8"
+    )
+
+    assert DirtyFlag.MATH in _flags(before, capture_artifact_manifest(tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("relative", "expected_flag", "expected_owner"),
+    [
+        ("problem/problem_brief.md", DirtyFlag.MODEL, 1),
+        ("viable_streams.md", DirtyFlag.MODEL, 1),
+        ("m1_spec.md", DirtyFlag.MODEL, 2),
+        ("m1_demo_result.json", DirtyFlag.MODEL, 2),
+        ("method_decision.md", DirtyFlag.MODEL, 2),
+        ("chosen_method.md", DirtyFlag.MODEL, 2),
+        ("results/values.json", DirtyFlag.RESULT, 4),
+        ("results/run_sensitivity.json", DirtyFlag.RESULT, 5),
+        ("sensitivity_report.md", DirtyFlag.RESULT, 5),
+        ("evaluation.md", DirtyFlag.RESULT, 5),
+        ("reviewer_entry_map.md", DirtyFlag.VISUAL, 6),
+        ("anchor_figure_plan.md", DirtyFlag.VISUAL, 6),
+        ("entry_gate.md", DirtyFlag.VISUAL, 6),
+    ],
+)
+def test_business_artifacts_use_the_shared_owner_registry(
+    tmp_path, relative, expected_flag, expected_owner
+):
+    before = capture_artifact_manifest(tmp_path)
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("changed\n", encoding="utf-8")
+    changes = classify_manifest_changes(
+        before, capture_artifact_manifest(tmp_path)
+    )
+
+    assert artifact_owner_stage(relative) == expected_owner
+    assert {(item.flag, item.owner_stage) for item in changes} == {
+        (expected_flag, expected_owner)
+    }
+
+
+def test_finalization_and_dirty_classifier_share_owner_registry(tmp_path):
+    before = capture_artifact_manifest(tmp_path)
+    chosen = tmp_path / "chosen_method.md"
+    chosen.write_text("PRIMARY: m1\n", encoding="utf-8")
+    change = classify_manifest_changes(
+        before, capture_artifact_manifest(tmp_path)
+    )[0]
+
+    assert change.owner_stage == artifact_owner_stage("chosen_method.md") == 2
+    assert reopen_after_for_changed_paths(["chosen_method.md"]) == 1
+    assert reopen_after_for_changed_paths(["entry_gate.md"]) == 7
+
+
 def test_dirty_classifier_preserves_each_recursive_source_cause(tmp_path):
     paper = tmp_path / "paper" / "paper.tex"
     first = tmp_path / "paper" / "sections" / "first.tex"
@@ -333,6 +465,18 @@ def test_final_input_manifest_detects_mutation_and_routes_owner(tmp_path):
         verify_final_input_snapshot(tmp_path, snapshot)
     assert paper.name in raised.value.changed_paths
     assert reopen_after_for_changed_paths(raised.value.changed_paths) == 10
+
+
+def test_final_input_manifest_excludes_final_audit_output(tmp_path):
+    paper = tmp_path / f"{tmp_path.name}_paper.tex"
+    paper.write_text("\\begin{document}\nhello\n\\end{document}\n", encoding="utf-8")
+    judge = tmp_path / "judge_evaluation.md"
+    judge.write_text("VERDICT: OLD\n", encoding="utf-8")
+    snapshot = build_final_input_manifest(tmp_path)
+
+    judge.write_text("VERDICT: PASS\n", encoding="utf-8")
+
+    verify_final_input_snapshot(tmp_path, snapshot)
 
 
 @dataclass

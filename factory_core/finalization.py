@@ -8,8 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .artifact_ownership import (
+    ARTIFACT_OWNERSHIP_SCHEMA,
+    iter_owned_artifacts,
+    reopen_after_step_for_artifact,
+)
 
-FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v3"
+
+FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v4"
 
 
 class FinalizationSnapshotChanged(RuntimeError):
@@ -48,34 +54,7 @@ def _input_paths(project: Path) -> list[Path]:
     paths = set(
         submission_bundle_paths(project, project.name, require_pdf=False)
     )
-    for relative in (
-        "problem/problem_brief.md",
-        "problem/problem_plan.json",
-        "problem/deliverables.json",
-        "chosen_method.md",
-        "model.md",
-        "symbol_table.md",
-        "assumption_ledger.md",
-        "claim_registry.json",
-        "quality_contract.json",
-        "solve_log.md",
-        "results/canonical_results.json",
-    ):
-        path = project / relative
-        if path.is_file() and not path.is_symlink():
-            paths.add(path)
-    for root_name in ("models", "results", "data/final"):
-        root = project / root_name
-        if not root.is_dir():
-            continue
-        for path in root.rglob("*"):
-            if (
-                path.is_file()
-                and not path.is_symlink()
-                and "__pycache__" not in path.parts
-                and path.suffix != ".pyc"
-            ):
-                paths.add(path)
+    paths.update(iter_owned_artifacts(project, final_input_only=True))
     return sorted(paths, key=lambda path: path.relative_to(project).as_posix())
 
 
@@ -97,6 +76,7 @@ def build_final_input_manifest(project_dir: str | Path) -> FinalInputSnapshot:
     ]
     identity = {
         "schema_version": FINAL_INPUT_MANIFEST_SCHEMA,
+        "artifact_ownership_schema": ARTIFACT_OWNERSHIP_SCHEMA,
         "base": project.name,
         "files": files,
         "planned_submission_bundle": planned_bundle,
@@ -162,6 +142,7 @@ def verify_final_input_snapshot(
         changed.append("<approval-receipts>")
     identity = {
         "schema_version": FINAL_INPUT_MANIFEST_SCHEMA,
+        "artifact_ownership_schema": ARTIFACT_OWNERSHIP_SCHEMA,
         "base": project.name,
         "files": [current_records[path] for path in sorted(current_records)],
         "planned_submission_bundle": current_bundle,
@@ -176,26 +157,8 @@ def verify_final_input_snapshot(
 def reopen_after_for_changed_paths(paths: list[str]) -> int:
     target = 13
     for relative in paths:
-        lowered = relative.lower()
-        if lowered.startswith("problem/"):
-            target = min(target, -1)
-        elif lowered.startswith("models/") or lowered in {
-            "model.md",
-            "symbol_table.md",
-            "assumption_ledger.md",
-            "claim_registry.json",
-            "quality_contract.json",
-            "chosen_method.md",
-        }:
-            target = min(target, 3)
-        elif lowered.startswith(("results/", "data/final/")) or lowered == "solve_log.md":
-            target = min(target, 4)
-        elif lowered.startswith("figures/"):
-            target = min(target, 7)
-        elif lowered.endswith(".tex") and not lowered.startswith("tables/"):
-            target = min(target, 10)
-        elif lowered.endswith(".bib") or lowered.startswith("tables/"):
-            target = min(target, 13)
-        else:
-            target = min(target, 3)
+        target = min(
+            target,
+            reopen_after_step_for_artifact(relative, default_stage=3),
+        )
     return target

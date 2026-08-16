@@ -112,6 +112,27 @@ def test_unreferenced_paper_draft_is_not_packaged(tmp_path):
     assert "paper/draft.tex" not in names
 
 
+def test_shared_registry_drives_submission_members_and_owner_metadata(tmp_path):
+    _complete_bundle_project(tmp_path)
+    (tmp_path / "entry_gate.md").write_text("VERDICT: PASS\n", encoding="utf-8")
+    final_data = tmp_path / "data/final/adopted.csv"
+    final_data.parent.mkdir(parents=True)
+    final_data.write_text("value\n1\n", encoding="utf-8")
+    (tmp_path / "judge_evaluation.md").write_text(
+        "VERDICT: PASS\n", encoding="utf-8"
+    )
+
+    manifest = submission_bundle_manifest(tmp_path, "demo")
+    members = {item["archive_path"]: item for item in manifest["members"]}
+
+    assert manifest["schema_version"] == "submission-bundle-manifest-v2"
+    assert manifest["artifact_ownership_schema"] == "factory-artifact-ownership-v1"
+    assert members["entry_gate.md"]["owner_stage"] == 6
+    assert members["data/final/adopted.csv"]["owner_stage"] == 4
+    assert members["results/values.json"]["owner_stage"] == 4
+    assert "judge_evaluation.md" not in members
+
+
 def test_package_manifest_matches_final_submission_fingerprint(tmp_path):
     _complete_bundle_project(tmp_path)
 
@@ -129,6 +150,17 @@ def test_submission_package_rejects_paper_symlink(tmp_path):
     (tmp_path / "paper/paper.tex").symlink_to(outside)
 
     with pytest.raises(ValueError, match="LaTeX|root|symlink"):
+        submission_bundle_manifest(tmp_path, "demo")
+
+
+def test_submission_package_rejects_owned_directory_symlink(tmp_path):
+    _complete_bundle_project(tmp_path)
+    outside = tmp_path.parent / "outside-models"
+    outside.mkdir()
+    (outside / "secret.py").write_text("secret = True\n", encoding="utf-8")
+    (tmp_path / "models/external").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
         submission_bundle_manifest(tmp_path, "demo")
 
 

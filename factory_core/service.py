@@ -471,6 +471,10 @@ class FactoryService:
             )
             if accepted.pending_action is not None:
                 return accepted, None
+            if str((pending.pending_action or {}).get("gate") or "") == "step3":
+                from .selection_projection import rebuild_step3_projections
+
+                rebuild_step3_projections(resolved_project)
             return self.resume_and_start(
                 resolved_project, expected_revision=accepted.revision
             )
@@ -610,20 +614,7 @@ class FactoryService:
         self._assert_expected_revision(state, expected_revision)
         if state.scheduler_generation == STEP_SCHEDULER_GENERATION:
             return state
-        if state.runner_pid is not None or state.status in {
-            WorkflowStatus.RUNNING,
-            WorkflowStatus.RETRYING,
-            WorkflowStatus.ARCHIVING,
-        }:
-            raise InvalidTransition("cannot roll back Stage scheduling while a runner is active")
-        if state.attempt > 0:
-            raise InvalidTransition(
-                "cannot roll back a Stage subtask after its execution attempt started"
-            )
-        if store.dirty_flags():
-            raise InvalidTransition(
-                "cannot roll back while Stage-owned semantic dirty flags are unresolved"
-            )
+        self.engine(resolved).assert_semantically_clean_for_rollback(state=state)
         updated = _workflow_coordinator(store).transition(
             expected_revision=state.revision,
             event_type="STAGE_SCHEDULER_ROLLED_BACK",

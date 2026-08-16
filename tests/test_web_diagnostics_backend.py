@@ -6,6 +6,7 @@ from factory_core.domain import WorkflowStatus
 from factory_core.domain import PendingAction
 from factory_core.human_decisions import build_decision_request
 from factory_core.storage import SQLiteStateStore
+from tests.test_selection_service import seed_authoritative_step3_decision
 
 
 def write_file(path: Path, text: str) -> None:
@@ -206,6 +207,27 @@ def test_diagnostics_exposes_decision_receipt_mismatch(tmp_path):
     assert diag["decision_receipt_mismatches"][0]["request_id"] == decision[
         "request_id"
     ]
+
+
+def test_diagnostics_exposes_step3_projection_owner_and_mismatch(tmp_path):
+    seed_authoritative_step3_decision(tmp_path)
+    chosen = tmp_path / "chosen_method.md"
+    chosen.write_text(
+        chosen.read_text(encoding="utf-8").replace("PRIMARY: m1", "PRIMARY: m2", 1),
+        encoding="utf-8",
+    )
+
+    diag = build_project_diagnostics(
+        tmp_path,
+        "demo",
+        is_running=False,
+        consultation_pending=False,
+        consultation_gate=None,
+    )
+
+    assert diag["status"]["reason_code"] == "SELECTION_PROJECTION_MISMATCH"
+    assert diag["selection_projection"]["valid"] is False
+    assert {item["owner_stage"] for item in diag["selection_projection"]["artifacts"]} == {2}
 
 
 def test_native_diagnostics_fails_closed_on_replay_hash_mismatch(tmp_path):

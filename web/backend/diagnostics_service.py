@@ -13,6 +13,11 @@ if str(SCRIPTS) not in sys.path:
 
 from project_diagnostics import load_recent_events, load_status
 from factory_core.storage import SQLiteStateStore
+from factory_core.artifact_ownership import artifact_owner_stage
+from factory_core.selection_projection import (
+    step3_projection_required,
+    verify_step3_projections,
+)
 from factory_core.workflow_events import (
     ENVELOPE_KEY,
     ReplayIntegrityError,
@@ -26,6 +31,7 @@ from factory_core.workflow_events import (
 PRIORITY = {
     "WORKFLOW_REPLAY_MISMATCH": 0,
     "DECISION_RECEIPT_MISMATCH": 0,
+    "SELECTION_PROJECTION_MISMATCH": 0,
     "CONSULTATION_PENDING": 1,
     "AWAITING_STEP8_5": 2,
     "VERIFY_OUTPUT_FAILED": 3,
@@ -38,6 +44,7 @@ PRIORITY = {
 BADGES = {
     "WORKFLOW_REPLAY_MISMATCH": "事件重放异常",
     "DECISION_RECEIPT_MISMATCH": "决策凭据损坏",
+    "SELECTION_PROJECTION_MISMATCH": "方法选择投影漂移",
     "CONSULTATION_PENDING": "等待人工",
     "AWAITING_STEP8_5": "等待 8.5 门禁",
     "VERIFY_OUTPUT_FAILED": "验证失败待重试",
@@ -195,6 +202,37 @@ def build_project_diagnostics(
                             for item in receipt_mismatches
                         ],
                     )
+                if (
+                    bool(store.decision_history("step3"))
+                    and step3_projection_required(project)
+                ):
+                    selection_projection = verify_step3_projections(project)
+                    projected["selection_projection"] = {
+                        "valid": selection_projection.valid,
+                        "errors": list(selection_projection.errors),
+                        "artifacts": [
+                            {
+                                "path": path,
+                                "owner_stage": artifact_owner_stage(path),
+                            }
+                            for path in ("chosen_method.md", "method_decision.md")
+                        ],
+                    }
+                    if not selection_projection.valid and not receipt_mismatches:
+                        projected["status"].update(
+                            reason_code="SELECTION_PROJECTION_MISMATCH",
+                            reason_summary=(
+                                "Step 3 Markdown projections no longer match the "
+                                "authoritative SQLite decision"
+                            ),
+                            evidence=[
+                                {
+                                    "kind": "selection_projection",
+                                    "errors": list(selection_projection.errors),
+                                    "owner_stage": 2,
+                                }
+                            ],
+                        )
                 orphaned = []
                 for path in sorted((project / "selection").glob("*_decision.json")):
                     gate = path.name.removesuffix("_decision.json")

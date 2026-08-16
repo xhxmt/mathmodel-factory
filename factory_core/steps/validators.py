@@ -17,6 +17,7 @@ from scripts.workflow_state import (
     gate2_verdict,
     step16_ready,
 )
+from ..artifact_ownership import reopen_after_step_for_artifact
 
 
 def _text(path: Path) -> str:
@@ -256,8 +257,31 @@ class NativeArtifactValidator:
         return len(validated) >= 2, "fewer than two validated modeling streams", tuple(f"m{stream}_critique.md" for stream in validated), {}
 
     def _step_3(self, project: Path):
-        ok = _has(project, "method_decision.md", 30) and _has(project, "chosen_method.md", 10) and _text(project / "chosen_method.md").startswith("PRIMARY:")
-        return ok, "Step 3 decision artifacts invalid", ("method_decision.md", "chosen_method.md"), {}
+        from ..selection_projection import (
+            STEP3_PROJECTION_SCHEMA,
+            step3_projection_required,
+            verify_step3_projections,
+        )
+
+        artifacts_ok = (
+            _has(project, "method_decision.md", 30)
+            and _has(project, "chosen_method.md", 10)
+            and _text(project / "chosen_method.md").startswith("PRIMARY:")
+        )
+        if step3_projection_required(project):
+            projection = verify_step3_projections(project)
+            ok = artifacts_ok and projection.valid
+            reason = (
+                ""
+                if ok
+                else "Step 3 decision projection invalid: "
+                + "; ".join(projection.errors or ("artifacts incomplete",))
+            )
+            return ok, reason, ("method_decision.md", "chosen_method.md"), {
+                "selection_projection_schema": STEP3_PROJECTION_SCHEMA,
+                "selection_projection_valid": projection.valid,
+            }
+        return artifacts_ok, "Step 3 decision artifacts invalid", ("method_decision.md", "chosen_method.md"), {}
 
     def _step_4(self, project: Path):
         ok = all((_has(project, name, minimum) for name, minimum in (("model.md", 100), ("symbol_table.md", 10), ("assumption_ledger.md", 10))))
@@ -413,42 +437,7 @@ class NativeArtifactValidator:
     @staticmethod
     def _artifact_owner(relative: str) -> int:
         """Return the last completed step needed to rerun an artifact's owner."""
-        if relative.startswith("problem/"):
-            return -1
-        if relative in {"research_brief.md", "viable_streams.md", "viability_gate.md"}:
-            return 0
-        if re.match(r"m\d+_(spec|demo_result|critique)", relative):
-            return 1
-        if relative in {"method_decision.md", "chosen_method.md"}:
-            return 2
-        if relative.startswith("models/") or relative in {
-            "claim_registry.json",
-            "model.md",
-            "symbol_table.md",
-            "assumption_ledger.md",
-            "modeling_scope_gate.md",
-            "quality_contract.json",
-        }:
-            return 3
-        if relative.startswith("results/") or relative == "solve_log.md":
-            return 4
-        if relative.startswith("figures/sensitivity_") or relative == "sensitivity_report.md":
-            return 5
-        if relative == "evaluation.md":
-            return 6
-        if relative.startswith("figures/") or relative == "visualization_log.md":
-            return 7
-        if relative.endswith("_paper.tex") or relative.startswith("paper/") or relative in {
-            "reviewer_entry_map.md",
-            "anchor_figure_plan.md",
-            "entry_gate.md",
-        }:
-            return 8
-        if relative.endswith("verification.latest.txt") or relative.endswith("verification.latest.json"):
-            return 9
-        if relative == "review_comments.md":
-            return 10
-        return 11
+        return reopen_after_step_for_artifact(relative, default_stage=3)
 
     def _step_14(self, project: Path):
         paper = _paper(project)

@@ -6,12 +6,17 @@ import os
 import stat
 import zipfile
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
+from .artifact_ownership import (
+    ARTIFACT_OWNERSHIP_SCHEMA,
+    artifact_ownership,
+    iter_owned_artifacts,
+)
 from .paper_sources import require_safe_latex_dependencies
 
 
-SUBMISSION_BUNDLE_SCHEMA = "submission-bundle-manifest-v1"
+SUBMISSION_BUNDLE_SCHEMA = "submission-bundle-manifest-v2"
 
 SKIP_DIR_NAMES = {
     ".git",
@@ -33,42 +38,6 @@ SKIP_SUFFIXES = {
     ".synctex.gz",
     ".pyc",
 }
-TOP_LEVEL_FILES = {
-    "abstract_draft.md",
-    "assumption_ledger.md",
-    "audit_issue_ledger.md",
-    "chosen_method.md",
-    "citation_audit.md",
-    "claim_registry.json",
-    "code_review.md",
-    "derobotification.md",
-    "evaluation.md",
-    "method_decision.md",
-    "model.md",
-    "modeling_guide.md",
-    "quality_contract.json",
-    "research_brief.md",
-    "review_comments.md",
-    "revision_summary.md",
-    "sensitivity_report.md",
-    "solve_log.md",
-    "symbol_table.md",
-    "viability_gate.md",
-    "viable_streams.md",
-    "visualization_log.md",
-}
-INCLUDE_DIRS = {
-    "data/raw",
-    "figures",
-    "models",
-    "problem",
-    "results",
-    "scripts",
-    "style",
-    "tables",
-}
-
-
 def _canonical_hash(value: object) -> str:
     encoded = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -148,33 +117,6 @@ def declared_delivery_files(project: Path) -> set[str]:
     return declared
 
 
-def _walk_allowed_directory(project: Path, root: Path) -> Iterable[Path]:
-    if not root.exists():
-        return
-    if root.is_symlink() or not root.is_dir():
-        raise ValueError(f"submission include root is not a regular directory: {root.relative_to(project)}")
-    for current, directories, names in os.walk(root, followlinks=False):
-        current_path = Path(current)
-        kept: list[str] = []
-        for name in sorted(directories):
-            child = current_path / name
-            relative = child.relative_to(project)
-            if name in SKIP_DIR_NAMES:
-                continue
-            if child.is_symlink():
-                raise ValueError(
-                    f"submission include directory is a symlink: {relative.as_posix()}"
-                )
-            kept.append(name)
-        directories[:] = kept
-        for name in sorted(names):
-            path = current_path / name
-            relative = path.relative_to(project)
-            if _should_skip(path, relative):
-                continue
-            yield _validate_regular_file(project, path, label="submission member")
-
-
 def submission_bundle_paths(
     project_dir: str | Path,
     base: str | None = None,
@@ -191,15 +133,15 @@ def submission_bundle_paths(
         selected.add(
             _validate_regular_file(project, pdf_candidate, label="final PDF")
         )
-    for name in TOP_LEVEL_FILES:
-        candidate = project / name
-        if candidate.exists() or candidate.is_symlink():
-            selected.add(_validate_regular_file(project, candidate, label="top-level submission file"))
-    for candidate in sorted(project.glob("m*")):
-        if candidate.suffix.lower() in {".md", ".json", ".csv"}:
-            selected.add(_validate_regular_file(project, candidate, label="model stream artifact"))
-    for relative in sorted(INCLUDE_DIRS):
-        selected.update(_walk_allowed_directory(project, project / relative))
+    for candidate in iter_owned_artifacts(
+        project, submission_only=True, include_symlinks=True
+    ):
+        relative = candidate.relative_to(project)
+        if _should_skip(candidate, relative):
+            continue
+        selected.add(
+            _validate_regular_file(project, candidate, label="owned submission member")
+        )
     for relative in declared_delivery_files(project):
         selected.add(
             _validate_regular_file(project, project / relative, label="declared deliverable")
@@ -215,19 +157,29 @@ def submission_bundle_manifest(
 ) -> dict[str, Any]:
     project = Path(project_dir).resolve()
     resolved_base = base or project.name
-    members = [
-        {
-            "source_path": path.relative_to(project).as_posix(),
-            "archive_path": path.relative_to(project).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in submission_bundle_paths(
-            project, resolved_base, require_pdf=require_pdf
+    members = []
+    for path in submission_bundle_paths(
+        project, resolved_base, require_pdf=require_pdf
+    ):
+        relative = path.relative_to(project).as_posix()
+        ownership = artifact_ownership(relative)
+        members.append(
+            {
+                "source_path": relative,
+                "archive_path": relative,
+                "size": path.stat().st_size,
+                "sha256": _sha256(path),
+                "owner_stage": (
+                    ownership.owner_stage if ownership is not None else None
+                ),
+                "semantic_domain": (
+                    ownership.semantic_domain if ownership is not None else "unowned"
+                ),
+            }
         )
-    ]
     identity = {
         "schema_version": SUBMISSION_BUNDLE_SCHEMA,
+        "artifact_ownership_schema": ARTIFACT_OWNERSHIP_SCHEMA,
         "base": resolved_base,
         "pdf_required": require_pdf,
         "members": members,

@@ -210,16 +210,12 @@ class FactoryEngine:
                 )
             attempt = state.attempt + 1 if state.active_step == definition.id else 1
             if stage_mode and state.attempt >= definition.max_attempts:
-                return self._owned_transition(
+                assert stage_task is not None
+                return self._fail_stage_task(
                     state,
                     lease,
+                    stage_task,
                     event_type="STEP_FAILED",
-                    changes={
-                        "status": WorkflowStatus.FAILED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
                     payload={
                         "error_class": "PERMANENT_ATTEMPT_BUDGET_EXHAUSTED",
                         "stage": stage_task.stage_id,
@@ -230,6 +226,18 @@ class FactoryEngine:
             try:
                 timeout_seconds = self._contest_timeout(definition)
             except ContestDeadlineExceeded as exc:
+                if stage_task is not None:
+                    return self._fail_stage_task(
+                        state,
+                        lease,
+                        stage_task,
+                        event_type="CONTEST_DEADLINE_EXHAUSTED",
+                        payload={
+                            "error_class": "PERMANENT_CONTEST_DEADLINE",
+                            "reason": str(exc),
+                            "step": definition.id,
+                        },
+                    )
                 return self._owned_transition(
                     state,
                     lease,
@@ -261,7 +269,13 @@ class FactoryEngine:
                         StageExecutionRequest(definition, preview_context)
                     )
             except ContestDeadlineExceeded as exc:
-                return self._deadline_failure(state, definition, exc, lease=lease)
+                return self._deadline_failure(
+                    state,
+                    definition,
+                    exc,
+                    lease=lease,
+                    stage_task=stage_task,
+                )
             if prepared.pending_action is not None:
                 return self._await_action(
                     state,
@@ -272,6 +286,17 @@ class FactoryEngine:
                     lease=lease,
                 )
             if not prepared.ready:
+                if stage_task is not None:
+                    return self._fail_stage_task(
+                        state,
+                        lease,
+                        stage_task,
+                        event_type="STEP_FAILED",
+                        payload={
+                            "error_class": "PERMANENT_INVALID_PREPARE_RESULT",
+                            "reason": prepared.reason,
+                        },
+                    )
                 return self._owned_transition(
                     state,
                     lease,
@@ -324,7 +349,13 @@ class FactoryEngine:
                     ),
                 )
             except ContestDeadlineExceeded as exc:
-                return self._deadline_failure(state, definition, exc, lease=lease)
+                return self._deadline_failure(
+                    state,
+                    definition,
+                    exc,
+                    lease=lease,
+                    stage_task=stage_task,
+                )
             result = outcome.execution
             state = self._refresh_owned_state(lease, active_step=definition.id)
             for side_effect in outcome.workflow_events:
@@ -392,6 +423,18 @@ class FactoryEngine:
                         lease=lease,
                     )
                 if not self._reopen_allowed(definition):
+                    if stage_task is not None:
+                        return self._fail_stage_task(
+                            state,
+                            lease,
+                            stage_task,
+                            event_type="STEP_FAILED",
+                            payload={
+                                "error_class": "PERMANENT_REOPEN_BUDGET_EXHAUSTED",
+                                "source_step": definition.id,
+                                "resume_after_step": resume_after,
+                            },
+                        )
                     return self._owned_transition(
                         state,
                         lease,
@@ -543,6 +586,20 @@ class FactoryEngine:
                 )
                 if terminal_error_class != error_class:
                     failure_metadata["exhausted_error_class"] = error_class
+                terminal_payload = {
+                    **failure_metadata,
+                    "error_class": terminal_error_class,
+                    "reason": validation.reason,
+                    "returncode": result.returncode,
+                }
+                if stage_task is not None:
+                    return self._fail_stage_task(
+                        state,
+                        lease,
+                        stage_task,
+                        event_type="STEP_FAILED",
+                        payload=terminal_payload,
+                    )
                 return self._owned_transition(
                     state,
                     lease,
@@ -553,12 +610,7 @@ class FactoryEngine:
                         "runner_lease_id": None,
                         "heartbeat_at": None,
                     },
-                    payload={
-                        **failure_metadata,
-                        "error_class": terminal_error_class,
-                        "reason": validation.reason,
-                        "returncode": result.returncode,
-                    },
+                    payload=terminal_payload,
                 )
             retry_delay = self._retry_delay(attempt)
             try:
@@ -571,6 +623,22 @@ class FactoryEngine:
             else:
                 budget_reason = "insufficient time for retry delay"
             if retry_budget < retry_delay:
+                deadline_payload = {
+                    **failure_metadata,
+                    "error_class": "PERMANENT_CONTEST_DEADLINE",
+                    "reason": budget_reason,
+                    "step": definition.id,
+                    "required_retry_delay_seconds": retry_delay,
+                    "remaining_budget_seconds": retry_budget,
+                }
+                if stage_task is not None:
+                    return self._fail_stage_task(
+                        state,
+                        lease,
+                        stage_task,
+                        event_type="CONTEST_DEADLINE_EXHAUSTED",
+                        payload=deadline_payload,
+                    )
                 return self._owned_transition(
                     state,
                     lease,
@@ -581,14 +649,7 @@ class FactoryEngine:
                         "runner_lease_id": None,
                         "heartbeat_at": None,
                     },
-                    payload={
-                        **failure_metadata,
-                        "error_class": "PERMANENT_CONTEST_DEADLINE",
-                        "reason": budget_reason,
-                        "step": definition.id,
-                        "required_retry_delay_seconds": retry_delay,
-                        "remaining_budget_seconds": retry_budget,
-                    },
+                    payload=deadline_payload,
                 )
             state = self._owned_transition(
                 state,
@@ -795,24 +856,19 @@ class FactoryEngine:
                 )
         return state
 
-    def _complete_stage_task(
+    def _stage_manifest_delta(
         self,
-        state: WorkflowState,
-        lease: str | None,
         task: ScheduledStageTask,
-        *,
-        validation,
-        result,
-    ) -> WorkflowState:
+    ) -> tuple[str, str, dict[str, str], list[dict[str, object]]]:
         baseline = self.store.stage_cursor_input()
         after = capture_artifact_manifest(self.project_dir)
         output_fingerprint = manifest_fingerprint(after)
         if baseline is None or (
             int(baseline["stage_id"]) != task.stage_id
             or str(baseline["subtask"]) != task.subtask
+            or int(baseline["source_step_id"]) != task.source_step_id
         ):
-            before: dict[str, str] = {}
-            dirty_changes = [
+            dirty_changes: list[dict[str, object]] = [
                 {
                     "flag": DirtyFlag.MATH.value,
                     "owner_stage": 8,
@@ -830,17 +886,74 @@ class FactoryEngine:
                     "classifier_contract_sha256": classifier_contract_sha256(),
                 },
             ]
-            input_fingerprint = "MISSING"
-        else:
-            before = dict(baseline["manifest"])
-            input_fingerprint = str(baseline["input_fingerprint"])
-            dirty_changes = [
-                {
-                    **change.to_dict(),
-                    "classifier_contract_sha256": classifier_contract_sha256(),
-                }
-                for change in classify_manifest_changes(before, after)
-            ]
+            return "MISSING", output_fingerprint, after, dirty_changes
+        before = dict(baseline["manifest"])
+        dirty_changes = [
+            {
+                **change.to_dict(),
+                "classifier_contract_sha256": classifier_contract_sha256(),
+            }
+            for change in classify_manifest_changes(before, after)
+        ]
+        return (
+            str(baseline["input_fingerprint"]),
+            output_fingerprint,
+            after,
+            dirty_changes,
+        )
+
+    def _fail_stage_task(
+        self,
+        state: WorkflowState,
+        lease: str | None,
+        task: ScheduledStageTask,
+        *,
+        event_type: str,
+        payload: dict[str, object],
+        expected_runner_pid: int | None = None,
+        expected_runner_lease_id: str | None = None,
+        enforce_lease: bool = False,
+    ) -> WorkflowState:
+        """Fail one Stage subtask while atomically persisting its file delta."""
+
+        _input, _output, _after, dirty_changes = self._stage_manifest_delta(task)
+        transition_guards = (
+            self._lease_expectations(
+                expected_runner_pid,
+                expected_runner_lease_id,
+                enforce_lease,
+            )
+            if lease is None
+            else {}
+        )
+        return self._stage_transition(
+            state,
+            lease,
+            event_type=event_type,
+            changes={
+                "status": WorkflowStatus.FAILED,
+                "runner_pid": None,
+                "runner_lease_id": None,
+                "heartbeat_at": None,
+            },
+            payload=payload,
+            dirty_changes=dirty_changes,
+            event_step=task.source_step_id,
+            **transition_guards,
+        )
+
+    def _complete_stage_task(
+        self,
+        state: WorkflowState,
+        lease: str | None,
+        task: ScheduledStageTask,
+        *,
+        validation,
+        result,
+    ) -> WorkflowState:
+        input_fingerprint, output_fingerprint, after, dirty_changes = (
+            self._stage_manifest_delta(task)
+        )
 
         new_flags = {str(item["flag"]) for item in dirty_changes}
         protected_deleted = [
@@ -1158,6 +1271,7 @@ class FactoryEngine:
                 state,
                 definition,
                 exc,
+                stage_task=stage_task,
                 expected_runner_pid=expected_runner_pid,
                 expected_runner_lease_id=expected_runner_lease_id,
                 enforce_lease=enforce_lease,
@@ -1165,6 +1279,20 @@ class FactoryEngine:
         decision_event_payload = {}
         if decision.disposition is RecoveryDisposition.REOPEN:
             if not self._reopen_allowed(definition):
+                if stage_task is not None:
+                    return self._fail_stage_task(
+                        state,
+                        None,
+                        stage_task,
+                        event_type="STEP_FAILED",
+                        payload={
+                            "error_class": "PERMANENT_REOPEN_BUDGET_EXHAUSTED",
+                            "source_step": definition.id,
+                        },
+                        expected_runner_pid=expected_runner_pid,
+                        expected_runner_lease_id=expected_runner_lease_id,
+                        enforce_lease=enforce_lease,
+                    )
                 return self._transition(
                     expected_revision=state.revision,
                     event_type="STEP_FAILED",
@@ -1301,6 +1429,24 @@ class FactoryEngine:
             }
             decision_name = "retry_incomplete_step"
         else:
+            if stage_task is not None:
+                return self._fail_stage_task(
+                    state,
+                    None,
+                    stage_task,
+                    event_type="RECOVERY_DECIDED",
+                    payload={
+                        "decision": "fail_recovery",
+                        "source": "recovery",
+                        "source_step": definition.id,
+                        "reason": decision.reason,
+                        "evidence": decision.evidence,
+                        **decision.metadata,
+                    },
+                    expected_runner_pid=expected_runner_pid,
+                    expected_runner_lease_id=expected_runner_lease_id,
+                    enforce_lease=enforce_lease,
+                )
             changes = {
                 "status": WorkflowStatus.FAILED,
                 "runner_pid": None,
@@ -1472,17 +1618,7 @@ class FactoryEngine:
 
     def deactivate(self, *, expected_revision: int) -> WorkflowState:
         state = self.store.load()
-        if state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING} or (
-            state.runner_pid is not None and self._pid_is_live(state.runner_pid)
-        ):
-            raise InvalidTransition("cannot deactivate an active engine runner")
-        if (
-            state.scheduler_generation == STAGE_SCHEDULER_GENERATION
-            and self.store.dirty_flags()
-        ):
-            raise InvalidTransition(
-                "cannot deactivate Stage scheduling while semantic dirty flags are unresolved"
-            )
+        self.assert_semantically_clean_for_rollback(state=state)
         return self._transition(
             expected_revision=expected_revision,
             event_type="ENGINE_DEACTIVATED",
@@ -1496,6 +1632,88 @@ class FactoryEngine:
                 "source_step_id": state.active_step,
             },
         )
+
+    def assert_semantically_clean_for_rollback(
+        self,
+        *,
+        state: WorkflowState | None = None,
+    ) -> None:
+        """Fail closed before changing a Stage project's control authority."""
+
+        current = state or self.store.load()
+        if current.status in {
+            WorkflowStatus.RUNNING,
+            WorkflowStatus.RETRYING,
+            WorkflowStatus.ARCHIVING,
+        } or (
+            current.runner_pid is not None
+            and self._pid_is_live(current.runner_pid)
+        ):
+            raise InvalidTransition("cannot change scheduler authority while a runner is active")
+        if current.scheduler_generation != STAGE_SCHEDULER_GENERATION:
+            return
+        if current.attempt > 0:
+            raise InvalidTransition(
+                "cannot change scheduler authority after a Stage execution attempt started"
+            )
+        dirty = self.store.dirty_flags()
+        if dirty:
+            raise InvalidTransition(
+                "cannot change scheduler authority while semantic dirty flags are unresolved"
+            )
+        baseline = self.store.stage_cursor_input()
+        if baseline is not None:
+            current_manifest = capture_artifact_manifest(self.project_dir)
+            baseline_manifest = dict(baseline.get("manifest") or {})
+            if manifest_fingerprint(current_manifest) != str(
+                baseline.get("input_fingerprint") or ""
+            ):
+                changes = classify_manifest_changes(
+                    baseline_manifest, current_manifest
+                )
+                artifacts = sorted(
+                    {change.cause_artifact for change in changes}
+                )
+                raise InvalidTransition(
+                    "cannot change scheduler authority because the Stage input "
+                    "manifest drifted from its baseline"
+                    + (f": {', '.join(artifacts[:5])}" if artifacts else "")
+                )
+        if self.store.projection_failures(pending_only=True):
+            raise InvalidTransition(
+                "cannot change scheduler authority with unresolved projection failures"
+            )
+        final_snapshot = (
+            self.project_dir / ".factory" / "finalization" / "input_manifest.json"
+        )
+        finalization_pending = (
+            current.active_stage == 10
+            or current.source_step_id == 16
+            or current.last_completed_step >= 15
+        )
+        if (
+            final_snapshot.is_file()
+            and finalization_pending
+            and current.status is not WorkflowStatus.COMPLETED
+        ):
+            raise InvalidTransition(
+                "cannot change scheduler authority while a Finalization snapshot is pending"
+            )
+        from .selection_projection import (
+            step3_projection_required,
+            verify_step3_projections,
+        )
+
+        if (
+            bool(self.store.decision_history("step3"))
+            and step3_projection_required(self.project_dir)
+        ):
+            projection = verify_step3_projections(self.project_dir)
+            if not projection.valid:
+                raise InvalidTransition(
+                    "cannot change scheduler authority with unresolved Step 3 "
+                    "projection drift: " + "; ".join(projection.errors)
+                )
 
     def archive_completed(self, factory_root: str | Path) -> WorkflowState:
         root = Path(factory_root).resolve()
@@ -1648,6 +1866,7 @@ class FactoryEngine:
         exc: ContestDeadlineExceeded,
         *,
         lease: str | None = None,
+        stage_task: ScheduledStageTask | None = None,
         expected_runner_pid: int | None = None,
         expected_runner_lease_id: str | None = None,
         enforce_lease: bool = False,
@@ -1663,6 +1882,14 @@ class FactoryEngine:
             "reason": str(exc),
             "step": definition.id,
         }
+        if stage_task is not None:
+            return self._fail_stage_task(
+                state,
+                lease,
+                stage_task,
+                event_type="CONTEST_DEADLINE_EXHAUSTED",
+                payload=payload,
+            )
         if lease is not None:
             return self._owned_transition(
                 state,

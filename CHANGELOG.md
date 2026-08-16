@@ -11,7 +11,7 @@
 - 最终发布链现在在 Final Audit 开始、acceptance 构建及 release pointer 切换前验证实际消费的人工 Approval receipt；不可变 release 会复制这些 receipt 并纳入 delivery manifest。决定 receipt 改为 `O_NOFOLLOW` 单次字节读取，并新增 `scripts/decision_receipt_repair.py`，仅当 SQLite 可重建字节与原 SHA-256 完全一致时恢复缺失文件。
 - CI 新增固定 TeX Live/BibTeX/Biber 的 `latex` 作业，真实编译、外部读取、符号链接、旧 `.bbl`、Biber 和未解析引用反例不得因工具缺失跳过。提交 ZIP 使用固定时间戳、权限和成员顺序，可从同一 manifest 确定性重建。
 - 新增 `LatexCompileContract`、`-recorder`/`.fls` 输入对账和按命令插入位置生成的展开文档流。静态依赖解析与编译统一使用“主文件目录 → 项目工作目录”搜索顺序；缺失、循环、动态依赖或 declared/observed 项目输入不一致均失败关闭。数字、数字链和符号检查共享展开流，因此跨文件章节状态、插入顺序与 use-before-definition 坐标不再丢失。
-- 新增 `submission-bundle-manifest-v1`：最终 PDF、活动 LaTeX 源/参考文献、显式允许的模型/结果/图表和声明附件形成唯一成员集合；final input、Judge packet、submission fingerprint、final acceptance receipt、打包器和 release verifier 绑定同一 manifest。打包拒绝符号链接/越界路径，并在写 ZIP 后逐成员复核中央目录、大小与 SHA-256。
+- 提交清单升级为 `submission-bundle-manifest-v2`：成员收集及 owner/domain 元数据绑定统一 artifact-ownership registry，最终 PDF、活动 LaTeX 源/参考文献、显式允许的模型/结果/图表和声明附件形成唯一成员集合；final input、Judge packet、submission fingerprint、final acceptance receipt、打包器和 release verifier 绑定同一 manifest。打包拒绝符号链接/越界路径，并在写 ZIP 后逐成员复核中央目录、大小与 SHA-256。
 - 新增 Human Decision receipt 读取时强制验证：路径、普通文件/符号链接、大小、SHA-256、schema、request/decision/gate/generation 和数据库决定正文必须一致；Approval receipt 缺失或篡改后 Gate 与 Final Audit 失败关闭，Web diagnostics 显示 `DECISION_RECEIPT_MISMATCH`。
 - 新增 schema-v8 审计加固合同：Human Decision 拆分为按 gate/request/generation 和 subject/options fingerprint 绑定的不可变请求与结果；每个决定生成 `.factory/decisions/<gate>/<request>/<decision>.json` 内容寻址 receipt，固定 selection/human-review 文件仅作兼容投影。内容冻结拒绝会清除 pending、失效 Stage 9 之后的 checkpoint 并回到 Stage 9，修复完成后才生成绑定新内容的下一代请求；陈旧的开放请求也可原子标记为 superseded 并重新绑定。
 - 新增统一递归 LaTeX 依赖图：从权威论文入口解析 `input`、`include`、`subfile`、`bibliography` 与 `addbibresource`，报告循环/缺失依赖并排除未引用草稿；content freeze、dirty 语义分类、提交/final fingerprint、数字/符号/数值链审计、Judge packet、Web artifact browser 与 submission package 共享活动源合同。
@@ -81,6 +81,7 @@
 
 ### 修复
 
+- 关闭 Stage 调度继续审计的 2 个 Blocker 与 2 个 Major：Step 3 的 SQLite 决定现在确定性生成并双阶段校验 `chosen_method.md`/`method_decision.md` 投影及候选 fingerprint；新增统一 artifact ownership registry 供 dirty、Finalization、Judge 缺件、Web 诊断和交付 manifest 共用；失败子任务在终止事务中持久化 baseline delta，所有 scheduler/control-mode 回滚统一复算 manifest 并拒绝活动 attempt、Finalization/projection 残留；LaTeX 数学定义检测改为覆盖 LaTeX2e/xparse、环境、TeX primitive、expl3 与 PGF 宏的定义族失败关闭策略。
 - 修复 `stage_v1` 三项合并阻断边界：中断后 COMPLETE 恢复改用携带完整 metadata 的真实 validation/execution 领域对象并幂等晋升 checkpoint；活动 LaTeX 宏、单位及计数器定义变化纳入数学语义指纹；语义重开依据全部 dirty cause 的最早 `owner_stage`，并从 Stage catalog 推导 Step 恢复边界，因此后期修改 `problem/problem_plan.json` 会回到 Stage 1 且只能由 Stage 1 成功 receipt 清除。
 - 修复 submission ZIP 递归纳入未冻结 `paper/draft.tex`、LaTeX 子文件按错误目录优先级解析、模块化论文数字链丢失父章节状态，以及决定 receipt 删除/篡改后仍可通过 Approval Gate 的四项审计阻断问题；内容冻结拒绝现在记录规范 `WORK_REOPENED` recovery 事件与失效 checkpoint 清单。
 - Web 相对时间格式化同时接受 Unix 秒级/毫秒级时间戳、数字字符串和日期字符串，避免 Solver Jobs 返回整数 `requested_at` 时触发渲染异常并使“求解任务”页整体空白；窄屏任务行改用三行自适应布局，完整保留状态、耗时、时间与 receipt 入口。

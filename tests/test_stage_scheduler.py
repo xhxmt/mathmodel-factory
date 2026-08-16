@@ -86,6 +86,14 @@ class RecoverCompleteLifecycle(Lifecycle):
         )
 
 
+class RecoverMutateThenFailLifecycle(Lifecycle):
+    def recover(self, context, _error):
+        problem = context.project_dir / "problem" / "problem_brief.md"
+        problem.parent.mkdir(parents=True, exist_ok=True)
+        problem.write_text("mutated during failed recovery\n", encoding="utf-8")
+        return RecoveryDecision(RecoveryDisposition.FAIL, reason="cannot recover")
+
+
 def stage_registry(*, overrides=None, gate=None, skip=None, content_guard=None):
     overrides = overrides or {}
     registry = StepRegistry()
@@ -322,6 +330,35 @@ def test_stage_recovery_complete_promotes_checkpoint(tmp_path):
     ) == 1
 
 
+def test_failed_stage_recovery_persists_manifest_delta(tmp_path):
+    lifecycle = RecoverMutateThenFailLifecycle()
+    registry, _lifecycles = stage_registry(overrides={4: lifecycle})
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=3,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    interrupt_stage_task(
+        store,
+        tmp_path,
+        stage=3,
+        subtask="model_construction",
+        source_step=4,
+    )
+
+    recovered = FactoryEngine(
+        tmp_path, store=store, registry=registry
+    ).recover()
+
+    assert recovered.status is WorkflowStatus.FAILED
+    assert {(item["flag"], item["owner_stage"]) for item in store.dirty_flags()} == {
+        ("MODEL_DIRTY", 1)
+    }
+    assert store.events()[-1].type == "RECOVERY_DECIDED"
+
+
 def test_reviewer_entry_gate_complete_recovery(tmp_path):
     for name in ("reviewer_entry_map.md", "anchor_figure_plan.md"):
         (tmp_path / name).write_text("# ready\n", encoding="utf-8")
@@ -508,6 +545,31 @@ class RewriteProblemPlanOnce(Lifecycle):
         return ExecutionResult.succeeded()
 
 
+class RewriteOwnedArtifactOnce(Lifecycle):
+    def __init__(self, relative):
+        super().__init__()
+        self.relative = relative
+
+    def execute(self, context):
+        self.calls.append(context.attempt)
+        path = context.project_dir / self.relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("changed by late Stage\n", encoding="utf-8")
+        return ExecutionResult.succeeded()
+
+
+class MutateCanonicalThenFail(Lifecycle):
+    def execute(self, context):
+        self.calls.append(context.attempt)
+        path = context.project_dir / "results" / "canonical_results.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"value": 2}\n', encoding="utf-8")
+        return ExecutionResult.failed("PERMANENT_TEST_FAILURE")
+
+    def validate(self, _context):
+        return ValidationResult.invalid("intentional failed mutation")
+
+
 class DeleteProtectedIssue(Lifecycle):
     def execute(self, context):
         self.calls.append(context.attempt)
@@ -655,6 +717,93 @@ def test_semantic_reopen_invalidates_all_downstream_checkpoints(tmp_path):
     assert [(item["stage_id"], item["subtask"]) for item in checkpoints] == [
         (1, "problem_setup")
     ]
+
+
+def _late_owned_artifact_reopen(tmp_path, relative, expected_owner, expected_resume):
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("original\n", encoding="utf-8")
+    rewrite = RewriteOwnedArtifactOnce(relative)
+    registry, _lifecycles = stage_registry(overrides={14: rewrite})
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=13,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    trust_seeded_reviewer_gate(store, tmp_path)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+    reopen = next(
+        event for event in store.events() if event.type == "STAGE_SEMANTIC_REOPENED"
+    )
+
+    assert reopen.payload["semantic_owner_stage"] == expected_owner
+    assert reopen.payload["resume_after_step"] == expected_resume
+    assert state.active_stage == expected_owner
+
+
+def test_late_problem_brief_change_reopens_stage1(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "problem/problem_brief.md", expected_owner=1, expected_resume=-1
+    )
+
+
+def test_late_viable_streams_change_reopens_stage1(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "viable_streams.md", expected_owner=1, expected_resume=-1
+    )
+
+
+def test_late_method_decision_change_reopens_stage2(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "method_decision.md", expected_owner=2, expected_resume=1
+    )
+
+
+def test_late_chosen_method_change_reopens_stage2(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "chosen_method.md", expected_owner=2, expected_resume=1
+    )
+
+
+def test_late_sensitivity_report_change_reopens_stage5(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "sensitivity_report.md", expected_owner=5, expected_resume=5
+    )
+
+
+def test_late_entry_gate_change_reopens_stage6(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "entry_gate.md", expected_owner=6, expected_resume=7
+    )
+
+
+def test_failed_stage_mutation_is_persisted_before_control_mode_change(tmp_path):
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "canonical_results.json").write_text(
+        '{"value": 1}\n', encoding="utf-8"
+    )
+    failing = MutateCanonicalThenFail()
+    registry, _lifecycles = stage_registry(overrides={14: failing})
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=13,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    trust_seeded_reviewer_gate(store, tmp_path)
+
+    failed = FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    assert failed.status is WorkflowStatus.FAILED
+    assert {(item["flag"], item["owner_stage"]) for item in store.dirty_flags()} == {
+        ("RESULT_DIRTY", 4)
+    }
+    assert store.events()[-1].type == "STEP_FAILED"
 
 
 def test_final_prose_change_does_not_stale_valid_conditional_skip(tmp_path):
