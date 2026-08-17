@@ -55,6 +55,11 @@ def _input_paths(project: Path) -> list[Path]:
         submission_bundle_paths(project, project.name, require_pdf=False)
     )
     paths.update(iter_owned_artifacts(project, final_input_only=True))
+    from .solver_input_coverage import solver_declared_input_coverage
+
+    solver_coverage = solver_declared_input_coverage(project)
+    paths.update(solver_coverage.included_paths)
+    paths.update(solver_coverage.evidence_paths)
     return sorted(paths, key=lambda path: path.relative_to(project).as_posix())
 
 

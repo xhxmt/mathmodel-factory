@@ -219,3 +219,182 @@ def test_release_zip_is_reproducible_for_identical_manifest(tmp_path):
     assert hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(
         second.read_bytes()
     ).digest()
+
+
+def _write_solver_submission_receipt_for_coverage(project, input_path):
+    import json
+    from scripts.solver_job_receipt import (
+        build_submission_receipt,
+        receipt_paths,
+        write_receipt,
+    )
+
+    script = project / "models" / "solve.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("print('ok')\n", encoding="utf-8")
+    output = project / "results" / "answer.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    receipt = build_submission_receipt(
+        project_dir=project,
+        job_id="coverage-job",
+        backend="local",
+        runtime="python",
+        script=script,
+        workdir=script.parent,
+        argv=(),
+        max_time_seconds=30,
+        requested_at=1,
+        input_paths=(input_path,),
+        output_paths=(output,),
+        seeds=(7,),
+    )
+    submitted, _completed = receipt_paths(
+        project / ".factory" / "solver_receipts", "coverage-job"
+    )
+    write_receipt(submitted, receipt)
+    return receipt
+
+
+def _write_minimal_active_paper(project):
+    paper = project / f"{project.name}_paper.tex"
+    paper.write_text(
+        "\\documentclass{article}\n\\begin{document}ok\\end{document}\n",
+        encoding="utf-8",
+    )
+    return paper
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "data/intermediate/calibration.parquet",
+        "replication/private_seed.npy",
+        "custom/coefficients.npz",
+        "config/model.mat",
+        "config/model.yaml",
+        "config/model.toml",
+        "solver_input.py",
+    ],
+)
+def test_solver_declared_unowned_input_blocks_submission_bundle(
+    tmp_path, relative
+):
+    from factory_core.submission_bundle import submission_bundle_paths
+
+    _write_minimal_active_paper(tmp_path)
+    input_path = tmp_path / relative
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    input_path.write_bytes(b"solver-input-fixture")
+    _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
+
+    with pytest.raises(
+        ValueError, match="solver-declared input lacks ownership.*" + input_path.name
+    ):
+        submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+
+
+def test_solver_declared_owned_input_is_in_submission_and_final_identity(tmp_path):
+    from factory_core.finalization import build_final_input_manifest
+    from factory_core.submission_bundle import submission_bundle_paths
+
+    _write_minimal_active_paper(tmp_path)
+    input_path = tmp_path / "data" / "raw" / "calibration.parquet"
+    input_path.parent.mkdir(parents=True)
+    input_path.write_bytes(b"PAR1fixture")
+    _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
+
+    bundle_paths = submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+    assert input_path.resolve() in bundle_paths
+    snapshot = build_final_input_manifest(tmp_path)
+    final_paths = {item["path"] for item in snapshot.manifest["files"]}
+    assert "data/raw/calibration.parquet" in final_paths
+    assert any(path.endswith("coverage-job.submitted.json") for path in final_paths)
+
+
+def test_solver_declared_input_exclusion_receipt_is_bound_to_final_identity(tmp_path):
+    from factory_core.finalization import build_final_input_manifest
+    from factory_core.solver_input_coverage import (
+        build_solver_input_exclusion_receipt,
+        write_solver_input_exclusion_receipt,
+    )
+    from factory_core.submission_bundle import submission_bundle_paths
+
+    _write_minimal_active_paper(tmp_path)
+    input_path = tmp_path / "replication" / "private_seed.npy"
+    input_path.parent.mkdir(parents=True)
+    input_path.write_bytes(b"NUMPYfixture")
+    submitted = _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
+    record = submitted["inputs"][0]
+    exclusion = build_solver_input_exclusion_receipt(
+        relative_path=record["path"],
+        input_sha256=record["sha256"],
+        reason="licensed input cannot be redistributed; receipt preserves exact identity",
+    )
+    exclusion_path = write_solver_input_exclusion_receipt(tmp_path, exclusion)
+
+    bundle_paths = submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+    assert input_path.resolve() not in bundle_paths
+    snapshot = build_final_input_manifest(tmp_path)
+    final_paths = {item["path"] for item in snapshot.manifest["files"]}
+    assert exclusion_path.relative_to(tmp_path).as_posix() in final_paths
+    assert "replication/private_seed.npy" not in final_paths
+
+
+def test_solver_submission_receipt_input_drift_blocks_finalization(tmp_path):
+    import pytest
+    from factory_core.finalization import build_final_input_manifest
+
+    _write_minimal_active_paper(tmp_path)
+    input_path = tmp_path / "data" / "raw" / "config.yaml"
+    input_path.parent.mkdir(parents=True)
+    input_path.write_text("alpha: 1\n", encoding="utf-8")
+    _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
+    input_path.write_text("alpha: 2\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="solver input content drift"):
+        build_final_input_manifest(tmp_path)
+
+def test_solver_input_exclusion_receipt_is_append_only(tmp_path):
+    from factory_core.solver_input_coverage import (
+        build_solver_input_exclusion_receipt,
+        write_solver_input_exclusion_receipt,
+    )
+
+    first = build_solver_input_exclusion_receipt(
+        relative_path="replication/private_seed.npy",
+        input_sha256="a" * 64,
+        reason="licensed input",
+    )
+    path = write_solver_input_exclusion_receipt(tmp_path, first)
+    assert write_solver_input_exclusion_receipt(tmp_path, first) == path
+
+    changed = build_solver_input_exclusion_receipt(
+        relative_path="replication/private_seed.npy",
+        input_sha256="a" * 64,
+        reason="different reason",
+    )
+    with pytest.raises(ValueError, match="immutable.*already differs"):
+        write_solver_input_exclusion_receipt(tmp_path, changed)
+
+
+def test_solver_input_exclusion_receipt_path_binds_input_hash(tmp_path):
+    from factory_core.solver_input_coverage import (
+        build_solver_input_exclusion_receipt,
+        write_solver_input_exclusion_receipt,
+    )
+
+    first = build_solver_input_exclusion_receipt(
+        relative_path="config/model.toml",
+        input_sha256="a" * 64,
+        reason="first version",
+    )
+    second = build_solver_input_exclusion_receipt(
+        relative_path="config/model.toml",
+        input_sha256="b" * 64,
+        reason="second version",
+    )
+    first_path = write_solver_input_exclusion_receipt(tmp_path, first)
+    second_path = write_solver_input_exclusion_receipt(tmp_path, second)
+
+    assert first_path != second_path
+    assert first_path.is_file() and second_path.is_file()

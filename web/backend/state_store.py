@@ -9,7 +9,6 @@ from pathlib import Path
 from factory_core.projections import runtime_payload
 from factory_core.storage import SQLiteStateStore
 
-from .consultation_service import gate_ready
 
 TOTAL_STEPS = 16
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,6 +61,25 @@ def _validate_pid(pid: int | None) -> int | None:
         return None
 
 
+def _legacy_gate_ready(human_review: Path, gate: str) -> bool:
+    """Read the frozen file-authoritative Consultation marker.
+
+    This predicate is used only by ``_fallback_status`` after
+    ``read_runtime_status`` has established that no engine-controlled SQLite
+    state is authoritative. Engine gates continue to use immutable SQLite
+    decisions and deterministic projection markers.
+    """
+
+    if not human_review.is_file() or human_review.is_symlink():
+        return False
+    pattern = (
+        rf"(?im)^##[ \t]+CONSULT[ \t]+{re.escape(gate)}"
+        rf"([ \t(].*)?STATUS:[ \t]*READY"
+    )
+    content = human_review.read_text(encoding="utf-8", errors="replace")
+    return re.search(pattern, content) is not None
+
+
 def _read_consultation(project_path: Path) -> tuple[bool, str | None]:
     human_review = project_path / "human_review.md"
     await_marker = project_path / ".awaiting_consultation"
@@ -69,7 +87,7 @@ def _read_consultation(project_path: Path) -> tuple[bool, str | None]:
         content = await_marker.read_text(encoding="utf-8", errors="replace")
         gate_match = re.search(r"GATE:([^\s]+)", content)
         gate = gate_match.group(1).strip() if gate_match else None
-        if gate and gate_ready(human_review, gate):
+        if gate and _legacy_gate_ready(human_review, gate):
             return False, None
         return True, gate
 
@@ -78,7 +96,7 @@ def _read_consultation(project_path: Path) -> tuple[bool, str | None]:
         return False, None
     for req_file in sorted(consult_dir.glob("*_request.md")):
         gate = req_file.stem.replace("_request", "")
-        if gate_ready(human_review, gate):
+        if _legacy_gate_ready(human_review, gate):
             continue
         return True, gate
     return False, None

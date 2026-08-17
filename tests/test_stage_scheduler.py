@@ -912,3 +912,143 @@ def test_content_freeze_is_a_persistent_guard_before_delivery(tmp_path):
     assert guarded.last_completed_step == 15
     assert guarded.last_completed_stage == 9
     assert guarded.active_subtask == "delivery"
+
+
+def test_successful_prompt_stage_checkpoint_rejects_missing_prompt_identity(tmp_path):
+    from types import SimpleNamespace
+    from factory_core.domain import ExecutionResult
+    from factory_core.engine import FactoryEngine
+    from factory_core.storage import SQLiteStateStore
+
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(
+        project_id="prompt-guard",
+        project_type="modeling",
+        scheduler_generation="stage_v1",
+    )
+    engine = FactoryEngine(tmp_path, store=store)
+    task = SimpleNamespace(
+        definition=SimpleNamespace(
+            lifecycle=SimpleNamespace(requires_prompt_input_receipt=True)
+        )
+    )
+
+    assert engine._prompt_input_receipt_valid(
+        task, ExecutionResult.succeeded()
+    ) is False
+
+
+def test_successful_prompt_stage_checkpoint_accepts_bound_prompt_identity(tmp_path):
+    from types import SimpleNamespace
+    from factory_core.domain import ExecutionResult
+    from factory_core.effective_prompt import build_effective_prompt_receipt
+    from factory_core.engine import FactoryEngine
+    from factory_core.storage import SQLiteStateStore
+
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(
+        project_id="prompt-guard-valid",
+        project_type="modeling",
+        scheduler_generation="stage_v1",
+    )
+    template = tmp_path / "prompt.txt"
+    template.write_text("prompt\n", encoding="utf-8")
+    receipt = build_effective_prompt_receipt(
+        project_dir=tmp_path,
+        factory_root=tmp_path,
+        project_id="prompt-guard-valid",
+        source_step_id=4,
+        stage_id=3,
+        subtask="model_construction",
+        attempt=1,
+        selected_revision=state.revision,
+        prompt_template=template,
+        prompt="effective prompt",
+        researcher_note="",
+    )
+    store.bind_prompt_attempt_input(
+        expected_revision=state.revision, receipt=receipt
+    )
+    task = SimpleNamespace(
+        definition=SimpleNamespace(
+            lifecycle=SimpleNamespace(requires_prompt_input_receipt=True)
+        )
+    )
+    result = ExecutionResult.succeeded(
+        prompt_input_schema="factory-effective-prompt-v1",
+        prompt_input_receipt_id=receipt["receipt_id"],
+        prompt_input_attempt_key=receipt["attempt_key"],
+        effective_prompt_sha256=receipt["effective_prompt_sha256"],
+        prompt_inputs_sha256=receipt["prompt_inputs_sha256"],
+    )
+    engine = FactoryEngine(tmp_path, store=store)
+
+    assert engine._prompt_input_receipt_valid(task, result) is True
+
+
+def test_engine_dispatches_prompt_only_after_durable_input_binding(tmp_path):
+    import hashlib
+
+    from factory_core.steps.prompt_step import PromptStep
+    from factory_core.steps.prompting import PromptRenderer
+
+    factory_root = tmp_path / "factory"
+    project = factory_root / "ongoing" / "demo"
+    prompt_dir = factory_root / "prompts"
+    project.mkdir(parents=True)
+    prompt_dir.mkdir(parents=True)
+    prompt_dir.joinpath("step4_model_construction.txt").write_text(
+        "Build the model for __BASE_NAME__.\n", encoding="utf-8"
+    )
+
+    store = SQLiteStateStore(project)
+    store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        last_completed_step=3,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    observed: dict[str, object] = {}
+
+    class ReceiptAwareDispatcher:
+        @staticmethod
+        def execute(request, **_kwargs):
+            events = store.events()
+            receipts = store.prompt_attempt_inputs()
+            assert events[-1].type == "PROMPT_INPUT_BOUND"
+            assert len(receipts) == 1
+            receipt = receipts[0]
+            assert receipt["bound_revision"] == events[-1].revision
+            assert receipt["effective_prompt_sha256"] == hashlib.sha256(
+                request.prompt.encode("utf-8")
+            ).hexdigest()
+            observed["dispatch_revision"] = events[-1].revision
+            observed["receipt_id"] = receipt["receipt_id"]
+            return ExecutionResult.succeeded(model_id="test")
+
+    class ValidPromptOutput:
+        @staticmethod
+        def validate(_context):
+            return ValidationResult.valid("artifact")
+
+    lifecycle = PromptStep(
+        contract_for(4),
+        PromptRenderer(factory_root),
+        ReceiptAwareDispatcher(),
+        ValidPromptOutput(),
+    )
+    registry, _lifecycles = stage_registry(overrides={4: lifecycle})
+
+    state = FactoryEngine(project, store=store, registry=registry).run(max_steps=1)
+
+    event_types = [event.type for event in store.events()]
+    assert event_types.index("STEP_STARTED") < event_types.index(
+        "PROMPT_INPUT_BOUND"
+    ) < event_types.index("STEP_SUCCEEDED")
+    prompt_bound = next(
+        event for event in store.events() if event.type == "PROMPT_INPUT_BOUND"
+    )
+    assert observed["dispatch_revision"] == prompt_bound.revision
+    assert observed["receipt_id"] == store.prompt_attempt_inputs()[0]["receipt_id"]
+    assert state.status is WorkflowStatus.READY
+    assert state.last_completed_step == 4

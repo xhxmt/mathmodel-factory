@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from ..domain import PendingAction, PrepareResult
@@ -10,36 +9,100 @@ from web.backend.selection_service import build_content_freeze_options
 
 def _consult_enabled(project: Path, gate: str) -> bool:
     enabled = project / "consultation" / "enabled"
-    if not enabled.is_file():
+    if enabled.is_symlink():
+        raise ValueError("consultation/enabled must not be a symlink")
+    if not enabled.exists():
         return False
+    if not enabled.is_file():
+        raise ValueError("consultation/enabled must be a regular file")
     body = enabled.read_text(encoding="utf-8", errors="replace").replace(",", " ")
     gates = set(body.split())
     return not gates or gate in gates
 
 
 def _consult_ready(project: Path, gate: str) -> bool:
-    review = project / "human_review.md"
-    if not review.is_file():
+    from ..consultation_projection import (
+        current_consultation_decision,
+        ensure_consultation_projection,
+    )
+
+    if current_consultation_decision(project, gate) is None:
         return False
-    pattern = rf"^##\s+CONSULT\s+{re.escape(gate)}(?:\s|\().*STATUS:\s*READY"
-    return re.search(pattern, review.read_text(encoding="utf-8", errors="replace"), re.MULTILINE | re.IGNORECASE) is not None
+    ensure_consultation_projection(project, gate)
+    return True
+
+
+def _consultation_request(
+    project: Path, gate: str, step_id: int
+) -> Path:
+    request = (
+        project / "consultation" / "REQUEST.md"
+        if gate == "dynamic"
+        else project / "consultation" / f"{gate}_request.md"
+    )
+    if request.is_symlink():
+        raise ValueError(f"consultation request must not be a symlink: {request.name}")
+    request.parent.mkdir(parents=True, exist_ok=True)
+    if request.exists() and not request.is_file():
+        raise ValueError(f"consultation request must be a regular file: {request.name}")
+    if not request.exists():
+        request.write_text(
+            f"# Consultation request\n\ngate: {gate}\nstep: {step_id}\n"
+            f"project: {project.name}\n",
+            encoding="utf-8",
+        )
+    return request
+
+
+def _consultation_gate(
+    project: Path,
+    gate: str,
+    step_id: int,
+    *,
+    reason: str,
+    owner_stage: int,
+) -> PrepareResult | None:
+    review = project / "human_review.md"
+    if review.is_symlink():
+        return PrepareResult(
+            ready=False, reason="human_review.md must not be a symlink"
+        )
+    try:
+        enabled = _consult_enabled(project, gate)
+    except (OSError, ValueError) as exc:
+        return PrepareResult(ready=False, reason=str(exc))
+    if not enabled:
+        return None
+    try:
+        if _consult_ready(project, gate):
+            return None
+        request = _consultation_request(project, gate, step_id)
+    except (OSError, ValueError) as exc:
+        return PrepareResult(ready=False, reason=str(exc))
+    return PrepareResult.awaiting(
+        PendingAction(
+            type="human_consultation",
+            gate=gate,
+            metadata={"consultation_owner_stage": int(owner_stage)},
+        ),
+        str(request.relative_to(project)),
+        reason=reason,
+    )
 
 
 def prepare_human_gates(project: Path, step_id: int) -> PrepareResult:
     gate = "preflight" if step_id == 1 else "step4" if step_id == 4 else ""
-    if gate and _consult_enabled(project, gate) and not _consult_ready(project, gate):
-        request = project / "consultation" / f"{gate}_request.md"
-        request.parent.mkdir(parents=True, exist_ok=True)
-        if not request.is_file():
-            request.write_text(
-                f"# Consultation request\n\ngate: {gate}\nstep: {step_id}\nproject: {project.name}\n",
-                encoding="utf-8",
-            )
-        return PrepareResult.awaiting(
-            PendingAction(type="human_consultation", gate=gate),
-            str(request.relative_to(project)),
-            reason=f"consultation gate {gate} is awaiting input",
+    if gate:
+        consultation = _consultation_gate(
+            project,
+            gate,
+            step_id,
+            reason=f"consultation gate {gate} is awaiting an immutable decision",
+            owner_stage=1 if gate == "preflight" else 2,
         )
+        if consultation is not None:
+            return consultation
+
     contest_required = False
     if step_id in {3, 16}:
         from ..storage import SQLiteStateStore
@@ -66,6 +129,11 @@ def prepare_human_gates(project: Path, step_id: int) -> PrepareResult:
             content_freeze = store.decision("content_freeze")
             if not (content_freeze and content_freeze.get("approved") is True):
                 options = project / "selection" / "content_freeze_options.json"
+                if options.is_symlink():
+                    return PrepareResult(
+                        ready=False,
+                        reason="content freeze options must not be a symlink",
+                    )
                 if not options.is_file():
                     build_content_freeze_options(project)
                 return PrepareResult.awaiting(
@@ -76,11 +144,23 @@ def prepare_human_gates(project: Path, step_id: int) -> PrepareResult:
                     str(options.relative_to(project)),
                     reason="content freeze approval is awaiting human review",
                 )
+
+    from ..storage import SQLiteStateStore
+
     dynamic = project / "consultation" / "REQUEST.md"
-    if dynamic.is_file() and _consult_enabled(project, "dynamic") and not _consult_ready(project, "dynamic"):
-        return PrepareResult.awaiting(
-            PendingAction(type="human_consultation", gate="dynamic"),
-            str(dynamic.relative_to(project)),
-            reason="dynamic consultation is awaiting input",
+    if dynamic.exists() or dynamic.is_symlink():
+        consultation = _consultation_gate(
+            project,
+            "dynamic",
+            step_id,
+            reason="dynamic consultation is awaiting an immutable decision",
+            owner_stage=(
+                SQLiteStateStore(project).load().active_stage
+                if SQLiteStateStore(project).exists
+                and SQLiteStateStore(project).load().active_stage is not None
+                else 1
+            ),
         )
+        if consultation is not None:
+            return consultation
     return PrepareResult.prepared()

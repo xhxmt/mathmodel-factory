@@ -687,3 +687,92 @@ def test_delivery_returns_events_without_writing_workflow_state_when_input_chang
         "FINAL_SNAPSHOT_CREATED",
         "FINALIZATION_ABORTED_SNAPSHOT_CHANGED",
     ]
+
+
+
+def _tex_control_change(tmp_path, before_control, after_control, body):
+    paper = tmp_path / "paper" / "paper.tex"
+    paper.parent.mkdir(parents=True, exist_ok=True)
+    paper.write_text(
+        f"{before_control}\n\\begin{{document}}{body}\\end{{document}}\n",
+        encoding="utf-8",
+    )
+    before = capture_artifact_manifest(tmp_path)
+    paper.write_text(
+        f"{after_control}\n\\begin{{document}}{body}\\end{{document}}\n",
+        encoding="utf-8",
+    )
+    return classify_manifest_changes(before, capture_artifact_manifest(tmp_path))
+
+
+def test_newif_toggle_change_marks_math_dirty(tmp_path):
+    changes = _tex_control_change(
+        tmp_path,
+        r"\newif\ifshow\showtrue",
+        r"\newif\ifshow\showfalse",
+        r"\ifshow \(x=1\)\else \(x=2\)\fi",
+    )
+    assert any(item.flag is DirtyFlag.MATH and item.owner_stage == 8 for item in changes)
+
+
+def test_ifthen_boolean_change_marks_math_dirty(tmp_path):
+    changes = _tex_control_change(
+        tmp_path,
+        r"\newboolean{show}\setboolean{show}{true}",
+        r"\newboolean{show}\setboolean{show}{false}",
+        r"\ifthenelse{\boolean{show}}{\(x=1\)}{\(x=2\)}",
+    )
+    assert any(item.flag is DirtyFlag.MATH for item in changes)
+
+
+def test_etoolbox_toggle_change_marks_math_dirty(tmp_path):
+    changes = _tex_control_change(
+        tmp_path,
+        r"\newtoggle{show}\toggletrue{show}",
+        r"\newtoggle{show}\togglefalse{show}",
+        r"\iftoggle{show}{\(x=1\)}{\(x=2\)}",
+    )
+    assert any(item.flag is DirtyFlag.MATH for item in changes)
+
+
+def test_expl3_boolean_change_marks_math_dirty(tmp_path):
+    changes = _tex_control_change(
+        tmp_path,
+        r"\bool_new:N \l_show_bool \bool_set_true:N \l_show_bool",
+        r"\bool_new:N \l_show_bool \bool_set_false:N \l_show_bool",
+        r"\bool_if:NTF \l_show_bool {\(x=1\)} {\(x=2\)}",
+    )
+    assert any(item.flag is DirtyFlag.MATH for item in changes)
+
+
+def test_ifcase_branch_control_change_marks_math_dirty(tmp_path):
+    changes = _tex_control_change(
+        tmp_path,
+        r"\newcount\choice\choice=0",
+        r"\newcount\choice\choice=1",
+        r"\ifcase\choice \(x=1\)\or \(x=2\)\fi",
+    )
+    assert any(item.flag is DirtyFlag.MATH for item in changes)
+
+
+def test_counter_control_change_marks_math_dirty(tmp_path):
+    changes = _tex_control_change(
+        tmp_path,
+        r"\newcounter{choice}\setcounter{choice}{0}",
+        r"\newcounter{choice}\setcounter{choice}{1}",
+        r"\ifcase\value{choice} \(x=1\)\or \(x=2\)\fi",
+    )
+    assert any(item.flag is DirtyFlag.MATH for item in changes)
+
+
+def test_stage9_conditional_formula_change_reopens_stage8_and_invalidates_precheck(tmp_path):
+    changes = _tex_control_change(
+        tmp_path,
+        r"\newif\ifshow\showtrue",
+        r"\newif\ifshow\showfalse",
+        r"\ifshow \(x=1\)\else \(x=2\)\fi",
+    )
+    math = [item for item in changes if item.flag is DirtyFlag.MATH]
+    assert math
+    assert {item.owner_stage for item in math} == {8}
+    assert reopen_after_for_changed_paths([item.cause_artifact for item in math]) <= 12

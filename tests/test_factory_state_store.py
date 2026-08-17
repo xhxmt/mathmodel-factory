@@ -460,3 +460,347 @@ def test_v7_migration_never_treats_string_false_as_approval(tmp_path):
     assert decision["outcome"] != "approved"
     assert decision["receipt_verification"]["valid"] is False
     assert store.decision("content_freeze") is None
+
+
+
+def _dirty_change(flag, owner, artifact, classifier):
+    return {
+        "flag": flag,
+        "owner_stage": owner,
+        "cause_artifact": artifact,
+        "baseline_fingerprint": "a" * 64,
+        "current_fingerprint": "b" * 64,
+        "classifier_contract_sha256": classifier,
+    }
+
+
+def test_future_classifier_change_rebases_active_obligation_and_emits_receipt(tmp_path):
+    from factory_core.dirty import classifier_contract_sha256
+
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="rebase", project_type="modeling")
+    store.transition(
+        expected_revision=state.revision,
+        event_type="OLD_CLASSIFIER_DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            _dirty_change(
+                "MODEL_DIRTY", 1, "problem/problem_brief.md", "old-classifier"
+            )
+        ],
+    )
+
+    rebased = store.rebase_dirty_classifier(
+        expected_revision=store.load().revision
+    )
+    flags = store.dirty_flags()
+    receipts = store.dirty_classifier_rebase_receipts()
+
+    assert rebased.revision > state.revision
+    assert store.events()[-1].type == "DIRTY_CLASSIFIER_REBASED"
+    assert flags[0]["classifier_contract_sha256"] == classifier_contract_sha256()
+    assert receipts
+    assert receipts[-1]["receipt"]["schema_version"] == (
+        "factory-dirty-classifier-rebase-v1"
+    )
+    assert receipts[-1]["receipt"]["obligations"][0]["old_classifier_sha256"] == (
+        "old-classifier"
+    )
+
+
+def test_lost_multi_owner_dirty_obligations_reconstruct_from_causes(tmp_path):
+    from factory_core.dirty import classifier_contract_sha256
+    from factory_core.workflow_events import canonical_hash
+
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="multi-owner", project_type="modeling")
+    connection = sqlite3.connect(store.path)
+    try:
+        for revision, owner, artifact in (
+            (2, 1, "problem/problem_brief.md"),
+            (3, 2, "chosen_method.md"),
+        ):
+            cause_id = canonical_hash(
+                {"revision": revision, "flag": "MODEL_DIRTY", "owner": owner}
+            )[:32]
+            connection.execute(
+                """
+                INSERT INTO dirty_causes(
+                    cause_id, flag, owner_stage, cause_revision,
+                    cause_artifact, baseline_fingerprint,
+                    current_fingerprint, classifier_contract_sha256
+                ) VALUES (?, 'MODEL_DIRTY', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cause_id,
+                    owner,
+                    revision,
+                    artifact,
+                    "a" * 64,
+                    "b" * 64,
+                    "old-classifier",
+                ),
+            )
+        connection.execute(
+            """
+            INSERT INTO dirty_flags(
+                flag, owner_stage, cause_revision, cause_artifact,
+                baseline_fingerprint, current_fingerprint,
+                classifier_contract_sha256
+            ) VALUES ('MODEL_DIRTY', 2, 3, 'chosen_method.md', ?, ?, ?)
+            """,
+            ("a" * 64, "b" * 64, "old-classifier"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store.rebase_dirty_classifier(expected_revision=store.load().revision)
+    flags = store.dirty_flags()
+
+    assert {(row["flag"], row["owner_stage"]) for row in flags} == {
+        ("MODEL_DIRTY", 1),
+        ("MODEL_DIRTY", 2),
+    }
+    assert all(
+        row["classifier_contract_sha256"] == classifier_contract_sha256()
+        for row in flags
+    )
+
+
+def test_cleared_historical_cause_is_not_reconstructed_by_rebase(tmp_path):
+    from factory_core.workflow_events import canonical_hash
+
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="cleared", project_type="modeling")
+    connection = sqlite3.connect(store.path)
+    try:
+        cause_id = canonical_hash({"cause": "cleared-owner"})[:32]
+        connection.execute(
+            """
+            INSERT INTO dirty_causes(
+                cause_id, flag, owner_stage, cause_revision,
+                cause_artifact, baseline_fingerprint,
+                current_fingerprint, classifier_contract_sha256
+            ) VALUES (?, 'RESULT_DIRTY', 4, 2, 'results/canonical_results.json',
+                      ?, ?, 'old-classifier')
+            """,
+            (cause_id, "a" * 64, "b" * 64),
+        )
+        connection.execute(
+            """
+            INSERT INTO dirty_flag_clear_receipts(
+                revision, flag, owner_stage, cleared_fingerprint,
+                classifier_contract_sha256, receipt_json
+            ) VALUES (3, 'RESULT_DIRTY', 4, ?, 'old-classifier', '{}')
+            """,
+            ("c" * 64,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert store.dirty_flags() == []
+
+
+def test_dirty_classifier_rebase_receipt_is_append_only(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="append-only-rebase", project_type="modeling")
+    store.transition(
+        expected_revision=state.revision,
+        event_type="OLD_DIRTY",
+        changes={},
+        dirty_changes=[
+            _dirty_change("MATH_DIRTY", 8, "paper/paper.tex", "old-classifier")
+        ],
+    )
+    store.rebase_dirty_classifier(expected_revision=store.load().revision)
+    assert store.dirty_flags()
+    connection = sqlite3.connect(store.path)
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            connection.execute("DELETE FROM dirty_classifier_rebases")
+    finally:
+        connection.close()
+
+
+def test_rebased_v8_dirty_obligation_can_clear_with_current_owner_checkpoint(tmp_path):
+    from factory_core.dirty import (
+        capture_artifact_manifest,
+        classifier_contract_sha256,
+        manifest_fingerprint,
+    )
+
+    store = SQLiteStateStore(tmp_path)
+    created = store.initialize(project_id="v8-clear", project_type="modeling")
+    dirty = store.transition(
+        expected_revision=created.revision,
+        event_type="OLD_V8_DIRTY",
+        changes={},
+        dirty_changes=[
+            _dirty_change(
+                "MODEL_DIRTY", 1, "problem/problem_brief.md", "old-classifier"
+            )
+        ],
+    )
+    flags = store.dirty_flags()
+    assert flags[0]["classifier_contract_sha256"] == "old-classifier"
+    output = manifest_fingerprint(capture_artifact_manifest(tmp_path))
+    success = {
+        "schema_version": "factory-stage-checkpoint-v1",
+        "status": "PASS",
+        "stage": 1,
+        "output_fingerprint": output,
+        "classifier_contract_sha256": classifier_contract_sha256(),
+    }
+    store.transition(
+        expected_revision=dirty.revision,
+        event_type="REBASED_OWNER_SUCCEEDED",
+        changes={},
+        stage_checkpoint={
+            "stage_id": 1,
+            "subtask": "research_viability",
+            "source_step_id": 1,
+            "completed_step_id": 1,
+            "input_fingerprint": output,
+            "output_fingerprint": output,
+            "receipt": success,
+        },
+        clear_dirty_stage={
+            "owner_stage": 1,
+            "cleared_fingerprint": output,
+            "classifier_contract_sha256": classifier_contract_sha256(),
+            "success_receipt": success,
+        },
+    )
+    assert store.dirty_flags() == []
+
+
+
+def test_prompt_attempt_input_is_bound_before_execution_with_revision_cas(tmp_path):
+    from factory_core.effective_prompt import build_effective_prompt_receipt
+
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="prompt", project_type="modeling")
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    template = prompt_dir / "step4.txt"
+    template.write_text("do work\n", encoding="utf-8")
+    receipt = build_effective_prompt_receipt(
+        project_dir=tmp_path,
+        factory_root=tmp_path,
+        project_id="prompt",
+        source_step_id=4,
+        stage_id=3,
+        subtask="model_construction",
+        attempt=1,
+        selected_revision=state.revision,
+        prompt_template=template,
+        prompt="effective prompt",
+        researcher_note="",
+    )
+
+    bound, stored = store.bind_prompt_attempt_input(
+        expected_revision=state.revision, receipt=receipt
+    )
+
+    assert bound.revision == state.revision + 1
+    assert store.events()[-1].type == "PROMPT_INPUT_BOUND"
+    assert stored["bound_revision"] == bound.revision
+    assert store.prompt_attempt_input(receipt["attempt_key"])["receipt_id"] == (
+        receipt["receipt_id"]
+    )
+    with pytest.raises(RevisionConflict):
+        store.bind_prompt_attempt_input(
+            expected_revision=state.revision, receipt=receipt
+        )
+
+
+def test_prompt_attempt_identity_allows_attempt_one_after_semantic_reopen(tmp_path):
+    from factory_core.effective_prompt import build_effective_prompt_receipt
+
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="prompt-reopen", project_type="modeling")
+    template = tmp_path / "template.txt"
+    template.write_text("prompt\n", encoding="utf-8")
+
+    first = build_effective_prompt_receipt(
+        project_dir=tmp_path,
+        factory_root=tmp_path,
+        project_id="prompt-reopen",
+        source_step_id=4,
+        stage_id=3,
+        subtask="model_construction",
+        attempt=1,
+        selected_revision=state.revision,
+        prompt_template=template,
+        prompt="first effective prompt",
+        researcher_note="",
+    )
+    bound, _ = store.bind_prompt_attempt_input(
+        expected_revision=state.revision, receipt=first
+    )
+    reopened = store.transition(
+        expected_revision=bound.revision,
+        event_type="SEMANTIC_REOPEN_FOR_PROMPT_TEST",
+        changes={},
+    )
+    second = build_effective_prompt_receipt(
+        project_dir=tmp_path,
+        factory_root=tmp_path,
+        project_id="prompt-reopen",
+        source_step_id=4,
+        stage_id=3,
+        subtask="model_construction",
+        attempt=1,
+        selected_revision=reopened.revision,
+        prompt_template=template,
+        prompt="second effective prompt",
+        researcher_note="",
+    )
+    store.bind_prompt_attempt_input(
+        expected_revision=reopened.revision, receipt=second
+    )
+
+    assert first["attempt_key"] != second["attempt_key"]
+    assert len(store.prompt_attempt_inputs()) == 2
+    latest = store.latest_prompt_attempt_input(
+        stage_id=3,
+        subtask="model_construction",
+        source_step_id=4,
+        attempt=1,
+    )
+    assert latest is not None
+    assert latest["receipt_id"] == second["receipt_id"]
+
+
+def test_prompt_attempt_input_receipt_is_append_only(tmp_path):
+    from factory_core.effective_prompt import build_effective_prompt_receipt
+
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="prompt-append", project_type="modeling")
+    template = tmp_path / "template.txt"
+    template.write_text("prompt\n", encoding="utf-8")
+    receipt = build_effective_prompt_receipt(
+        project_dir=tmp_path,
+        factory_root=tmp_path,
+        project_id="prompt-append",
+        source_step_id=1,
+        stage_id=1,
+        subtask="research_viability",
+        attempt=1,
+        selected_revision=state.revision,
+        prompt_template=template,
+        prompt="effective",
+        researcher_note="note",
+    )
+    store.bind_prompt_attempt_input(
+        expected_revision=state.revision, receipt=receipt
+    )
+
+    connection = sqlite3.connect(store.path)
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            connection.execute("DELETE FROM prompt_attempt_inputs")
+    finally:
+        connection.close()

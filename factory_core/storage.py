@@ -369,6 +369,11 @@ class SQLiteStateStore:
             END;
             """
         )
+        from .dirty_rebase import ensure_dirty_rebase_schema
+        from .prompt_receipts import ensure_prompt_receipt_schema
+
+        ensure_dirty_rebase_schema(connection)
+        ensure_prompt_receipt_schema(connection)
         connection.execute(
             "INSERT OR IGNORE INTO schema_info(singleton, schema_version) VALUES (1, ?)",
             (SCHEMA_VERSION,),
@@ -379,8 +384,7 @@ class SQLiteStateStore:
         if current != SCHEMA_VERSION:
             raise RuntimeError(f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}")
 
-    @staticmethod
-    def _upgrade_schema(connection: sqlite3.Connection) -> None:
+    def _upgrade_schema(self, connection: sqlite3.Connection) -> None:
         try:
             row = connection.execute(
                 "SELECT schema_version FROM schema_info WHERE singleton = 1"
@@ -391,6 +395,11 @@ class SQLiteStateStore:
             raise StateNotInitialized("workflow schema is not initialized")
         current = int(row[0])
         if current == SCHEMA_VERSION:
+            from .dirty_rebase import ensure_dirty_rebase_schema
+            from .prompt_receipts import ensure_prompt_receipt_schema
+
+            ensure_dirty_rebase_schema(connection)
+            ensure_prompt_receipt_schema(connection)
             return
         if current not in {1, 2, 3, 4, 5, 6, 7, 8}:
             raise RuntimeError(
@@ -1044,6 +1053,22 @@ class SQLiteStateStore:
                     "WHERE job_id=?",
                     (str(request_sha256), str(job_id)),
                 )
+        from .dirty_rebase import (
+            ensure_dirty_rebase_schema,
+            rebase_dirty_classifier_state,
+        )
+        from .prompt_receipts import ensure_prompt_receipt_schema
+
+        ensure_dirty_rebase_schema(connection)
+        ensure_prompt_receipt_schema(connection)
+        migration_before = connection.execute(
+            "SELECT * FROM project_state WHERE singleton=1"
+        ).fetchone()
+        rebase_receipt = rebase_dirty_classifier_state(
+            connection,
+            source_schema_version=current,
+            target_schema_version=SCHEMA_VERSION,
+        )
         connection.execute(
             "UPDATE project_state SET schema_version = ? WHERE singleton = 1",
             (SCHEMA_VERSION,),
@@ -1052,6 +1077,45 @@ class SQLiteStateStore:
             "UPDATE schema_info SET schema_version = ? WHERE singleton = 1",
             (SCHEMA_VERSION,),
         )
+        if rebase_receipt is not None and migration_before is not None:
+            now = int(self._clock())
+            revision = int(migration_before["revision"]) + 1
+            connection.execute(
+                "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? "
+                "WHERE singleton=1",
+                (revision, now, now),
+            )
+            migration_after = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            payload = self._versioned_event_payload(
+                connection,
+                before=migration_before,
+                after=migration_after,
+                revision=revision,
+                event_type="DIRTY_CLASSIFIER_REBASED",
+                created_at=now,
+                payload={
+                    "schema_version": rebase_receipt.get("schema_version"),
+                    "rebase_id": rebase_receipt.get("rebase_id"),
+                    "source_schema_version": current,
+                    "target_schema_version": SCHEMA_VERSION,
+                    "obligation_count": len(
+                        rebase_receipt.get("obligations") or ()
+                    ),
+                    "migration": True,
+                },
+            )
+            connection.execute(
+                "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
+                "VALUES (?, 'DIRTY_CLASSIFIER_REBASED', ?, NULL, ?, ?)",
+                (
+                    revision,
+                    now,
+                    int(migration_before["attempt"]),
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                ),
+            )
         connection.commit()
 
     @staticmethod
@@ -1130,6 +1194,12 @@ class SQLiteStateStore:
             ),
             "dirty_causes": rows_hash(
                 "SELECT * FROM dirty_causes ORDER BY cause_revision, cause_id"
+            ),
+            "dirty_classifier_rebases": rows_hash(
+                "SELECT * FROM dirty_classifier_rebases ORDER BY created_at, rebase_id"
+            ),
+            "prompt_attempt_inputs": rows_hash(
+                "SELECT * FROM prompt_attempt_inputs ORDER BY bound_revision, attempt_key"
             ),
             "stage_checkpoints": rows_hash(
                 "SELECT * FROM stage_checkpoints ORDER BY stage_id, subtask"
@@ -2791,6 +2861,13 @@ class SQLiteStateStore:
                     raise InvalidTransition(
                         "dirty clear classifier does not match the checkpoint receipt"
                     )
+                from .dirty_rebase import rebase_dirty_classifier_state
+
+                rebase_dirty_classifier_state(
+                    connection,
+                    source_schema_version=SCHEMA_VERSION,
+                    target_schema_version=SCHEMA_VERSION,
+                )
                 rows_to_clear = connection.execute(
                     "SELECT * FROM dirty_flags WHERE owner_stage = ? "
                     "ORDER BY flag, owner_stage",
@@ -2860,6 +2937,205 @@ class SQLiteStateStore:
                 ),
             )
         return self._state_from_row(updated)
+
+    def bind_prompt_attempt_input(
+        self,
+        *,
+        expected_revision: int,
+        receipt: dict[str, Any],
+    ) -> tuple[WorkflowState, dict[str, Any]]:
+        """Persist an immutable model-input identity before process launch."""
+
+        from .effective_prompt import EFFECTIVE_PROMPT_SCHEMA
+        from .prompt_receipts import ensure_prompt_receipt_schema
+
+        safe = dict(_redact(receipt))
+        if safe.get("schema_version") != EFFECTIVE_PROMPT_SCHEMA:
+            raise InvalidTransition("prompt input receipt schema is invalid")
+        attempt_key = str(safe.get("attempt_key") or "")
+        receipt_id = str(safe.get("receipt_id") or "")
+        if not attempt_key or not receipt_id:
+            raise InvalidTransition("prompt input receipt identity is incomplete")
+        from .workflow_events import canonical_hash as _prompt_canonical_hash
+
+        if receipt_id != _prompt_canonical_hash(
+            {key: value for key, value in safe.items() if key != "receipt_id"}
+        ):
+            raise InvalidTransition("prompt input receipt content hash mismatch")
+        now = int(self._clock())
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            ensure_prompt_receipt_schema(connection)
+            connection.commit()
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            if row is None:
+                raise StateNotInitialized("workflow state is not initialized")
+            if int(row["revision"]) != int(expected_revision):
+                raise RevisionConflict(
+                    f"expected revision {expected_revision}, found {row['revision']}"
+                )
+            existing = connection.execute(
+                "SELECT * FROM prompt_attempt_inputs WHERE attempt_key=?",
+                (attempt_key,),
+            ).fetchone()
+            if existing is not None:
+                value = json.loads(existing["receipt_json"])
+                comparable = {
+                    key: item for key, item in value.items() if key != "bound_revision"
+                }
+                if comparable != safe:
+                    raise InvalidTransition(
+                        "immutable prompt attempt input already exists with different content"
+                    )
+                return self._state_from_row(row), value
+            revision = int(row["revision"]) + 1
+            stored = {**safe, "bound_revision": revision}
+            connection.execute(
+                """
+                INSERT INTO prompt_attempt_inputs(
+                    receipt_id, attempt_key, stage_id, subtask, source_step_id,
+                    attempt, selected_revision, bound_revision,
+                    effective_prompt_sha256, prompt_inputs_sha256,
+                    consultation_decision_ids_json, researcher_note_sha256,
+                    human_review_sha256, prompt_template_sha256,
+                    model_config_sha256, receipt_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt_id,
+                    attempt_key,
+                    safe.get("stage"),
+                    safe.get("subtask"),
+                    int(safe["source_step_id"]),
+                    int(safe["attempt"]),
+                    int(safe["selected_revision"]),
+                    revision,
+                    str(safe["effective_prompt_sha256"]),
+                    str(safe["prompt_inputs_sha256"]),
+                    json.dumps(
+                        safe.get("consultation_decision_ids") or (),
+                        ensure_ascii=True,
+                        sort_keys=True,
+                    ),
+                    str(safe["researcher_note_sha256"]),
+                    str(safe["human_review_sha256"]),
+                    str(safe["prompt_template_sha256"]),
+                    str(safe["model_config_sha256"]),
+                    json.dumps(stored, ensure_ascii=True, sort_keys=True),
+                ),
+            )
+            connection.execute(
+                "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? "
+                "WHERE singleton=1",
+                (revision, now, now),
+            )
+            updated = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            payload = self._versioned_event_payload(
+                connection,
+                before=row,
+                after=updated,
+                revision=revision,
+                event_type="PROMPT_INPUT_BOUND",
+                created_at=now,
+                payload={
+                    "schema_version": EFFECTIVE_PROMPT_SCHEMA,
+                    "receipt_id": receipt_id,
+                    "attempt_key": attempt_key,
+                    "stage": safe.get("stage"),
+                    "subtask": safe.get("subtask"),
+                    "source_step_id": safe.get("source_step_id"),
+                    "attempt": safe.get("attempt"),
+                    "effective_prompt_sha256": safe.get(
+                        "effective_prompt_sha256"
+                    ),
+                    "prompt_inputs_sha256": safe.get("prompt_inputs_sha256"),
+                },
+            )
+            connection.execute(
+                "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
+                "VALUES (?, 'PROMPT_INPUT_BOUND', ?, ?, ?, ?)",
+                (
+                    revision,
+                    now,
+                    int(safe["source_step_id"]),
+                    int(safe["attempt"]),
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                ),
+            )
+        return self._state_from_row(updated), stored
+
+    def prompt_attempt_input(
+        self, attempt_key: str
+    ) -> dict[str, Any] | None:
+        if not self.path.is_file():
+            return None
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            from .prompt_receipts import ensure_prompt_receipt_schema
+
+            ensure_prompt_receipt_schema(connection)
+            row = connection.execute(
+                "SELECT receipt_json FROM prompt_attempt_inputs WHERE attempt_key=?",
+                (str(attempt_key),),
+            ).fetchone()
+        return json.loads(row["receipt_json"]) if row is not None else None
+
+    def latest_prompt_attempt_input(
+        self,
+        *,
+        stage_id: int | None,
+        subtask: str | None,
+        source_step_id: int,
+        attempt: int,
+    ) -> dict[str, Any] | None:
+        if not self.path.is_file():
+            return None
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            from .prompt_receipts import ensure_prompt_receipt_schema
+
+            ensure_prompt_receipt_schema(connection)
+            if stage_id is None:
+                row = connection.execute(
+                    "SELECT receipt_json FROM prompt_attempt_inputs "
+                    "WHERE stage_id IS NULL AND COALESCE(subtask, '')=? "
+                    "AND source_step_id=? AND attempt=? "
+                    "ORDER BY bound_revision DESC LIMIT 1",
+                    (str(subtask or ""), int(source_step_id), int(attempt)),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT receipt_json FROM prompt_attempt_inputs "
+                    "WHERE stage_id=? AND COALESCE(subtask, '')=? "
+                    "AND source_step_id=? AND attempt=? "
+                    "ORDER BY bound_revision DESC LIMIT 1",
+                    (
+                        int(stage_id),
+                        str(subtask or ""),
+                        int(source_step_id),
+                        int(attempt),
+                    ),
+                ).fetchone()
+        return json.loads(row["receipt_json"]) if row is not None else None
+
+    def prompt_attempt_inputs(self) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            from .prompt_receipts import ensure_prompt_receipt_schema
+
+            ensure_prompt_receipt_schema(connection)
+            rows = connection.execute(
+                "SELECT receipt_json FROM prompt_attempt_inputs "
+                "ORDER BY bound_revision, attempt_key"
+            ).fetchall()
+        return [json.loads(row["receipt_json"]) for row in rows]
 
     def events(self, *, since_revision: int = 0) -> list[WorkflowEvent]:
         if not self.path.is_file():
@@ -3080,6 +3356,94 @@ class SQLiteStateStore:
             "manifest": json.loads(row["baseline_json"]),
             "selected_revision": row["selected_revision"],
         }
+
+    def rebase_dirty_classifier(
+        self, *, expected_revision: int
+    ) -> WorkflowState:
+        """Explicitly rebase active dirty obligations under revision CAS."""
+
+        from .dirty_rebase import (
+            ensure_dirty_rebase_schema,
+            rebase_dirty_classifier_state,
+        )
+
+        now = int(self._clock())
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            ensure_dirty_rebase_schema(connection)
+            connection.commit()
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            if row is None:
+                raise StateNotInitialized("workflow state is not initialized")
+            if int(row["revision"]) != int(expected_revision):
+                raise RevisionConflict(
+                    f"expected revision {expected_revision}, found {row['revision']}"
+                )
+            receipt = rebase_dirty_classifier_state(
+                connection,
+                source_schema_version=SCHEMA_VERSION,
+                target_schema_version=SCHEMA_VERSION,
+            )
+            if receipt is None:
+                return self._state_from_row(row)
+            revision = int(row["revision"]) + 1
+            connection.execute(
+                "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? "
+                "WHERE singleton=1",
+                (revision, now, now),
+            )
+            updated = connection.execute(
+                "SELECT * FROM project_state WHERE singleton=1"
+            ).fetchone()
+            payload = self._versioned_event_payload(
+                connection,
+                before=row,
+                after=updated,
+                revision=revision,
+                event_type="DIRTY_CLASSIFIER_REBASED",
+                created_at=now,
+                payload={
+                    "schema_version": receipt.get("schema_version"),
+                    "rebase_id": receipt.get("rebase_id"),
+                    "obligation_count": len(receipt.get("obligations") or ()),
+                    "new_classifier_sha256": receipt.get(
+                        "new_classifier_sha256"
+                    ),
+                },
+            )
+            connection.execute(
+                "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
+                "VALUES (?, 'DIRTY_CLASSIFIER_REBASED', ?, NULL, ?, ?)",
+                (
+                    revision,
+                    now,
+                    int(row["attempt"]),
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                ),
+            )
+        return self._state_from_row(updated)
+
+    def dirty_classifier_rebase_receipts(self) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            from .dirty_rebase import ensure_dirty_rebase_schema
+
+            ensure_dirty_rebase_schema(connection)
+            rows = connection.execute(
+                "SELECT * FROM dirty_classifier_rebases "
+                "ORDER BY created_at, rebase_id"
+            ).fetchall()
+        values = []
+        for row in rows:
+            value = dict(row)
+            value["receipt"] = json.loads(value.pop("receipt_json"))
+            values.append(value)
+        return values
 
     def dirty_flags(self) -> list[dict[str, Any]]:
         if not self.path.is_file():

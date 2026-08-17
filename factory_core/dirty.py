@@ -99,6 +99,24 @@ _MATH_DEFINITION_RE = re.compile(
     r")(?P<star>\*)?(?![A-Za-z@])",
     re.IGNORECASE,
 )
+_MATH_CONTROL_RE = re.compile(
+    r"\\newif\s*\\if[A-Za-z@]+|"
+    r"\\[A-Za-z@]+(?:true|false)(?![A-Za-z@])|"
+    r"\\(?:newboolean|setboolean)\s*\{[^{}]+\}(?:\s*\{[^{}]+\})?|"
+    r"\\(?:newtoggle|toggletrue|togglefalse)\s*\{[^{}]+\}|"
+    r"\\bool_(?:new|set_true|set_false|gset_true|gset_false|if)"
+    r"(?::[A-Za-z]+)?(?:\s*\\[A-Za-z@:_]+)?|"
+    r"\\if[A-Za-z@]+(?:\s*\\[A-Za-z@:_]+)?|"
+    r"\\ifcase\b[^\n]*|"
+    r"\\if(?:num|dim|odd|x|cat|defined|csname)?\b[^\n]*|"
+    r"\\(?:or|else|fi)\b|"
+    r"\\newcount\s*\\[A-Za-z@]+|"
+    r"\\[A-Za-z@]+\s*=\s*[-+]?\d+|"
+    r"\\(?:newcounter|setcounter|addtocounter|stepcounter|refstepcounter|"
+    r"counterwithin|numberwithin)\s*\{[^{}]+\}(?:\s*\{[^{}]+\})?",
+    re.IGNORECASE,
+)
+
 _DEF_STYLE_RE = re.compile(
     r"^(?:(?:g|e|x)?def|let|"
     r"[A-Za-z]+_(?:new|set|gset|const|generate)(?::[A-Za-z]+)?)$",
@@ -232,9 +250,26 @@ def _math_definition_chunks(text: str) -> list[str]:
     return chunks
 
 
+def _math_control_chunks(text: str) -> list[str]:
+    """Fingerprint active TeX control state that may select rendered math.
+
+    TeX expansion and package conditionals are not safely decidable with the
+    lightweight classifier.  Any authored conditional, boolean assignment, or
+    counter control therefore participates in the mathematical identity unless
+    a future parser proves irrelevance.
+    """
+
+    source = mask_inactive_latex(text)
+    return [
+        re.sub(r"\s+", " ", match.group(0)).strip()
+        for match in _MATH_CONTROL_RE.finditer(source)
+    ]
+
+
 def _paper_semantics(text: str) -> dict[str, str]:
     math_chunks = _MATH_RE.findall(text)
     math_definitions = _math_definition_chunks(text)
+    math_controls = _math_control_chunks(text)
     citations = _CITATION_RE.findall(text)
     without_math = _MATH_RE.sub(" ", text)
     without_citations = _CITATION_RE.sub(" ", without_math)
@@ -244,7 +279,11 @@ def _paper_semantics(text: str) -> dict[str, str]:
     format_only = re.sub(r"\s+", " ", without_math).strip()
     return {
         "math": _canonical_hash(
-            {"formulas": math_chunks, "definitions": math_definitions}
+            {
+                "formulas": math_chunks,
+                "definitions": math_definitions,
+                "controls": math_controls,
+            }
         ),
         "citation": _canonical_hash(citations),
         "prose": _sha256_bytes(prose.encode("utf-8", errors="replace")),

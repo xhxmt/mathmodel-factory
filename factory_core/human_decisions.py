@@ -124,9 +124,129 @@ def decision_fingerprints(
     option_evidence, options_path = _option_evidence(project, gate)
     subject_paths: set[Path] = set()
     subject_metadata: list[dict[str, Any]] = []
-    if gate == "content_freeze":
-        # Human approval is meaningful only when every active source can be
-        # resolved to an exact, compiler-aligned input identity.
+
+    def bind_record(relative: str) -> None:
+        subject_metadata.append(_file_record(project, project / relative))
+
+    if gate == "preflight":
+        for value in (
+            "problem/source.md",
+            "problem/problem.md",
+            "problem/problem_brief.md",
+            "problem/problem_plan.json",
+            "problem/data_inventory.md",
+            "problem/feasibility_constraints.md",
+        ):
+            bind_record(value)
+    elif gate == "step4":
+        from .storage import SQLiteStateStore
+
+        for value in (
+            "problem/problem_plan.json",
+            "problem/feasibility_constraints.md",
+            "chosen_method.md",
+            "method_decision.md",
+        ):
+            bind_record(value)
+        store = SQLiteStateStore(project)
+        step3 = store.decision("step3") if store.exists else None
+        if step3 is None:
+            subject_metadata.append(
+                {
+                    "path": "<step3-decision>",
+                    "exists": False,
+                    "sha256": canonical_hash(None),
+                }
+            )
+        else:
+            identity = {
+                key: step3.get(key)
+                for key in (
+                    "request_id",
+                    "decision_id",
+                    "generation",
+                    "selected_option_id",
+                    "selected_aux_id",
+                    "subject_fingerprint",
+                    "options_fingerprint",
+                    "receipt_sha256",
+                    "receipt_path",
+                )
+            }
+            subject_metadata.append(
+                {
+                    "path": "<step3-decision>",
+                    "exists": True,
+                    "sha256": canonical_hash(identity),
+                    "identity": identity,
+                }
+            )
+            for value in (
+                step3.get("candidate_evidence")
+                or step3.get("evidence")
+                or ()
+            ):
+                if isinstance(value, str) and value:
+                    subject_paths.update(_contained_files(project, value))
+            for reference in step3.get("artifact_refs") or ():
+                if isinstance(reference, Mapping) and reference.get("path"):
+                    subject_paths.update(
+                        _contained_files(project, str(reference["path"]))
+                    )
+    elif gate == "dynamic":
+        from .storage import SQLiteStateStore
+
+        bind_record("consultation/REQUEST.md")
+        store = SQLiteStateStore(project)
+        cursor = store.stage_cursor_input() if store.exists else None
+        checkpoints = store.stage_checkpoints() if store.exists else []
+        cursor_identity = (
+            {
+                key: cursor.get(key)
+                for key in (
+                    "stage_id",
+                    "subtask",
+                    "source_step_id",
+                    "input_fingerprint",
+                    "selected_revision",
+                )
+            }
+            if isinstance(cursor, Mapping)
+            else None
+        )
+        checkpoint_identity = [
+            {
+                key: item.get(key)
+                for key in (
+                    "stage_id",
+                    "subtask",
+                    "source_step_id",
+                    "completed_step_id",
+                    "input_fingerprint",
+                    "output_fingerprint",
+                    "completed_revision",
+                )
+            }
+            for item in checkpoints
+            if isinstance(item, Mapping)
+        ]
+        subject_metadata.extend(
+            (
+                {
+                    "path": "<stage-cursor-input>",
+                    "exists": cursor_identity is not None,
+                    "sha256": canonical_hash(cursor_identity),
+                    "identity": cursor_identity,
+                },
+                {
+                    "path": "<stage-checkpoints>",
+                    "exists": bool(checkpoint_identity),
+                    "sha256": canonical_hash(checkpoint_identity),
+                    "identity": checkpoint_identity,
+                },
+            )
+        )
+    elif gate == "content_freeze":
         dependency_graph = require_safe_latex_dependencies(project)
         subject_paths.update(dependency_graph.files)
         subject_metadata.append(
@@ -149,6 +269,11 @@ def decision_fingerprints(
             "problem/deliverables.json",
         ):
             subject_paths.update(_contained_files(project, value))
+        from .solver_input_coverage import solver_declared_input_coverage
+
+        solver_coverage = solver_declared_input_coverage(project)
+        subject_paths.update(solver_coverage.included_paths)
+        subject_paths.update(solver_coverage.evidence_paths)
     elif gate == "delivery_freeze_override":
         for value in (
             "judge_outputs/final_submission_fingerprint.json",
@@ -159,16 +284,19 @@ def decision_fingerprints(
     else:
         for value in option_evidence:
             subject_paths.update(_contained_files(project, value))
+
     for value in evidence:
         if value != options_path.relative_to(project).as_posix():
             subject_paths.update(_contained_files(project, value))
     subject_records = subject_metadata + [
         _file_record(project, path)
-        for path in sorted(subject_paths, key=lambda item: item.relative_to(project).as_posix())
+        for path in sorted(
+            subject_paths,
+            key=lambda item: item.relative_to(project).as_posix(),
+        )
     ]
     options_records = [_file_record(project, options_path)]
     return canonical_hash(subject_records), canonical_hash(options_records)
-
 
 def build_decision_request(
     *,

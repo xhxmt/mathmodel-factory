@@ -942,6 +942,37 @@ class FactoryEngine:
             **transition_guards,
         )
 
+    def _prompt_input_receipt_valid(
+        self, task: ScheduledStageTask, result: ExecutionResult
+    ) -> bool:
+        if not getattr(
+            task.definition.lifecycle,
+            "requires_prompt_input_receipt",
+            False,
+        ):
+            return True
+        if result.metadata.get("prompt_input_schema") != (
+            "factory-effective-prompt-v1"
+        ):
+            return False
+        receipt_id = str(
+            result.metadata.get("prompt_input_receipt_id") or ""
+        )
+        attempt_key_value = str(
+            result.metadata.get("prompt_input_attempt_key") or ""
+        )
+        if not receipt_id or not attempt_key_value:
+            return False
+        stored = self.store.prompt_attempt_input(attempt_key_value)
+        return bool(
+            stored is not None
+            and stored.get("receipt_id") == receipt_id
+            and stored.get("effective_prompt_sha256")
+            == result.metadata.get("effective_prompt_sha256")
+            and stored.get("prompt_inputs_sha256")
+            == result.metadata.get("prompt_inputs_sha256")
+        )
+
     def _complete_stage_task(
         self,
         state: WorkflowState,
@@ -954,6 +985,35 @@ class FactoryEngine:
         input_fingerprint, output_fingerprint, after, dirty_changes = (
             self._stage_manifest_delta(task)
         )
+
+        if not self._prompt_input_receipt_valid(task, result):
+            receipt_id = str(
+                result.metadata.get("prompt_input_receipt_id") or ""
+            )
+            attempt_key_value = str(
+                result.metadata.get("prompt_input_attempt_key") or ""
+            )
+            return self._stage_transition(
+                state,
+                lease,
+                event_type="STEP_FAILED",
+                changes={
+                    "status": WorkflowStatus.FAILED,
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={
+                    "error_class": "PERMANENT_PROMPT_INPUT_RECEIPT_MISSING",
+                    "stage": task.stage_id,
+                    "subtask": task.subtask,
+                    "source_step": task.source_step_id,
+                    "prompt_input_receipt_id": receipt_id,
+                    "prompt_input_attempt_key": attempt_key_value,
+                },
+                dirty_changes=dirty_changes,
+                event_step=task.source_step_id,
+            )
 
         new_flags = {str(item["flag"]) for item in dirty_changes}
         protected_deleted = [

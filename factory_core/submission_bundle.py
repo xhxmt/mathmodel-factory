@@ -146,6 +146,27 @@ def submission_bundle_paths(
         selected.add(
             _validate_regular_file(project, project / relative, label="declared deliverable")
         )
+    from .solver_input_coverage import solver_declared_input_coverage
+
+    solver_coverage = solver_declared_input_coverage(project)
+    active_latex = {path.relative_to(project).as_posix() for path in graph.files}
+    declared = declared_delivery_files(project)
+    for solver_input in solver_coverage.included_paths:
+        relative = solver_input.relative_to(project).as_posix()
+        if (
+            artifact_ownership(relative) is None
+            and relative not in active_latex
+            and relative not in declared
+        ):
+            raise ValueError(
+                "solver-declared input lacks ownership or an explicit route: "
+                + relative
+            )
+        selected.add(
+            _validate_regular_file(
+                project, solver_input, label="solver-declared submission input"
+            )
+        )
     from .dirty import tracked_artifact_paths
 
     selected_relatives = {

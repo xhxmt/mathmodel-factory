@@ -383,12 +383,32 @@ class FactoryService:
         self._terminate_runner(state.runner_pid)
         return updated
 
-    def resume(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
+    def resume(
+        self,
+        project: str | Path,
+        *,
+        expected_revision: int | None = None,
+    ) -> WorkflowState:
         engine = self.engine(project)
         state = engine.get_state()
         self._assert_expected_revision(state, expected_revision)
         if state.pending_action is not None:
             state = self._resolve_pending_if_ready(engine.project_dir, state)
+        from .consultation_projection import ensure_all_consultation_projections
+
+        try:
+            consultation = ensure_all_consultation_projections(
+                engine.project_dir
+            )
+        except (OSError, ValueError) as exc:
+            raise InvalidTransition(
+                "consultation projection rebuild failed: " + str(exc)
+            ) from exc
+        if not consultation.valid:
+            raise InvalidTransition(
+                "consultation projection drift: "
+                + "; ".join(consultation.errors)
+            )
         return engine.resume(expected_revision=state.revision)
 
     def kill(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
@@ -398,6 +418,83 @@ class FactoryService:
         updated = engine.kill(expected_revision=revision)
         self._terminate_runner(state.runner_pid)
         return updated
+
+    @staticmethod
+    def _bind_consultation_staging(
+        project: Path,
+        pending_action: dict[str, Any],
+        resolution: dict[str, Any],
+        decision_record: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        if pending_action.get("type") != "human_consultation":
+            return resolution, decision_record
+        from .artifacts import artifact_ref
+        from .consultation_projection import (
+            consultation_staging_path,
+            read_staged_consultation_answer,
+            stage_consultation_answer,
+        )
+
+        normalized = validate_resolution(pending_action, resolution)
+        gate = str(normalized.get("gate") or pending_action.get("gate") or "")
+        request_id = str(normalized.get("request_id") or "")
+        if not request_id:
+            from .human_decisions import build_decision_request
+
+            store = SQLiteStateStore(project)
+            state = store.load()
+            request = build_decision_request(
+                project_id=state.project_id,
+                project_dir=project,
+                requested_revision=state.revision,
+                generation=store.next_decision_generation(gate),
+                action=pending_action,
+                reason="compatibility request identity synthesized at resolution",
+            )
+            request_id = request.request_id
+            normalized = {**normalized, "request_id": request_id}
+        answer = str(normalized.get("answer") or "").strip()
+        path = consultation_staging_path(project, request_id)
+        if path.exists():
+            staged = read_staged_consultation_answer(project, request_id, gate)
+            if str(staged.get("answer") or "").strip() != answer:
+                raise InvalidTransition(
+                    "staged consultation answer does not match the resolution"
+                )
+        else:
+            path = stage_consultation_answer(
+                project_dir=project,
+                request_id=request_id,
+                gate=gate,
+                answer=answer,
+                step=(
+                    int(pending_action.get("metadata", {}).get("step"))
+                    if isinstance(pending_action.get("metadata"), dict)
+                    and pending_action.get("metadata", {}).get("step") is not None
+                    else None
+                ),
+            )
+        reference = artifact_ref(project, path)
+        record = dict(decision_record or {})
+        refs = [
+            dict(item)
+            for item in record.get("artifact_refs") or ()
+            if isinstance(item, dict)
+        ]
+        if not any(item.get("path") == reference["path"] for item in refs):
+            refs.append(reference)
+        record.update(
+            schema_version=str(
+                record.get("schema_version") or "human-decision-v1"
+            ),
+            gate=gate,
+            kind="consultation",
+            answer=answer,
+            request_id=request_id,
+            staging_receipt=reference["path"],
+            artifact_refs=refs,
+        )
+        return normalized, record
 
     def resolve(
         self,
@@ -409,15 +506,48 @@ class FactoryService:
         engine = self.engine(project)
         state = engine.get_state()
         revision = state.revision if expected_revision is None else expected_revision
-        pending = state.pending_action or {}
-        updated = engine.resolve_action(resolution, expected_revision=revision)
+        pending = dict(state.pending_action or {})
+        resolution, decision_record = self._bind_consultation_staging(
+            engine.project_dir, pending, resolution
+        )
+        updated = engine.resolve_action(
+            resolution,
+            expected_revision=revision,
+            decision_record=decision_record,
+        )
         if pending.get("type") == "human_consultation":
-            from .consultation_projection import rebuild_consultation_projection
-
-            rebuild_consultation_projection(
+            self._rebuild_consultation_projection_or_record(
                 engine.project_dir, str(pending.get("gate") or "")
             )
         return updated
+
+    @staticmethod
+    def _rebuild_consultation_projection_or_record(
+        project: Path, gate: str
+    ) -> None:
+        from .consultation_projection import rebuild_consultation_projection
+
+        store = SQLiteStateStore(project)
+        projector_name = f"consultation:{gate}"
+        try:
+            rebuild_consultation_projection(project, gate)
+        except Exception as exc:
+            try:
+                store.record_projection_failure(
+                    revision=store.load().revision,
+                    projector_name=projector_name,
+                    error_type=type(exc).__name__,
+                )
+            except Exception:
+                pass
+            raise
+        for failure in store.projection_failures(pending_only=True):
+            if failure.get("projector_name") != projector_name:
+                continue
+            store.resolve_projection_failure(
+                revision=int(failure["revision"]),
+                projector_name=projector_name,
+            )
 
     def supersede_pending_decision_request(
         self,
@@ -443,23 +573,23 @@ class FactoryService:
         expected_revision: int | None = None,
         artifact_first: bool = False,
     ) -> tuple[WorkflowState, WorkerHandle | None]:
-        """Commit evidence and a decision, then resume through the Native worker."""
+        """Commit immutable evidence and a decision, then launch a worker."""
+
         resolved_project = self.resolve_project(project)
         engine = self.engine(resolved_project)
         pending = engine.get_state()
         self._assert_expected_revision(pending, expected_revision)
         if pending.pending_action is None:
             raise InvalidTransition("project has no pending action")
+        pending_action = dict(pending.pending_action)
+        gate = str(pending_action.get("gate") or "")
         artifact_first = artifact_first or bool(
             getattr(evidence_writer, "artifact_first", False)
         )
         if artifact_first:
-            # Artifact-first adapters (the Web human-review writer) must not
-            # mutate compatibility evidence for a stale or foreign request.
-            resolution = validate_resolution(pending.pending_action, resolution)
-            SQLiteStateStore(resolved_project).assert_pending_decision_current(
-                str((pending.pending_action or {}).get("gate") or "")
-            )
+            resolution = validate_resolution(pending_action, resolution)
+            store = SQLiteStateStore(resolved_project)
+            store.assert_pending_decision_current(gate)
             decision_record = evidence_writer()
             if (
                 isinstance(decision_record, dict)
@@ -470,30 +600,43 @@ class FactoryService:
                     **resolution,
                     "answer": decision_record.get("answer"),
                 }
+            resolution, bound_record = self._bind_consultation_staging(
+                resolved_project,
+                pending_action,
+                resolution,
+                decision_record=(
+                    decision_record
+                    if isinstance(decision_record, dict)
+                    else None
+                ),
+            )
             accepted = engine.resolve_action(
                 resolution,
                 expected_revision=pending.revision,
-                decision_record=(
-                    decision_record if isinstance(decision_record, dict) else None
-                ),
+                decision_record=bound_record,
             )
             if accepted.pending_action is not None:
                 return accepted, None
-            if str((pending.pending_action or {}).get("gate") or "") == "step3":
+            if gate == "step3":
                 from .selection_projection import rebuild_step3_projections
 
                 rebuild_step3_projections(resolved_project)
-            if (pending.pending_action or {}).get("type") == "human_consultation":
-                from .consultation_projection import rebuild_consultation_projection
-
-                rebuild_consultation_projection(
-                    resolved_project,
-                    str((pending.pending_action or {}).get("gate") or ""),
+            if pending_action.get("type") == "human_consultation":
+                self._rebuild_consultation_projection_or_record(
+                    resolved_project, gate
                 )
             return self.resume_and_start(
                 resolved_project, expected_revision=accepted.revision
             )
-        accepted = engine.resolve_action(resolution, expected_revision=pending.revision)
+
+        resolution, staged_record = self._bind_consultation_staging(
+            resolved_project, pending_action, resolution
+        )
+        accepted = engine.resolve_action(
+            resolution,
+            expected_revision=pending.revision,
+            decision_record=staged_record,
+        )
         if accepted.pending_action is not None:
             return accepted, None
         try:
@@ -510,12 +653,13 @@ class FactoryService:
                 payload={"error_type": type(exc).__name__},
             )
             raise
-        if (pending.pending_action or {}).get("type") == "human_consultation":
-            from .consultation_projection import rebuild_consultation_projection
+        if gate == "step3":
+            from .selection_projection import rebuild_step3_projections
 
-            rebuild_consultation_projection(
-                resolved_project,
-                str((pending.pending_action or {}).get("gate") or ""),
+            rebuild_step3_projections(resolved_project)
+        if pending_action.get("type") == "human_consultation":
+            self._rebuild_consultation_projection_or_record(
+                resolved_project, gate
             )
         return self.resume_and_start(
             resolved_project, expected_revision=accepted.revision
@@ -1043,10 +1187,7 @@ class FactoryService:
                     project / "selection" / f"{gate or 'step3'}_decision.json"
                 ).is_file()
         elif decision_kind == "consultation" or action_type == "human_consultation":
-            from .consultation_projection import (
-                extract_ready_consultation_answer,
-                rebuild_consultation_projection,
-            )
+            from .consultation_projection import extract_ready_consultation_answer
 
             answer = extract_ready_consultation_answer(project, gate) if gate else None
             ready = bool(answer)
@@ -1054,12 +1195,16 @@ class FactoryService:
                 resolution["answer"] = answer
         if not ready:
             return state
+        resolution, decision_record = self._bind_consultation_staging(
+            project, dict(pending), resolution
+        )
         updated = self.engine(project).resolve_action(
             resolution,
             expected_revision=state.revision,
+            decision_record=decision_record,
         )
         if decision_kind == "consultation" or action_type == "human_consultation":
-            rebuild_consultation_projection(project, gate)
+            self._rebuild_consultation_projection_or_record(project, gate)
         return updated
 
     def _write_delivery_manifest(self, project: Path) -> None:

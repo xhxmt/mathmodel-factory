@@ -274,10 +274,16 @@ def test_prompt_step_validates_once_in_engine_not_during_model_call(tmp_path):
             return ExecutionResult.succeeded(model_id="codex-test")
 
     contract = next(item for item in STEP_CONTRACTS if item.id == 4)
+    factory_root = tmp_path / "factory"
+    prompt_dir = factory_root / "prompts"
+    prompt_dir.mkdir(parents=True)
+    prompt_dir.joinpath(contract.prompt).write_text(
+        "Build the model for __BASE_NAME__.\n", encoding="utf-8"
+    )
     validator = CountingValidator()
     step = PromptStep(
         contract,
-        PromptRenderer(Path(__file__).resolve().parents[1]),
+        PromptRenderer(factory_root),
         SuccessfulDispatcher(),
         validator,
     )
@@ -286,6 +292,10 @@ def test_prompt_step_validates_once_in_engine_not_during_model_call(tmp_path):
     result = step.execute(context)
 
     assert result.returncode == 0
+    assert result.metadata["prompt_input_mode"] == "standalone_compatibility"
+    assert result.metadata["prompt_input_receipt_durable"] is False
+    assert "prompt_input_receipt_id" not in result.metadata
+    assert not (tmp_path / ".factory" / "state.db").exists()
     assert validator.calls == 0
     assert step.validate(context).is_valid is True
     assert validator.calls == 1
