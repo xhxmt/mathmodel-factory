@@ -87,8 +87,51 @@ def test_local_solver_job_uses_sqlite_lifecycle(tmp_path):
     assert "SOLVER_JOB_RUNNING" in event_types
     assert "SOLVER_JOB_COMPLETED" in event_types
     assert "SOLVER_JOB_RECEIPT_COMPLETED" in event_types
+    assert completed["result_refs"]["stdout"] == (
+        f"logs/solver_jobs/{job['job_id']}.stdout.log"
+    )
+    assert completed["result_refs"]["stderr"] == (
+        f"logs/solver_jobs/{job['job_id']}.stderr.log"
+    )
+    assert (project / completed["result_refs"]["stdout"]).read_text(
+        encoding="utf-8"
+    ) == "done\n"
+    assert (project / completed["result_refs"]["stderr"]).read_text(
+        encoding="utf-8"
+    ) == ""
     store = SQLiteStateStore(project)
     assert replay_events(store.events()) == replay_state(store.load())
+
+
+def test_local_solver_logs_are_isolated_by_job_id(tmp_path):
+    service, project, script = make_project(tmp_path)
+    script.write_text(
+        "import sys\nprint(sys.argv[1])\n",
+        encoding="utf-8",
+    )
+
+    first = service.submit_solver(
+        project,
+        runtime="python",
+        script=script,
+        args=("first",),
+        max_time_seconds=10,
+    )
+    first = service.wait_solver(project, first["job_id"], poll_seconds=0.02)
+    second = service.submit_solver(
+        project,
+        runtime="python",
+        script=script,
+        args=("second",),
+        max_time_seconds=10,
+    )
+    second = service.wait_solver(project, second["job_id"], poll_seconds=0.02)
+
+    first_stdout = project / first["result_refs"]["stdout"]
+    second_stdout = project / second["result_refs"]["stdout"]
+    assert first_stdout != second_stdout
+    assert first_stdout.read_text(encoding="utf-8") == "first\n"
+    assert second_stdout.read_text(encoding="utf-8") == "second\n"
 
 
 def test_fake_cloud_and_local_share_solver_job_contract(tmp_path, monkeypatch):

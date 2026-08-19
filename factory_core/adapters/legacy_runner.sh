@@ -3990,7 +3990,7 @@ ISOLATED CODEX JUDGE MODE:
         codex exec \
           "${model_args[@]}" \
           -c "model_reasoning_effort=\"$effort\"" \
-          --full-auto \
+          --approve-for-me \
           --ephemeral \
           -C "$isolated_root" \
           --skip-git-repo-check \

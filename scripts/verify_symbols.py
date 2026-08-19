@@ -39,7 +39,8 @@ from factory_core.paper_sources import expand_latex_document, primary_paper_sour
 # LaTeX commands that are operators/structure, NOT user symbols
 _LATEX_NOISE = {
     'frac', 'sqrt', 'sum', 'prod', 'int', 'lim', 'inf', 'sup', 'min', 'max',
-    'sin', 'cos', 'tan', 'log', 'ln', 'exp', 'arg', 'det', 'dim', 'mod',
+    'sin', 'cos', 'tan', 'arcsin', 'arccos', 'arctan', 'log', 'ln', 'exp',
+    'arg', 'det', 'dim', 'mod',
     'left', 'right', 'big', 'Big', 'bigg', 'Bigg', 'quad', 'qquad',
     'cdot', 'cdots', 'ldots', 'dots', 'vdots', 'ddots', 'times', 'div',
     'leq', 'geq', 'neq', 'approx', 'equiv', 'sim', 'simeq', 'cong', 'propto',
@@ -106,6 +107,8 @@ def normalize_symbol(raw: str) -> str:
     m = re.match(r'\\([A-Za-z]+)', s)
     if m:
         cmd = m.group(1)
+        if cmd == 'pi':
+            return ''  # the standard circle constant is not a user-defined symbol
         if cmd in _GREEK:
             return '\\' + cmd  # keep greek letters as symbols
         if cmd in _LATEX_NOISE:
@@ -213,6 +216,17 @@ def extract_used_symbols(paper_path: str):
 def extract_used_symbols_from_text(text: str):
     """Extract symbols from one already ordered paper stream."""
 
+    # Deterministic display macros (for example headline values generated with
+    # ``\newcommand``) are TeX implementation names, not mathematical symbols.
+    # Capture them before dropping the preamble so their later uses can be
+    # excluded without maintaining a project-specific allowlist.
+    declared_commands = {
+        '\\' + name
+        for name in re.findall(
+            r'\\(?:re)?newcommand\*?\s*\{\\([A-Za-z]+)\}', text
+        )
+    }
+
     # For .tex: drop preamble before \begin{document}
     doc_start = text.find(r'\begin{document}')
     if doc_start >= 0:
@@ -257,6 +271,10 @@ def extract_used_symbols_from_text(text: str):
                 ' ',
                 m.group(1),
             )
+            # Remove the micrometre unit before stripping its ``\mathrm``
+            # wrapper; otherwise the SI prefix is mistaken for a Greek
+            # variable.  A genuine standalone ``\mu`` remains auditable.
+            expr = re.sub(r'\\mu\s*\\mathrm\s*(?:\{m\}|m)', ' ', expr)
             # Environment names and textual operator labels are structure, not
             # mathematical symbols (for example "aligned" and "MAD").
             expr = re.sub(r'\\(?:begin|end)\{[^{}]*\}', ' ', expr)
@@ -277,7 +295,7 @@ def extract_used_symbols_from_text(text: str):
             ln = line_of(m.start())
             for tok in _split_math_tokens(expr):
                 base = normalize_symbol(tok)
-                if base:
+                if base and base not in declared_commands:
                     used.add(base)
                     if base not in first_use_line:
                         first_use_line[base] = ln

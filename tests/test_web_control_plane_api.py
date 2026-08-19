@@ -213,6 +213,48 @@ def test_main_module_exposes_runtime_api_surface():
     assert missing == []
 
 
+def test_artifact_listing_handles_symlinked_project_root(tmp_path):
+    mod = load_main_module(factory_root=tmp_path / "factory")
+    project = tmp_path / "worktree" / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    (project / "demo_paper.tex").write_text(
+        "\\documentclass{article}\n\\begin{document}ok\\end{document}\n",
+        encoding="utf-8",
+    )
+    figures = project / "figures"
+    figures.mkdir()
+    (figures / "inside.png").write_bytes(b"inside")
+
+    discovered = tmp_path / "factory" / "ongoing" / "demo"
+    discovered.parent.mkdir(parents=True)
+    discovered.symlink_to(project, target_is_directory=True)
+
+    files = mod.project_api.list_artifacts(discovered)
+    paths = {item["path"] for item in files}
+
+    assert "demo_paper.tex" in paths
+    assert "figures/inside.png" in paths
+
+
+def test_artifact_listing_ignores_symlink_escaping_project_root(tmp_path):
+    mod = load_main_module(factory_root=tmp_path / "factory")
+    project = tmp_path / "worktree" / "ongoing" / "demo"
+    figures = project / "figures"
+    figures.mkdir(parents=True)
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"outside")
+    (figures / "escape.png").symlink_to(outside)
+
+    discovered = tmp_path / "factory" / "ongoing" / "demo"
+    discovered.parent.mkdir(parents=True)
+    discovered.symlink_to(project, target_is_directory=True)
+
+    files = mod.project_api.list_artifacts(discovered)
+
+    assert all(item["path"] != "figures/escape.png" for item in files)
+    assert all("outside.png" not in item["path"] for item in files)
+
+
 def test_issue_ws_ticket_is_single_use():
     mod = load_main_module()
     user = mod.UserInfo(username="admin", role="admin", status="active")

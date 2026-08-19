@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 import time
 from dataclasses import dataclass, field, replace
@@ -98,18 +97,41 @@ class CodexCliBackend(_ProcessModelBackend):
     name = "codex"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
+        codex_cli = (
+            request.env.get("CODEX_CLI_PATH", "")
+            or os.getenv("CODEX_CLI_PATH", "")
+            or "codex"
+        )
         effective_model = (
             request.model
             or request.env.get("CODEX_MODEL", "")
             or os.getenv("CODEX_MODEL", "")
         )
+        service_tier = (
+            request.env.get("CODEX_SERVICE_TIER", "")
+            or os.getenv("CODEX_SERVICE_TIER", "")
+        ).strip().lower()
+        if service_tier and service_tier not in {"fast", "flex"}:
+            return ExecutionResult.failed(
+                "PERMANENT_MODEL_CONFIG",
+                returncode=2,
+                reason="CODEX_SERVICE_TIER must be unset, fast, or flex",
+            )
         request = replace(request, model=effective_model)
-        argv = ["codex", "exec"]
+        argv = [codex_cli]
+        if service_tier:
+            argv.extend(["-c", f'service_tier="{service_tier}"'])
+        argv.append("exec")
         if effective_model:
             argv.extend(["--model", effective_model])
         argv.extend(["-c", f'model_reasoning_effort="{request.effort or "xhigh"}"'])
         if request.isolated:
-            argv.extend(["--full-auto", "--ephemeral"])
+            argv.extend(
+                [
+                    "--approve-for-me",
+                    "--ephemeral",
+                ]
+            )
             if request.final_response_file is not None:
                 argv.extend(["--output-last-message", str(request.final_response_file)])
         else:

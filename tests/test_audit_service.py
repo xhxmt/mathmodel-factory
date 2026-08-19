@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from factory_core.adapters.infrastructure.commands import CommandResult
 from factory_core.audit import AuditStatus, FinalAuditService
@@ -153,6 +154,89 @@ def test_final_audit_writes_snapshot_without_publishing(tmp_path: Path) -> None:
         args for script, args in runner.calls if script.endswith("judge_decision_router.py")
     )
     assert router_args[router_args.index("--policy-mode") + 1] == "enforce"
+
+
+def test_technical_flow_runs_real_judge_but_never_allows_delivery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    authorization = project / ".factory/technical_flow/authorization.json"
+    authorization.parent.mkdir(parents=True)
+    authorization.write_text("{}\n", encoding="utf-8")
+    judge = PassingJudge()
+    service = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "6" * 64,
+        technical_flow_validation=True,
+    )
+    monkeypatch.setattr(
+        service,
+        "_technical_authorization",
+        lambda _project: SimpleNamespace(
+            path=authorization,
+            sha256="5" * 64,
+        ),
+    )
+    monkeypatch.setattr(service, "_unresolved_blocking", lambda _project: True)
+    monkeypatch.setattr(
+        service,
+        "_run_acceptance_checks",
+        lambda _project: (
+            [
+                {
+                    "name": "derived_artifacts",
+                    "passed": False,
+                    "severity": "hard",
+                    "returncode": 1,
+                }
+            ],
+            ExecutionResult.failed(
+                "PERMANENT_DELIVERY_ACCEPTANCE",
+                returncode=1,
+                check="derived_artifacts",
+            ),
+        ),
+    )
+
+    outcome = service.run(make_context(project), reuse_pass=True)
+
+    assert judge.judge_calls == 1
+    assert outcome.record.status is AuditStatus.PASS
+    assert outcome.record.judge_completed is True
+    assert outcome.record.delivery_allowed is False
+    assert outcome.execution.error_class == "PERMANENT_TECHNICAL_FLOW_NO_DELIVERY"
+    assert outcome.execution.metadata["quality_pass_fabricated"] is False
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+
+
+def test_normal_final_audit_still_blocks_unresolved_issue_ledger(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    judge = PassingJudge()
+    service = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "8" * 64,
+    )
+    monkeypatch.setattr(service, "_unresolved_blocking", lambda _project: True)
+
+    outcome = service.run(make_context(project))
+
+    assert judge.judge_calls == 0
+    assert outcome.record.status is AuditStatus.FAIL
+    assert outcome.record.error_class == "PERMANENT_DELIVERY_ACCEPTANCE"
+    assert outcome.record.decision == "CONTENT_NOT_READY"
+    assert outcome.record.delivery_allowed is False
 
 
 def test_content_freeze_receipt_removed_during_judge_blocks_acceptance(

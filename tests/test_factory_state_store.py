@@ -508,6 +508,82 @@ def test_future_classifier_change_rebases_active_obligation_and_emits_receipt(tm
     )
 
 
+def test_classifier_rebase_moves_obligation_to_current_artifact_owner(tmp_path):
+    from factory_core.dirty import classifier_contract_sha256
+
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="owner-move", project_type="modeling")
+    store.transition(
+        expected_revision=state.revision,
+        event_type="OLD_ASSUMPTION_OWNER_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            _dirty_change(
+                "MODEL_DIRTY", 3, "assumption_ledger.md", "old-classifier"
+            )
+        ],
+    )
+
+    first = store.rebase_dirty_classifier(expected_revision=store.load().revision)
+
+    flags = store.dirty_flags()
+    receipt = store.dirty_classifier_rebase_receipts()[-1]["receipt"]
+    assert [(row["flag"], row["owner_stage"]) for row in flags] == [
+        ("MATH_DIRTY", 8)
+    ]
+    assert flags[0]["classifier_contract_sha256"] == classifier_contract_sha256()
+    assert receipt["obligations"][0]["previous_flag"] == "MODEL_DIRTY"
+    assert receipt["obligations"][0]["previous_owner_stage"] == 3
+    assert receipt["obligations"][0]["ownership_migrated"] is True
+    second = store.rebase_dirty_classifier(expected_revision=first.revision)
+    assert second.revision == first.revision
+    assert len(store.dirty_classifier_rebase_receipts()) == 1
+
+
+def test_classifier_rebase_routes_solver_receipt_to_durable_job_owner(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="receipt-owner-move", project_type="modeling")
+    job_id = "local_python_sensitivity"
+    state = store.create_solver_job(
+        expected_revision=state.revision,
+        record={
+            "job_id": job_id,
+            "owner_stage": 5,
+            "owner_subtask": "sensitivity",
+            "backend": "local",
+            "runtime": "python",
+            "script": "models/m2/05_sensitivity.py",
+            "workdir": "models/m2",
+            "argv": [],
+            "max_time_seconds": 60,
+            "status": "completed",
+            "result_refs": {},
+        },
+    )
+    receipt_path = f".factory/solver_receipts/{job_id}.completed.json"
+    state = store.transition(
+        expected_revision=state.revision,
+        event_type="STATIC_RECEIPT_OWNER_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            _dirty_change("RESULT_DIRTY", 4, receipt_path, "old-classifier")
+        ],
+    )
+
+    store.rebase_dirty_classifier(expected_revision=state.revision)
+
+    flags = store.dirty_flags()
+    receipt = store.dirty_classifier_rebase_receipts()[-1]["receipt"]
+    assert [(row["flag"], row["owner_stage"]) for row in flags] == [
+        ("RESULT_DIRTY", 5)
+    ]
+    obligation = receipt["obligations"][0]
+    assert obligation["cause_artifact"] == receipt_path
+    assert obligation["previous_owner_stage"] == 4
+    assert obligation["owner_stage"] == 5
+    assert obligation["ownership_migrated"] is True
+
+
 def test_lost_multi_owner_dirty_obligations_reconstruct_from_causes(tmp_path):
     from factory_core.dirty import classifier_contract_sha256
     from factory_core.workflow_events import canonical_hash

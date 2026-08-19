@@ -121,8 +121,139 @@ def test_native_codex_backend_honors_codex_model_for_builtin_fallback(monkeypatc
     assert result.returncode == 0
     assert result.metadata["model"] == "gpt-5.6-sol"
     assert list(supervisor.request.argv[:4]) == [
-        "codex", "exec", "--model", "gpt-5.6-sol"
+        "codex",
+        "exec",
+        "--model",
+        "gpt-5.6-sol",
     ]
+
+
+def test_native_codex_backend_allows_explicit_fast_service_tier(
+    monkeypatch, tmp_path
+):
+    class RecordingSupervisor:
+        request = None
+
+        def run(self, request):
+            self.request = request
+            return ProcessResult(0, False, 0.01, 123)
+
+    supervisor = RecordingSupervisor()
+    monkeypatch.setenv("CODEX_SERVICE_TIER", "fast")
+    backend = CodexCliBackend(tmp_path, supervisor=supervisor)
+
+    result = backend.execute(
+        ModelRequest(
+            project_dir=tmp_path,
+            step_id=2,
+            attempt=1,
+            prompt="work",
+            timeout_seconds=10,
+            hang_timeout_seconds=5,
+        )
+    )
+
+    assert result.returncode == 0
+    assert list(supervisor.request.argv[:4]) == [
+        "codex",
+        "-c",
+        'service_tier="fast"',
+        "exec",
+    ]
+
+
+def test_native_codex_backend_honors_explicit_cli_path(monkeypatch, tmp_path):
+    class RecordingSupervisor:
+        request = None
+
+        def run(self, request):
+            self.request = request
+            return ProcessResult(0, False, 0.01, 123)
+
+    supervisor = RecordingSupervisor()
+    monkeypatch.setenv("CODEX_CLI_PATH", "/opt/codex/latest/codex")
+    backend = CodexCliBackend(tmp_path, supervisor=supervisor)
+
+    result = backend.execute(
+        ModelRequest(
+            project_dir=tmp_path,
+            step_id=2,
+            attempt=1,
+            prompt="work",
+            timeout_seconds=10,
+            hang_timeout_seconds=5,
+        )
+    )
+
+    assert result.returncode == 0
+    assert supervisor.request.argv[0] == "/opt/codex/latest/codex"
+    assert "service_tier" not in " ".join(supervisor.request.argv)
+
+
+def test_native_codex_backend_isolated_uses_current_safe_exec_flags(
+    monkeypatch, tmp_path
+):
+    class RecordingSupervisor:
+        request = None
+
+        def run(self, request):
+            self.request = request
+            return ProcessResult(0, False, 0.01, 123)
+
+    supervisor = RecordingSupervisor()
+    monkeypatch.delenv("CODEX_SERVICE_TIER", raising=False)
+    backend = CodexCliBackend(tmp_path, supervisor=supervisor)
+    final_response = tmp_path / "judge_outputs" / "math.final.txt"
+
+    result = backend.execute(
+        ModelRequest(
+            project_dir=tmp_path,
+            step_id=13,
+            attempt=1,
+            prompt="judge",
+            timeout_seconds=10,
+            hang_timeout_seconds=5,
+            model="gpt-5.6-luna",
+            effort="xhigh",
+            isolated=True,
+            final_response_file=final_response,
+        )
+    )
+
+    assert result.returncode == 0
+    argv = list(supervisor.request.argv)
+    assert "--full-auto" not in argv
+    assert "--sandbox" not in argv
+    assert "--approve-for-me" in argv
+    assert "--ephemeral" in argv
+    assert argv[argv.index("--output-last-message") + 1] == str(final_response)
+    assert "service_tier" not in " ".join(argv)
+
+
+def test_native_codex_backend_rejects_unknown_service_tier(monkeypatch, tmp_path):
+    class UnexpectedSupervisor:
+        def run(self, request):
+            raise AssertionError(f"unexpected process launch: {request.argv}")
+
+    monkeypatch.setenv("CODEX_SERVICE_TIER", "default")
+    backend = CodexCliBackend(tmp_path, supervisor=UnexpectedSupervisor())
+
+    result = backend.execute(
+        ModelRequest(
+            project_dir=tmp_path,
+            step_id=2,
+            attempt=1,
+            prompt="work",
+            timeout_seconds=10,
+            hang_timeout_seconds=5,
+        )
+    )
+
+    assert result.returncode == 2
+    assert result.error_class == "PERMANENT_MODEL_CONFIG"
+    assert result.metadata["reason"] == (
+        "CODEX_SERVICE_TIER must be unset, fast, or flex"
+    )
 
 
 def test_process_backend_recognizes_unsupported_model_as_permanent(tmp_path):

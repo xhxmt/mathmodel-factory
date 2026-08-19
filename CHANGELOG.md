@@ -54,6 +54,7 @@
 
 ### 变更
 
+- 规格—实现对账门禁 S4 改为按目标方向验证松弛界：最小化接受结构化 `lower_bound`，最大化要求 `upper_bound`，并兼容旧顶层字段；S1 同时识别 `1500/3000/6000 次目标评估` 形式的直接预算阶梯，避免把已明确的执行预算误报为不可解析。
 - Web 求解任务面板将任务状态、两阶段凭证限制/错误码、输入输出字段和标准日志入口统一为中文展示；API 原始值保持不变并保留在诊断提示中。
 - Final Audit 统一为最终编译、完整 Step-10 paper/provenance suite、视觉/页数门禁、packet/fingerprint、enforce-mode 三角色 Judge、判决前后快照复核、judgment receipt 与 final acceptance receipt；PASS 复用也必须验证双 receipt 和当前快照。
 - Native 与 Legacy Step 16 统一消费同一个 Final Audit 和原子 release publisher；项目清理提前到最终快照构建前，`2026-08-09.atomic_release_v7` 成为当前交付合同。

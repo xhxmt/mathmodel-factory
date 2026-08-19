@@ -570,11 +570,17 @@ def _file_type(path: Path) -> str:
 
 
 def _meta(project: Path, path: Path, group: str) -> dict[str, Any]:
-    st = path.stat()
+    root = project.resolve(strict=True)
+    target = path.resolve(strict=True)
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("artifact path is outside the project root") from exc
+    st = target.stat()
     return {
-        "path": str(path.relative_to(project)),
-        "name": path.name,
-        "type": _file_type(path),
+        "path": relative.as_posix(),
+        "name": target.name,
+        "type": _file_type(target),
         "group": group,
         "size": st.st_size,
         "mtime": datetime.fromtimestamp(st.st_mtime, tz=BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S"),
@@ -643,11 +649,20 @@ def list_artifacts(project: Path) -> list[dict[str, Any]]:
             return
         if any(part in SKIP_PARTS for part in path.parts):
             return
-        key = str(path)
+        try:
+            root = project.resolve(strict=True)
+            target = path.resolve(strict=True)
+            target.relative_to(root)
+        except (OSError, ValueError):
+            # LaTeX dependencies and project-local symlinks are canonicalized
+            # before publication.  Anything escaping the authorized project
+            # root is not an artifact of this project and must fail closed.
+            return
+        key = str(target)
         if key in seen:
             return
         seen.add(key)
-        items.append(_meta(project, path, group))
+        items.append(_meta(root, target, group))
 
     for group, rels in ARTIFACT_GROUPS.items():
         for rel in rels:
