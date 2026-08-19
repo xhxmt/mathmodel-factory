@@ -12,7 +12,7 @@ from .artifact_ownership import artifact_ownership
 from .paper_sources import mask_inactive_latex, resolve_latex_dependency_graph
 
 
-DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v4"
+DIRTY_CLASSIFIER_SCHEMA = "factory-dirty-classifier-v9"
 
 
 class DirtyFlag(str, Enum):
@@ -82,6 +82,9 @@ _MATH_RE = re.compile(
     r"gather\*?|multline\*?|eqnarray\*?)\}",
     re.DOTALL,
 )
+_SOLVER_RECEIPT_RE = re.compile(
+    r"^\.factory/solver_receipts/(?P<job_id>.+)\.(?:submitted|completed)\.json$"
+)
 _CITATION_RE = re.compile(r"\\(?:cite|citep|citet|autocite)\*?(?:\[[^]]*\])?\{[^}]+\}")
 _LATEX_COMMAND_RE = re.compile(r"\\[A-Za-z@]+\*?(?:\[[^]]*\])?")
 _MATH_DEFINITION_RE = re.compile(
@@ -145,6 +148,13 @@ def classifier_contract_sha256() -> str:
         + b"\0"
         + ownership
     )
+
+
+def solver_receipt_job_id(path: str) -> str | None:
+    """Return the durable solver job id encoded by a receipt artifact path."""
+
+    match = _SOLVER_RECEIPT_RE.fullmatch(path.replace("\\", "/"))
+    return match.group("job_id") if match is not None else None
 
 
 def _tracked(relative: str, path: Path) -> bool:

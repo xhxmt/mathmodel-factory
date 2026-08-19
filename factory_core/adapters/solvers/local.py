@@ -22,9 +22,10 @@ class LocalSolverBackend:
         job_dir = request.project_dir / ".factory" / "solver_jobs"
         job_dir.mkdir(parents=True, exist_ok=True)
         exit_file = job_dir / f"{request.job_id}.json"
-        stdout = request.script.with_suffix(".log")
-        stderr = request.project_dir / "logs" / f"{request.script.stem}_stderr.log"
-        stderr.parent.mkdir(parents=True, exist_ok=True)
+        log_dir = request.project_dir / "logs" / "solver_jobs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout = log_dir / f"{request.job_id}.stdout.log"
+        stderr = log_dir / f"{request.job_id}.stderr.log"
         process = subprocess.Popen(
             [
                 sys.executable,

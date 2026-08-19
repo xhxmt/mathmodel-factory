@@ -23,3 +23,28 @@ def test_collect_symbol_metrics_dict():
     assert m["symbols_undefined"] == 1   # \beta used, not in table
     assert m["symbols_used"] >= 2
     assert "use_before_def" in m
+
+
+def test_display_macros_constants_functions_and_micrometre_units_are_not_symbols():
+    from verify_symbols import extract_used_symbols_from_text
+
+    used, _ = extract_used_symbols_from_text(
+        r"""
+        \newcommand{\HeadlineValue}{\ensuremath{7.8975}}
+        \begin{document}
+        $d=\HeadlineValue\,\mu\mathrm m$, $\arcsin(x)$, and $2\pi$.
+        \end{document}
+        """
+    )
+
+    assert used == {"d", "x"}
+
+
+def test_standalone_mu_remains_auditable():
+    from verify_symbols import extract_used_symbols_from_text
+
+    used, _ = extract_used_symbols_from_text(
+        r"\begin{document}$\mu+x$\end{document}"
+    )
+
+    assert used == {"\\mu", "x"}

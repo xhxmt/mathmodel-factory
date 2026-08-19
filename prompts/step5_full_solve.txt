@@ -17,6 +17,7 @@ Step 5 是数据的「真相之锚」：评委读论文时所有引用的数字�
 - 数值结果写到 `__PROJECT_PATH__/results/<子问题>/`（每个子问题一个子目录）。
 - 中间数据写到 `__PROJECT_PATH__/data/intermediate/m{N}_*`，最终入参（如果有）写到 `data/final/`。
 - **不要**碰 `figures/` / `tables/` / `paper/` —— 那是 Step 8 / 9 / 13 的地盘。Step 5 只产 `results/<subproblem>/plots.pdf` 作为求解过程的 quick-look 图，最终论文图由 Step 8 重做。
+- **跨阶段写入边界**：`models/**/README.md`、`model.md`、`symbol_table.md`、`modeling_scope_gate.md`、`quality_contract.json` 和 `claim_registry.json` 归 Step 4 模型构建所有，本步骤不得改写。AUXILIARY 实例化只允许删除对应 `.stub` 并创建/维护其同名可执行 `.py`；PRIMARY 模型源码除修复会直接阻断完整求解的实现缺陷外不得修改。AUX 的实例化状态、接口说明和 solver receipt 统一记录到 `solve_log.md`，不要通过把 README 从 “scaffold” 改成 “implementation” 来表示状态。若发现模型契约确需修改，明确报告并让调度器按真实语义回绕，禁止顺手改写上游文档。
 
 [必读资料 — 顺序就是建议阅读次序]
 

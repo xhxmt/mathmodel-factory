@@ -73,6 +73,20 @@ def test_derived_result_projection_does_not_reopen_canonical_solve(tmp_path):
     assert DirtyFlag.RESULT not in flags
 
 
+def test_number_verification_is_owned_by_final_revision_validation(tmp_path):
+    before = capture_artifact_manifest(tmp_path)
+    (tmp_path / "number_verification.md").write_text(
+        "# Number verification\n\nVERDICT: PASS\n", encoding="utf-8"
+    )
+    after = capture_artifact_manifest(tmp_path)
+
+    changes = classify_manifest_changes(before, after)
+
+    assert [(change.flag, change.owner_stage) for change in changes] == [
+        (DirtyFlag.MATH, 8)
+    ]
+
+
 def test_problem_plan_change_is_owned_by_understand_stage(tmp_path):
     plan = tmp_path / "problem" / "problem_plan.json"
     plan.parent.mkdir()
