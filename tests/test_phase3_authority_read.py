@@ -12,8 +12,12 @@ import pytest
 
 import factory_core.authority_production_writer as writer_module
 from factory_core.authority_read_repository import (
+    AUTHORITY_PHASE3_ARTIFACT_STATE_SCHEMA,
+    AuthorityPhase3ArtifactState,
     AuthorityReadError,
     AuthorityReadRepository,
+    authority_phase3_artifact_state_from_dict,
+    validate_authority_phase3_artifact_state,
 )
 from factory_core.phase3_artifacts import (
     build_artifact_occurrence,
@@ -29,12 +33,120 @@ from tests.support.authority_production import (
 from tests.test_phase3_authority_writer import (
     CHECKPOINT_KEY,
     _blocked_mutation,
+    _blocker,
+    _compilation,
     _complete_mutation,
     _latest_artifact_occurrence_id,
     _latest_checkpoint_occurrence_id,
     _persist,
     _phase3_head_kwargs,
 )
+
+
+def _assert_phase3_artifact_state_wire_contract(
+    state: AuthorityPhase3ArtifactState,
+) -> None:
+    assert validate_authority_phase3_artifact_state(state) is state
+    wire = state.as_dict()
+    assert wire["schema"] == AUTHORITY_PHASE3_ARTIFACT_STATE_SCHEMA
+    assert wire["state_sha256"] == state.state_sha256
+    assert authority_phase3_artifact_state_from_dict(
+        json.loads(json.dumps(wire))
+    ) == state
+
+    bad_hash = json.loads(json.dumps(wire))
+    bad_hash["state_sha256"] = "f" * 64
+    with pytest.raises(AuthorityReadError, match="SHA-256 differs"):
+        authority_phase3_artifact_state_from_dict(bad_hash)
+
+    cropped_or_ahead = json.loads(json.dumps(wire))
+    cropped_or_ahead["through_revision"] += 1
+    with pytest.raises(AuthorityReadError, match="SHA-256 differs"):
+        authority_phase3_artifact_state_from_dict(cropped_or_ahead)
+
+    unknown_key = json.loads(json.dumps(wire))
+    unknown_key["unexpected"] = False
+    with pytest.raises(AuthorityReadError, match="fields or schema"):
+        authority_phase3_artifact_state_from_dict(unknown_key)
+
+    nested_tamper = json.loads(json.dumps(wire))
+    nested_tamper["occurrences"][0]["mutation_sha256"] = "e" * 64
+    with pytest.raises(AuthorityReadError, match="wire does not revalidate"):
+        authority_phase3_artifact_state_from_dict(nested_tamper)
+
+    first = state.occurrences[0]
+    other = build_artifact_occurrence(
+        workflow_id=state.workflow_id,
+        revision=state.through_revision,
+        command_id="command-state-z",
+        mutation_sha256="d" * 64,
+        blocker=_blocker(_compilation(), path="results/z.json"),
+    )
+    ordered = tuple(sorted((first, other), key=lambda item: item.normalized_path))
+    state_b = validate_authority_phase3_artifact_state(
+        AuthorityPhase3ArtifactState(
+            state.workflow_id,
+            state.through_revision,
+            ordered,
+        )
+    )
+    state_a_later = validate_authority_phase3_artifact_state(
+        AuthorityPhase3ArtifactState(
+            state.workflow_id,
+            state.through_revision + 1,
+            state.occurrences,
+        )
+    )
+    assert len({state.state_sha256, state_b.state_sha256, state_a_later.state_sha256}) == 3
+
+    with pytest.raises(AuthorityReadError, match="unique and sorted"):
+        validate_authority_phase3_artifact_state(
+            AuthorityPhase3ArtifactState(
+                state.workflow_id,
+                state.through_revision,
+                tuple(reversed(ordered)),
+            )
+        )
+    with pytest.raises(AuthorityReadError, match="unique and sorted"):
+        validate_authority_phase3_artifact_state(
+            AuthorityPhase3ArtifactState(
+                state.workflow_id,
+                state.through_revision,
+                (first, first),
+            )
+        )
+
+    foreign = build_artifact_occurrence(
+        workflow_id="other-workflow",
+        revision=state.through_revision,
+        command_id=first.command_id,
+        mutation_sha256=first.mutation_sha256,
+        blocker=first.blocker,
+    )
+    with pytest.raises(AuthorityReadError, match="workflow differs"):
+        validate_authority_phase3_artifact_state(
+            AuthorityPhase3ArtifactState(
+                state.workflow_id,
+                state.through_revision,
+                (foreign,),
+            )
+        )
+
+    future = build_artifact_occurrence(
+        workflow_id=state.workflow_id,
+        revision=state.through_revision + 1,
+        command_id=first.command_id,
+        mutation_sha256=first.mutation_sha256,
+        blocker=first.blocker,
+    )
+    with pytest.raises(AuthorityReadError, match="exceeds read boundary"):
+        validate_authority_phase3_artifact_state(
+            AuthorityPhase3ArtifactState(
+                state.workflow_id,
+                state.through_revision,
+                (future,),
+            )
+        )
 
 
 def _file_identity(path: Path) -> tuple[str, int, int]:
@@ -158,6 +270,7 @@ def test_reader_reconstructs_blocked_phase3_bundle_after_restart(tmp_path):
     assert state.present_records == ()
     assert state.tombstones == ()
     assert state.blockers == mutation.current_manifest.blockers
+    _assert_phase3_artifact_state_wire_contract(state)
 
 
 def test_phase3_typed_row_tamper_fails_closed_after_schema_is_restored(tmp_path):

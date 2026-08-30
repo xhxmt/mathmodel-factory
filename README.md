@@ -32,6 +32,7 @@ cd web
 - **项目控制**：在权限范围内暂停、恢复或终止运行。
 - **人工咨询与选择**：处理咨询请求；交互式项目可启用 Step 3 `PRIMARY/AUXILIARY` 选择门，CLI 路径仍然保留。
 - **Phase 6 验证快照（候选、默认关闭）**：可选展示独立 shadow SQLite 中与单一 Authority revision 绑定的只读快照证据；认证与项目 ACL 先行，且永远不授予 Authority、交付或 dispatch 能力。
+- **Phase 7+8 本地 full-shadow（候选、默认关闭）**：受控 OS 操作员先生成经持久验证的本地 preflight，随后普通 CLI/Web 调用经持久 request/claim/lease ledger 同步执行三角色 grounding、PDF/CAS 与 shadow egress decision；Web 仅提供 ACL-first API 读写适配器，没有前端面板、provider、outbox 或真实 dispatch。
 
 详细使用说明请参阅 [`web/README.md`](web/README.md)。
 
@@ -88,18 +89,24 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 这些运行输出会被 Git 自动忽略。
 
-## 最新更新（2026-08-29）
+## 最新更新（2026-08-30）
 
 当前候选工作树的近期变更集中在核心编排、Web 控制面、评测治理与仓库治理；
 是否进入 `main` 仍以独立审核和后续授权为准：
 
 - Phase 6 候选实现 verified snapshot 与 closed scoped-grant 的独立持久化 full shadow：canonical source binding 精确绑定 Authority coordinate 和 Phase 3/4/5 状态哈希，snapshot/current、grant lifecycle、evaluation/proof 与幂等 receipt 事务化保存在 caller-selected SQLite。Web 只提供 ACL-first 的非权威 GET 适配器；后端 `PHASE6_SNAPSHOT_ENABLED` 和前端构建时 `VITE_PHASE6_FULL_SHADOW_ENABLED=true` 必须同时启用，默认配置仍走 v1 且不触碰 Phase 6 store。它不增加 Authority reader/writer、生产 mutation、action execution 或 dispatch。当前合同见 [`docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md`](docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md)。
+- Phase 7+8 候选实现显式启用、同步本地的 durable full-shadow sidecar：完整绑定当前 `AuthorityPhase3ArtifactState`、修订级 occurrence、Phase 6 exact proof、三角色原始 bytes、PDF/CAS package 和 lifecycle decision。可信操作员通过独立 `factory_core.phase78_operator` 入口先生成 durable preflight；普通 subject 只能引用其 hash，再经 CLI/service/Scheduler/local worker 与 ACL-first Web API 提交、执行和读取。`PHASE78_TRUSTED_OPERATOR_ID`/`GENERATION` 只是部署标签，信任来自受控 OS 账号及 `0700`/`0600` 私有运行目录；issuer 必须不同于 subject。历史 PASS/AUTHORIZED receipt 保留，但上游 head、approval、policy 或时效变化会让 current/effective 视图失败关闭。它默认关闭、没有后台线程、frontend、provider/outbox/dispatch，也没有获得 cutover 或部署授权。当前合同见 [`docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md`](docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md)。
 - Phase 3–6 候选可运行 `./bootstrap.sh` 做无网络自包含验证。版本化
   `phase46-bootstrap-exact-count-v1` 门禁精确要求五组
   `100 / 274 / 146 / 29 / 108`、总计 657 个 passed，且 failed、skipped、
   xfailed、xpassed 全为零。JUnit XML 与独立 pytest outcome ledger 必须完整
   一致；终端文本仅供阅读。运行
   `python3 -m scripts.bootstrap_test_contract describe` 可查看当前合同。
+- Phase 7+8 使用完全独立的 `./bootstrap_phase78.sh` 门禁，不改写上述 657
+  合同。其 unit、runtime、adapters、PDF/CAS、enabled-E2E 五组精确数量由
+  `python3 -m scripts.phase78_test_contract describe` 的版本化结构化合同唯一
+  定义；文档不复制尚会随合法新增测试变化的数字。两套门禁都要求零 failure、
+  error、skip、xfail 和 xpass，并分别在源码树与 fresh no-`.git` 解包树复核。
 - 冻结候选由源码内 `tools/generate_freeze_inventory.py` 和
   `archive_tools/build_deterministic_candidate.py` 构建。二者在任何候选文件
   `lstat/open/read/hash` 前统一调用 `scripts.evidence_payload_policy`；SQLite

@@ -1,8 +1,10 @@
 # Phase 7 Evidence Grounding Shadow
 
-Status: pure validation and hardening slice for ordinary judge evidence
-grounding. The current v1 judge, aggregation, audit, routing, and delivery path
-remains the sole production authority.
+Status: Phase 7A pure validation compatibility contract plus an explicitly
+enabled, durable Phase 7B full-shadow runtime. The current v1 judge,
+aggregation, audit, routing, and delivery path remains the sole production
+authority. The durable runtime and its Phase 8 composition are specified in
+[`PHASE7_8_DURABLE_FULL_SHADOW.md`](PHASE7_8_DURABLE_FULL_SHADOW.md).
 
 ## Selected contract
 
@@ -54,13 +56,17 @@ failure is exit 2. The library performs no writes.
 
 ## Aggregator compatibility and exclusions
 
-`scripts/aggregate_judges.py` already had the selected optional integration:
+`scripts/aggregate_judges.py` retains the selected Phase 7A optional integration:
 without a manifest, grounding is not enforced and existing v1 aggregation is
 unchanged; with a manifest, the role is grounded and a receipt is written by
 that existing caller. Aggregate role parsing preserves exact quote bytes; only
-non-quote strings are normalized. Phase 7 adds no caller or production routing.
+non-quote strings are normalized. Phase 7A adds no caller or production routing.
 
-This slice does not implement delivery hard gates, multi-layer effective
-verdict state, release publication, outbox/current-pointer writes, Scheduler,
-Web/API, frontend, feature flags, provider/model/Solver calls, or cutover. It
-does not use network, SQLite, production configuration, or production data.
+Phase 7B adds a separate default-off SQLite store for exact three-role bytes,
+revision-level Phase 3 occurrence and aggregate-state binding, Phase 6 current
+proof binding, path-free durable receipts, effective verdict/current
+projection, restart, concurrency, and exact replay. It is reachable only
+through the explicitly enabled local Phase 7+8 sidecar and never calls a
+provider, model, Solver, production workflow callback, outbox, or delivery
+route. It does not change the Phase 7A report wire or make either slice
+authoritative.

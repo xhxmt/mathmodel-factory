@@ -29,6 +29,11 @@ paper-factory-api.service
   `VITE_PHASE6_FULL_SHADOW_ENABLED` 设为精确 `true`；不能因为代码存在就推断
   已获准上线。默认构建通过 inert virtual-module alias 完全排除 Phase 6 面板、
   route 和客户端；仅用运行时 CSS/`v-if` 隐藏不符合回滚合同。
+- Phase 7+8 durable local sidecar 也需要单独审批。普通部署保持
+  `PHASE78_ENABLED=false`；默认进程不注册其 Web router、不读取 request/path、
+  不创建 SQLite/CAS/spool、不导入重模块，也不启动 thread/process。它没有前端
+  bundle、provider、outbox 或 dispatch，不能因源码存在或本地 shadow test 通过
+  就推断已获 cutover/部署授权。
 - 前端构建由服务用户执行，避免 root-owned `dist/` 阻塞下一次构建。
 - 根 `.venv` 已由 `uv sync --extra web --extra models --locked` 准备；部署时不会安装 Python 依赖。
 - `pyproject.toml`、`uv.lock`、两个 requirements lock export 和前端 `package-lock.json` 完整且已审查。
@@ -146,6 +151,121 @@ Phase 6 core 或访问 store。保留数据库及启停前后身份供审计。�
 但仍留下已启用 API；仅关闭后端会让已构建 UI 显示 unavailable，因此都不是完整
 回滚。
 
+## 可选 Phase 7+8 durable local sidecar 启停
+
+本节只定义候选在获得单独批准后的本地 sidecar 配置、正常流程 smoke 与回滚；
+它不批准当前候选上线、production cutover、provider dispatch、upload 或 authority
+transfer。Phase 7+8 是同步 local `run-one`，没有后台 Scheduler/worker、生产 outbox
+或 Phase 7+8 前端页面。
+
+### 信任与启用前条件
+
+- 运行 `factory_core.phase78_operator` 的 OS 账号必须是受控本地账号；在当前单用户
+  拓扑中，服务账号必须被当作可信 operator credential 管理，不能向 Web 用户提供
+  shell、任意命令、环境改写或 operator RPC。
+- `PHASE78_TRUSTED_OPERATOR_ID` 和
+  `PHASE78_TRUSTED_OPERATOR_GENERATION` 只是受保护部署环境中的审计标签，不是
+  password、token、signature 或身份验证器。request JSON 不能选择信任根。
+- operator issuer 必须不同于 Phase 6 grant subject。subject ID/generation 必须与
+  当前 exact Phase 6 proof 和后续认证 CLI/Web caller 一致；`snapshot:view` 本身
+  不能授权 egress。
+- 所有运行父目录预先存在、真实且私有，mode 为 `0700`；SQLite、canonical job
+  等持久文件为 `0600`，CAS 已发布 blob 为不可变只读。路径不得复用
+  `web/auth.db`、项目 `.factory/state.db`、生产 outbox 或其他 phase store。
+- Authority、Phase 6 和 project root 已备份并记录 identity。Authority 的 project、
+  run、runtime、Scheduler generation 均为正规 migration 产生的具体值；任一仍是
+  `legacy_unknown` 时不得启用，也不得手改行或伪造 generation。
+- 源码树先通过 `./bootstrap.sh` 的冻结 657 合同和独立
+  `./bootstrap_phase78.sh`。Phase 7+8 当前 exact group/count 只从
+  `python3 -m scripts.phase78_test_contract describe` 读取，不在部署记录中复制旧值。
+- 已记录目标 commit、Authority source fence、获批项目/subject/operator scope、
+  私有路径 inventory、启用窗口和回滚负责人。
+
+### 配置
+
+在受控的非公开服务环境设置以下非敏感配置；所有路径都必须是绝对路径。示例名称
+只表示布局，不是预先存在的生产值：
+
+```dotenv
+PHASE78_ENABLED=true
+PHASE78_AUTHORITY_DB_FILE=/srv/paper-factory/phase78/authority.db
+PHASE78_AUTHORITY_SOURCE_FENCE_SHA256=<64-lowercase-hex>
+PHASE78_PHASE6_DB_FILE=/srv/paper-factory/phase78/phase6.db
+PHASE78_PHASE7_DB_FILE=/srv/paper-factory/phase78/phase7.db
+PHASE78_PHASE8_DB_FILE=/srv/paper-factory/phase78/phase8.db
+PHASE78_WORK_DB_FILE=/srv/paper-factory/phase78/work.db
+PHASE78_WORK_SPOOL=/srv/paper-factory/phase78/work-spool
+PHASE78_PROJECT_ROOT=/srv/paper-factory/phase78/project-root
+PHASE78_CAS_ROOT=/srv/paper-factory/phase78/cas
+PHASE78_SCRATCH_ROOT=/srv/paper-factory/phase78/scratch
+PHASE78_DEADLINE_MS=30000
+PHASE78_LEASE_SECONDS=30
+PHASE78_TRUSTED_OPERATOR_ID=<trusted-operator-id>
+PHASE78_TRUSTED_OPERATOR_GENERATION=<operator-generation>
+```
+
+`PHASE78_DEADLINE_MS` 范围为 1–300000，`PHASE78_LEASE_SECONDS` 范围为
+1–86400。一次请求的 deadline 同时覆盖 current-head/SQLite busy、文件/PDF/CAS、
+Phase 7/8 和一次 committed replay，不能在各 adapter 重置。不要把上述标签放进
+request body，也不要把它们误记为 secret 轮换对象；需要保护的是 OS credential、
+服务配置写权限和私有目录。
+
+配置后按“标准部署”重启后端。由于 Phase 7+8 没有 frontend，前端重新构建不会
+新增 Phase 7+8 页面；router 只在后端进程启动时按 flag 注册。
+
+### 可信 preparation 与普通执行
+
+对每个获批 request，先由受控 OS operator 运行：
+
+在已安全加载上述配置的受控 `tfisher` 账号会话中运行；不要把环境值写到命令行：
+
+```bash
+cd /home/tfisher/paper_factory
+/home/tfisher/paper_factory/.venv/bin/python \
+  -m factory_core.phase78_operator --operator <trusted-operator-id> \
+  prepare <project-id> /absolute/private/path/request.json
+```
+
+该命令重验当前 Phase 3/6 heads，持久化三角色 bytes，稳定读取 occurrence-bound
+PDF，发布并回读 CAS package，再输出 `trusted_preflight_sha256`。它不入队、不启动
+worker、不调用 provider、不 dispatch。把该 hash 写入同一 canonical request 后，
+Phase 6 subject 才可用普通 CLI `submit`/`run-one`，或通过已授权 Web API 执行。
+operator 命令不应由 Web endpoint、通用 job runner 或 request hook 代跑。
+
+### Phase 7+8 live smoke
+
+除通用 smoke 外，使用不记录 token 值的测试账号/会话验证：
+
+- 默认关闭进程没有 Phase 7+8 route/import/resource；启用后，未认证与无项目 ACL
+  用户都在 flag、body、path、database/CAS 和 lazy core 之前被拒绝；
+- operator preflight 的 issuer 与 subject 不同，subject/generation 与 Phase 6 proof
+  精确一致；伪造、缺失或跨 request preflight hash 失败关闭；
+- 真实路径按 operator preflight → CLI/service → durable Scheduler/local worker →
+  Phase 7 store → PDF/CAS/Phase 8 → authenticated Web status 完成；
+- 相同 idempotency key/bytes 并发和重启 replay 收敛，同 key 不同 bytes 冲突；
+  timeout 后 uncertain 只用原 key 查询/重放；
+- 移动原三角色 packet root 或在 successful preflight 后移除原 PDF，持久 replay
+  identity 不变；missing/corrupt/encrypted/no-text 在 preparation 阶段给稳定结构化
+  unavailable，不泄漏绝对路径或内部堆栈；
+- Phase 3/6/7 head、work generation、policy、approval lifecycle 或 server-time expiry
+  变化后，历史 receipt 仍保留而 effective current 立即 unavailable/`DENIED`；
+- approval revoke 后 Web status 为 `DENIED`；旧 AUTHORIZED 只作为 historical
+  receipt，不作为当前授权；
+- 全部响应的 `authoritative`、`authority_transferred`、`dispatch_performed`、
+  `provider_call_performed` 和 `outbox_dispatch_performed` 均为 `false`，进程未导入/
+  调用 provider，未创建生产 outbox 或外部网络请求。
+
+### Phase 7+8 回滚
+
+在受控环境把 `PHASE78_ENABLED` 改为 `false`，然后重启后端。验收要求：Phase 7+8
+router 不再注册；普通 CLI/service/Scheduler/worker 在 request path、数据库/CAS 和
+重模块 import 前返回 disabled；Phase 1–6 页面、API、CLI 和输出保持原样。
+
+回滚不得删除或改写 Phase 7/8 SQLite、work database/spool、CAS、scratch、operator
+preflight 或历史 receipts。保留启停前后 commit、flag、source fence、路径/mode、
+route inventory 和 smoke 结果。旧 work 可在以后重新获批启用后用同 key 审计或
+重放；关闭 flag 本身不声称撤销历史事实，也不产生 dispatch。
+
 ## 预检与验证
 
 ### 本地服务
@@ -181,6 +301,9 @@ curl -kfsS https://tfisher.de/ >/dev/null
 - WebSocket、日志、咨询、Step 3 选择和项目 ACL 与当前用户权限一致。
 - 默认部署不出现“验证快照”标签；若 Phase 6 经批准启用，则追加执行本 runbook
   的 ACL-first、revision 与 false-safety-bit smoke。
+- 默认部署没有 Phase 7+8 route 或资源访问；若 Phase 7+8 经批准启用，则追加执行
+  本 runbook 的 operator-preflight、ACL-first、durable replay、effective-current 与
+  全 false safety-bit smoke。Phase 7+8 没有可检查的 frontend 面板。
 
 ### 构建指纹
 
@@ -247,6 +370,21 @@ SIGKILL 收尾，并有启动限流，避免后续重启再次遗留子进程或
 失败关闭；不要用 `chmod`、复制空库或绕过校验来“修复”。记录数据库身份与日志中
 的错误类型，回滚双 flag，再由 Phase 6 store 审核流程诊断。公共 API 的泛化错误
 是预期的信息泄漏边界，不应改成返回内部路径或 SQL。
+
+### Phase 7+8 启用后失败
+
+先把故障分类为 config、operator preflight、durable work、Phase 7 grounding、PDF/CAS、
+Phase 8 currentness 或 Web ACL，而不是重复生成 idempotency key。确认服务实际读取的
+全部路径均为受控绝对路径，parent/file mode 符合 `0700`/`0600`，Authority source
+fence 与 concrete generations 正确，且 operator issuer、Phase 6 subject 和各
+generation 没有混用。`legacy_unknown` 必须由正规 migration 关闭，不能靠 SQL 手改。
+
+如果请求可能已经提交，先用原 idempotency key 查询 status；post-commit timeout 的
+uncertain 结果只能用该 key 重放。missing/corrupt/encrypted/no-text PDF、CAS digest/
+length 失败、stale head、expired/revoked/superseded approval 都应失败关闭；不要复制
+原文件、放宽 schema/hash、重置 current row 或把公共错误改成泄漏内部路径。无法在
+批准窗口内恢复时关闭 `PHASE78_ENABLED`、重启并按本节回滚验收；保留所有 store、
+CAS、spool、preflight、原始日志和身份供审计。
 
 ## 运行后记录
 

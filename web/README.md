@@ -29,6 +29,7 @@
 - 论文 artifact 分组来自完整活动 LaTeX dependency graph（含嵌套 bibliography）；决定 receipt 的缺失、符号链接、哈希或身份不一致显示为 `DECISION_RECEIPT_MISMATCH`，Approval Gate 不会继续放行。缺失 receipt 只能通过 `scripts/decision_receipt_repair.py <project> <request_id>` 从不可变 SQLite 决定重建，且重建字节必须匹配原 SHA-256；已有损坏证据不会被覆盖。
 - 交付就绪中心按红黄绿列出 PDF、canonical results、附件、内容冻结、确定性检查、视觉页数、三角色、最终快照和原子 release；PDF/ZIP 只从已验证的 current release 下载。
 - Phase 6 候选提供可选的“验证快照”只读页：它从独立 SQLite 展示与单一 revision 绑定的 snapshot/section 哈希证据，默认不进入前端包且后端默认不访问其数据库。该页不授予 Authority、项目 ACL、交付权或 dispatch 能力。
+- Phase 7+8 候选提供默认关闭的 durable local full-shadow API：受控 OS 操作员先生成可信 preflight，普通 subject 再通过 CLI 或项目 ACL 保护的 Web API 提交、显式执行和读取 grounding/PDF-CAS/egress shadow 结果。它没有 Phase 7+8 前端面板、后台 worker、provider、outbox 或真实 dispatch。
 
 ## 本地启动
 
@@ -221,6 +222,142 @@ Vite 会在构建时把 `virtual:optional-workspace-snapshot` 精确映射到 in
 Phase 6 的完整身份、持久化、grant 生命周期和安全边界见
 [`../docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md`](../docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md)。
 
+## Phase 7+8 durable local sidecar（默认关闭）
+
+Phase 7+8 是候选级同步本地 full-shadow sidecar，不是现役 workflow、交付或
+provider 控制面。默认 `PHASE78_ENABLED=false` 时，后端不注册 Phase 7+8
+router；CLI、service、Scheduler 和 worker 也在读取 request file、解析路径、
+打开 SQLite/CAS、导入重模块或启动线程/进程前返回。该能力没有前端页面或 Vite
+flag，启用后也只有 API/CLI JSON 结果。
+
+### 信任边界与正常流程
+
+普通 Web/CLI caller 不能创建 approval authority。完整正常流程分为两个独立步骤：
+
+1. 受控 OS 操作员运行 `factory_core.phase78_operator`。该入口重验当前 Phase 3
+   aggregate/occurrence 与 Phase 6 exact proof，持久化三角色原始 bytes，稳定读取
+   revision-bound PDF，将 raw PDF、PNG、text、chunks、package 和 receipt 先写入并
+   回读 CAS，再生成 durable trusted preflight。
+2. Phase 6 grant 的 subject 把返回的 `trusted_preflight_sha256` 放入同一规范 request，
+   再用 CLI 或 ACL-first Web submit/`run-one`。service、durable Scheduler/local worker
+   重放并逐字段验证 preflight；Web 随后读取 effective status。
+
+`PHASE78_TRUSTED_OPERATOR_ID` 和
+`PHASE78_TRUSTED_OPERATOR_GENERATION` 只是受保护进程环境中的部署标签，不是
+password、token、签名或身份验证器。信任来自可运行 operator 命令的受控 OS 账号，
+以及 `0700` 的 store/CAS/spool/scratch 父目录和 `0600` 的持久文件。不要把该 OS
+credential、operator 命令或可改写其环境的 shell 暴露给 Web 用户。operator issuer
+必须不同于 Phase 6 subject；subject ID/generation 又必须与 exact grant 和认证 caller
+一致。Phase 6 `snapshot:view` 证明仅是读取/currentness fence，不能升级为 egress
+authority。
+
+operator 命令与普通 CLI 是两套入口：
+
+```bash
+python3 -m factory_core.phase78_operator \
+  --operator <trusted-operator-id> prepare <project-id> /abs/path/request.json
+
+python3 -m factory_core.cli phase78 --actor <phase6-subject> \
+  submit <project-id> /abs/path/request-with-preflight-hash.json
+python3 -m factory_core.cli phase78 --actor <phase6-subject> \
+  run-one <project-id> /abs/path/request-with-preflight-hash.json
+python3 -m factory_core.cli phase78 --actor <phase6-subject> \
+  status <project-id> <idempotency-key>
+python3 -m factory_core.cli phase78 --actor <phase6-subject> \
+  cancel <project-id> /abs/path/cancel-request.json
+```
+
+operator preparation 不入队、不启动 worker，也不 dispatch。普通 request 中自报的
+issuer/approval 或伪造 preflight hash 不会获批。撤销只能由持久 approval 的 issuer
+执行；具体 JSON schema 和 successor CAS 见架构合同与测试 fixture，不应从旧审计
+报告复制。
+
+### 启用配置
+
+显式启用要求下列值全部有效；路径必须是绝对路径且分别指向受控的私有资源：
+
+```dotenv
+PHASE78_ENABLED=true
+PHASE78_AUTHORITY_DB_FILE=/absolute/private/path/authority.db
+PHASE78_AUTHORITY_SOURCE_FENCE_SHA256=<64-lowercase-hex>
+PHASE78_PHASE6_DB_FILE=/absolute/private/path/phase6.db
+PHASE78_PHASE7_DB_FILE=/absolute/private/path/phase7.db
+PHASE78_PHASE8_DB_FILE=/absolute/private/path/phase8.db
+PHASE78_WORK_DB_FILE=/absolute/private/path/work.db
+PHASE78_WORK_SPOOL=/absolute/private/path/work-spool
+PHASE78_PROJECT_ROOT=/absolute/private/path/project-root
+PHASE78_CAS_ROOT=/absolute/private/path/cas
+PHASE78_SCRATCH_ROOT=/absolute/private/path/scratch
+PHASE78_DEADLINE_MS=30000
+PHASE78_LEASE_SECONDS=30
+PHASE78_TRUSTED_OPERATOR_ID=<trusted-operator-id>
+PHASE78_TRUSTED_OPERATOR_GENERATION=<operator-generation>
+```
+
+deadline 范围是 1–300000ms，lease 范围是 1–86400 秒。一次 request 只创建一个
+总 deadline，覆盖 Authority/Phase 6 current read、SQLite busy、file/PDF/CAS、
+Phase 7/8 和最多一次 committed replay；每层不得重置预算。超时、用户取消、shutdown
+和 superseded generation 有不同稳定 code。若内层已提交后才超时，结果是 uncertain；
+caller 应用同一 idempotency key 查询/重放，不能换 key 重复生成。
+
+Authority 中任何 project/run/runtime/Scheduler generation 仍是 `legacy_unknown` 时
+必须先走正常生产 migration 并落地具体 generation。不要手改 Authority 行、伪造
+generation 或放宽 Phase 6 eligibility 来启用 sidecar。
+
+### Web API 与 current 语义
+
+启用后的路由是：
+
+```text
+POST /api/projects/{base_name}/phase78-shadow/requests
+POST /api/projects/{base_name}/phase78-shadow/run-one
+GET  /api/projects/{base_name}/phase78-shadow/{idempotency_key}
+POST /api/projects/{base_name}/phase78-shadow/{idempotency_key}/cancel
+POST /api/projects/{base_name}/phase78-shadow/approvals/{approval_id}/revoke
+```
+
+每条路由都先完成认证和现有 `web/auth.db` 项目 ACL，再检查 flag/config、解析 body、
+导入 core 或访问资源。Web 不提供 operator preflight。未知异常返回泛化安全文案；
+可公开的 conflict/not-found/deadline/request code 才使用稳定映射。
+
+历史 receipt 与当前可用性明确分离：旧 PASS/AUTHORIZED 事实仍可按不可变 identity
+重放，但 Phase 3/6/7 head、work generation、approval lifecycle、expiry、successor 或
+policy 漂移会让 effective current 返回 unavailable/`DENIED`。status 使用 service-owned
+当前时间，所以重启后也不会继续暴露已过期 approval。成功结果仍固定
+`authoritative=false`、`authority_transferred=false`、`dispatch_performed=false`、
+`provider_call_performed=false`、`outbox_dispatch_performed=false`。
+
+取消请求的 JSON 固定为 `phase78-work-cancel-request-v1`，并只接受与 URL
+相同的 canonical idempotency key、逻辑 `cancelled_at` 和
+`reason="user_cancel"`。内部 shutdown/superseded 分类同样持久化，但公共响应只返回
+稳定的 reason、occurred-at 和 receipt hash；claim owner、epoch、nonce 等私有 lease
+token 不进入 CLI/Web 响应。重启和同请求重放保留最初原因，不同原因或时间按
+idempotency conflict 失败关闭。只有 durable `SUCCEEDED` work 才能把 Phase 8
+decision 投影为 pipeline 成功；cancelled、failed、pending 或 active 状态不会被历史
+`AUTHORIZED` decision 翻成成功。
+
+PDF 只在 operator preparation 期间按 occurrence digest/length 稳定读取。完成 preflight
+后，普通 worker 和重启 replay 使用持久 CAS components，不依赖原绝对 PDF 路径或
+当前 parser 版本；missing/corrupt/encrypted/no-text 以稳定结构化 unavailable 结束，
+不返回绝对路径或 500 内部细节。
+
+### 验证与回滚
+
+`./bootstrap.sh` 继续独立验证冻结的 Phase 3–6 精确 657 合同；
+`./bootstrap_phase78.sh` 验证 Phase 7+8 的 unit、runtime、adapters、PDF/CAS 和真实
+enabled E2E。Phase 7+8 当前精确 group/count 只以
+`python3 -m scripts.phase78_test_contract describe` 为准，两套门禁都要求全部收集项
+通过且零 skip/xfail/xpass。
+
+回滚时把 `PHASE78_ENABLED` 设回 `false` 并重启后端。验收应确认 router 消失、普通
+CLI/service/Scheduler/worker 在资源访问前返回、旧 Dashboard/Phase 1–6 输出不变。
+不得删除 Phase 7/8 SQLite、CAS、spool、scratch 或历史 receipts；它们保留供审计和
+后续同 key replay。完整运维前置、smoke 和回滚记录见
+[`docs/deployment/DEPLOYMENT.md`](docs/deployment/DEPLOYMENT.md)。
+
+完整身份、持久化、trust/currentness 和 no-dispatch 合同见
+[`../docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md`](../docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md)。
+
 ## API 概览
 
 公开只读：
@@ -250,6 +387,10 @@ Phase 6 的完整身份、持久化、grant 生命周期和安全边界见
 - `GET /api/projects/{base_name}/modeling-directions`（分层方法召回与结构化内容块）
 - `GET /api/projects/{base_name}/problem-plan`（经校验的问题专属 DAG）
 - `GET /api/projects/{base_name}/phase6-snapshot`（默认关闭、ACL-first、非权威只读 shadow）
+- `POST /api/projects/{base_name}/phase78-shadow/requests`（默认关闭、ACL-first、durable shadow submit）
+- `POST /api/projects/{base_name}/phase78-shadow/run-one`（默认关闭、显式同步 local worker）
+- `GET /api/projects/{base_name}/phase78-shadow/{idempotency_key}`（默认关闭、effective current read）
+- `POST /api/projects/{base_name}/phase78-shadow/approvals/{approval_id}/revoke`（默认关闭、issuer-only shadow revoke）
 - `GET /api/projects/{base_name}/submission`（仅验证过的 current release ZIP）
 
 管理员：

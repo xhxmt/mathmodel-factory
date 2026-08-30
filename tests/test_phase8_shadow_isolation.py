@@ -19,8 +19,21 @@ ROOT = Path(__file__).resolve().parents[1]
 LATER_PHASE_MODULES = frozenset(
     {
         "factory_core.data_egress",
+        "factory_core.phase78_cli",
+        "factory_core.phase78_config",
+        "factory_core.phase78_current",
+        "factory_core.phase78_deadline",
+        "factory_core.phase78_operator",
+        "factory_core.phase78_scheduler",
+        "factory_core.phase78_service",
+        "factory_core.phase78_work_ledger",
+        "factory_core.phase78_worker",
+        "factory_core.phase7_grounding_runtime",
+        "factory_core.phase8_evidence_egress_runtime",
         "factory_core.reference_evidence",
+        "factory_core.reference_materializer",
         "scripts.evidence_grounding",
+        "web.backend.phase78_api",
     }
 )
 PRODUCTION_ENTRYPOINTS = {
@@ -133,6 +146,7 @@ def test_clean_process_import_does_not_load_phase7_8_modules(
             "FACTORY_ROOT": str(tmp_path),
             "JWT_SECRET": "generated-isolation-key-material-32chars",
             "PHASE6_SNAPSHOT_ENABLED": "false",
+            "PHASE78_ENABLED": "false",
             "PYTHONDONTWRITEBYTECODE": "1",
         }
     )

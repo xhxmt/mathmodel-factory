@@ -753,7 +753,7 @@ def test_operator_health_reads_explicit_backup_and_restore_evidence(tmp_path):
     assert payload["restore_evidence_present"] is True
 
 
-def test_fresh_active_cli_imports_no_production_authority_modules_and_has_no_callers():
+def test_fresh_active_cli_imports_no_production_authority_modules_and_has_only_the_phase78_read_fence():
     code = (
         "import sys; import factory_core.cli; "
         "bad=[n for n in sys.modules if n.startswith('factory_core.authority_production') "
@@ -780,7 +780,14 @@ def test_fresh_active_cli_imports_no_production_authority_modules_and_has_no_cal
             "authority_production_schema.py", "authority_operator_workflow.py",
         }
     ]
-    matches = []
+    # Phase 7+8 is still absent from the default CLI import graph above.  When
+    # explicitly enabled, its current-head verifier is the one reviewed,
+    # read-only consumer of the Authority repository; no writer, outbox,
+    # operations, or operator module may acquire another caller here.
+    expected_callers = {
+        "factory_core/phase78_current.py": {"authority_read_repository"},
+    }
+    matches = {}
     for path in active_files:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         imports = []
@@ -789,9 +796,11 @@ def test_fresh_active_cli_imports_no_production_authority_modules_and_has_no_cal
                 imports.extend(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
                 imports.append(node.module)
-        if any(
-            module.rsplit(".", 1)[-1] in forbidden_modules
+        forbidden_imports = {
+            module.rsplit(".", 1)[-1]
             for module in imports
-        ):
-            matches.append(str(path.relative_to(ROOT)))
-    assert matches == []
+            if module.rsplit(".", 1)[-1] in forbidden_modules
+        }
+        if forbidden_imports:
+            matches[str(path.relative_to(ROOT))] = forbidden_imports
+    assert matches == expected_callers

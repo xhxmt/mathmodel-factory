@@ -22,6 +22,13 @@ BUILDER = ROOT / "archive_tools/build_deterministic_candidate.py"
 VERIFY = ROOT / "archive_tools/verify_candidate_zip.py"
 
 
+def test_candidate_manifest_schema_is_phase_neutral_and_versioned() -> None:
+    safety = importlib.import_module("archive_tools.archive_safety")
+
+    assert safety.MANIFEST_SCHEMA == "paper-factory-full-shadow-candidate-manifest-v2"
+    assert "phase4-6" not in safety.MANIFEST_SCHEMA
+
+
 def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         ["git", *arguments],
@@ -57,7 +64,7 @@ def _unsafe_archive_name(name: str) -> bool:
     folded = name.replace("\\", "/").casefold().rsplit("/", 1)[-1]
     database_suffixes = (".db", ".sqlite", ".sqlite3")
     sidecars = ("", "-wal", "-shm", "-journal")
-    return any(
+    return folded.startswith(".put-") or any(
         folded.endswith(database_suffix + sidecar)
         for database_suffix in database_suffixes
         for sidecar in sidecars
@@ -176,8 +183,10 @@ def test_live_sqlite_wal_is_excluded_by_real_inventory_and_builder(
         denied_fixtures = {
             source / "nested/STATE.SQLite-JOURNAL": b"journal-state",
             source / "windows\\ACL.Db-WaL": b"windows-sidecar",
+            source / "runtime/cas/objects/sha256/aa/.put-deadbeef-1234": b"cas-temp",
         }
         for path, value in denied_fixtures.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(value)
         _git(source, "add", "-f", "--", ".")
 
@@ -208,6 +217,11 @@ def test_live_sqlite_wal_is_excluded_by_real_inventory_and_builder(
                 f"{denied}\tpath-policy-before-file-io:database_state"
                 in exclusions
             )
+        assert (
+            "runtime/cas/objects/sha256/aa/.put-deadbeef-1234"
+            "\tpath-policy-before-file-io:cas_temporary_state"
+            in exclusions
+        )
 
         metadata = tmp_path / "metadata.json"
         metadata.write_text(

@@ -1,5 +1,40 @@
 # Changelog
 
+- Phase 7+8 durable full-shadow candidate: add a strictly default-off,
+  synchronous local sidecar that binds the complete current Phase-3 Authority
+  aggregate, one exact revision-level artifact occurrence, the Phase-6 current
+  access proof, three exact-byte grounding roles, and the Phase-8 PDF/CAS/
+  package/approval/decision chain. The private work ledger durably records
+  request, claim, lease, checkpoint, result, cancellation and uncertain replay;
+  one total deadline spans Authority and SQLite waits, file/PDF/CAS work, both
+  phase stores and the one allowed replay. Work-generation and upstream-head
+  fences prevent a cancelled, superseded or late local worker from publishing
+  current state. P7 replay retains whitespace/newlines and works after the
+  original packet root moves; P8 replay uses persisted exact PDF-derived CAS
+  facts after the original path disappears. Missing, corrupt, encrypted or
+  textless PDFs produce stable path-free unavailable results.
+  Add an operator-only `factory_core.phase78_operator` preflight that validates
+  and persists the exact P7/P8 facts before an ordinary request may reference
+  its receipt hash. `PHASE78_TRUSTED_OPERATOR_ID` and `GENERATION` are only
+  deployment labels; the trust boundary is the controlled OS account plus
+  private `0700` parents and `0600` files. The operator issuer is distinct from
+  the Phase-6 subject, and CLI/Web/service callers cannot mint a preflight or
+  promote `snapshot:view` into egress authority. Historical PASS/AUTHORIZED
+  receipts remain replayable while current reads rejoin live Phase-3/6/7 heads,
+  lifecycle, policy and service-owned time, so revoke, expiry, supersession or
+  drift yields `DENIED`. Legacy `legacy_unknown` generations must complete the
+  regular migration before eligibility.
+  Add lazy ordinary CLI, ACL-first Web API, service, explicit local Scheduler/
+  worker and durable status/revoke paths. With `PHASE78_ENABLED=false`, they
+  return before request paths, databases, CAS, heavy imports, threads or
+  processes; with it enabled, every result is non-authoritative, no-transfer,
+  no-provider, no-outbox and no-dispatch. There is no Phase-7+8 frontend or
+  production cutover in this candidate. A new independent
+  `bootstrap_phase78.sh` owns exact unit/runtime/adapters/PDF-CAS/E2E counts via
+  its versioned structured contract and leaves the Phase-3–6 exact 657 gate
+  unchanged. This entry records implementation, not deployment authorization
+  or a final release PASS.
+
 - Phase 6 verified snapshot/scoped-grant full-shadow candidate: add a
   caller-path, independent exact-profile SQLite store for canonical source
   bindings, immutable verified snapshot chains, current-head CAS, closed

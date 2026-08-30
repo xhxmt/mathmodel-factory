@@ -593,13 +593,27 @@ def connect_authority_rw(path: Path, *, timeout_seconds: float = 2.0) -> sqlite3
     return connection
 
 
-def connect_authority_ro(path: Path) -> sqlite3.Connection:
+def connect_authority_ro(
+    path: Path, *, timeout_seconds: float = 2.0
+) -> sqlite3.Connection:
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or timeout_seconds <= 0
+    ):
+        raise AuthorityProductionSourceError(
+            "read-only Authority timeout must be positive seconds"
+        )
     uri = f"file:{path.as_posix()}?mode=ro"
-    connection = sqlite3.connect(uri, uri=True, timeout=2, isolation_level=None)
+    connection = sqlite3.connect(
+        uri, uri=True, timeout=float(timeout_seconds), isolation_level=None
+    )
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only=ON")
     connection.execute("PRAGMA foreign_keys=ON")
-    connection.execute("PRAGMA busy_timeout=2000")
+    connection.execute(
+        f"PRAGMA busy_timeout={max(1, int(float(timeout_seconds) * 1000))}"
+    )
     return connection
 
 

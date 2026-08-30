@@ -14,7 +14,12 @@ from .authority_repository import (
     AUTHORITY_IDEMPOTENCY_REQUEST_SCHEMA,
     AuthorityEnvelopePersistenceError,
 )
-from .authority_operations import _identifier, _nonnegative, _sha
+from .authority_operations import (
+    AuthorityOperationError,
+    _identifier,
+    _nonnegative,
+    _sha,
+)
 from .authority_production_schema import (
     authority_database_path,
     connect_authority_ro,
@@ -28,13 +33,18 @@ from .phase3_artifacts import (
     CheckpointLedgerOccurrence,
     Phase3ContractError,
     Phase3Mutation,
+    artifact_occurrence_from_dict,
     phase3_mutation_from_dict,
+    validate_artifact_occurrence,
 )
 from . import authority_production_writer as _production_writer
 
 
 class AuthorityReadError(RuntimeError):
     """Raised when a supported read cannot prove its immutable identity."""
+
+
+AUTHORITY_PHASE3_ARTIFACT_STATE_SCHEMA = "authority-read-phase3-artifact-state-v1"
 
 
 @dataclass(frozen=True)
@@ -198,6 +208,17 @@ class AuthorityPhase3ArtifactState:
     through_revision: int
     occurrences: tuple[ArtifactLedgerOccurrence, ...]
 
+    def as_dict(self) -> dict[str, object]:
+        validate_authority_phase3_artifact_state(self)
+        result = _authority_phase3_artifact_state_identity(self)
+        result["state_sha256"] = canonical_sha256(result)
+        return result
+
+    @property
+    def state_sha256(self) -> str:
+        validate_authority_phase3_artifact_state(self)
+        return canonical_sha256(_authority_phase3_artifact_state_identity(self))
+
     @property
     def present_records(self):
         return tuple(
@@ -221,6 +242,103 @@ class AuthorityPhase3ArtifactState:
             for occurrence in self.occurrences
             if occurrence.kind is ArtifactOccurrenceKind.REMOVAL
         )
+
+
+def _authority_phase3_artifact_state_identity(
+    state: AuthorityPhase3ArtifactState,
+) -> dict[str, object]:
+    return {
+        "schema": AUTHORITY_PHASE3_ARTIFACT_STATE_SCHEMA,
+        "workflow_id": state.workflow_id,
+        "through_revision": state.through_revision,
+        "occurrences": [item.as_dict() for item in state.occurrences],
+    }
+
+
+def validate_authority_phase3_artifact_state(
+    state: AuthorityPhase3ArtifactState,
+) -> AuthorityPhase3ArtifactState:
+    """Validate one canonical latest-occurrence projection at a read boundary."""
+
+    if type(state) is not AuthorityPhase3ArtifactState:
+        raise AuthorityReadError(
+            "Phase-3 artifact state must be AuthorityPhase3ArtifactState"
+        )
+    try:
+        workflow_id = _identifier(state.workflow_id, "workflow_id")
+        through_revision = _nonnegative(
+            state.through_revision,
+            "through_revision",
+        )
+    except AuthorityOperationError as exc:
+        raise AuthorityReadError(str(exc)) from exc
+    if type(state.occurrences) is not tuple:
+        raise AuthorityReadError("Phase-3 artifact state occurrences must be a tuple")
+    paths: list[str] = []
+    for occurrence in state.occurrences:
+        try:
+            validate_artifact_occurrence(occurrence)
+        except Phase3ContractError as exc:
+            raise AuthorityReadError(
+                "Phase-3 artifact state occurrence does not revalidate"
+            ) from exc
+        if occurrence.workflow_id != workflow_id:
+            raise AuthorityReadError(
+                "Phase-3 artifact state occurrence workflow differs"
+            )
+        if occurrence.revision > through_revision:
+            raise AuthorityReadError(
+                "Phase-3 artifact state occurrence exceeds read boundary"
+            )
+        paths.append(occurrence.normalized_path)
+    if paths != sorted(paths) or len(paths) != len(set(paths)):
+        raise AuthorityReadError(
+            "Phase-3 artifact state paths must be unique and sorted"
+        )
+    return state
+
+
+def authority_phase3_artifact_state_from_dict(
+    value: object,
+) -> AuthorityPhase3ArtifactState:
+    """Parse and hash-check one exact JSON-safe Phase-3 artifact state wire."""
+
+    expected = {
+        "schema",
+        "workflow_id",
+        "through_revision",
+        "occurrences",
+        "state_sha256",
+    }
+    if (
+        type(value) is not dict
+        or set(value) != expected
+        or value.get("schema") != AUTHORITY_PHASE3_ARTIFACT_STATE_SCHEMA
+    ):
+        raise AuthorityReadError("Phase-3 artifact state fields or schema differ")
+    if type(value["occurrences"]) is not list:
+        raise AuthorityReadError(
+            "Phase-3 artifact state occurrences must be a JSON array"
+        )
+    try:
+        occurrences = tuple(
+            artifact_occurrence_from_dict(item) for item in value["occurrences"]
+        )
+        supplied_sha256 = _sha(value["state_sha256"], "state_sha256")
+    except (AuthorityOperationError, Phase3ContractError) as exc:
+        raise AuthorityReadError(
+            "Phase-3 artifact state wire does not revalidate"
+        ) from exc
+    state = validate_authority_phase3_artifact_state(
+        AuthorityPhase3ArtifactState(
+            value["workflow_id"],
+            value["through_revision"],
+            occurrences,
+        )
+    )
+    if state.state_sha256 != supplied_sha256:
+        raise AuthorityReadError("Phase-3 artifact state SHA-256 differs")
+    return state
 
 
 @dataclass(frozen=True)
@@ -319,25 +437,54 @@ def _phase3_mutation_at_revision(
 class AuthorityReadRepository:
     """Frozen supported reads over one explicit read-only SQLite transaction."""
 
-    __slots__ = ("_path", "_expected_source_fence")
+    __slots__ = ("_path", "_expected_source_fence", "_deadline")
 
     def __init__(
-        self, database: str | Path, *, expected_source_fence_sha256: str
+        self,
+        database: str | Path,
+        *,
+        expected_source_fence_sha256: str,
+        deadline: object | None = None,
     ) -> None:
         self._path = authority_database_path(database)
         self._expected_source_fence = _sha(
             expected_source_fence_sha256, "expected_source_fence_sha256"
         )
+        self._deadline = deadline
+
+    def _remaining_timeout(self) -> float:
+        if self._deadline is None:
+            return 2.0
+        check = getattr(self._deadline, "check", None)
+        remaining = getattr(self._deadline, "remaining_seconds", None)
+        if not callable(check) or not callable(remaining):
+            raise AuthorityReadError(
+                "Authority read deadline must expose check() and remaining_seconds()"
+            )
+        check("authority_read_before")
+        value = remaining()
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or value <= 0
+        ):
+            check("authority_read_exhausted")
+            raise AuthorityReadError("Authority read deadline has no remaining budget")
+        return min(2.0, float(value))
 
     @contextmanager
     def _snapshot(self) -> Iterator[sqlite3.Connection]:
-        connection = connect_authority_ro(self._path)
+        connection = connect_authority_ro(
+            self._path, timeout_seconds=self._remaining_timeout()
+        )
         try:
             connection.execute("BEGIN")
             verify_production_installation(connection, require_ready=True)
             if legacy_source_identity_sha256(connection) != self._expected_source_fence:
                 raise AuthorityReadError("read source fence differs")
             yield connection
+            if self._deadline is not None:
+                self._deadline.check("authority_read_after")
             connection.commit()
         except Exception:
             connection.rollback()
@@ -564,10 +711,12 @@ class AuthorityReadRepository:
             for bundle in bundles:
                 for occurrence in bundle.artifact_occurrences:
                     latest[occurrence.normalized_path] = occurrence
-            return AuthorityPhase3ArtifactState(
-                coordinate.workflow_id,
-                boundary,
-                tuple(latest[path] for path in sorted(latest)),
+            return validate_authority_phase3_artifact_state(
+                AuthorityPhase3ArtifactState(
+                    coordinate.workflow_id,
+                    boundary,
+                    tuple(latest[path] for path in sorted(latest)),
+                )
             )
 
     def revision_snapshot(

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import hashlib
 from typing import Mapping
 
-from factory_core.canonical import canonical_sha256
+from factory_core.canonical import CanonicalizationError, canonical_sha256
 
 
 REFERENCE_EVIDENCE_SCHEMA = "canonical-reference-evidence-v1"
@@ -598,3 +598,97 @@ def validate_canonical_reference_evidence(
         external_share_classification=classification,
         egress_authority_granted=False,
     )
+
+
+def verify_reference_document_record(
+    wire_record: Mapping[str, object],
+) -> ReferenceDocumentRecord:
+    """Deeply recompile and verify a serialized reference record.
+
+    The function remains path-free and side-effect-free.  Materializers and
+    durable stores use it after decoding canonical JSON so a self-consistent
+    outer hash cannot hide malformed nested facts.
+    """
+
+    root = _require_mapping(wire_record, "reference document record")
+    _require_keys(
+        root,
+        {
+            "schema_version",
+            "reference_id",
+            "raw_pdf",
+            "pdf_inspection",
+            "pages",
+            "chunks",
+            "bibliographic_metadata",
+            "metadata_provenance",
+            "external_share",
+            "record_sha256",
+        },
+        "reference document record",
+    )
+    if root["schema_version"] != REFERENCE_DOCUMENT_RECORD_SCHEMA:
+        raise ReferenceEvidenceError("unsupported reference document record schema")
+    claimed = _require_sha256(
+        root["record_sha256"], "reference document record record_sha256"
+    )
+    identity = {key: root[key] for key in root if key != "record_sha256"}
+    try:
+        actual = canonical_sha256(identity)
+    except CanonicalizationError as exc:
+        raise ReferenceEvidenceError(
+            "reference document record is outside canonical JSON"
+        ) from exc
+    if actual != claimed:
+        raise ReferenceEvidenceError("reference document record hash mismatch")
+
+    external_share = _require_mapping(root["external_share"], "external_share")
+    _require_keys(
+        external_share,
+        {"classification", "authority_granted"},
+        "external_share",
+    )
+    if external_share["authority_granted"] is not False:
+        raise ReferenceEvidenceError(
+            "external_share.authority_granted must be false"
+        )
+
+    provenance_wire = root["metadata_provenance"]
+    if not isinstance(provenance_wire, list):
+        raise ReferenceEvidenceError("metadata_provenance must be an array")
+    provenance: dict[str, object] = {}
+    for ordinal, value in enumerate(provenance_wire):
+        fact = _require_mapping(value, f"metadata_provenance[{ordinal}]")
+        _require_keys(
+            fact,
+            {"field", "source_kind", "source_ref", "value_sha256"},
+            f"metadata_provenance[{ordinal}]",
+        )
+        field = _require_nonblank_string(
+            fact["field"], f"metadata_provenance[{ordinal}].field"
+        )
+        if field in provenance:
+            raise ReferenceEvidenceError(
+                "metadata_provenance fields must be unique"
+            )
+        provenance[field] = {
+            "source_kind": fact["source_kind"],
+            "source_ref": fact["source_ref"],
+            "value_sha256": fact["value_sha256"],
+        }
+
+    evidence = {
+        "schema_version": REFERENCE_EVIDENCE_SCHEMA,
+        "reference_id": root["reference_id"],
+        "raw_pdf": root["raw_pdf"],
+        "pdf_inspection": root["pdf_inspection"],
+        "pages": root["pages"],
+        "chunks": root["chunks"],
+        "bibliographic_metadata": root["bibliographic_metadata"],
+        "metadata_provenance": provenance,
+        "external_share_classification": external_share["classification"],
+    }
+    record = validate_canonical_reference_evidence(evidence)
+    if record.as_dict() != dict(root):
+        raise ReferenceEvidenceError("reference document record is not canonical")
+    return record

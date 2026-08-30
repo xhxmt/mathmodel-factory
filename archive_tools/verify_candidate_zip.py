@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strictly verify a Phase 4-6 candidate ZIP and outer SHA256SUMS."""
+"""Strictly verify a full-shadow candidate ZIP and outer SHA256SUMS."""
 
 from __future__ import annotations
 

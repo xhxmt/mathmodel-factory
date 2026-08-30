@@ -47,6 +47,7 @@ class Settings:
     gcp_solver_service: str = "solver-api"
     phase6_snapshot_enabled: bool = False
     phase6_snapshot_db_file: Path | None = None
+    phase78_shadow_enabled: bool = False
 
     @property
     def ongoing_dir(self) -> Path:
@@ -134,6 +135,9 @@ def load_settings() -> Settings:
             "PHASE6_SNAPSHOT_ENABLED", default=False
         ),
         phase6_snapshot_db_file=Path(phase6_db_env) if phase6_db_env else None,
+        phase78_shadow_enabled=_parse_bool_environment(
+            "PHASE78_ENABLED", default=False
+        ),
     )
 
 

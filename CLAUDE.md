@@ -206,6 +206,60 @@ preserved for restart verification.
 Phase 5 internal checkpoint/observation/recovery keys are bounded,
 domain-separated SHA-256 identities, never caller-key suffixes.
 
+The current Phase-7+8 durable full-shadow sidecar is documented in
+`docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md`. It is synchronously and
+explicitly enabled by `PHASE78_ENABLED`; there is no background Scheduler,
+hidden worker, provider, network, production outbox, frontend panel, dispatch,
+or authority transfer. Disabled CLI, Web, service, Scheduler, and worker entry
+points return before request-file or path parsing, database/CAS access, heavy
+imports, threads, or process creation. Enabled work uses a private durable
+request/claim/lease/result ledger and one explicit local `run-one` worker.
+
+Phase 7 binds the complete current `AuthorityPhase3ArtifactState`, one exact
+revision-level `ArtifactLedgerOccurrence`, the full Phase-6 current access
+proof, and exact `math`/`execution`/`paper` role, manifest, and context bytes.
+An occurrence created before the aggregate head is eligible only when it is
+still the exact current path occurrence at that head; equal semantic bytes in
+an A→B→A cycle are not enough. `legacy_unknown` generations are ineligible:
+complete the normal production migration and record concrete project/run/
+runtime/Scheduler generations instead of editing imported Authority rows.
+Grounding history is immutable, while INVALID/INDETERMINATE or upstream drift
+makes the effective current head unavailable rather than exposing an old PASS.
+Replay uses persisted bytes and does not depend on the original absolute packet
+root.
+
+Phase 8 materializes the occurrence-bound PDF during a separate trusted local
+operator preflight, then fsyncs and re-reads raw PDF, PNG, text, chunk, package,
+and receipt facts in the private CAS before publishing SQLite current state.
+Ordinary CLI/Web/service callers can only reference the returned preflight hash;
+they cannot invoke `register_trusted_approval_preflight`, and a Phase-6
+`snapshot:view` proof is never egress authority. The preflight issuer must be
+the configured operator and differ from the Phase-6 subject. The subject and
+generation must match both that proof and the authenticated caller. Approval,
+revoke, supersede and decision history remains replayable, but every current
+read rejoins live Phase-3/6/7 heads, policy, lifecycle and service-owned time so
+expired or stale authorization is `DENIED`.
+
+`PHASE78_TRUSTED_OPERATOR_ID` and
+`PHASE78_TRUSTED_OPERATOR_GENERATION` are deployment labels, not authenticators
+or secrets. The trust boundary is the controlled OS account allowed to run
+`factory_core.phase78_operator` plus private `0700` runtime parents and `0600`
+persistent files. Do not expose that OS credential or command through Web,
+request JSON, a general service RPC, or an untrusted automation runner. A
+same-credential namespace attacker is an explicitly documented information-
+level limitation, not something these labels can prevent.
+
+One `TotalDeadline` is propagated across Authority/Phase-6 reads, SQLite busy,
+files/PDF tools, CAS, Phase 7, Phase 8, and the one deterministic replay. Work
+generation/owner/epoch/nonce and upstream-head fences prevent a cancelled,
+superseded or late worker from publishing current. After a possibly committed
+timeout, query or replay the same idempotency key; never generate a replacement
+key. Run `./bootstrap_phase78.sh` for the separate versioned five-group
+Phase-7+8 gate, and obtain its exact current counts from
+`python3 -m scripts.phase78_test_contract describe`. This gate does not change
+the frozen Phase-3–6 `./bootstrap.sh` contract of
+`100/274/146/29/108 = 657`.
+
 The Legacy Adapter still snapshots itself under `logs/runner_snapshots/` so an
 active Step is insulated from edits. Do not add new scheduling, retry, recovery,
 or state logic to the adapter.

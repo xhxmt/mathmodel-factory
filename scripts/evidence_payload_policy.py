@@ -76,6 +76,8 @@ def payload_path_finding(path: str) -> PayloadPolicyFinding | None:
         return PayloadPolicyFinding(path=path, rule="non_payload_path")
     if basename.endswith((".pyc", ".pyo")):
         return PayloadPolicyFinding(path=path, rule="dependency_or_cache_path")
+    if basename.startswith(".put-"):
+        return PayloadPolicyFinding(path=path, rule="cas_temporary_state")
     if basename in _DENIED_FILENAMES or (
         basename.startswith(".env.") and basename != ".env.example"
     ):

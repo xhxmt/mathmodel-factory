@@ -45,12 +45,12 @@ FORBIDDEN_RUNTIME_IMPORTS = {
     "workflow_contract",
 }
 
-# Phase 2-6's identity, evidence, and shadow stores intentionally reuse the
+# Phase 2-8's identity, evidence, and shadow stores intentionally reuse the
 # side-effect-free canonical/owner primitives that M0.1 originally introduced
 # as pure modules.  Keep this exception closed by both consumer path and the
 # exact primitive family each consumer may reference; it is not a general
 # exemption for production runtime modules.
-PHASE2_6_PURE_MODULE_CONSUMERS = {
+PHASE2_8_PURE_MODULE_CONSUMERS = {
     "factory_core/authority_operations.py": frozenset({"canonical"}),
     "factory_core/authority_operator_workflow.py": frozenset({"canonical"}),
     "factory_core/authority_outbox_delivery.py": frozenset({"canonical"}),
@@ -67,7 +67,13 @@ PHASE2_6_PURE_MODULE_CONSUMERS = {
     "factory_core/phase4_shadow_runtime.py": frozenset({"canonical"}),
     "factory_core/phase5_shadow_supervisor.py": frozenset({"canonical"}),
     "factory_core/phase6_snapshot_grants.py": frozenset({"canonical"}),
+    "factory_core/phase78_service.py": frozenset({"canonical"}),
+    "factory_core/phase78_work_ledger.py": frozenset({"canonical"}),
+    "factory_core/phase78_worker.py": frozenset({"canonical"}),
+    "factory_core/phase7_grounding_runtime.py": frozenset({"canonical"}),
+    "factory_core/phase8_evidence_egress_runtime.py": frozenset({"canonical"}),
     "factory_core/reference_evidence.py": frozenset({"canonical"}),
+    "factory_core/reference_materializer.py": frozenset({"canonical"}),
 }
 
 
@@ -186,7 +192,7 @@ def test_production_runtime_does_not_import_or_reference_m01_pure_modules() -> N
                 referenced_primitives.add(_pure_module_key(module_name))
                 file_violations.append(f"{relative}:references {module_name}")
 
-        approved_primitives = PHASE2_6_PURE_MODULE_CONSUMERS.get(relative)
+        approved_primitives = PHASE2_8_PURE_MODULE_CONSUMERS.get(relative)
         if approved_primitives is None:
             violations.extend(file_violations)
             continue
@@ -200,10 +206,10 @@ def test_production_runtime_does_not_import_or_reference_m01_pure_modules() -> N
             )
 
     assert violations == []
-    assert observed_consumers == PHASE2_6_PURE_MODULE_CONSUMERS
+    assert observed_consumers == PHASE2_8_PURE_MODULE_CONSUMERS
 
 
-def test_phase2_6_pure_module_consumers_are_an_exact_closed_set() -> None:
+def test_phase2_8_pure_module_consumers_are_an_exact_closed_set() -> None:
     expected = {
         "factory_core/authority_operations.py": frozenset({"canonical"}),
         "factory_core/authority_operator_workflow.py": frozenset({"canonical"}),
@@ -221,13 +227,19 @@ def test_phase2_6_pure_module_consumers_are_an_exact_closed_set() -> None:
         "factory_core/phase4_shadow_runtime.py": frozenset({"canonical"}),
         "factory_core/phase5_shadow_supervisor.py": frozenset({"canonical"}),
         "factory_core/phase6_snapshot_grants.py": frozenset({"canonical"}),
+        "factory_core/phase78_service.py": frozenset({"canonical"}),
+        "factory_core/phase78_work_ledger.py": frozenset({"canonical"}),
+        "factory_core/phase78_worker.py": frozenset({"canonical"}),
+        "factory_core/phase7_grounding_runtime.py": frozenset({"canonical"}),
+        "factory_core/phase8_evidence_egress_runtime.py": frozenset({"canonical"}),
         "factory_core/reference_evidence.py": frozenset({"canonical"}),
+        "factory_core/reference_materializer.py": frozenset({"canonical"}),
     }
 
-    assert PHASE2_6_PURE_MODULE_CONSUMERS == expected
-    assert len(PHASE2_6_PURE_MODULE_CONSUMERS) == 13
-    assert set(PHASE2_6_PURE_MODULE_CONSUMERS).isdisjoint(PURE_M01_MODULES)
-    assert all((ROOT / path).is_file() for path in PHASE2_6_PURE_MODULE_CONSUMERS)
+    assert PHASE2_8_PURE_MODULE_CONSUMERS == expected
+    assert len(PHASE2_8_PURE_MODULE_CONSUMERS) == 19
+    assert set(PHASE2_8_PURE_MODULE_CONSUMERS).isdisjoint(PURE_M01_MODULES)
+    assert all((ROOT / path).is_file() for path in PHASE2_8_PURE_MODULE_CONSUMERS)
 
 
 def test_m03_pure_module_compatibility_exception_is_exact_closed_set() -> None:

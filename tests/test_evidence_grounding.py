@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from scripts.evidence_grounding import validate_grounding
+from scripts.evidence_grounding import validate_grounding, validate_grounding_bytes
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -190,6 +190,69 @@ def test_valid_hard_role_binds_packet_and_maps_source_and_context_lines(tmp_path
             "context_line_end": 5,
         }
     ]
+
+
+def test_exact_bytes_api_matches_grounding_without_reading_source_paths(tmp_path):
+    packet = _packet(tmp_path)
+    _write_hard_role(packet, [_hard_reference(packet)])
+
+    report = validate_grounding_bytes(
+        Path(packet["role_path"]).read_bytes(),
+        Path(packet["manifest_path"]).read_bytes(),
+        Path(packet["context_path"]).read_bytes(),
+        role="math",
+    )
+    expected = _validate(packet)
+
+    assert report == {
+        **expected,
+        "manifest": {**expected["manifest"], "path": "manifest"},
+        "context": {**expected["context"], "path": "context"},
+    }
+    Path(packet["role_path"]).unlink()
+    Path(packet["manifest_path"]).unlink()
+    Path(packet["context_path"]).unlink()
+    assert report["valid"] is True
+
+
+def test_quote_leading_and_trailing_whitespace_is_identity_bearing(tmp_path):
+    quote = "  exact quote bytes  "
+    packet = _packet(
+        tmp_path,
+        content=f"intro\n{quote}\noutro\n",
+    )
+    _write_hard_role(
+        packet,
+        [
+            _hard_reference(
+                packet,
+                quote=quote,
+                quote_sha256=_sha256(quote.encode("utf-8")),
+            )
+        ],
+    )
+
+    report = validate_grounding_bytes(
+        Path(packet["role_path"]).read_bytes(),
+        Path(packet["manifest_path"]).read_bytes(),
+        Path(packet["context_path"]).read_bytes(),
+        role="math",
+    )
+
+    assert report["valid"] is True
+    assert report["refs"][0]["quote_sha256"] == _sha256(quote.encode("utf-8"))
+    assert report["refs"][0]["quote_sha256"] != _sha256(
+        quote.strip().encode("utf-8")
+    )
+
+
+def test_exact_bytes_api_returns_structured_invalid_report_for_non_bytes():
+    report = validate_grounding_bytes(  # type: ignore[arg-type]
+        "not-bytes", b"{}", b"", role="math"
+    )
+
+    assert report["valid"] is False
+    assert report["errors"][0]["code"] == "GROUNDING_INPUT_INVALID"
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,10 @@
 # Phase 8 Reference Evidence and Data Egress Shadow
 
-Status: direct-test-only shadow contract. The existing v1 runtime, UI, audit,
-aggregation, delivery, and operator paths remain the only production authority.
+Status: Phase 8A pure compatibility contract plus an explicitly enabled,
+durable Phase 8B full-shadow runtime. The existing v1 runtime, UI, audit,
+aggregation, delivery, and operator paths remain the only production
+authority. The durable runtime is specified in
+[`PHASE7_8_DURABLE_FULL_SHADOW.md`](PHASE7_8_DURABLE_FULL_SHADOW.md).
 
 ## Scope
 
@@ -12,9 +15,11 @@ Phase 8 adds two independent, pure validation slices:
 2. `factory_core.data_egress` stages a declared transfer request and evaluates
    an optional, exact approval receipt without performing a transfer.
 
-Neither module is imported by the CLI, Scheduler, Web/API, frontend, judge
+In default configuration neither module is imported by the CLI, Scheduler, Web/API, frontend, judge
 aggregator, or another production entry point. They have no feature flag and no
-shadow writer. Importing either module has no runtime side effect.
+shadow writer. Importing either module has no runtime side effect. Explicitly
+enabled Phase 8B consumes these pure contracts without changing their wire
+semantics.
 
 ## Canonical reference evidence
 
@@ -71,7 +76,21 @@ including request, policy, staged-manifest, approval, and decision hashes. It
 reads no external state. `data_egress_policy_sha256()` exposes the stable
 identity of the declaration-only `data-egress-policy-v1` policy.
 
-## Explicit non-goals
+## Phase 8B durable materialization and approval
+
+Phase 8B adds a trusted local PDF materializer, immutable CAS, reference
+binding store, and durable approval/decision ledger. It binds the complete
+Phase 3 aggregate state and selected revision occurrence, a current Phase 6
+proof, and the current Phase 7 receipt/effective verdict. Raw PDF, rendered
+PNG, extracted text, chunks, package, and receipt bytes are CAS-addressed and
+restart-verified. Approval issue/successor/revoke/expiry and effective decision
+current pointers preserve history while automatically denying stale state.
+
+This runtime remains local-only and no-dispatch. It never treats a Phase 6
+read grant or a reference classification as egress authority. See the linked
+durable contract for deadline, work-ledger, entry-point, and recovery details.
+
+## Phase 8A explicit non-goals
 
 This slice is not a PDF parser, CAS/blob store, OCR or render pipeline,
 reference-package builder, secret scanner, authenticated approval ledger,
@@ -84,7 +103,7 @@ not a complete enterprise policy taxonomy. A valid reference record is not a
 data-egress request, and an `AUTHORIZED` shadow decision is not proof that a
 transfer occurred.
 
-## Future integration prerequisites
+## Production-cutover prerequisites
 
 Before any production caller is allowed, a later phase must separately define
 and review:

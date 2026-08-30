@@ -11,7 +11,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 SCHEMA_VERSION = "evidence-grounding-v1"
@@ -46,23 +46,27 @@ def _read_bytes(path: Path, code: str, label: str) -> bytes:
         raise GroundingError(code, f"{label} is unreadable: {path}") from exc
 
 
-def _read_object(path: Path) -> tuple[dict[str, Any], bytes]:
-    raw = _read_bytes(path, "MANIFEST_UNREADABLE", "packet manifest")
+def _decode_object(raw: bytes, *, label: str) -> dict[str, Any]:
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise GroundingError(
-            "MANIFEST_JSON_INVALID", f"packet manifest JSON is invalid: {path}"
+            "MANIFEST_JSON_INVALID", f"packet manifest JSON is invalid: {label}"
         ) from exc
     if not isinstance(value, dict):
         raise GroundingError(
-            "MANIFEST_JSON_INVALID", f"packet manifest root must be an object: {path}"
+            "MANIFEST_JSON_INVALID",
+            f"packet manifest root must be an object: {label}",
         )
-    return value, raw
+    return value
 
 
-def _role_payload(path: Path, role: str) -> dict[str, Any]:
-    raw = _read_bytes(path, "ROLE_OUTPUT_UNREADABLE", "role output")
+def _read_object(path: Path) -> tuple[dict[str, Any], bytes]:
+    raw = _read_bytes(path, "MANIFEST_UNREADABLE", "packet manifest")
+    return _decode_object(raw, label=str(path)), raw
+
+
+def _decode_role_payload(raw: bytes, role: str) -> dict[str, Any]:
     try:
         lines = raw.decode("utf-8").splitlines()
     except UnicodeDecodeError as exc:
@@ -98,6 +102,11 @@ def _role_payload(path: Path, role: str) -> dict[str, Any]:
     if payload.get("verdict") not in allowed_verdicts:
         raise GroundingError("ROLE_VERDICT_INVALID", f"invalid {role} verdict")
     return payload
+
+
+def _role_payload(path: Path, role: str) -> dict[str, Any]:
+    raw = _read_bytes(path, "ROLE_OUTPUT_UNREADABLE", "role output")
+    return _decode_role_payload(raw, role)
 
 
 def _references(payload: dict[str, Any], role: str) -> Iterable[tuple[str, dict[str, Any]]]:
@@ -305,26 +314,29 @@ def _occurrence_count(text: str, quote: str) -> int:
         start = offset + 1
 
 
-def validate_grounding(
-    role_path: Path,
-    manifest_path: Path,
-    context_path: Path | None = None,
+def _validate_grounding_payloads(
     *,
-    role: str | None = None,
+    role_output_bytes: bytes | None,
+    manifest_bytes: bytes | None,
+    context_bytes: bytes | None,
+    requested_role: str,
+    manifest_label: str,
+    context_label: str,
+    role_output_loader: Callable[[], bytes] | None = None,
+    manifest_loader: Callable[[], bytes] | None = None,
+    context_loader: Callable[[], bytes] | None = None,
 ) -> dict[str, Any]:
-    manifest_path = manifest_path.resolve()
-    context_path = (context_path or manifest_path.with_name("context.txt")).resolve()
-    role_path = role_path.resolve()
-    requested_role = role or role_path.stem
+    """Validate already-loaded packet bytes without filesystem access."""
+
     errors: list[dict[str, str]] = []
     refs: list[dict[str, Any]] = []
     manifest_record: dict[str, Any] = {
-        "path": str(manifest_path),
+        "path": manifest_label,
         "sha256": None,
         "size": None,
     }
     context_record: dict[str, Any] = {
-        "path": str(context_path),
+        "path": context_label,
         "sha256": None,
         "size": None,
     }
@@ -333,7 +345,13 @@ def validate_grounding(
             raise GroundingError(
                 "UNSUPPORTED_ROLE", f"unsupported role: {requested_role}"
             )
-        manifest, manifest_bytes = _read_object(manifest_path)
+        if manifest_bytes is None:
+            if manifest_loader is None:
+                raise GroundingError(
+                    "MANIFEST_UNREADABLE", "packet manifest bytes are unavailable"
+                )
+            manifest_bytes = manifest_loader()
+        manifest = _decode_object(manifest_bytes, label=manifest_label)
         manifest_record.update(
             {
                 "sha256": sha256_bytes(manifest_bytes),
@@ -350,7 +368,12 @@ def validate_grounding(
                 "MANIFEST_FILES_INVALID", "packet manifest files must be an array"
             )
 
-        context_bytes = _read_bytes(context_path, "CONTEXT_UNREADABLE", "packet context")
+        if context_bytes is None:
+            if context_loader is None:
+                raise GroundingError(
+                    "CONTEXT_UNREADABLE", "packet context bytes are unavailable"
+                )
+            context_bytes = context_loader()
         actual_context_hash = sha256_bytes(context_bytes)
         actual_context_size = len(context_bytes)
         context_record.update(
@@ -387,7 +410,13 @@ def validate_grounding(
 
         chunks_by_path, chunks = _active_chunks(files)
         sections = _context_sections(context_text, chunks_by_path)
-        payload = _role_payload(role_path, requested_role)
+        if role_output_bytes is None:
+            if role_output_loader is None:
+                raise GroundingError(
+                    "ROLE_OUTPUT_UNREADABLE", "role output bytes are unavailable"
+                )
+            role_output_bytes = role_output_loader()
+        payload = _decode_role_payload(role_output_bytes, requested_role)
         seen_ids: set[str] = set()
         for fallback_id, reference in _references(payload, requested_role):
             raw_ref_id = reference.get("ref_id")
@@ -509,6 +538,82 @@ def validate_grounding(
         "refs": refs,
         "errors": errors,
     }
+
+
+def validate_grounding_bytes(
+    role_output_bytes: bytes,
+    manifest_bytes: bytes,
+    context_bytes: bytes,
+    *,
+    role: str,
+) -> dict[str, Any]:
+    """Validate exact in-memory packet bytes and return a path-free report.
+
+    The byte API is the trusted boundary for durable shadow runtimes.  It does
+    not construct, resolve, stat, or open a path.  Fixed logical labels retain
+    the existing report shape without introducing host-dependent identity.
+    """
+
+    if any(type(value) is not bytes for value in (
+        role_output_bytes,
+        manifest_bytes,
+        context_bytes,
+    )):
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "role": role,
+            "valid": False,
+            "manifest": {"path": "manifest", "sha256": None, "size": None},
+            "context": {"path": "context", "sha256": None, "size": None},
+            "refs": [],
+            "errors": [
+                {
+                    "ref_id": "__packet__",
+                    "code": "GROUNDING_INPUT_INVALID",
+                    "message": "role output, manifest, and context must be exact bytes",
+                }
+            ],
+        }
+    return _validate_grounding_payloads(
+        role_output_bytes=role_output_bytes,
+        manifest_bytes=manifest_bytes,
+        context_bytes=context_bytes,
+        requested_role=role,
+        manifest_label="manifest",
+        context_label="context",
+    )
+
+
+def validate_grounding(
+    role_path: Path,
+    manifest_path: Path,
+    context_path: Path | None = None,
+    *,
+    role: str | None = None,
+) -> dict[str, Any]:
+    """Filesystem adapter preserving the established CLI/library contract."""
+
+    manifest_path = manifest_path.resolve()
+    context_path = (context_path or manifest_path.with_name("context.txt")).resolve()
+    role_path = role_path.resolve()
+    requested_role = role or role_path.stem
+    return _validate_grounding_payloads(
+        role_output_bytes=None,
+        manifest_bytes=None,
+        context_bytes=None,
+        requested_role=requested_role,
+        manifest_label=str(manifest_path),
+        context_label=str(context_path),
+        manifest_loader=lambda: _read_bytes(
+            manifest_path, "MANIFEST_UNREADABLE", "packet manifest"
+        ),
+        context_loader=lambda: _read_bytes(
+            context_path, "CONTEXT_UNREADABLE", "packet context"
+        ),
+        role_output_loader=lambda: _read_bytes(
+            role_path, "ROLE_OUTPUT_UNREADABLE", "role output"
+        ),
+    )
 
 
 def atomic_write_report(path: Path, report: dict[str, Any]) -> None:

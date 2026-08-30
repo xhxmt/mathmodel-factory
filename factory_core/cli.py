@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib
 import os
 import re
 import shlex
@@ -307,6 +308,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "phase78":
+        adapter = importlib.import_module("factory_core.phase78_cli")
+        return adapter.main(arguments[1:])
     if arguments and arguments[0] == "compat":
         try:
             return compat(arguments[1:])

@@ -1,6 +1,6 @@
 # Phase 4-8 Full-Shadow Dependency and Gap Matrix
 
-Status date: 2026-08-29
+Status date: 2026-08-30
 
 This document is the current implementation map for the Phase 4-8 full-shadow
 slice.  It does not authorize a production cutover.  The sole frozen Phase 3
@@ -21,11 +21,11 @@ That archive and the contracts it verified are not modified by this work.
 | Phase 6A project snapshot UI | Frozen seven-state, single-coordinate projection retained and integrated behind a strict build-time flag in this candidate | Pure projection remains independently usable and fail-closed; full-shadow data must pass the Phase 6B Web boundary first | `ProjectSnapshotV0` remains permanently non-authoritative. Web ACL and delivery override are separate control-plane contracts. |
 | Phase 6B verified snapshot/scoped grants | Implemented and locally verified in this candidate; independent Pro review remains pending | Canonical source/snapshot binding, independent durable store, scoped grant lifecycle, exact replay/restart and ACL-first Web read path are present; no cutover is authorized | Authority transfer remains impossible. No sixth Authority reader method or additional production writer was added. |
 | Phase 7A grounding hardening | Complete for strict role envelopes, manifests, context/chunk/quote checks and fail-closed reports | No path-free input identity, durable verdict/receipt, exact replay, restart or Phase 6 binding | Preserve aggregate v1 compatibility and its existing sidecar schema.  Avoid the historical registration-only Phase 3 adapter. |
-| Phase 7B grounding runtime | Missing | Bind current Phase 3 artifact identity plus snapshot/grant and role/manifest/context bytes; persist and replay the effective verdict | Consume immutable identities only; no provider, network or production workflow callback. |
+| Phase 7B grounding runtime | Implemented in this local full-shadow candidate | Bind canonical Phase 3 aggregate state and revision occurrence plus the exact Phase 6 current proof and role/manifest/context bytes; persist/replay the path-free effective verdict | Independent SQLite; no provider, network, outbox, production workflow callback, or authority transfer. |
 | Phase 8A reference evidence | Complete for deterministic in-memory reference records | No trusted binding to artifact/snapshot/grant, persistence or recovery | Classification never grants authority. |
 | Phase 8A data egress | Complete for pure staging/approval decisions with `dispatch_performed=false` | Caller-supplied approval is not a durable scoped grant; no expiry/revoke/replay ledger | Preserve `dispatch_capability=false`; do not add a consumer. |
-| Phase 8B evidence/egress runtime | Missing | Durable reference binding, scoped approval/revocation, decision replay/recovery and rollback | Bind Phase 3 artifact, Phase 6 snapshot/grant and Phase 7 receipt identities; always no-dispatch. |
-| Phase 2-8 joint acceptance | Synthetic, in-memory and test-only | No restart, revocation, fault injection, rollback or durable replay | Replace the historical Phase 3 compatibility identity in the new joint slice; leave the old adapter intact for compatibility tests. |
+| Phase 8B evidence/egress runtime | Implemented in this local full-shadow candidate | Durable PDF/CAS reference binding, scoped approval lifecycle, decision replay/current recovery and rollback | Binds Phase 3 aggregate/occurrence, Phase 6 current proof and Phase 7 receipt/current head; always no-dispatch. |
+| Phase 2-8 joint acceptance | Implemented as an explicit-enabled synchronous local sidecar | Durable work ledger, restart, revoke/expiry, current-head rollback, exact replay and real CLI/service/worker/Web composition | Default-off import/resource isolation; historical pure adapters remain compatible; no production outbox or cutover. |
 
 ## Freeze-node status
 
@@ -54,7 +54,10 @@ Local validation is complete in this audit round and independent Pro review
 remains pending; this paragraph does not retroactively claim that a historical
 Phase 4+5 archive implemented or verified Phase 6.
 
-Phase 7B and Phase 8B remain gaps. Their rows are not completion claims.
+Phase 7B and Phase 8B are implemented in the current local candidate and are
+assessed from current source, exact structured tests, and a fresh-extraction
+audit. This status is not a production-cutover claim. The selected contract is
+[`PHASE7_8_DURABLE_FULL_SHADOW.md`](PHASE7_8_DURABLE_FULL_SHADOW.md).
 
 ## Persistence decision
 

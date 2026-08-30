@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 import errno
 import hashlib
 import inspect
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -219,6 +221,267 @@ def _evaluate(store: Phase6SnapshotGrantStore, grant_id: str, **overrides):
     }
     values.update(overrides)
     return store.evaluate_grant(grant_id, **values)
+
+
+def _proof_wire(proof: phase6.ShadowAccessProof) -> dict[str, object]:
+    return json.loads(json.dumps(proof.as_dict()))
+
+
+def _rehash_proof(wire: dict[str, object]) -> dict[str, object]:
+    wire["proof_sha256"] = canonical_sha256(
+        {key: value for key, value in wire.items() if key != "proof_sha256"}
+    )
+    return wire
+
+
+def _forged_allowed_evaluation(
+    proof: phase6.ShadowAccessProof,
+    **overrides,
+) -> phase6.GrantEvaluationReceipt:
+    values = {
+        "grant": proof.grant,
+        "lifecycle": proof.lifecycle_receipt,
+        "observed_snapshot_head_id": proof.snapshot.snapshot_id,
+        "subject_type": proof.grant.subject_type,
+        "subject_id": proof.grant.subject_id,
+        "subject_generation": proof.grant.subject_generation,
+        "requested_scope": proof.grant.scope,
+        "requested_scope_key": proof.grant.scope_key,
+        "evaluated_at": proof.evaluated_at,
+        "decision": EvaluationDecision.ALLOWED_SHADOW,
+        "reason_code": "EXACT_SHADOW_SCOPE_ALLOWED",
+    }
+    values.update(overrides)
+    return phase6._build_evaluation(**values)
+
+
+def _assert_access_proof_roundtrip_and_tamper_rejection(
+    proof: phase6.ShadowAccessProof,
+) -> None:
+    assert phase6.verify_shadow_access_proof(proof) == proof
+    wire = _proof_wire(proof)
+    rebuilt = phase6.verify_shadow_access_proof(wire)
+    assert rebuilt == proof
+    assert rebuilt.as_dict() == wire
+    assert rebuilt.source_binding.authority_coordinate == (
+        proof.source_binding.authority_coordinate
+    )
+    assert set(rebuilt.source_binding.authority_coordinate) == phase6._COORDINATE_KEYS
+    assert rebuilt.source_binding.authority_coordinate_sha256 == (
+        proof.source_binding.authority_coordinate_sha256
+    )
+    assert rebuilt.source_binding.phase3_artifact_state_sha256 == (
+        proof.source_binding.phase3_artifact_state_sha256
+    )
+
+    with pytest.raises(Phase6ContractError, match="ShadowAccessProof or an exact"):
+        phase6.verify_shadow_access_proof("not-a-proof")
+
+    class BrokenMapping(Mapping):
+        def __getitem__(self, key):
+            raise RuntimeError(f"cannot read {key}")
+
+        def __iter__(self):
+            raise RuntimeError("cannot iterate")
+
+        def __len__(self):
+            return 1
+
+    with pytest.raises(Phase6ContractError, match="cannot be read exactly"):
+        phase6.verify_shadow_access_proof(BrokenMapping())
+
+    non_json = _proof_wire(proof)
+    non_json["requested_scope"] = (proof.requested_scope.value,)
+    with pytest.raises(Phase6ContractError, match="exact JSON-safe"):
+        phase6.verify_shadow_access_proof(non_json)
+
+    wrong_keys = _proof_wire(proof)
+    wrong_keys["unexpected"] = False
+    with pytest.raises(Phase6StoreError, match="keys or schema"):
+        phase6.verify_shadow_access_proof(wrong_keys)
+
+    tampered_paths = (
+        (("source_binding", "authority_coordinate", "project_id"), "project-2"),
+        (("source_binding", "source_snapshot_coordinate", "project_id"), "project-2"),
+        (("source_binding", "phase3_artifact_state_sha256"), _h("9")),
+        (("snapshot", "snapshot_id"), _h("9")),
+        (("grant", "grant_id"), _h("9")),
+        (("lifecycle_receipt", "receipt_sha256"), _h("9")),
+        (("evaluation_receipt", "subject_id"), "mallory"),
+        (("snapshot", "authoritative"), True),
+        (("grant", "authority_transferred"), True),
+        (("lifecycle_receipt", "dispatch_performed"), True),
+        (("evaluation_receipt", "authoritative"), True),
+        (("shadow_allowed",), False),
+        (("authoritative",), True),
+        (("authority_transferred",), True),
+        (("dispatch_performed",), True),
+        (("proof_sha256",), _h("9")),
+    )
+    for path, replacement in tampered_paths:
+        candidate = _proof_wire(proof)
+        target = candidate
+        for component in path[:-1]:
+            target = target[component]  # type: ignore[index,assignment]
+        target[path[-1]] = replacement
+        if path != ("proof_sha256",):
+            _rehash_proof(candidate)
+        with pytest.raises(Phase6StoreError):
+            phase6.verify_shadow_access_proof(candidate)
+
+    source_crossover = _proof_wire(proof)
+    source_crossover["source_binding"] = _binding(
+        project_generation="project-generation-2"
+    ).as_dict()
+    _rehash_proof(source_crossover)
+    with pytest.raises(Phase6StoreError, match="source binding differs"):
+        phase6.verify_shadow_access_proof(source_crossover)
+
+    other_snapshot = phase6._build_snapshot(
+        source_binding=proof.source_binding,
+        snapshot_sequence=1,
+        previous_snapshot_id=None,
+        captured_at=10,
+        valid_until=100,
+        sections=_sections("7"),
+    )
+    snapshot_crossover = _proof_wire(proof)
+    snapshot_crossover["snapshot"] = other_snapshot.as_dict()
+    _rehash_proof(snapshot_crossover)
+    with pytest.raises(Phase6StoreError):
+        phase6.verify_shadow_access_proof(snapshot_crossover)
+
+    other_grant = phase6._build_grant(
+        snapshot=proof.snapshot,
+        grant_sequence=1,
+        previous_grant_id=None,
+        subject_type="user",
+        subject_id="bob",
+        subject_generation="membership-generation-8",
+        scope=GrantScope.SECTION_VIEW,
+        scope_key="overview",
+        issuer_id="shadow-issuer",
+        issuer_generation="issuer-generation-2",
+        issuer_evidence_schema="synthetic-issuer-receipt-v1",
+        issuer_receipt_sha256=_h("3"),
+        issued_at=11,
+        not_before=12,
+        expires_at=50,
+    )
+    grant_crossover = _proof_wire(proof)
+    grant_crossover["grant"] = other_grant.as_dict()
+    _rehash_proof(grant_crossover)
+    with pytest.raises(Phase6StoreError):
+        phase6.verify_shadow_access_proof(grant_crossover)
+
+    semantic_mismatches = (
+        {"observed_snapshot_head_id": _h("9")},
+        {"subject_generation": "membership-generation-8"},
+        {
+            "requested_scope": GrantScope.SNAPSHOT_VIEW,
+            "requested_scope_key": None,
+        },
+        {"evaluated_at": proof.grant.not_before - 1},
+        {"evaluated_at": proof.grant.expires_at},
+        {"reason_code": "UNEXPECTED_ALLOWED_REASON"},
+    )
+    for overrides in semantic_mismatches:
+        forged = _forged_allowed_evaluation(proof, **overrides)
+        candidate = _proof_wire(proof)
+        candidate["evaluation_receipt"] = forged.as_dict()
+        candidate["requested_scope"] = forged.requested_scope.value
+        candidate["requested_scope_key"] = forged.requested_scope_key
+        candidate["evaluated_at"] = forged.evaluated_at
+        _rehash_proof(candidate)
+        with pytest.raises(Phase6StoreError, match="not currently allowed"):
+            phase6.verify_shadow_access_proof(candidate)
+
+    partial_snapshot = phase6._build_snapshot(
+        source_binding=_binding(completeness="PARTIAL"),
+        snapshot_sequence=1,
+        previous_snapshot_id=None,
+        captured_at=10,
+        valid_until=100,
+        sections=_sections(),
+    )
+    partial_grant = phase6._build_grant(
+        snapshot=partial_snapshot,
+        grant_sequence=1,
+        previous_grant_id=None,
+        subject_type=proof.grant.subject_type,
+        subject_id=proof.grant.subject_id,
+        subject_generation=proof.grant.subject_generation,
+        scope=proof.grant.scope,
+        scope_key=proof.grant.scope_key,
+        issuer_id=proof.grant.issuer_id,
+        issuer_generation=proof.grant.issuer_generation,
+        issuer_evidence_schema=proof.grant.issuer_evidence_schema,
+        issuer_receipt_sha256=proof.grant.issuer_receipt_sha256,
+        issued_at=proof.grant.issued_at,
+        not_before=proof.grant.not_before,
+        expires_at=proof.grant.expires_at,
+    )
+    partial_lifecycle = phase6._build_lifecycle(
+        grant=partial_grant,
+        receipt_sequence=1,
+        previous_receipt_sha256=None,
+        event="issued",
+        before_status=None,
+        after_status=GrantStatus.ACTIVE,
+        actor_id=partial_grant.issuer_id,
+        actor_generation=partial_grant.issuer_generation,
+        reason_code="ISSUED_SHADOW",
+        effective_at=partial_grant.issued_at,
+        request_schema="phase6-issue-shadow-scoped-grant-request-v1",
+        request_sha256=_h("8"),
+    )
+    partial_evaluation = phase6._build_evaluation(
+        grant=partial_grant,
+        lifecycle=partial_lifecycle,
+        observed_snapshot_head_id=partial_snapshot.snapshot_id,
+        subject_type=partial_grant.subject_type,
+        subject_id=partial_grant.subject_id,
+        subject_generation=partial_grant.subject_generation,
+        requested_scope=partial_grant.scope,
+        requested_scope_key=partial_grant.scope_key,
+        evaluated_at=proof.evaluated_at,
+        decision=EvaluationDecision.ALLOWED_SHADOW,
+        reason_code="EXACT_SHADOW_SCOPE_ALLOWED",
+    )
+    partial_proof = phase6._build_proof(
+        partial_snapshot,
+        partial_grant,
+        partial_lifecycle,
+        partial_evaluation,
+    )
+    with pytest.raises(Phase6StoreError, match="source binding is ineligible"):
+        phase6.verify_shadow_access_proof(partial_proof)
+
+
+def _assert_revoked_lifecycle_cannot_be_reframed_as_allowed(
+    proof: phase6.ShadowAccessProof,
+    revoked: phase6.GrantLifecycleReceipt,
+) -> None:
+    forged = phase6._build_evaluation(
+        grant=proof.grant,
+        lifecycle=revoked,
+        observed_snapshot_head_id=proof.snapshot.snapshot_id,
+        subject_type=proof.grant.subject_type,
+        subject_id=proof.grant.subject_id,
+        subject_generation=proof.grant.subject_generation,
+        requested_scope=proof.grant.scope,
+        requested_scope_key=proof.grant.scope_key,
+        evaluated_at=revoked.effective_at,
+        decision=EvaluationDecision.ALLOWED_SHADOW,
+        reason_code="EXACT_SHADOW_SCOPE_ALLOWED",
+    )
+    candidate = _proof_wire(proof)
+    candidate["lifecycle_receipt"] = revoked.as_dict()
+    candidate["evaluation_receipt"] = forged.as_dict()
+    candidate["evaluated_at"] = forged.evaluated_at
+    _rehash_proof(candidate)
+    with pytest.raises(Phase6StoreError, match="active issue fact"):
+        phase6.verify_shadow_access_proof(candidate)
 
 
 def test_default_off_returns_before_path_construction(monkeypatch):
@@ -949,7 +1212,7 @@ def test_same_revision_replay_requires_the_original_predecessor_fence(tmp_path):
 
 
 def test_issue_evaluate_scope_subject_revoke_and_historical_replay(tmp_path):
-    store, _, snapshot = _store_with_snapshot(tmp_path)
+    store, path, snapshot = _store_with_snapshot(tmp_path)
     issued = _issue(store, snapshot.snapshot_id)
     assert issued.lifecycle_receipt.after_status is GrantStatus.ACTIVE
     replay = _issue(store, snapshot.snapshot_id)
@@ -994,6 +1257,15 @@ def test_issue_evaluate_scope_subject_revoke_and_historical_replay(tmp_path):
     assert canonical_sha256(
         {key: value for key, value in proof.items() if key != "proof_sha256"}
     ) == proof["proof_sha256"]
+    _assert_access_proof_roundtrip_and_tamper_rejection(allowed.access_proof)
+    before_verify = path.read_bytes()
+    assert store.verify_current_access_proof(allowed.access_proof) == (
+        allowed.access_proof
+    )
+    assert Phase6SnapshotGrantStore(path).verify_current_access_proof(
+        _proof_wire(allowed.access_proof)
+    ) == allowed.access_proof
+    assert path.read_bytes() == before_verify
     same_fact = _evaluate(
         store,
         issued.grant.grant_id,
@@ -1021,6 +1293,12 @@ def test_issue_evaluate_scope_subject_revoke_and_historical_replay(tmp_path):
         idempotency_key="revoke-request",
     )
     assert revoked.lifecycle_receipt.after_status is GrantStatus.REVOKED
+    _assert_revoked_lifecycle_cannot_be_reframed_as_allowed(
+        allowed.access_proof,
+        revoked.lifecycle_receipt,
+    )
+    with pytest.raises(Phase6StoreError, match="not current and shadow-allowed"):
+        store.verify_current_access_proof(allowed.access_proof)
     historical = _evaluate(
         store,
         issued.grant.grant_id,
@@ -1091,6 +1369,16 @@ def test_expiry_is_exclusive_materialized_once_and_reopen_safe(tmp_path):
 def test_snapshot_advance_stales_old_grant_and_renewal_links_new_grant(tmp_path):
     store, _, first = _store_with_snapshot(tmp_path)
     old = _issue(store, first.snapshot_id)
+    old_allowed = _evaluate(
+        store,
+        old.grant.grant_id,
+        evaluated_at=14,
+        idempotency_key="old-grant-before-advance",
+    )
+    assert old_allowed.access_proof is not None
+    assert store.verify_current_access_proof(old_allowed.access_proof) == (
+        old_allowed.access_proof
+    )
     second = store.append_snapshot(
         source_binding=_binding(2),
         sections=_sections("7"),
@@ -1099,6 +1387,8 @@ def test_snapshot_advance_stales_old_grant_and_renewal_links_new_grant(tmp_path)
         expected_previous_snapshot_id=first.snapshot_id,
         idempotency_key="snapshot-advance",
     ).snapshot
+    with pytest.raises(Phase6StoreError, match="not current and shadow-allowed"):
+        store.verify_current_access_proof(old_allowed.access_proof)
     stale = _evaluate(
         store,
         old.grant.grant_id,

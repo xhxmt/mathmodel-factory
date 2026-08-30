@@ -29,6 +29,7 @@ import re
 import secrets
 import sqlite3
 import stat
+import time
 from typing import Iterable, Mapping
 
 from .canonical import canonical_bytes, canonical_sha256
@@ -66,6 +67,35 @@ _CONNECTION_OWNER = "phase6-sqlite-connection"
 _RENAME_NOREPLACE = 1
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _deadline_check(deadline: object | None, stage: str) -> None:
+    if deadline is None:
+        return
+    check = getattr(deadline, "check", None)
+    if not callable(check):
+        raise Phase6ContractError("deadline must expose check()")
+    check(stage)
+
+
+def _deadline_remaining(
+    deadline: object | None, maximum_seconds: float, stage: str
+) -> float:
+    _deadline_check(deadline, stage)
+    if deadline is None:
+        return maximum_seconds
+    remaining = getattr(deadline, "remaining_seconds", None)
+    if not callable(remaining):
+        raise Phase6ContractError("deadline must expose remaining_seconds()")
+    value = remaining()
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or value <= 0
+    ):
+        _deadline_check(deadline, f"{stage}_exhausted")
+        raise Phase6StoreError("Phase-6 deadline has no remaining budget")
+    return min(maximum_seconds, float(value))
 
 
 def _rename_noreplace(
@@ -1511,6 +1541,127 @@ def _evaluation_from_dict(
     return result
 
 
+def verify_shadow_access_proof(value: object) -> ShadowAccessProof:
+    """Deeply revalidate one serialized, currently allowed shadow proof.
+
+    This is the public deserialization boundary for later-phase CLI, Web and
+    service callers.  It accepts either the typed value returned by
+    :meth:`Phase6SnapshotGrantStore.evaluate_grant` or an exact JSON-safe
+    mapping.  Every nested receipt is rebuilt through the same validators used
+    by the durable store; no caller-supplied hash or ``shadow_allowed`` flag is
+    trusted on its own.
+
+    The proof describes the current state observed by its evaluation.  It is
+    not a live authorization check against a database: a caller that needs to
+    know whether a proof remains current must use
+    :meth:`Phase6SnapshotGrantStore.verify_current_access_proof`.
+    """
+
+    if type(value) is ShadowAccessProof:
+        raw: object = value.as_dict()
+    elif isinstance(value, Mapping):
+        try:
+            raw = dict(value)
+        except Exception as exc:
+            raise Phase6ContractError(
+                "access proof mapping cannot be read exactly"
+            ) from exc
+    else:
+        raise Phase6ContractError(
+            "access proof must be ShadowAccessProof or an exact JSON object"
+        )
+    try:
+        wire = json.loads(canonical_bytes(raw).decode("utf-8"))
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise Phase6ContractError("access proof is outside canonical JSON") from exc
+    if raw != wire or type(wire) is not dict:
+        raise Phase6ContractError("access proof must contain exact JSON-safe values")
+
+    expected = {
+        "schema_version",
+        "source_binding",
+        "snapshot",
+        "grant",
+        "lifecycle_receipt",
+        "evaluation_receipt",
+        "requested_scope",
+        "requested_scope_key",
+        "evaluated_at",
+        "shadow_allowed",
+        "authoritative",
+        "authority_transferred",
+        "dispatch_performed",
+        "proof_sha256",
+    }
+    if set(wire) != expected or wire.get("schema_version") != PHASE6_ACCESS_PROOF_SCHEMA:
+        raise Phase6StoreError("access proof keys or schema differ")
+    _false_safety(wire, "access proof")
+    if wire["shadow_allowed"] is not True:
+        raise Phase6StoreError("access proof must be currently shadow-allowed")
+
+    source_binding = _source_binding_from_dict(wire["source_binding"])
+    snapshot = _snapshot_from_dict(wire["snapshot"])
+    if source_binding != snapshot.source_binding:
+        raise Phase6StoreError("access proof source binding differs from snapshot")
+    if not source_binding.eligible:
+        raise Phase6StoreError("access proof source binding is ineligible")
+
+    grant = _grant_from_dict(wire["grant"], snapshot)
+    lifecycle = _lifecycle_from_dict(wire["lifecycle_receipt"], grant)
+    evaluation = _evaluation_from_dict(
+        wire["evaluation_receipt"], grant, lifecycle
+    )
+
+    issue_schema = "phase6-issue-shadow-scoped-grant-request-v1"
+    issue_request = {
+        "schema_version": issue_schema,
+        "snapshot_id": grant.snapshot_id,
+        "subject_type": grant.subject_type,
+        "subject_id": grant.subject_id,
+        "subject_generation": grant.subject_generation,
+        "scope": grant.scope.value,
+        "scope_key": grant.scope_key,
+        "issuer_id": grant.issuer_id,
+        "issuer_generation": grant.issuer_generation,
+        "issuer_evidence_schema": grant.issuer_evidence_schema,
+        "issuer_receipt_sha256": grant.issuer_receipt_sha256,
+        "issued_at": grant.issued_at,
+        "not_before": grant.not_before,
+        "expires_at": grant.expires_at,
+        "expected_previous_grant_id": grant.previous_grant_id,
+    }
+    if (
+        lifecycle.after_status is not GrantStatus.ACTIVE
+        or lifecycle.actor_id != grant.issuer_id
+        or lifecycle.actor_generation != grant.issuer_generation
+        or lifecycle.reason_code != "ISSUED_SHADOW"
+        or lifecycle.effective_at != grant.issued_at
+        or lifecycle.request_schema != issue_schema
+        or lifecycle.request_sha256 != canonical_sha256(issue_request)
+    ):
+        raise Phase6StoreError("access proof lifecycle is not the active issue fact")
+
+    if (
+        evaluation.decision is not EvaluationDecision.ALLOWED_SHADOW
+        or evaluation.reason_code != "EXACT_SHADOW_SCOPE_ALLOWED"
+        or evaluation.observed_snapshot_head_id != snapshot.snapshot_id
+        or evaluation.subject_type != grant.subject_type
+        or evaluation.subject_id != grant.subject_id
+        or evaluation.subject_generation != grant.subject_generation
+        or evaluation.requested_scope is not grant.scope
+        or evaluation.requested_scope_key != grant.scope_key
+        or evaluation.evaluated_at < grant.not_before
+        or evaluation.evaluated_at >= grant.expires_at
+        or evaluation.evaluated_at >= snapshot.valid_until
+    ):
+        raise Phase6StoreError("access proof evaluation is not currently allowed")
+
+    canonical = _build_proof(snapshot, grant, lifecycle, evaluation)
+    if canonical.as_dict() != wire:
+        raise Phase6StoreError("access proof canonical binding or SHA-256 differs")
+    return canonical
+
+
 _SCHEMA_STATEMENTS = (
     """
     CREATE TABLE phase6_shadow_schema_state (
@@ -1874,7 +2025,9 @@ class Phase6SnapshotGrantStore:
 
     def _open_verified(
         self,
+        deadline: object | None = None,
     ) -> tuple[OwnedDescriptor, _FileIdentity, OwnedDescriptor, tuple[int, int]]:
+        _deadline_check(deadline, "phase6_preflight_before")
         parent_owner = "phase6-preflight-parent"
         database_owner = "phase6-preflight-database"
         parent, parent_identity = self._open_parent(parent_owner)
@@ -1899,7 +2052,21 @@ class Phase6SnapshotGrantStore:
             # verifier could ignore an in-flight rollback journal and observe
             # transient main-file pages as corruption.  The lock is retained
             # by the same owned descriptor through connection close.
-            fcntl.flock(database.fileno(database_owner), fcntl.LOCK_EX)
+            if deadline is None:
+                fcntl.flock(database.fileno(database_owner), fcntl.LOCK_EX)
+            else:
+                while True:
+                    try:
+                        fcntl.flock(
+                            database.fileno(database_owner),
+                            fcntl.LOCK_EX | fcntl.LOCK_NB,
+                        )
+                        break
+                    except BlockingIOError:
+                        remaining = _deadline_remaining(
+                            deadline, 0.01, "phase6_preflight_lock_wait"
+                        )
+                        time.sleep(remaining)
             self._assert_no_sidecars()
             before = self._assert_path(database, database_owner, exact=True)
             header = os.pread(database.fileno(database_owner), 100, 0)
@@ -1937,6 +2104,7 @@ class Phase6SnapshotGrantStore:
             self._assert_path(database, database_owner, expected=before, exact=True)
             self._assert_parent(parent, parent_owner, parent_identity)
             self._assert_no_sidecars()
+            _deadline_check(deadline, "phase6_preflight_after")
             return database, before, parent, parent_identity
         except BaseException as primary:
             callbacks = []
@@ -1960,8 +2128,8 @@ class Phase6SnapshotGrantStore:
             run_cleanup(callbacks, primary=primary)
             raise
 
-    def _connect(self) -> _AnchoredConnection:
-        database, identity, parent, parent_identity = self._open_verified()
+    def _connect(self, deadline: object | None = None) -> _AnchoredConnection:
+        database, identity, parent, parent_identity = self._open_verified(deadline)
         database_owner = database.owner
         parent_owner = parent.owner
         connection: _AnchoredConnection | None = None
@@ -1969,7 +2137,9 @@ class Phase6SnapshotGrantStore:
             connection = sqlite3.connect(
                 self._fd_uri(database.fileno(database_owner), "mode=rw"),
                 uri=True,
-                timeout=5,
+                timeout=_deadline_remaining(
+                    deadline, 5.0, "phase6_connect_before"
+                ),
                 factory=_AnchoredConnection,
             )
             connection._adopt_anchors(
@@ -1982,7 +2152,16 @@ class Phase6SnapshotGrantStore:
             connection._parent_identity = parent_identity
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA busy_timeout=5000")
+            busy_timeout_ms = max(
+                1,
+                int(
+                    _deadline_remaining(
+                        deadline, 5.0, "phase6_connect_busy_timeout"
+                    )
+                    * 1000
+                ),
+            )
+            connection.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             self._assert_connection(connection, exact=True)
             self._verify_schema(connection, identity, parent_identity)
             self._verify_integrity(connection)
@@ -3933,6 +4112,70 @@ class Phase6SnapshotGrantStore:
             )
             raise
         return result
+
+    def verify_current_access_proof(
+        self, value: object, *, deadline: object | None = None
+    ) -> ShadowAccessProof:
+        """Revalidate an access proof against this store's current projections.
+
+        Unlike :func:`verify_shadow_access_proof`, this boundary proves that
+        the exact snapshot, grant, lifecycle and evaluation facts still exist
+        in this store and that the observed snapshot and lifecycle remain the
+        current heads.  The transaction is explicitly query-only and records
+        no new evaluation, projection or idempotency fact.
+        """
+
+        _deadline_check(deadline, "phase6_current_proof_before")
+        proof = verify_shadow_access_proof(value)
+        connection = self._connect(deadline)
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            self._begin(connection, immediate=False)
+            snapshot = self._load_snapshot(connection, proof.snapshot.snapshot_id)
+            grant = self._load_grant(connection, proof.grant.grant_id)
+            lifecycle = self._load_lifecycle(connection, grant)
+            evaluation, evaluation_grant, observed_lifecycle = self._load_evaluation(
+                connection,
+                proof.evaluation_receipt.evaluation_id,
+            )
+            if (
+                snapshot != proof.snapshot
+                or grant != proof.grant
+                or evaluation != proof.evaluation_receipt
+                or evaluation_grant != proof.grant
+                or observed_lifecycle != proof.lifecycle_receipt
+            ):
+                raise Phase6StoreError(
+                    "access proof differs from exact persisted Phase-6 facts"
+                )
+            current = self._current_evaluation_result(
+                connection,
+                receipt=evaluation,
+                grant=grant,
+                observed_lifecycle=observed_lifecycle,
+                replayed=True,
+            )
+            if (
+                not current.current
+                or not current.shadow_allowed
+                or current.access_proof is None
+                or current.access_proof != proof
+                or lifecycle != proof.lifecycle_receipt
+            ):
+                raise Phase6StoreError(
+                    "access proof is not current and shadow-allowed in this store"
+                )
+            self._commit(connection)
+            connection.close()
+        except BaseException as primary:
+            _cleanup_failed_connection(
+                connection,
+                label="Phase-6 current access proof verification",
+                primary=primary,
+            )
+            raise
+        _deadline_check(deadline, "phase6_current_proof_after")
+        return proof
 
     def load_grant(self, grant_id: str) -> LifecycleCommitResult:
         connection = self._connect()

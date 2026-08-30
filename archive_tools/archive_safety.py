@@ -29,7 +29,10 @@ from scripts import evidence_payload_policy as payload_policy  # noqa: E402
 
 MANIFEST_BASENAME = "MANIFEST.json"
 CHECKSUMS_RELATIVE = "checksums/SHA256SUMS"
-MANIFEST_SCHEMA = "paper-factory-phase4-6-candidate-manifest-v1"
+# Candidate manifests describe the complete source closure, not one historical
+# audit round.  Keep the schema phase-neutral so the same strict verifier can
+# bind later full-shadow slices without misrepresenting their contents.
+MANIFEST_SCHEMA = "paper-factory-full-shadow-candidate-manifest-v2"
 BUILDER_ID = "paper-factory-deterministic-zip-v1"
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 DEFAULT_MAX_MEMBER_BYTES = 256 * 1024 * 1024

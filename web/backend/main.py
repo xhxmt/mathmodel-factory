@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 from contextlib import asynccontextmanager
 
@@ -436,6 +437,14 @@ app.include_router(cloud_router)
 app.include_router(ws_router)
 app.include_router(showcase_router)
 app.include_router(phase6_router)
+
+# Phase 7+8 has no default route or import surface.  Its lightweight Web
+# adapter is imported only when the explicit process-level shadow gate is on;
+# the adapter itself defers path validation and core imports until after auth
+# and project ACL checks.
+if settings.phase78_shadow_enabled:
+    phase78_api = importlib.import_module("web.backend.phase78_api")
+    app.include_router(phase78_api.create_phase78_router(settings))
 
 def _router_endpoint(router, path: str, method: str | None = None):
     for route in getattr(router, "routes", []):

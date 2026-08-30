@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and validate the explicit Phase 4-6 source freeze inventory."""
+"""Generate and validate an explicit full-shadow source freeze inventory."""
 
 from __future__ import annotations
 

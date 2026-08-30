@@ -1393,6 +1393,7 @@ def test_payload_policy_rejects_runtime_locks_and_sensitive_state_paths() -> Non
         "web/auth.db": "database_state",
         "state/cache.sqlite": "database_state",
         "state/cache.sqlite3": "database_state",
+        "runtime/cas/objects/sha256/aa/.put-deadbeef-1234": "cas_temporary_state",
         "node_modules/pkg/index.js": "dependency_or_cache_path",
         ".env.production": "environment_credential_file",
     }

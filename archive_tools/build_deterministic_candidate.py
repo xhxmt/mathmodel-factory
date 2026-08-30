@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a deterministic, self-verifying Phase 4-6 candidate ZIP.
+"""Build a deterministic, self-verifying full-shadow candidate ZIP.
 
 The source tree is opened read-only.  The output must be a new absolute
 directory, so the command cannot overwrite an earlier candidate.  Payload is
