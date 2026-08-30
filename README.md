@@ -31,6 +31,7 @@ cd web
 - **求解证据**：在项目工作区查看本地/云端 Solver 作业、终态、耗时与两阶段 receipt 完整性。
 - **项目控制**：在权限范围内暂停、恢复或终止运行。
 - **人工咨询与选择**：处理咨询请求；交互式项目可启用 Step 3 `PRIMARY/AUXILIARY` 选择门，CLI 路径仍然保留。
+- **Phase 6 验证快照（候选、默认关闭）**：可选展示独立 shadow SQLite 中与单一 Authority revision 绑定的只读快照证据；认证与项目 ACL 先行，且永远不授予 Authority、交付或 dispatch 能力。
 
 详细使用说明请参阅 [`web/README.md`](web/README.md)。
 
@@ -87,11 +88,26 @@ chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_
 
 这些运行输出会被 Git 自动忽略。
 
-## 最新更新（2026-08-16）
+## 最新更新（2026-08-29）
 
-当前 `main` 分支的近期变更集中在核心编排、Web 控制面、评测治理与仓库治理：
+当前候选工作树的近期变更集中在核心编排、Web 控制面、评测治理与仓库治理；
+是否进入 `main` 仍以独立审核和后续授权为准：
 
+- Phase 6 候选实现 verified snapshot 与 closed scoped-grant 的独立持久化 full shadow：canonical source binding 精确绑定 Authority coordinate 和 Phase 3/4/5 状态哈希，snapshot/current、grant lifecycle、evaluation/proof 与幂等 receipt 事务化保存在 caller-selected SQLite。Web 只提供 ACL-first 的非权威 GET 适配器；后端 `PHASE6_SNAPSHOT_ENABLED` 和前端构建时 `VITE_PHASE6_FULL_SHADOW_ENABLED=true` 必须同时启用，默认配置仍走 v1 且不触碰 Phase 6 store。它不增加 Authority reader/writer、生产 mutation、action execution 或 dispatch。当前合同见 [`docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md`](docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md)。
+- Phase 3–6 候选可运行 `./bootstrap.sh` 做无网络自包含验证。版本化
+  `phase46-bootstrap-exact-count-v1` 门禁精确要求五组
+  `100 / 274 / 146 / 29 / 108`、总计 657 个 passed，且 failed、skipped、
+  xfailed、xpassed 全为零。JUnit XML 与独立 pytest outcome ledger 必须完整
+  一致；终端文本仅供阅读。运行
+  `python3 -m scripts.bootstrap_test_contract describe` 可查看当前合同。
+- 冻结候选由源码内 `tools/generate_freeze_inventory.py` 和
+  `archive_tools/build_deterministic_candidate.py` 构建。二者在任何候选文件
+  `lstat/open/read/hash` 前统一调用 `scripts.evidence_payload_policy`；SQLite
+  主库及 WAL/SHM/journal、凭据、缓存和运行时状态不会进入 inventory 或 ZIP，
+  策略内部错误也会失败关闭。
 - 新项目使用 `factory_core.FactoryEngine`、`contest_core_v1` 和 10-Stage `stage_v1` 调度；未显式配置时默认 74 小时，CLI/Web 可写入官方提交 deadline 作为权威时间。Stage/subtask/Step 兼容游标、v2 主体/结果事件信封、T−6h content freeze、T−2h delivery freeze、按 request/generation 绑定且拥有不可变 receipt 的人工决策及 Solver 幂等身份保存在项目内 schema-v9 `.factory/state.db`。模块化论文从权威主文件递归解析活动 LaTeX/参考文献依赖，冻结、审计与最终指纹不会把未引用草稿混入论文身份。
+- `TransitionCoordinator` 是 application writer 的目标边界，但当前尚有 decision record、request supersede、prompt binding、projection bookkeeping、bootstrap/migration 和 archive relocation 旁路；现状清单与未来静态门禁规格见 [`docs/architecture/application_writer_allowlist_v1.json`](docs/architecture/application_writer_allowlist_v1.json)，不得把它误述为已经实现的“唯一 writer”。
+- `web/auth.db` 的身份、项目 ACL、展示 ACL 与 scoped delivery override 属于控制面；项目 `.factory/state.db` 的 scheduler/Human Decision 属于单项目 workflow。两者不能互相替代或反向授予权限。
 - `run_paper.sh` 已降级为兼容启动器；原生 Stage 调度在内部继续调用 Step 0–16 lifecycle/validator，不调用冻结 Bash，冻结实现只服务未迁移或显式回滚的项目。
 - CLI、Web 和本地/Cloud Run 求解器通过同一 `FactoryService`、revision 与事件合同运行；云执行仍受全局 quarantine 限制。
 - Python、Web backend、Cloud 镜像和前端构建均有锁文件，运行时启动脚本不再动态安装依赖。
@@ -210,7 +226,7 @@ python3 -m factory_core.cli audit ongoing/test_cumcm2024b
 - 设置 / Step 0：将赛题解析至 `problem/` 目录。
 - Step 1：背景调研及方法预选。
 - Step 2：并行生成建模方案及示例求解。
-- Step 3：方法选择，支持 `human_review.md` 手工介入修改；显式启用 `selection/config.json` 时会先暂停，让用户在 Step 2 验证过的候选流中选择 `PRIMARY/AUXILIARY`。
+- Step 3：方法选择。带 `contest_core_v1` policy 的新 Native 项目必须先暂停，让用户在 Step 2 验证过的候选流中选择 `PRIMARY/AUXILIARY`；无 policy 的兼容项目仍可由 `selection/config.json` 显式启用。SQLite 决定是权威，`human_review.md` 是可重建投影而不是人工覆盖通道。
 - Step 4：构建完整模型，并运行 `model` profile 审计。
 - Step 5：执行完整求解过程，并运行 Step-5 `results` profile 审计。
 - Step 6：敏感性与鲁棒性分析，并以新快照运行 Step-6 `results` profile 审计。

@@ -1,11 +1,241 @@
 # Changelog
 
+- Phase 6 verified snapshot/scoped-grant full-shadow candidate: add a
+  caller-path, independent exact-profile SQLite store for canonical source
+  bindings, immutable verified snapshot chains, current-head CAS, closed
+  snapshot/section/action-center grants, revocation/expiry lifecycle,
+  evaluation/access-proof receipts and exact idempotency replay. Source
+  bindings require matching Authority/source coordinates and explicit Phase
+  3/4/5 state hashes; all domain times are caller-supplied and every result
+  remains non-authoritative/no-transfer/no-dispatch. Add an authenticated
+  project-ACL-first read endpoint and strict seven-state frontend projection
+  with one stale retry, request-generation fencing and accessible keyboard/
+  focus behavior. Backend `PHASE6_SNAPSHOT_ENABLED` and the exact build-time
+  string `VITE_PHASE6_FULL_SHADOW_ENABLED=true` are independently default-off;
+  the disabled frontend excludes the Phase 6 component and the disabled
+  backend does not import the core or touch its store. The current candidate
+  implementation has passed the current worktree's complete local
+  audit and remains pending independent Pro review; it does not add an
+  Authority reader/writer, mutate v1 state, execute an action, dispatch or
+  claim deployment. The historical M0.1 pure-module import gate now retains an
+  exact path-and-primitive allowlist for the 13 formal Phase 2-6 consumers,
+  while every other production module remains prohibited.
+  Pro Round 02-04 hardening makes malformed/undecodable Python and scanner
+  faults reject evidence payloads with a conservative raw-byte fallback;
+  normalizes SQLite database/WAL/SHM/journal denial across case and Windows
+  separators; and preserves project-ACL-first behavior even when an
+  authenticated caller supplies an invalid `expected_revision`. Duplicate
+  trimmed action IDs now fail closed at both Web boundaries, unknown errors use
+  one allowlisted public message, and current/obsolete abort generations settle
+  without stale UI overwrite. Add real production-build/module/resource-load,
+  mounted browser keyboard/ARIA, CLI/Web/service/Scheduler/worker Phase 7/8
+  isolation, and five historical F1 counterexample closure regressions. These
+  changes do not enable either Phase 6 flag or expand Phase 7/8 behavior.
+  Normal-flow follow-up adds one configurable 1–300000ms frontend request
+  deadline (15000ms default) whose single budget spans response headers, body
+  parsing and the one permitted stale retry; an AbortController plus deadline
+  race settles transports that ignore cancellation without allowing an old
+  generation to overwrite current UI. Bootstrap now requires the versioned
+  exact five-group `100/274/146/29/108 = 657` contract from both JUnit XML and
+  an independent outcome ledger, with zero failed/skipped/xfailed/xpassed.
+  The actual freeze-inventory and deterministic ZIP tools are now candidate
+  source and invoke the central payload path policy before candidate file I/O;
+  a live SQLite WAL pipeline regression proves database and sidecar state stay
+  out of both inventory and archive.
+
+- Phase 4-5 FIX2 candidate hardening: make the Phase 5 owned SQLite profile an
+  exact inventory of every persistent table, index, view and trigger, including
+  the deterministic SQLite automatic indexes, so any additional ordinary,
+  unique, partial or expression index or view fails closed. Bind the Phase 5
+  companion marker to the anchored parent-directory device and inode and check
+  that identity before read-write open, transaction entry and commit. Phase 4
+  and Phase 5 now recover from failed exclusive initialization by atomically
+  moving a still-named candidate to a private quarantine, verifying it against
+  the creation descriptor, and deleting only that inode; a raced foreign
+  replacement is restored without overwrite. Uncommitted connect, schema and
+  commit failures clean up and fsync their anchored parent, while an actually
+  committed store is retained and restart-verifiable. This is a review
+  candidate, not an independent PASS; production authority, dispatch, frozen
+  Phase 3/FIX5 contracts and excluded Phase 6B-8B drafts remain unchanged.
+
+- Phase 4-5 re-audit repair: move standalone shadow-store ownership proof ahead
+  of every ordinary SQLite read-write open and transaction. Existing databases
+  are anchored read-only, reject WAL/SHM/journal sidecars, and must match an
+  exact ownership marker plus complete schema profile before the same inode can
+  be opened read-write; new stores use exclusive creation and path/inode-bound
+  markers. Commit and initialization error paths retain the anchor and fail
+  closed on replacement without leaking descriptors. Replace Phase 5 stage
+  suffix concatenation with bounded, domain-separated SHA-256 keys bound to the
+  caller key, request, stage and schema. Linux inotify/writer-lock and
+  495-512-character crash/restart/replay tests cover both reported defects.
+  Runtime authority, dispatch, production imports, frozen migrations, Phase 3
+  FIX5 and the excluded Phase 6B/7B/8B drafts remain unchanged.
+
+- Phase 4-5 durable full-shadow closure: add a caller-path-explicit,
+  standalone SQLite Phase 4 operation runtime with atomic immutable launch
+  intent, CAS current state, append-only receipts and idempotency results;
+  lease claim/reclaim, retry accounting, uncertain-result reconciliation,
+  exact restart replay and transaction failure injection remain synthetic and
+  never dispatch. Add a separately isolated Phase 5 supervisor lifecycle that
+  binds workflow/invocation/attempt/process-scope/operation identities to the
+  existing pure pause policy, persists scoped requests and receipts, and puts
+  any observation behind an injected shadow-only port. Both runtimes return
+  before opening SQLite or calling a port when disabled, remain outside all
+  production import graphs, claim no authority, and do not change
+  `A2_0001`-`A2_0014`, the sole production writer, the five-method reader, the
+  three Phase 3 ledgers, V1 identity, or the frozen Phase 3 FIX5 archive.
+
+- Phase 3 FIX5 audit closure: fail a complete dirty/blocked mutation that lacks
+  its reopen-ledger control record with the existing typed Phase-3 contract
+  exception before any database connection or SQL, identically under normal
+  and optimized Python. Remove two inert class-body expressions from the sole
+  production-capable writer without changing its public surface. The runnable
+  audit archive now writes default bootstrap logs and environment facts outside
+  the immutable package root, so its full checksum manifest passes before and
+  after a no-override bootstrap from a fresh extraction. Runtime authority,
+  schema/migrations, dispatch, routes, and Phase 4-8 behavior are unchanged.
+
+- Phase 3 operator-authorization authority binding: replace the self-hashed
+  owner-resolution authorization with a v2 typed claim that binds workflow,
+  source revision, target command, path, reconstructable owner compilation and
+  policy SHA, owner ID/Stage, dirty flag, operator, and reason. Claims are
+  trusted only when included in an immutable control receipt emitted by a real
+  `V1_ONLY` writer-configuration epoch CAS. The production writer verifies the
+  receipt, grant membership, complete command coordinate, and independently
+  rejects authorization for normally resolvable paths in the same transaction;
+  exact replay and all Phase 3 reader reconstruction repeat these checks.
+  Cross-workflow/command, stale revision, altered policy/path/owner/dirty/issuer
+  or receipt, SQL tamper, and failure-injection paths fail closed without
+  command or ledger residue. No migration/table or active route changes.
+
+- Phase 3 full-shadow re-audit hardening: tighten checkpoint persistence so an
+  initial checkpoint root is valid only when no prior Phase-3 head exists, and
+  every later checkpoint must bind both semantic and occurrence predecessors
+  plus a legal state edge. Persist blocked analysis atomically in the existing
+  reopen ledger as a typed `BLOCKED_NO_REOPEN` disposition. Filesystem blockers
+  now carry a frozen owner registration; owner-resolution failures require typed
+  operator authorization, and blocker/tombstone removals derive owner identity
+  only from prior typed bindings. Complete Phase-3 mutations now carry a typed
+  bootstrap/continuation previous-head that binds the real persisted head
+  revision, command, mutation, and manifest; the reader revalidates adjacent
+  continuity while reconstructing revisions and latest artifact state. No
+  `A2_0001`-`A2_0014` migration bytes, checksums, or statement ordering change;
+  V1 remains the sole active production authority, and Phase 3 stays
+  default-disabled, non-authoritative, and non-dispatching.
+  A follow-up replaces the last missing-control assertion with a typed
+  fail-closed contract error that is identical under `python -O`, before any
+  database connection, and moves audit-bootstrap runtime output outside the
+  immutable package checksum closure.
+
+- Phase 2 Production Authority Foundation: append the separately verified
+  A2_0010-A2_0014 production suffix without changing the published
+  A2_0001-A2_0009 bytes/checksums. Add explicit-path, dry-run-first operator
+  backup/migration/restore and switch administration; a durable writer/epoch
+  CAS facade with atomic revision/bundle/outbox commits; a mode-ro,
+  revision-atomic read repository; callback-injected transactional outbox
+  claim/reconciliation/retry/dead-letter state; and explicit-policy
+  health/one-way fallback evidence. A2_0014 immutably binds the persistent
+  database identity and original pre-Authority backup lineage. Migrate and
+  restore now reserve their explicit evidence path as a durable operation
+  journal, reuse the original immutable backup across interruption, and can
+  close final evidence after an already-completed READY migration or verified
+  restore replacement. A brand-new migrate operation now fails before journal
+  or backup publication when base Authority or the production suffix has
+  already started, requiring exact replay of the original operation paths.
+  Revision snapshots reject `after_revision` greater than
+  the resolved through/current boundary. All production-capable paths remain
+  default `V1_ONLY`, have no active Scheduler/Web/Service/CLI/launcher caller,
+  perform no real provider dispatch, and do not change v1 as the sole active
+  production route.
+
+- Phase 5 simplified pause-policy shadow: add a pure two-mode/four-scope
+  decision matrix with immutable wire receipts. Worker, model, and attached
+  Solver scopes map to `terminate-scope`; durable Solvers continue for ordinary
+  pause and map to `request-cancel` only for explicit cancel-Solvers mode. The
+  module remains outside production imports and performs no process signal,
+  launch, termination, persistence, outbox/invocation write, Solver/provider
+  call, Scheduler/Web/API integration, feature-flag cutover, or deployment.
+
+- Phase 3 full shadow foundation: package immutable, deterministic Artifact
+  Record/Manifest, explicit ArtifactRemoval, typed ChangeSet/DirtyDecision,
+  read-set-CAS ReopenPlan, checkpoint ledger/re-attestation dry-run, and parity
+  receipt contracts behind an explicit default-disabled, non-authoritative
+  runner. Manifests hash-bind their complete normalized tracked-path inventory;
+  prior records and unreadable blockers cannot disappear without a current
+  record/blocker or typed removal. The complete mutation binds both manifests,
+  the recomputed ChangeSet, exact current values/removals, checkpoint input, and
+  ReopenPlan/read set, rejecting partial, tampered, or cross-round graphs.
+  Semantic artifact/checkpoint identity is separated from revision-bound ledger
+  occurrence identity, allowing A-to-B-to-A and equal states across workflows
+  without PK collision. Typed tombstone occurrences close pure and mixed
+  removals, later recreation, presence/absence CAS, replay, and read-side latest
+  state. Owner-policy change fails closed as `MIGRATION_REQUIRED`; unsafe paths,
+  symlink escape, unreadable files, and changed-during-read files produce typed
+  blockers; illegal non-string paths use one deterministic sentinel. The only
+  production-capable write surface remains
+  `AuthorityProductionWriter.persist_command_bundle`: no mutation preserves the
+  exact v1 request/bundle/replay identity, while an explicit complete typed
+  `phase3_mutation` uses hash-bound v2 identity and writes the existing
+  artifact/checkpoint/reopen ledgers in the same fenced `BEGIN IMMEDIATE`.
+  Extend the `mode=ro`/`query_only` read repository with strict typed mutation
+  reconstruction plus the supported `phase3_artifact_state()` read for
+  revision-bound present-record/blocker/tombstone reconstruction. The public
+  read surface remains exactly five supported query methods:
+  `workflow_coordinate()`, `command_bundle()`, `phase3_artifact_state()`,
+  `revision_snapshot()`, and `outbox_delivery_state()`. No
+  `A2_0001`-`A2_0014` migration bytes change. Checkpoint keys use an explicit
+  `phase3:` namespace; packaging now makes the already-included `scripts`
+  support modules importable from a built wheel. No active
+  Scheduler/Service/CLI/Web route imports the runner, no real dispatch occurs,
+  and V1 remains the sole production authority and active route with no cutover.
+
+- Phase 2 additive authority persistence: add an independently versioned
+  authority-schema-v2 migration state machine for legacy schema v1-v9,
+  default-off Command/Event/Receipt envelope storage, revision allocation,
+  scoped idempotency, contract pins, artifact/checkpoint/reopen records,
+  invocation/attempt/process scopes, project snapshots, and a
+  transaction-bound append-only outbox. The migration and repository recheck a
+  canonical legacy-source fingerprint, exact ordered migration identities, and
+  actual SQLite object definitions; append-only identities reject
+  `INSERT OR REPLACE` conflicts as well as updates and deletes. The repository
+  exposes no partial mutation/allocator transaction and freezes idempotency as
+  command request bytes plus exact recorded companion-envelope identities.
+  Legacy current checkpoints retain only `LEGACY_IMPORTED`/`UNKNOWN` assurance;
+  project-state stage fields do not invent an owner, and ambiguous owners stop
+  at `MIGRATION_BLOCKED_OWNER_AMBIGUOUS`. Existing writers, legacy tables,
+  production DBs, API/UI, providers, Scheduler, outbox consumers, and delivery
+  paths remain untouched.
+
+- Run4 M0.3 attempt-9: add an explicit source-compiled WorkflowEvent row
+  policy with a closed raw-type/payload-family vocabulary and exact
+  catalog/payload/subject/result Step plus zero/subject/result attempt
+  bindings. Unknown raw or dynamic event families and coherent Step/attempt
+  drift now fail before EVENT_HEAD publication; project-relative immutable
+  paths also reject C0/DEL. Snapshot/CurrentFacts/CAS identities advance to
+  v3. The current v1 competition runtime remains the only authority; this
+  prototype remains read-only, non-authoritative, default-off and disconnected
+  from DB writers, Web and the Scheduler, with no Phase 2–10 or cutover work.
+- Run4 M0.3 attempt-8: validate and replay the complete source-authorized
+  WorkflowEvent stream before publishing EVENT_HEAD, bind the current domain
+  root to same-transaction business rows, require safe project-relative
+  immutable paths and literal Solver receipt paths, and bind completed receipts
+  to the current terminal lifecycle event. Snapshot/CurrentFacts/CAS identities
+  are explicitly versioned; the prototype remains unconnected to production.
+- Run4 M0.3 attempt-7: source-authorize Solver submitted/completed receipt
+  events separately from lifecycle generation, project their hash-pinned refs,
+  bind submission/external/failure row facts to recorded events, and fail closed
+  on unbound non-empty legacy result refs.
+
 本文档记录 Paper Factory (Modeling Factory) 的重要更新。
 
 ## [Unreleased]
 
 ### 新增
 
+- 新增尚未接入生产路径的 Run4 M0.3 shadow/prototype 合同：把 pure dirty classifier 的 semantic identity 与三文件 operational implementation manifest 拆分，把持久 Solver receipt owner 覆盖建模为独立 semantic/symbol-span identity，并以冻结 v1 为信任根增加 additive Workflow V2、ContractPinSet/runtime pin；Project Snapshot V0 使用单一 `mode=ro`/`query_only`/`BEGIN` SQLite transaction 返回 typed availability，CommandEnvelope/structured read-set CAS 只消费显式 immutable facts并固定 non-authoritative、zero-mutation/side-effect。当前 schema-v9 缺 project/run generation、recorded pins 与 delivery authorization binding，因此 snapshot 明确 `PARTIAL` 且不能 CAS accept；没有表、迁移、API/UI、feature flag、writer/cutover 或 provider/model/Solver 接入。`APPROVE_M03_WAL_ADDENDUM` 采用方案 A：SQLite C/VFS 可在严格的 `<db>-wal`/`<db>-shm` 路径内实施辅助 I/O，应用代码仍零 workflow mutation、零主动写操作；quiescent 主 DB 与业务逻辑不变，辅助文件仅作 analysis/evidence 观测且不进入 Snapshot/CAS 身份。该 addendum 只关闭 WAL 设计冲突，不构成整体 M0.3 实现批准或完成声明。
+- 新增默认关闭且未接入生产路径的 M0.2 Stage-v1 shadow scheduler：`StageV1ReadinessAdapter` 只消费同一 revision-bound 已记录快照并防御性冻结 readiness DTO，`SchedulerCore` 纯函数返回非权威、零 mutation/side-effect 的规范化计划，parity receipt 精确区分 MATCH、逐项 correction、未知差异、v2 错误与 v1 不可表示。所有值分别绑定 M0.1 workflow semantic/analysis 身份；analysis-only 证据不改变 semantic plan identity，unsupported owner mode 在 receipt 边界失败关闭。现役 v1 Scheduler、SQLite schema、Legacy adapter、provider 与真实运行状态均未接入或改变。
+- 新增未接入生产运行路径的 `workflow-contract-bundle-v1`：从现役 10 Stage、Step 0–16、Step 8.5、全部 Gate、contest phase、dirty 分类与 artifact owner 真值纯函数编译深度不可变合同，并用 `factory-canonical-json-utf8-v1` 生成可复算 bytes/SHA-256。Owner 兼容编译器保留 v1 首命中，同时返回全部匹配、稳定规则 ID、精确 pair-scoped `INTENTIONAL_PRIORITY` 及 NO_OWNER/MULTIPLE_MATCH/SHADOWED/UNREACHABLE/UNANALYZABLE 诊断；严格模式尚因已固化的同 owner `paper/**/*.tex`/`paper/*.tex` 冗余失败关闭。
+- 新增 Phase 0 源码事实 ADR、application-writer 旁路/未来静态门禁清单和 v1 characterization corpus；只读测试将运行时 schema-v9 与现役文档绑定，并校验 normal、dirty、semantic reopen、Human Gate、recovery、packet rebuild、technical terminal 与 Solver receipt 描述不漂移。文档明确 `TransitionCoordinator` 仍是目标而非当前唯一 writer，并区分 `web/auth.db` 控制面授权与项目 SQLite workflow decision 的信任和生命周期。
 - 工作流状态升级为 schema-v9：活动 dirty 状态及清除 receipt 按 `(flag, owner_stage)` 持久化，同一 MODEL/RESULT 域的多个责任 Stage 不再相互覆盖；LaTeX 数学语义补齐 `\\(...\\)`、`math`/`displaymath`、`alignat`/`flalign`/`eqnarray` 和 TeX definition prefix。最终输入与 submission bundle 增加 authored-artifact ownership coverage gate，未登记且未声明的普通产物失败关闭。
 - Consultation 决策现在把完整答案写入不可变 SQLite receipt，由控制平面确定性重建 `human_review.md` 段落；执行前校验投影并将权威答案直接嵌入提示词，Step 事件/checkpoint 绑定 effective prompt、决策 ID 与 Web researcher note 哈希。Stage 项目仅允许回滚到 `step_v2`，禁止继续降级 Legacy；所有回滚检查 pending Gate、开放请求、调用方 revision 和 Legacy/SQLite 游标一致性。
 - LaTeX 构建证据升级为三轮 recorder 与 bibliography 双合同：所有 `.fls` 输入分类为已声明项目文件、未声明项目文件、项目符号链接、受控 TeX runtime、禁止外部文件或允许生成物，异常路径不再静默过滤；编译清理继承的 TeX/BibTeX 搜索环境，启用 `-no-shell-escape`/严格 `openin_any`，并要求三轮项目输入身份一致。
@@ -54,6 +284,10 @@
 
 ### 变更
 
+- M0.2 workflow bundle 公共边界在源码行为授权之前先验证完整、深度不可变的精确 runtime DTO 图：错误容器、子类、嵌套 DTO、原始类型、可选字段和非法 UTF-8 值均在 validator、readiness adapter、shadow core 和 receipt 入口稳定抛出 `WorkflowContractValidationError`，不再泄漏属性、迭代或 canonicalizer 异常。新的 identity-matched 反例、classifier↔Step 13 同步伪造和仅 monkeypatch 生产 validator 的 kill test 证明四入口测试不会因 identity 不匹配而假通过；Step prompt、Gate producer、owner compiler schema/诊断逐字段 analysis-only 正测仍保持 semantic identity 不变。本项仍仅为 M0.2，未开始 M0.3 classifier semantic/implementation identity split。
+- M0.2 workflow bundle 公共信任边界改为从源码重建并逐字段授权 Step、Gate、ContestPhase、dirty classifier 与 owner behavior rules；新增 Stage↔Step phase/owner/budget、ContestPhase↔Step 双向映射和 Step 13 operands↔classifier semantic flags 精确绑定。同一固定版本下的 supplied 自哈希变体在 validator、readiness adapter、shadow core 和 parity receipt 前失败关闭；Step prompt、Gate producer、owner diagnostics 与 owner compiler 实现 schema 继续仅影响 analysis identity，合法 canonical bytes/hash 与 shadow-only/zero-write/zero-dispatch 合同不变。该修复仍为 M0.2，不处理 M0.3 classifier semantic/implementation identity split。
+- M0.1 workflow-contract 主 bytes/SHA-256 改为只覆盖语义投影：保留 Stage/Step/Gate 条件、预算、dispatch、owner 规则、owner resolution mode 与精确优先级授权，排除 analyzer witness/诊断文本、owner compiler 实现 schema、Step prompt 与 Gate producer 源码位置；bundle validation 对当前 resolver 不支持的 mode 失败关闭，并保留完整 analysis bytes/SHA-256 作为独立审查身份。该修复不接入运行时、数据库或 M0.2/M0.3 持久化。
+- 规格—实现对账门禁 S4 改为按目标方向验证松弛界：最小化接受结构化 `lower_bound`，最大化要求 `upper_bound`，并兼容旧顶层字段；S1 同时识别 `1500/3000/6000 次目标评估` 形式的直接预算阶梯，避免把已明确的执行预算误报为不可解析。
 - Web 求解任务面板将任务状态、两阶段凭证限制/错误码、输入输出字段和标准日志入口统一为中文展示；API 原始值保持不变并保留在诊断提示中。
 - Final Audit 统一为最终编译、完整 Step-10 paper/provenance suite、视觉/页数门禁、packet/fingerprint、enforce-mode 三角色 Judge、判决前后快照复核、judgment receipt 与 final acceptance receipt；PASS 复用也必须验证双 receipt 和当前快照。
 - Native 与 Legacy Step 16 统一消费同一个 Final Audit 和原子 release publisher；项目清理提前到最终快照构建前，`2026-08-09.atomic_release_v7` 成为当前交付合同。
@@ -83,6 +317,12 @@
 
 ### 修复
 
+- 修复 Run4 M0.3 attempt-5 复审发现的 Solver lifecycle P1：Project Snapshot V0 以单一源码授权 event/status 映射同时派生合法状态词表与连续 generation 历史校验，补齐现役 `SOLVER_JOB_SUBMITTING`、`SOLVER_JOB_QUEUED`、`SOLVER_JOB_CANCELLING`，保留 generation-1 `SUBMITTED` 兼容规则；未知状态/事件、generation gap 和 row/latest-event 矛盾继续 typed fail closed。真实 SQLiteStateStore 的 repeated submitting、queued、cancelling 路线进入 INVOCATIONS_SOLVER，并保持 Snapshot→CurrentFacts→shadow CAS entity generation 绑定。
+- 修复 Run4 M0.3 attempt-4 实施审查发现的三项 shadow/prototype 信任边界：Project Snapshot V0 现在从源码重建 SQLite 领域 policy，在生成 AVAILABLE fact 前绑定项目游标、Stage/checkpoint ID 与 receipt、dirty cause/clear/rebase 历史、pending request identity、projector event chain、Solver lifecycle generation/status/owner 与 hash-pinned immutable refs，并保留现役初始 `submitting` 来源状态；Command CAS 为 required fact 显式声明 entity/subject binding，并在 read-set 重建前返回稳定 generation/fingerprint mismatch；Snapshot→CurrentFacts 以 `compile+validate` 重建固定六项映射、携带完整可恢复 ContractPinSet 并覆盖四类 synthetic COMPLETE accepted 路线。现役 schema-v9 仍为 PARTIAL，未增加表、迁移、API/UI、生产导入、writer/cutover 或真实 dispatch。
+- 移除两个旧 MinerU OCR 入口中的硬编码 Bearer 凭据，统一要求由现役 `MINERU_TOKEN` 环境变量注入并在缺失时于任何网络命令前失败关闭；新增冻结 payload 高置信扫描，校验三段式 JWT 的 base64url JSON header/payload、硬编码 Authorization Bearer、既有供应商/私钥签名，并只报告路径与规则名。证据归档路径策略同时拒绝 `.claude/*.lock` 运行锁、环境凭据文件、数据库、依赖/cache、符号链接和非普通文件；凭据撤销/轮换仍是账号所有者的外部操作，未在本轮执行。
+- M0.2 recorded snapshot、readiness/decision/parity DTO 公共边界现在拒绝映射、序列、字符串、整数、tuple 和 DTO 子类，逐字段要求严格 UTF-8，并在属性读取前拒绝未初始化 exact DTO；parity receipt serializer 也先完成结构验证。因此非法 Unicode 或携带额外可变状态的伪造值不再从 adapter/core/receipt 泄漏 canonicalizer 或属性异常。合法 schema、canonical bytes/hash 与 shadow-only 行为不变，仍未开始 M0.3。
+- M0.2 supplied `WorkflowContractBundle` 的共享验证边界现在用当前 `stage_catalog_version` 从源码 `STAGE_CONTRACTS`、`STEP_CONTRACTS` 与 `CONTEST_PHASES` 重编译完整 Stage 行为投影，并校验 Stage/subtask 顺序与 ID、source/checkpoint Step、contest phase、owner、继承预算、kind、condition、全局 subtask ID/调度坐标和 Stage 内 key 唯一性；`reviewer_entry_gate` 的 Step-8 无 checkpoint completion gate 与 Stage-10 Human Gate 继续按源码类型显式验证。adapter、纯 core 与 parity receipt 在 readiness/主动计划/receipt 创建前共同失败关闭，`step:N` 路线生成点还会断言 N 属于已验证 Step 集合。合法 bundle schema、semantic/analysis identity、readiness、plan 与 parity golden 保持不变，仍未接入 authoritative writer、Legacy、数据库或生产 dispatch。
+- M0.2 shadow readiness 边界对 workflow status、active invocation type/state、domain readiness、fact availability、delivery capability 与 dirty flag 使用精确大小写词表，并由 adapter 和绑定可信 workflow bundle 的纯 `SchedulerCore` 双重失败关闭校验；core 会重建 catalog 并复核 schema/contract/generation、cursor/attempt、checkpoint、owner 与所有 target，伪造 DTO 不再能把 catalog 或域目标当作新信任根。固定条件边界要求唯一非 `ALWAYS` 子任务只能是 Stage 8 Step 13 的 `ANY(semantic_dirty_flags)`。parity value/receipt 升级至 v2 并把 `execution_route` 纳入比较与 correction 精确绑定；receipt 在比较前重算 input/readiness/plan hashes 和关联，并拒绝权威计划或任何 mutation/side effect。workflow status 穷尽处置表保持不变：只有 `ready/running/retrying` 可进入普通 catalog scheduling，`archiving` 与缺少显式恢复/domain 事实的 `interrupted` 和其他非运行状态统一 `WAIT`，显式安全事实继续优先。checkpoint/immutable 引用继续要求规范 64 位小写 SHA-256，技术终态与比赛交付权限继续分离。该修复不接入或改变 v1 authoritative writer、Legacy、数据库或真实运行数据。
 - 关闭 Stage 调度继续审计的 2 个 Blocker 与 2 个 Major：Step 3 的 SQLite 决定现在确定性生成并双阶段校验 `chosen_method.md`/`method_decision.md` 投影及候选 fingerprint；新增统一 artifact ownership registry 供 dirty、Finalization、Judge 缺件、Web 诊断和交付 manifest 共用；失败子任务在终止事务中持久化 baseline delta，所有 scheduler/control-mode 回滚统一复算 manifest 并拒绝活动 attempt、Finalization/projection 残留；LaTeX 数学定义检测改为覆盖 LaTeX2e/xparse、环境、TeX primitive、expl3 与 PGF 宏的定义族失败关闭策略。
 - 修复 `stage_v1` 三项合并阻断边界：中断后 COMPLETE 恢复改用携带完整 metadata 的真实 validation/execution 领域对象并幂等晋升 checkpoint；活动 LaTeX 宏、单位及计数器定义变化纳入数学语义指纹；语义重开依据全部 dirty cause 的最早 `owner_stage`，并从 Stage catalog 推导 Step 恢复边界，因此后期修改 `problem/problem_plan.json` 会回到 Stage 1 且只能由 Stage 1 成功 receipt 清除。
 - 修复 submission ZIP 递归纳入未冻结 `paper/draft.tex`、LaTeX 子文件按错误目录优先级解析、模块化论文数字链丢失父章节状态，以及决定 receipt 删除/篡改后仍可通过 Approval Gate 的四项审计阻断问题；内容冻结拒绝现在记录规范 `WORK_REOPENED` recovery 事件与失效 checkpoint 清单。

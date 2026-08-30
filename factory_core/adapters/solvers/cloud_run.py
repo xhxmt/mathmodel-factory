@@ -12,6 +12,13 @@ from urllib.request import Request, urlopen
 from .types import SolverRequest, SolverSubmission
 
 
+def _request_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+
 class CloudTransport(Protocol):
     def submit(self, request: SolverRequest) -> SolverSubmission: ...
 
@@ -115,10 +122,7 @@ class CloudRunHttpTransport:
             self.service_url + path,
             data=body,
             method=method,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
+            headers=_request_headers(token),
         )
         try:
             response = self._opener(request, timeout=self.timeout_seconds)

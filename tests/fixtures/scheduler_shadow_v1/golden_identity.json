@@ -1,0 +1,21 @@
+{
+  "action": "DISPATCH",
+  "contract_analysis_sha256": "a9d7aa2a134075ba53b9f2c09b94c8182d209a683639609a27caa4c1e535c92b",
+  "contract_semantic_sha256": "2e2f3b9cb48788db5e7a28d0f0343518c3d1cd5969a57e045ef2fc946df5455d",
+  "parity_bytes": 1215,
+  "parity_sha256": "fa2d725485696e46cbba41bf7690c9608557720adb5aa03a42e7711f2ad77b30",
+  "parity_status": "MATCH",
+  "plan_analysis_bytes": 952,
+  "plan_analysis_sha256": "53e8a4ce53433f3430ba1c987546335f4faa8ead84b2efb66bb1549767772608",
+  "plan_semantic_bytes": 748,
+  "plan_semantic_sha256": "9161b630544bd57aa89bfc50407cf83c0bf6dc8cf6d1e4de0c1819e94c139f04",
+  "readiness_analysis_bytes": 3905,
+  "readiness_analysis_sha256": "cd2245de59df3970634d00e61337638691eb02e907612706acb7eb231dd5b892",
+  "readiness_semantic_bytes": 3635,
+  "readiness_semantic_sha256": "be0b8c04412f21eeda67f340e56a15c6d683c24f95e57b182c671189ffd9b8eb",
+  "target": {
+    "source_step_id": 0,
+    "stage_id": 1,
+    "subtask": "problem_setup"
+  }
+}

@@ -79,6 +79,19 @@ Dashboard 不再把每个运行都当作一张独立题目卡。后端根据项�
 - 失败关闭的交付清单，以及绑定原子 current release 的论文 PDF 和 submission ZIP；
 - 按权限开放的暂停、恢复和终止动作。
 
+如果运维方同时启用了 Phase 6 后端与前端构建 flag，工作区还会出现“验证快照”
+页。它只显示独立 shadow SQLite 中已验证的 snapshot coordinate、section 状态和
+内容 SHA-256；它不是项目 `.factory/state.db` 的权威视图，也不改变项目、grant、
+交付或运行状态。能看到该页不增加权限：后端仍先使用现有项目 ACL，管理员仍可见
+全部项目，普通用户仍只能读取自己的 ACL 项目。
+
+Phase 6 页面具有七种互不混淆的状态。只有 `ready` 且 page、section、action
+全部绑定同一 snapshot/revision 时才展示业务内容；`empty` 不等于“没有待办”，
+legacy/unavailable、认证失败、API 失败和校验失败也不会显示绿色 clear 状态。快照
+revision 变化时客户端最多自动重读一次；用户切换项目或较新的请求完成后，旧响应
+会被 generation fence 丢弃。Action Center 支持方向键、Home/End、Enter/Space，
+但当前 Web adapter 只提供只读 section 证据并不执行 action。
+
 `checkpoint.md` 仅用于显示，不是工作流权威状态。需要判断真实步骤时，在仓库根目录运行：
 
 ```bash
@@ -164,6 +177,16 @@ T−2h delivery freeze 后若 Final Audit 要求回退，必须另行明确批�
 ### 状态看起来过期
 
 刷新页面并检查 WebSocket；必要时用 `run_paper.sh --infer-step` 对照权威运行状态。
+
+### 验证快照显示异常
+
+- `此项目暂不提供快照`：后端未启用，独立 Phase 6 store 没有该项目的 current
+  verified snapshot，或当前 source 是 PARTIAL/ineligible；这不表示 v1 项目不存在。
+- `无权读取项目快照`：重新登录并确认项目 ACL；Phase 6 shadow grant 不能代替
+  Web ACL。
+- `项目快照服务暂不可用`：稍后重试并通知运维检查后端；客户端不会无限重试。
+- `项目快照校验失败`：表示坐标、身份、schema 或存储完整性未通过，必须保持
+  失败关闭，不能把它解释为可继续的空状态。
 
 ### 生产问题
 

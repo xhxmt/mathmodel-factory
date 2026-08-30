@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Test script for archive upload feature
-# Requires: backend running on localhost:8000, valid JWT token
+# Requires: backend running on localhost:8000 and ARCHIVE_UPLOAD_TOKEN in env
 
 BACKEND_URL="http://localhost:8000"
 TEST_ARCHIVE="/tmp/test_problem.zip"
@@ -25,32 +25,17 @@ echo -e "${GREEN}✓ Test archive found${NC}"
 echo "Archive: $TEST_ARCHIVE"
 echo ""
 
-# Get JWT token (requires credentials)
-echo -e "${YELLOW}Step 1: Login and get JWT token${NC}"
-read -p "Username [admin]: " USERNAME
-USERNAME=${USERNAME:-admin}
-read -sp "Password: " PASSWORD
-echo ""
+# Accept only a caller-provided runtime token; never derive or persist it here.
+echo -e "${YELLOW}Step 1: Validate runtime authorization input${NC}"
+: "${ARCHIVE_UPLOAD_TOKEN:?ARCHIVE_UPLOAD_TOKEN is required}"
 
-LOGIN_RESPONSE=$(curl -s -X POST "$BACKEND_URL/api/auth/login" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}")
-
-TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.access_token // empty')
-
-if [[ -z "$TOKEN" ]]; then
-    echo -e "${RED}✗ Login failed${NC}"
-    echo "$LOGIN_RESPONSE" | jq '.'
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Login successful${NC}"
+echo -e "${GREEN}✓ Runtime authorization input is present${NC}"
 echo ""
 
 # Upload archive
 echo -e "${YELLOW}Step 2: Upload archive${NC}"
 UPLOAD_RESPONSE=$(curl -s -X POST "$BACKEND_URL/api/upload/problem" \
-    -H "Authorization: Bearer $TOKEN" \
+    -H "Authorization: Bearer ${ARCHIVE_UPLOAD_TOKEN}" \
     -F "file=@$TEST_ARCHIVE")
 
 echo "$UPLOAD_RESPONSE" | jq '.'

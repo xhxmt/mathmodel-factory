@@ -388,6 +388,62 @@ def test_verify_numbers_handles_latex_commands_and_exponents(tmp_path):
         "The verified result is $T_1\\approx1.3624\\,\\mathrm{s}$ with tolerance $<10^{-6}$.\n"
         "\\end{document}\n",
     )
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is True
+
+
+def test_verify_numbers_handles_ranges_scientific_notation_and_layout(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(
+        project / "results" / "p1" / "values.json",
+        json.dumps(
+            {
+                "range": [1200.47, 3999.64],
+                "tiny": 4.0779e-7,
+            }
+        ),
+    )
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n"
+        "\\begin{longtable}{p{0.22\\textwidth}p{0.49\\textwidth}}\n"
+        "Range: 1200.47--3999.64; spreads: $4.08\\times 10^{-7}$ and $4.08\\times10^-7$.\n"
+        "\\end{longtable}\n"
+        "\\lstinputlisting[firstline=53,lastline=170]{models/02_model.py}\n"
+        "\\end{document}\n",
+    )
+    write_file(project / "models" / "02_model.py", "# fixture\n")
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is True
+
+
+def test_verify_numbers_ignores_multiline_lstinputlisting_line_selectors(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(
+        project / "results" / "p1" / "values.json",
+        json.dumps({"result": 42.5}),
+    )
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n"
+        "Verified result: 42.5.\n"
+        "\\lstinputlisting[\n"
+        "  language=Python,\n"
+        "  firstline=540,\n"
+        "  lastline=650\n"
+        "]{models/02_model.py}\n"
+        "\\end{document}\n",
+    )
+    write_file(project / "models" / "02_model.py", "# fixture\n")
 
     from verify_numbers import generate_manifest, verify_paper
 

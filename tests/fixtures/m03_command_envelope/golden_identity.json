@@ -1,0 +1,12 @@
+{
+  "accepted_cas_decision_sha256": "f56051050174078ec9303b331bcf126361f07a0f3458eff72694de9cf106fe92",
+  "command_cas_decision_schema": "command-cas-decision-v3",
+  "command_envelope_sha256": "cefb532c951c8e0e458842efeae13ea3f9512625c22a6b821e40f8c4d14e13fb",
+  "current_facts_schema": "command-current-facts-v3",
+  "current_facts_sha256": "0408d690ba5de409d26f0ae5fa13b76fd6990295567a2d6178e2559df473c840",
+  "read_set_sha256": "06be3ef35868b5801c102d18165be8bdaf06727bf677db1a1316c0ac408725c7",
+  "scope_rejected_cas_decision_sha256": "8eca840f37baa67531ad209dde42e16e757d03a0d5519d768f03974c71443e7e",
+  "scope_rejection_codes": [
+    "ENTITY_GENERATION_MISMATCH"
+  ]
+}

@@ -3,12 +3,16 @@
 
 set -e
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+BACKEND_DIR="$SCRIPT_DIR/backend"
+FRONTEND_DIR="$SCRIPT_DIR/frontend"
+
 echo "Testing Paper Factory Dashboard..."
 echo ""
 
 # Test backend
 echo "1. Testing backend..."
-cd /home/tfisher/paper_factory/web/backend
+cd "$BACKEND_DIR"
 source venv/bin/activate
 python3 -c "import app; print('✓ Backend imports OK')"
 
@@ -38,7 +42,7 @@ sleep 1
 # Test frontend
 echo ""
 echo "2. Testing frontend..."
-cd /home/tfisher/paper_factory/web/frontend
+cd "$FRONTEND_DIR"
 
 if [[ -f "node_modules/.bin/vite" ]]; then
     echo "✓ Frontend dependencies installed"
@@ -60,6 +64,6 @@ echo "   All tests passed! ✓"
 echo "=========================================="
 echo ""
 echo "To start the dashboard:"
-echo "  cd /home/tfisher/paper_factory/web"
+echo "  cd $SCRIPT_DIR"
 echo "  ./start_dashboard.sh"
 echo ""

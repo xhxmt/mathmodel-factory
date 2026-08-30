@@ -11,6 +11,11 @@
 | 查看编排状态、迁移与恢复契约 | [docs/architecture/ORCHESTRATION_ENGINE.md](docs/architecture/ORCHESTRATION_ENGINE.md) |
 | 查看当前 10-Stage 编排合同与实施状态 | [docs/architecture/STAGE_SIMPLIFICATION_PLAN.md](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md) |
 | 查看横向运行时基础设施收敛实现与验收计划 | [docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md](docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md) |
+| 查看 Phase 0 源码事实、authority 边界与 v1 characterization | [docs/architecture/decisions/ADR-0001-phase0-source-truth.md](docs/architecture/decisions/ADR-0001-phase0-source-truth.md) |
+| 查看 M0.1 不可变合同包、canonical hash 与 Owner 诊断 | [docs/architecture/WORKFLOW_CONTRACT_BUNDLE.md](docs/architecture/WORKFLOW_CONTRACT_BUNDLE.md) |
+| 查看当前 writer 旁路与未来静态门禁规格 | [docs/architecture/application_writer_allowlist_v1.json](docs/architecture/application_writer_allowlist_v1.json) |
+| 查看 v1 characterization corpus/index | [tests/fixtures/v1_characterization/README.md](tests/fixtures/v1_characterization/README.md) |
+| 查看 Phase 6 verified snapshot、scoped grant 与 Web shadow 契约 | [docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md](docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md) |
 | 查看源码、运行数据和兼容边界 | [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md) |
 | 编写模型、代码和论文 | [modeling_guide.md](modeling_guide.md) |
 | 检查建模口径 | [docs/guides/MODELING_CHECKLIST.md](docs/guides/MODELING_CHECKLIST.md) |
@@ -31,7 +36,15 @@
 - [CHANGELOG.md](CHANGELOG.md)：主要功能与工作流变更记录。
 - [docs/architecture/ORCHESTRATION_ENGINE.md](docs/architecture/ORCHESTRATION_ENGINE.md)：Python 引擎、SQLite 状态、Legacy 迁移和恢复契约。
 - [docs/architecture/STAGE_SIMPLIFICATION_PLAN.md](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md)：当前 10 Stage 映射、Step 0–16 验证/兼容边界、dirty flag、迁移/回滚合同及验收状态。
-- [docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md](docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md)：已实现的类型化 WorkflowEvent、纯 Projector、Human Decision、StageExecutionPipeline、TransitionCoordinator 和 Job 幂等合同，以及仍待完成的 clean-room 运营验收。
+- [docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md](docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md)：已实现的类型化 WorkflowEvent、纯 Projector、Human Decision、StageExecutionPipeline 和 Job 幂等合同，以及尚未实现的 application-writer 唯一性与仍待完成的 clean-room 运营验收。
+- [docs/architecture/PHASE4_8_FULL_SHADOW_GAP_MATRIX.md](docs/architecture/PHASE4_8_FULL_SHADOW_GAP_MATRIX.md)：Phase 4-8 的依赖、冲突、已完成切片和待实现闭环；明确独立 shadow SQLite 与冻结 Authority/FIX5 边界。
+- [docs/architecture/PHASE4_DURABLE_OPERATION_SHADOW.md](docs/architecture/PHASE4_DURABLE_OPERATION_SHADOW.md)：Phase 4 纯 operation 合同及 durable full-shadow runtime、lease/retry/reconcile、重启与精确重放边界。
+- [docs/architecture/PHASE5_PAUSE_POLICY_SHADOW.md](docs/architecture/PHASE5_PAUSE_POLICY_SHADOW.md)：Phase 5 pause policy 与 durable shadow supervisor 的 scope fence、注入式观察端口及 default-off/no-dispatch 边界。
+- [docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md](docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md)：Phase 6A 冻结七状态投影与 Phase 6B verified durable snapshot/scoped-grant、独立 SQLite、ACL-first Web 只读适配器、双 default-off flag 和 D001-D018 验收映射。
+- [docs/architecture/decisions/ADR-0001-phase0-source-truth.md](docs/architecture/decisions/ADR-0001-phase0-source-truth.md)：以指定源码提交为基线，锁定 schema-v9、writer 现状/目标、控制面与项目 workflow authority 边界及层级不变量。
+- [docs/architecture/WORKFLOW_CONTRACT_BUNDLE.md](docs/architecture/WORKFLOW_CONTRACT_BUNDLE.md)：M0.1 纯函数合同编译、canonical JSON/SHA-256、v1 Owner 全匹配兼容诊断、严格验证与后续接线边界。
+- [docs/architecture/application_writer_allowlist_v1.json](docs/architecture/application_writer_allowlist_v1.json)：当前直接 Store mutation characterization 与未来 receiver-aware 静态依赖门禁规格；Phase 0 只校验清单漂移，不执行重构。
+- [tests/fixtures/v1_characterization/README.md](tests/fixtures/v1_characterization/README.md)：normal、dirty、semantic reopen、Human Gate、recovery、packet rebuild、technical terminal 与 Solver receipt 的 v1 可机器读取索引和缺口。
 - [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md)：核心、应用、部署、评测、历史资产和运行数据的所有权。
 - [docs/architecture/compatibility-removal.md](docs/architecture/compatibility-removal.md)：兼容入口的可观察移除条件；本轮不删除这些入口。
 - [docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md](docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md)：本轮旧 worktree 的恢复、取舍与合并依据（历史快照）。
@@ -102,4 +115,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料。
 
-**最后更新：2026-08-14**
+**最后更新：2026-08-29**

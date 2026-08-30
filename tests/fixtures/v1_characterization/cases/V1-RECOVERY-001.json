@@ -1,0 +1,51 @@
+{
+  "schema": "v1-characterization-case-v1",
+  "fixture_id": "V1-RECOVERY-001",
+  "category": "recovery",
+  "fixture_kind": "pytest_runtime_tmp_path_descriptor",
+  "source_paths": [
+    "factory_core/engine.py",
+    "factory_core/stages.py",
+    "tests/test_stage_scheduler.py"
+  ],
+  "pytest_nodes": [
+    "tests/test_stage_scheduler.py::test_stage_recovery_complete_promotes_checkpoint"
+  ],
+  "v1_expected": {
+    "workflow_status": "ready",
+    "last_completed_step": 4,
+    "last_completed_stage": 3,
+    "active_stage": 4,
+    "checkpoint": {
+      "stage_id": 3,
+      "subtask": "model_construction",
+      "validation_marker": "preserved",
+      "result_recovered": true
+    },
+    "execute_call_count": 0,
+    "recover_call_count": 1,
+    "successful_event_count": 1
+  },
+  "contracts": [
+    "INV-RECOVERY-VALIDATE-BEFORE-RERUN",
+    "INV-RECOVERY-CHECKPOINT-PROMOTION",
+    "INV-RECOVERY-SINGLE-SUCCESS-EVENT"
+  ],
+  "machine_readable_fields": [
+    "workflow_status",
+    "last_completed_step",
+    "last_completed_stage",
+    "active_stage",
+    "checkpoint",
+    "execute_call_count",
+    "recover_call_count",
+    "successful_event_count"
+  ],
+  "missing_evidence": [
+    {
+      "gap_id": "GAP-V1-RECOVERY-PROCESS-CRASH",
+      "description": "The interrupted task is constructed deterministically; the test does not kill a real worker process.",
+      "impact": "Recovery state semantics are covered without process-control or lease-loss end-to-end evidence."
+    }
+  ]
+}

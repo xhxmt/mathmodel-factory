@@ -13,6 +13,17 @@ REGION = "europe-west4"
 SERVICE = "solver-api"
 
 
+def _authorization_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _json_authorization_headers(token: str) -> dict[str, str]:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+
+
 def get_service_url() -> str:
     out = subprocess.check_output(
         [
@@ -70,10 +81,7 @@ subprocess.run([
     req = urllib.request.Request(
         f"{url}/solve/python",
         data=json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
+        headers=_json_authorization_headers(token),
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
@@ -89,7 +97,7 @@ def poll_job(job_id: str, url: str, token: str, timeout: int = 900) -> dict:
     while time.time() - start < timeout:
         req = urllib.request.Request(
             f"{url}/jobs/{job_id}/status",
-            headers={"Authorization": f"Bearer {token}"},
+            headers=_authorization_headers(token),
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             status = json.loads(resp.read().decode())

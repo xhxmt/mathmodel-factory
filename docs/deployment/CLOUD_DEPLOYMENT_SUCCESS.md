@@ -109,14 +109,16 @@ source .env.gcp
 ```bash
 SERVICE_URL="https://solver-api-chqc6lw4sa-ez.a.run.app"
 JOB_ID="job-xxx"
+IDENTITY_TOKEN="$(gcloud auth print-identity-token)"
 
 # 查看状态
-curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+curl -H "Authorization: Bearer ${IDENTITY_TOKEN}" \
   "${SERVICE_URL}/jobs/${JOB_ID}/status" | jq .
 
 # 列出所有作业
-curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+curl -H "Authorization: Bearer ${IDENTITY_TOKEN}" \
   "${SERVICE_URL}/jobs" | jq .
+unset IDENTITY_TOKEN
 ```
 
 ---
@@ -208,7 +210,9 @@ gcloud run services update solver-api \
 
 然后客户端需要传递身份令牌：
 ```bash
-curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" ...
+IDENTITY_TOKEN="$(gcloud auth print-identity-token)"
+curl -H "Authorization: Bearer ${IDENTITY_TOKEN}" ...
+unset IDENTITY_TOKEN
 ```
 
 ---

@@ -1,0 +1,51 @@
+{
+  "schema": "v1-characterization-case-v1",
+  "fixture_id": "V1-DIRTY-001",
+  "category": "dirty",
+  "fixture_kind": "pytest_runtime_tmp_path_descriptor",
+  "source_paths": [
+    "factory_core/dirty.py",
+    "factory_core/artifact_ownership.py",
+    "tests/test_dirty_and_finalization.py"
+  ],
+  "pytest_nodes": [
+    "tests/test_dirty_and_finalization.py::test_dirty_classifier_separates_prose_math_results_and_unknown"
+  ],
+  "v1_expected": {
+    "prose_change_includes": [
+      "PROSE_DIRTY"
+    ],
+    "prose_change_excludes": [
+      "MATH_DIRTY"
+    ],
+    "formula_change_includes": [
+      "MATH_DIRTY"
+    ],
+    "canonical_result_change_includes": [
+      "RESULT_DIRTY"
+    ],
+    "unknown_path_fail_closed_includes": [
+      "MATH_DIRTY",
+      "RESULT_DIRTY"
+    ]
+  },
+  "contracts": [
+    "INV-DIRTY-SEMANTIC-CLASSIFICATION",
+    "INV-UNKNOWN-CHANGE-FAILS-CLOSED",
+    "INV-ARTIFACT-OWNER-REGISTRY"
+  ],
+  "machine_readable_fields": [
+    "prose_change_includes",
+    "prose_change_excludes",
+    "formula_change_includes",
+    "canonical_result_change_includes",
+    "unknown_path_fail_closed_includes"
+  ],
+  "missing_evidence": [
+    {
+      "gap_id": "GAP-V1-DIRTY-FROZEN-MANIFEST",
+      "description": "The before/after manifests are generated inside the test and are not checked in as immutable fixture bytes.",
+      "impact": "The classifier contract is executable, but this corpus cannot independently replay a historical project manifest."
+    }
+  ]
+}

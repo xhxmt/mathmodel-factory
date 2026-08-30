@@ -117,6 +117,95 @@ string. Current Approval decisions also require a verified immutable receipt;
 missing, symlinked, hash-mismatched, or identity-mismatched evidence fails
 closed.
 
+The additive Phase-2 authority schema is documented in
+`docs/architecture/AUTHORITY_SCHEMA_V2_PHASE2.md`. It uses separate
+`authority_*` tables and migration state, leaves legacy `schema_info` and all
+current writers unchanged, and keeps `AUTHORITY_SCHEMA_V2_WRITE_SHADOW` false
+by default. Migration/resume and repository access fail closed unless the
+legacy-source fingerprint, exact migration prefix/checksums, and actual SQLite
+table/index/trigger identities still match. The repository intentionally has
+no public generic transaction or revision allocator; use only its complete
+bundle or coordinate-bound snapshot methods in Phase 2 tests. This is a
+persistence boundary only: do not treat table presence as Scheduler cutover,
+outbox delivery, command authorization, or production DB migration.
+
+The Phase-2 production-capable but not traffic-connected suffix is documented
+in `docs/architecture/PHASE2_PRODUCTION_AUTHORITY_FOUNDATION.md`. It appends
+`A2_0010` through `A2_0014` in a separate verified migration history and keeps
+the published `A2_0001` through `A2_0009` bytes/checksums unchanged. Its only
+operator entrypoint is `scripts/authority_operator.py`, which requires an
+explicit regular SQLite path and is dry-run unless `--confirm` is supplied.
+The first confirmed migrate binds an immutable persistent database identity to
+the exact pre-Authority backup and its recorded lineage; backup health and
+restore reject evidence from another database even when its legacy source
+fence is equal. Confirmed migrate/restore reserve the explicit evidence output
+as a durable journal before mutation, so the exact operation can reuse its
+original backup, resume each committed suffix step, or complete evidence after
+an already-verified restore replacement.
+The future Authority writer has one fenced complete-bundle mutation, the read
+repository is query-only/revision-atomic, and outbox delivery requires a
+durable consumer fence plus injected provider/reconciliation callbacks. The
+persisted switch defaults to `V1_ONLY`; no active Scheduler, Service, current
+CLI, Web/API/frontend, launcher, model, Solver, provider, or Phase 3-8 path
+imports or calls the production foundation. The current v1 writer inventory
+and route remain active and are not dual-written.
+
+The complete Phase-3 shadow foundation is documented in
+`docs/architecture/PHASE3_ARTIFACT_REGISTRATION_SHADOW.md`. Its canonical,
+packaged modules are `factory_core/phase3_artifacts.py` and the explicitly
+default-disabled `factory_core/phase3_shadow_runtime.py`; `shadow_contracts`
+contains compatibility imports only and remains excluded from packaging. The
+foundation provides frozen Artifact Record/Manifest, explicit ArtifactRemoval,
+typed ChangeSet and dirty decisions, read-set-CAS ReopenPlan, checkpoint
+transitions and re-attestation dry-run, and parity receipts. A manifest hashes
+its complete normalized tracked-path inventory; a previous record or unreadable
+blocker must close as a current record, current blocker, or explicit typed
+removal. Owner-policy drift is `MIGRATION_REQUIRED`, never an implicit rewrite.
+Optional persistence is permitted only through
+`AuthorityProductionWriter.persist_command_bundle` as a complete typed
+`phase3_mutation`. The mutation binds the exact previous/current manifests,
+recomputed ChangeSet, current values/removals, checkpoint input manifest, and
+ReopenPlan/read set; cross-round or partial graphs fail closed. No mutation
+retains exact v1 request/bundle identity, while an explicit mutation uses
+hash-bound v2 identity and atomically reuses the existing
+artifact/checkpoint/reopen tables. Persisted artifact/checkpoint occurrence IDs
+bind workflow, committed revision, command, mutation, and semantic identity so
+equal semantic states can recur across workflows or revisions. Removals are
+revision-bound tombstone occurrences and participate in presence/absence CAS
+and latest-state reconstruction. Supported reads remain
+`mode=ro`/`query_only`, validate all typed rows before return, and expose only
+`workflow_coordinate()`, `command_bundle()`, `phase3_artifact_state()`,
+`revision_snapshot()`, and `outbox_delivery_state()`. No active Scheduler,
+Service, CLI, Web, process, provider, model, or Solver route imports the
+runner; V1 remains the sole production authority and active route, and no
+cutover is authorized.
+
+The Phase-4 and Phase-5 durable full-shadow slices are documented in
+`docs/architecture/PHASE4_DURABLE_OPERATION_SHADOW.md` and
+`docs/architecture/PHASE5_PAUSE_POLICY_SHADOW.md`. Phase 4 keeps the pure
+operation transition contract and adds an explicit-path, standalone SQLite
+runtime for atomic launch intent/current state/receipt/idempotency, claim lease,
+retry, restart, exact replay, and synthetic reconciliation. Phase 5 keeps the
+pure two-mode/four-scope pause matrix and adds a separately isolated durable
+supervisor that binds workflow/invocation/attempt/process-scope/operation
+identity. Its only port records a synthetic `would_apply` observation after a
+durable checkpoint. Both runners return before SQLite or a port when disabled;
+neither imports production process/provider/outbox code, dispatches, signals,
+transfers authority, changes the Authority schema, or appears in production
+imports. Do not connect these stores to an active project database or treat
+their durable shadow evidence as an Execution Supervisor production cutover.
+Existing store files must pass an anchored immutable-read exact
+ownership/schema profile before any read-write connection, lock or transaction;
+new files use exclusive creation and remain bound to their requested path/inode.
+Phase 5 additionally binds the companion marker to the anchored parent
+directory device/inode and inventories every persistent SQLite table, index,
+view and trigger, including the exact automatic indexes. Failed uncommitted
+Phase 4/5 exclusive initialization quarantines and identity-checks the created
+entry before deletion and fsyncs the anchored parent; completed commits are
+preserved for restart verification.
+Phase 5 internal checkpoint/observation/recovery keys are bounded,
+domain-separated SHA-256 identities, never caller-key suffixes.
+
 The Legacy Adapter still snapshots itself under `logs/runner_snapshots/` so an
 active Step is insulated from edits. Do not add new scheduling, retry, recovery,
 or state logic to the adapter.
@@ -127,6 +216,14 @@ For new and migrated projects, `.factory/state.db` is the workflow-state source
 of truth. A transaction appends an event and updates the snapshot with a
 monotonic `revision`. `checkpoint.md`, heartbeat, marker, PID, and diagnostics
 files are compatibility projections and must not be used to overwrite SQLite.
+
+`TransitionCoordinator` is the target application-writer boundary, not an
+achieved unique-writer guarantee. At the current baseline, compatibility
+decision recording, request supersede, prompt-attempt input binding, projection
+failure bookkeeping, bootstrap/migration, and archive relocation still include
+direct `SQLiteStateStore` writes. Do not add another bypass or claim exclusivity;
+use the characterized inventory and future gate specification in
+`docs/architecture/application_writer_allowlist_v1.json`.
 
 Artifacts defined by `STEPS.md` remain validation evidence. Recovery calls the
 registered Step validator: valid artifacts promote the interrupted Step;
@@ -199,12 +296,16 @@ checks → visual/page gate → packets/fingerprint → enforce-mode three-role 
 structured repair hints to the engine; the audit subsystem does not directly
 rewind workflow state.
 
-Delivery governance authority lives only in `web/auth.db`. The scopes are
+Delivery override authority lives only in `web/auth.db`. The scopes are
 `continue_after_gate2` and `deliver_snapshot`; the latter must bind the exact
 64-character final snapshot and is consumed when the final acceptance is
 recorded. A project-local `gate2_delivery_override.json` never authorizes
 anything. This is an operational boundary for the single-operator deployment,
 not cryptographic isolation from another process running as the same Unix UID.
+The same control database owns identity and `project_acl`, but none of those
+records replaces project-local workflow decisions in `.factory/state.db` or
+advances its scheduler. Conversely, a project decision never grants Web access
+or an override. The two databases have different trust scopes and lifecycles.
 
 Step 16 publishes immutable releases under
 `papers/releases/<base>/<snapshot>/` and atomically replaces only

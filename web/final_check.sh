@@ -1,12 +1,19 @@
 #!/bin/bash
 
+set -u
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+FACTORY_ROOT="${FACTORY:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
+FRONTEND_DIST="$SCRIPT_DIR/frontend/dist"
+UPLOAD_DIR="$FACTORY_ROOT/uploads"
+
 echo "=========================================="
 echo "🎯 最终验证：文件上传功能"
 echo "=========================================="
 echo
 
 # 检查构建时间
-BUILD_TIME=$(stat -c %Y /home/tfisher/paper_factory/web/frontend/dist/index.html)
+BUILD_TIME=$(stat -c %Y "$FRONTEND_DIST/index.html")
 CURRENT_TIME=$(date +%s)
 TIME_DIFF=$((CURRENT_TIME - BUILD_TIME))
 
@@ -17,25 +24,25 @@ echo
 
 # 检查关键代码
 echo "✅ 验证上传功能代码："
-if grep -q "handleFileDrop" /home/tfisher/paper_factory/web/frontend/dist/assets/*.js; then
+if grep -q "handleFileDrop" "$FRONTEND_DIST"/assets/*.js; then
     echo "   ✅ handleFileDrop - 拖拽处理函数已编译"
 else
     echo "   ❌ handleFileDrop - 未找到"
 fi
 
-if grep -q "uploadMethod" /home/tfisher/paper_factory/web/frontend/dist/assets/*.js; then
+if grep -q "uploadMethod" "$FRONTEND_DIST"/assets/*.js; then
     echo "   ✅ uploadMethod - 模式切换已编译"
 else
     echo "   ❌ uploadMethod - 未找到"
 fi
 
-if grep -q "isDragOver" /home/tfisher/paper_factory/web/frontend/dist/assets/*.js; then
+if grep -q "isDragOver" "$FRONTEND_DIST"/assets/*.js; then
     echo "   ✅ isDragOver - 拖拽状态已编译"
 else
     echo "   ❌ isDragOver - 未找到"
 fi
 
-if grep -q "uploadProgress" /home/tfisher/paper_factory/web/frontend/dist/assets/*.js; then
+if grep -q "uploadProgress" "$FRONTEND_DIST"/assets/*.js; then
     echo "   ✅ uploadProgress - 进度条已编译"
 else
     echo "   ❌ uploadProgress - 未找到"
@@ -63,10 +70,11 @@ echo
 
 # 检查上传目录
 echo "✅ 上传目录："
-if [ -d "/home/tfisher/paper_factory/uploads" ]; then
+if [ -d "$UPLOAD_DIR" ]; then
     echo "   ✅ 目录存在"
-    echo "   权限: $(stat -c '%a %U:%G' /home/tfisher/paper_factory/uploads)"
-    FILE_COUNT=$(ls -1 /home/tfisher/paper_factory/uploads/*.pdf /home/tfisher/paper_factory/uploads/*.md 2>/dev/null | wc -l)
+    echo "   权限: $(stat -c '%a %U:%G' "$UPLOAD_DIR")"
+    FILE_COUNT=$(find "$UPLOAD_DIR" -maxdepth 1 -type f \
+        \( -name '*.pdf' -o -name '*.md' \) -printf '.' 2>/dev/null | wc -c)
     echo "   文件数: $FILE_COUNT"
 else
     echo "   ❌ 目录不存在"

@@ -465,6 +465,10 @@ update discipline:
 - Project files cannot grant a quality bypass. Only an administrator record in
   `web/auth.db` may continue after Gate 2 or authorize one exact final snapshot;
   the real verdict remains visible and no PASS may be fabricated.
+- Control-plane grants in `web/auth.db` do not resolve Human Gates or advance
+  the project workflow. Those decisions live in the schema-v9
+  `.factory/state.db`; conversely, a project decision cannot grant Web access or
+  a delivery override.
 
 ## What you may NOT do
 

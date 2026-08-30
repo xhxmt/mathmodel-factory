@@ -117,6 +117,12 @@ def _require_string(value: object, where: str) -> str:
     return value.strip()
 
 
+def _require_exact_nonblank_string(value: object, where: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{where} must be a non-empty string")
+    return value
+
+
 def _validate_string_list(value: object, where: str) -> list[str]:
     if not isinstance(value, list):
         raise ValueError(f"{where} must be an array")
@@ -141,7 +147,11 @@ def _validate_hard_evidence(value: object) -> list[dict[str, str]]:
             raise ValueError(f"evidence[{index}] must be an object")
         _require_exact_keys(item, required | ({"quote_sha256"} if "quote_sha256" in item else set()), f"evidence[{index}]")
         evidence = {
-            field: _require_string(item[field], f"evidence[{index}].{field}")
+            field: (
+                _require_exact_nonblank_string(item[field], f"evidence[{index}].{field}")
+                if field == "quote"
+                else _require_string(item[field], f"evidence[{index}].{field}")
+            )
             for field in required
         }
         if len(evidence["chunk_id"]) != 64:
@@ -168,7 +178,11 @@ def _validate_paper_evidence(value: object, where: str) -> list[dict[str, str]]:
         expected = required | ({"quote_sha256"} if "quote_sha256" in item else set())
         _require_exact_keys(item, expected, f"{where}[{index}]")
         evidence = {
-            field: _require_string(item[field], f"{where}[{index}].{field}")
+            field: (
+                _require_exact_nonblank_string(item[field], f"{where}[{index}].{field}")
+                if field == "quote"
+                else _require_string(item[field], f"{where}[{index}].{field}")
+            )
             for field in required
         }
         if len(evidence["chunk_id"]) != 64:
@@ -201,7 +215,11 @@ def _validate_paper_issues(value: object) -> list[dict[str, str]]:
         expected = required | ({"quote_sha256"} if "quote_sha256" in item else set())
         _require_exact_keys(item, expected, f"issues[{index}]")
         issue = {
-            field: _require_string(item[field], f"issues[{index}].{field}")
+            field: (
+                _require_exact_nonblank_string(item[field], f"issues[{index}].{field}")
+                if field == "quote"
+                else _require_string(item[field], f"issues[{index}].{field}")
+            )
             for field in required
         }
         if issue["severity"] not in allowed_severity:

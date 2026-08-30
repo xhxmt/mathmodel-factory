@@ -17,6 +17,7 @@ from .dirty import (
     classify_manifest_changes,
     manifest_fingerprint,
     semantic_flags,
+    solver_receipt_job_id,
 )
 from .domain import (
     ExecutionResult,
@@ -888,19 +889,35 @@ class FactoryEngine:
             ]
             return "MISSING", output_fingerprint, after, dirty_changes
         before = dict(baseline["manifest"])
-        dirty_changes = [
-            {
+        dirty_changes = []
+        for change in classify_manifest_changes(before, after):
+            record = {
                 **change.to_dict(),
                 "classifier_contract_sha256": classifier_contract_sha256(),
             }
-            for change in classify_manifest_changes(before, after)
-        ]
+            receipt_owner = self._solver_receipt_owner_stage(change.cause_artifact)
+            if receipt_owner is not None:
+                record["owner_stage"] = receipt_owner
+            dirty_changes.append(record)
         return (
             str(baseline["input_fingerprint"]),
             output_fingerprint,
             after,
             dirty_changes,
         )
+
+    def _solver_receipt_owner_stage(self, artifact: str) -> int | None:
+        """Resolve shared receipt infrastructure to its durable job owner."""
+
+        job_id = solver_receipt_job_id(artifact)
+        if job_id is None:
+            return None
+        try:
+            job = self.store.solver_job(job_id)
+        except KeyError:
+            return None
+        owner_stage = job.get("owner_stage")
+        return int(owner_stage) if owner_stage is not None else None
 
     def _fail_stage_task(
         self,
@@ -1081,6 +1098,7 @@ class FactoryEngine:
                         "resume_after_step": semantic_reopen_target,
                         "semantic_owner_stage": semantic_owner_stage,
                         "reason": semantic_reason,
+                        "classifier_contract_sha256": classifier_contract_sha256(),
                     },
                     dirty_changes=dirty_changes,
                     event_step=task.source_step_id,
@@ -1110,6 +1128,7 @@ class FactoryEngine:
                     "dirty_owner_stages": upstream_owners,
                     "reason": semantic_reason,
                     "dirty_flags": sorted(new_flags),
+                    "classifier_contract_sha256": classifier_contract_sha256(),
                 },
                 dirty_changes=dirty_changes,
                 invalidate_checkpoints_after_step=semantic_reopen_target,
@@ -1270,12 +1289,34 @@ class FactoryEngine:
         )
 
     def _stage_semantic_reopen_allowed(self, stage_id: int) -> bool:
-        count = sum(
-            1
-            for event in self.store.events()
-            if event.type == "STAGE_SEMANTIC_REOPENED"
-            and int(event.payload.get("stage", -1)) == int(stage_id)
+        current_classifier = classifier_contract_sha256()
+        events = self.store.events()
+        legacy_boundary = max(
+            (
+                event.revision
+                for event in events
+                if event.type == "DIRTY_CLASSIFIER_REBASED"
+                and str(event.payload.get("new_classifier_sha256", ""))
+                == current_classifier
+            ),
+            default=0,
         )
+        count = 0
+        for event in events:
+            if event.type != "STAGE_SEMANTIC_REOPENED":
+                continue
+            if int(event.payload.get("stage", -1)) != int(stage_id):
+                continue
+            event_classifier = event.payload.get("classifier_contract_sha256")
+            if event_classifier is None:
+                # Legacy events did not record their classifier identity.  A
+                # later explicit rebase to the current contract is the audit
+                # boundary proving that older ownership decisions are stale.
+                if event.revision <= legacy_boundary:
+                    continue
+            elif str(event_classifier) != current_classifier:
+                continue
+            count += 1
         return count < 2
 
     def recover(
@@ -1556,17 +1597,42 @@ class FactoryEngine:
         event_type: str = "AWAITING_ACTION",
         lease: str | None = None,
     ) -> WorkflowState:
-        request = build_decision_request(
-            project_id=state.project_id,
-            project_dir=self.project_dir,
-            requested_revision=state.revision + 1,
-            generation=self.store.next_decision_generation(
-                str(action.get("gate") or action.get("type") or "human_decision")
-            ),
-            action=action,
-            reason=reason,
-            evidence=evidence,
-        )
+        try:
+            request = build_decision_request(
+                project_id=state.project_id,
+                project_dir=self.project_dir,
+                requested_revision=state.revision + 1,
+                generation=self.store.next_decision_generation(
+                    str(action.get("gate") or action.get("type") or "human_decision")
+                ),
+                action=action,
+                reason=reason,
+                evidence=evidence,
+            )
+        except Exception as exc:
+            transition = self._transition if lease is None else self._owned_transition
+            args = () if lease is None else (state, lease)
+            kwargs = {"expected_revision": state.revision} if lease is None else {}
+            return transition(
+                *args,
+                event_type="DECISION_REQUEST_BUILD_FAILED",
+                changes={
+                    "status": WorkflowStatus.FAILED,
+                    "pending_action": None,
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={
+                    "error_class": "PERMANENT_DECISION_REQUEST_BUILD_FAILED",
+                    "exception_type": type(exc).__name__,
+                    "reason": str(exc),
+                    "gate": str(action.get("gate") or ""),
+                    "action_type": str(action.get("type") or ""),
+                    "evidence": evidence,
+                },
+                **kwargs,
+            )
         action = dict(action)
         metadata = dict(action.get("metadata") or {})
         metadata["human_decision"] = request.to_dict()

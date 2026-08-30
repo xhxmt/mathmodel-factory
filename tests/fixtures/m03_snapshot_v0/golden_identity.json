@@ -1,0 +1,11 @@
+{
+  "complete_analysis_sha256": "16f736955828d0c372ea2e0773a503d06990657909c54806b0c2f16e20c904f0",
+  "complete_semantic_sha256": "16f736955828d0c372ea2e0773a503d06990657909c54806b0c2f16e20c904f0",
+  "event_head_contract_schema": "snapshot-event-head-contract-v3",
+  "immutable_ref_contract_schema": "snapshot-immutable-ref-contract-v3",
+  "partial_analysis_sha256": "276f310b978450c0dc1b7d4458b55f224b1fb0c78bd1cd8cf6998a993f9912c5",
+  "partial_semantic_sha256": "276f310b978450c0dc1b7d4458b55f224b1fb0c78bd1cd8cf6998a993f9912c5",
+  "policy_schema": "snapshot-policy-v3",
+  "schema_version": "project-snapshot-v0-source-authorized-v3",
+  "solver_receipt_contract_schema": "snapshot-solver-receipt-contract-v2"
+}

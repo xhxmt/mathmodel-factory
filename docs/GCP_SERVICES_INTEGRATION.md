@@ -609,8 +609,10 @@ echo "CLOUD_THRESHOLD_TIME=300" >> .env
 ./scripts/enable_gcp_features.sh  # 选择 y 启用备份
 
 # 3. 验证 Cloud Run 健康状态
-curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+IDENTITY_TOKEN="$(gcloud auth print-identity-token)"
+curl -H "Authorization: Bearer ${IDENTITY_TOKEN}" \
   https://solver-api-144584367563.europe-west4.run.app/health | jq .
+unset IDENTITY_TOKEN
 ```
 
 ### 📋 本周可做：

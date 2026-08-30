@@ -91,14 +91,20 @@ def _consultation_gate(
 
 
 def prepare_human_gates(project: Path, step_id: int) -> PrepareResult:
-    gate = "preflight" if step_id == 1 else "step4" if step_id == 4 else ""
-    if gate:
+    from ..stages import gate_policy, native_consultation_policy_for_step
+
+    consultation_policy = native_consultation_policy_for_step(step_id)
+    if consultation_policy is not None:
+        assert consultation_policy.stage_id is not None
         consultation = _consultation_gate(
             project,
-            gate,
+            consultation_policy.gate,
             step_id,
-            reason=f"consultation gate {gate} is awaiting an immutable decision",
-            owner_stage=1 if gate == "preflight" else 2,
+            reason=(
+                f"consultation gate {consultation_policy.gate} is awaiting "
+                "an immutable decision"
+            ),
+            owner_stage=consultation_policy.stage_id,
         )
         if consultation is not None:
             return consultation
@@ -149,9 +155,10 @@ def prepare_human_gates(project: Path, step_id: int) -> PrepareResult:
 
     dynamic = project / "consultation" / "REQUEST.md"
     if dynamic.exists() or dynamic.is_symlink():
+        dynamic_policy = gate_policy("dynamic")
         consultation = _consultation_gate(
             project,
-            "dynamic",
+            dynamic_policy.gate,
             step_id,
             reason="dynamic consultation is awaiting an immutable decision",
             owner_stage=(

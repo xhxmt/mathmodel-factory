@@ -1,0 +1,48 @@
+{
+  "schema": "v1-characterization-index-v1",
+  "baseline_commit": "357947948f034325ea6202694c20bf435910d011",
+  "runtime_schema_version": 9,
+  "corpus_semantics": "Read-only descriptors for synthetic pytest fixtures materialized under tmp_path; this directory contains no copied project database or Run4 runtime artifact.",
+  "entries": [
+    {
+      "fixture_id": "V1-NORMAL-001",
+      "category": "normal",
+      "case_file": "cases/V1-NORMAL-001.json"
+    },
+    {
+      "fixture_id": "V1-DIRTY-001",
+      "category": "dirty",
+      "case_file": "cases/V1-DIRTY-001.json"
+    },
+    {
+      "fixture_id": "V1-SEMANTIC-REOPEN-001",
+      "category": "semantic_reopen",
+      "case_file": "cases/V1-SEMANTIC-REOPEN-001.json"
+    },
+    {
+      "fixture_id": "V1-HUMAN-GATE-001",
+      "category": "human_gate",
+      "case_file": "cases/V1-HUMAN-GATE-001.json"
+    },
+    {
+      "fixture_id": "V1-RECOVERY-001",
+      "category": "recovery",
+      "case_file": "cases/V1-RECOVERY-001.json"
+    },
+    {
+      "fixture_id": "V1-PACKET-REBUILD-001",
+      "category": "packet_rebuild",
+      "case_file": "cases/V1-PACKET-REBUILD-001.json"
+    },
+    {
+      "fixture_id": "V1-TECHNICAL-TERMINAL-001",
+      "category": "technical_terminal",
+      "case_file": "cases/V1-TECHNICAL-TERMINAL-001.json"
+    },
+    {
+      "fixture_id": "V1-SOLVER-10OF10-001",
+      "category": "solver_10_of_10_receipt",
+      "case_file": "cases/V1-SOLVER-10OF10-001.json"
+    }
+  ]
+}

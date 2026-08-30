@@ -1,0 +1,51 @@
+{
+  "schema": "v1-characterization-case-v1",
+  "fixture_id": "V1-TECHNICAL-TERMINAL-001",
+  "category": "technical_terminal",
+  "fixture_kind": "pytest_runtime_tmp_path_descriptor",
+  "source_paths": [
+    "factory_core/audit/service.py",
+    "factory_core/audit/domain.py",
+    "tests/test_audit_service.py"
+  ],
+  "pytest_nodes": [
+    "tests/test_audit_service.py::test_technical_flow_runs_real_judge_but_never_allows_delivery"
+  ],
+  "v1_expected": {
+    "technical_flow_validation": true,
+    "judge_call_count": 1,
+    "audit_status": "PASS",
+    "judge_completed": true,
+    "delivery_allowed": false,
+    "execution_error_class": "PERMANENT_TECHNICAL_FLOW_NO_DELIVERY",
+    "quality_pass_fabricated": false,
+    "final_submission_hash_exists": false
+  },
+  "contracts": [
+    "INV-TECHNICAL-FLOW-TERMINAL-NONDELIVERY",
+    "INV-TECHNICAL-FLOW-RUNS-REAL-JUDGE",
+    "INV-NO-FABRICATED-QUALITY-PASS"
+  ],
+  "machine_readable_fields": [
+    "technical_flow_validation",
+    "judge_call_count",
+    "audit_status",
+    "judge_completed",
+    "delivery_allowed",
+    "execution_error_class",
+    "quality_pass_fabricated",
+    "final_submission_hash_exists"
+  ],
+  "missing_evidence": [
+    {
+      "gap_id": "GAP-V1-TECHNICAL-TYPED-TERMINAL",
+      "description": "The test asserts the audit outcome but does not persist a dedicated project-SQLite typed terminal record bound to a snapshot.",
+      "impact": "Terminal non-delivery is characterized at the audit service boundary only."
+    },
+    {
+      "gap_id": "GAP-V1-TECHNICAL-ABLATION-COMBINATION",
+      "description": "The technical-flow plus no-judge-ablation combination is intentionally excluded from this Phase 0 corpus because AR-007 is owned by a separate worktree.",
+      "impact": "This task neither copies nor validates the independent AR-007 patch."
+    }
+  ]
+}

@@ -23,6 +23,10 @@ from factory_core.storage import SQLiteStateStore
 CLOUD_ENV_NAME = ".env.cloud"
 
 
+def _authorization_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
 def available_cloud_solver_types() -> list[str]:
     return list(enabled_solver_types())
 
@@ -203,7 +207,7 @@ def create_cloud_router(settings: Settings) -> APIRouter:
                 token = get_identity_token(service_url)
                 request = urllib.request.Request(
                     f"{service_url.rstrip('/')}/capabilities",
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=_authorization_headers(token),
                 )
                 del token
                 with urllib.request.urlopen(request, timeout=10) as response:

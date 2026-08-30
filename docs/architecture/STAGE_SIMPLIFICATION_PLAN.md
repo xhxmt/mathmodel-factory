@@ -3,7 +3,7 @@
 > 状态：代码合同已实施；新项目默认使用 `stage_v1`，旧 native 项目保持
 > `step_v2` 直到显式切换，Legacy 项目保持冻结适配路径。
 >
-> schema、调度、恢复、迁移、dirty flag、条件 Step 13、Final snapshot 冻结和
+> 当前 workflow schema-v9、调度、恢复、迁移、dirty flag、条件 Step 13、Final snapshot 冻结和
 > 自动化验收均已落地。完成定义中的真实新项目无 override clean-room 运行仍是
 > 独立的运营验收项；本文不会用模拟 lifecycle 或注入审计 receipt 冒充该结果。
 
@@ -30,6 +30,12 @@
 - **Step contract**：产物、validator、兼容和证据链的稳定边界。
 - **Subtask**：一次 Agent、确定性检查、人工 Gate 或发布操作；可以在 Stage 内独立重试。
 - **Artifact / Receipt**：证明某个输入快照完成了某项工作；Agent 自述不能替代 receipt。
+
+项目内 `.factory/state.db` 保存 Stage/Step、Human Decision、dirty/checkpoint、Solver 与事件
+事实。控制面 `web/auth.db` 保存身份、`project_acl`、展示 ACL 和 delivery override；它不属于
+Stage 层，不能替代项目决定或推进 cursor。项目决定也不能反向授予 Web 访问或交付 override。
+当前 writer 边界及已知旁路见
+[`application_writer_allowlist_v1.json`](application_writer_allowlist_v1.json)。
 
 合并后不得退回“整个 Stage 失败就全部重跑”。每个 Stage 必须持久化当前 subtask、所消费的
 输入 fingerprint 和已完成的 Step checkpoint，从最后一个有效 checkpoint 恢复。
@@ -315,7 +321,9 @@ release 目录和原子 current pointer；审计系统仍不得自行发布。
   名称和 dirty flag 枚举。
 - 固定 `source_step_id` -> Web phase 投影，确认八阶段与现状完全一致。
 - 版本化 dirty classifier/clear receipt 和各 Step-backed subtask 的预算继承合同。
-- 加入文档/代码 schema 版本一致性检查，清除 schema v4 的现役残留描述。
+- 加入文档/代码 workflow schema 版本一致性检查；当前由
+  `factory_core.domain.SCHEMA_VERSION == 9` 与 schema-v9 文档标记共同锁定。其他产物协议
+  （例如 `quality_contract` schema v4）是不同命名空间，不得误判为 workflow schema。
 
 ### R1：只读投影（已完成）
 

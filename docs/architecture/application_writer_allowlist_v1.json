@@ -1,0 +1,160 @@
+{
+  "schema": "application-writer-allowlist-v1",
+  "baseline_commit": "357947948f034325ea6202694c20bf435910d011",
+  "runtime_schema_version": 9,
+  "enforcement": "characterization_only",
+  "scope": "Project workflow aggregate mutations in .factory/state.db; web/auth.db is a separate control-plane authority.",
+  "target_role": {
+    "application_writer": "factory_core.transitions.TransitionCoordinator",
+    "storage_implementation": "factory_core.storage.SQLiteStateStore",
+    "statement": "All live application-level workflow mutations should eventually enter through TransitionCoordinator; this is a target boundary, not the current implementation state."
+  },
+  "current_scan_assurance": {
+    "level": "naming_heuristic_only",
+    "purpose": "Characterize the known baseline callsites; this is not a complete static dependency gate.",
+    "recognized_receiver_shapes": [
+      "direct SQLiteStateStore(...) call receiver",
+      "Name receiver exactly store",
+      "Name receiver ending with _store"
+    ],
+    "known_limitations": [
+      "no_type_resolution",
+      "no_assignment_alias_tracking",
+      "no_self_or_attribute_receiver_resolution",
+      "no_cross_function_receiver_resolution",
+      "may_miss_renamed_receiver_variables"
+    ],
+    "may_miss_new_bypasses": true,
+    "baseline_review": "The listed baseline callsites were additionally checked by grep and source review; the heuristic alone does not prove completeness for future code."
+  },
+  "current_direct_store_callsites": [
+    {
+      "id": "AW-CURRENT-001",
+      "path": "web/backend/selection_service.py",
+      "method": "record_decision",
+      "occurrences": 1,
+      "classification": "workflow_revision_bypass",
+      "evidence": "The compatibility selection writer can call SQLiteStateStore.record_decision directly after writing projections."
+    },
+    {
+      "id": "AW-CURRENT-002",
+      "path": "factory_core/service.py",
+      "method": "supersede_pending_decision_request",
+      "occurrences": 1,
+      "classification": "workflow_revision_bypass",
+      "evidence": "FactoryService constructs SQLiteStateStore and supersedes the open request without TransitionCoordinator."
+    },
+    {
+      "id": "AW-CURRENT-003",
+      "path": "factory_core/steps/prompt_step.py",
+      "method": "bind_prompt_attempt_input",
+      "occurrences": 1,
+      "classification": "workflow_revision_bypass",
+      "evidence": "Prompt execution binds the immutable input receipt and increments the project revision before model dispatch."
+    },
+    {
+      "id": "AW-CURRENT-004",
+      "path": "factory_core/service.py",
+      "method": "record_projection_failure",
+      "occurrences": 1,
+      "classification": "diagnostic_side_table_bypass",
+      "evidence": "Consultation projection failure bookkeeping writes the project database directly."
+    },
+    {
+      "id": "AW-CURRENT-005",
+      "path": "factory_core/service.py",
+      "method": "resolve_projection_failure",
+      "occurrences": 1,
+      "classification": "diagnostic_side_table_bypass",
+      "evidence": "Consultation projection recovery bookkeeping writes the project database directly."
+    },
+    {
+      "id": "AW-CURRENT-006",
+      "path": "factory_core/consultation_projection.py",
+      "method": "record_projection_failure",
+      "occurrences": 1,
+      "classification": "diagnostic_side_table_bypass",
+      "evidence": "Projection repair helpers record failures through SQLiteStateStore directly."
+    },
+    {
+      "id": "AW-CURRENT-007",
+      "path": "factory_core/consultation_projection.py",
+      "method": "resolve_projection_failure",
+      "occurrences": 1,
+      "classification": "diagnostic_side_table_bypass",
+      "evidence": "Projection repair helpers resolve failures through SQLiteStateStore directly."
+    }
+  ],
+  "other_current_write_surfaces": [
+    {
+      "id": "AW-SURFACE-001",
+      "paths": [
+        "factory_core/service.py",
+        "factory_core/cli.py",
+        "factory_core/migration.py"
+      ],
+      "operation": "SQLiteStateStore.initialize",
+      "classification": "bootstrap_or_migration_exception",
+      "target_disposition": "Keep an explicit, narrowly scoped bootstrap/migration exception; reject use for an already initialized live aggregate."
+    },
+    {
+      "id": "AW-SURFACE-002",
+      "paths": [
+        "factory_core/engine.py"
+      ],
+      "operation": "SQLiteStateStore.prepare_for_move",
+      "classification": "archive_relocation_bypass",
+      "target_disposition": "Route the application operation through the coordinator or an explicit relocation port before writer exclusivity is claimed."
+    },
+    {
+      "id": "AW-SURFACE-003",
+      "paths": [
+        "factory_core/transitions.py"
+      ],
+      "operation": "SQLiteStateStore.record_projection_failure",
+      "classification": "coordinator_internal_diagnostic_write",
+      "target_disposition": "Allowed inside the target writer module; retain as diagnostic state rather than workflow-domain authority."
+    }
+  ],
+  "future_static_gate": {
+    "status": "specified_not_activated",
+    "target_writer": "factory_core/transitions.py",
+    "storage_implementation": "factory_core/storage.py",
+    "separate_control_plane": "web/backend/auth_store.py",
+    "scan_roots": [
+      "factory_core",
+      "web/backend",
+      "scripts"
+    ],
+    "forbidden_outside_target": [
+      "transition",
+      "resolve_human_decision",
+      "record_decision",
+      "supersede_pending_decision_request",
+      "bind_prompt_attempt_input",
+      "record_projection_failure",
+      "resolve_projection_failure",
+      "configure_solver_policy",
+      "create_solver_job",
+      "update_solver_job",
+      "record_solver_receipt",
+      "prepare_for_move"
+    ],
+    "bootstrap_exception": {
+      "method": "initialize",
+      "allowed_modules": [
+        "factory_core/service.py",
+        "factory_core/cli.py",
+        "factory_core/migration.py"
+      ],
+      "precondition": "The project aggregate is absent or an explicit stopped migration is in progress."
+    },
+    "activation_requirements": [
+      "Route or explicitly adjudicate every current bypass in this file.",
+      "Use receiver-aware AST resolution so FactoryService calls are not confused with SQLiteStateStore calls.",
+      "Fail CI on an unlisted application mutation callsite.",
+      "Keep web/auth.db AuthStore mutations outside the project-workflow writer rule.",
+      "Do not activate the gate as part of Phase 0 characterization."
+    ]
+  }
+}

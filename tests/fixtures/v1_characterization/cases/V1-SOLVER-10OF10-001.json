@@ -1,0 +1,67 @@
+{
+  "schema": "v1-characterization-case-v1",
+  "fixture_id": "V1-SOLVER-10OF10-001",
+  "category": "solver_10_of_10_receipt",
+  "fixture_kind": "pytest_runtime_tmp_path_descriptor",
+  "source_paths": [
+    "scripts/solver_job_receipt.py",
+    "factory_core/storage.py",
+    "factory_core/service.py",
+    "tests/test_solver_job_receipt.py",
+    "tests/test_solver_service.py",
+    "SOLVER_JOBS_FEATURE.md"
+  ],
+  "pytest_nodes": [
+    "tests/test_solver_job_receipt.py::test_two_stage_receipt_binds_code_inputs_environment_seed_and_outputs",
+    "tests/test_solver_job_receipt.py::test_native_event_stream_must_bind_both_receipt_hashes",
+    "tests/test_solver_service.py::test_local_solver_job_uses_sqlite_lifecycle"
+  ],
+  "v1_expected": {
+    "submission_schema": "solver-job-submission-receipt-v1",
+    "completion_schema": "solver-job-completion-receipt-v1",
+    "evidence_schema": "solver-job-evidence-v2",
+    "receipt_ready": true,
+    "seed_claim_limit": "DECLARATION_ONLY_EXECUTION_CONSUMPTION_NOT_ATTESTED",
+    "sqlite_job_status": "completed",
+    "required_event_types": [
+      "SOLVER_JOB_SUBMITTED",
+      "SOLVER_JOB_RECEIPT_SUBMITTED",
+      "SOLVER_JOB_RUNNING",
+      "SOLVER_JOB_COMPLETED",
+      "SOLVER_JOB_RECEIPT_COMPLETED"
+    ],
+    "replay_matches_snapshot": true,
+    "tampered_completion_receipt_binding_fails_ready": true,
+    "ten_job_fixture_status": "gap_not_present"
+  },
+  "contracts": [
+    "INV-SOLVER-TWO-STAGE-CONTENT-ADDRESSED-RECEIPT",
+    "INV-SOLVER-NATIVE-EVENT-BINDING",
+    "INV-SOLVER-REPLAY-PARITY",
+    "INV-SOLVER-SEED-CLAIM-LIMIT"
+  ],
+  "machine_readable_fields": [
+    "submission_schema",
+    "completion_schema",
+    "evidence_schema",
+    "receipt_ready",
+    "seed_claim_limit",
+    "sqlite_job_status",
+    "required_event_types",
+    "replay_matches_snapshot",
+    "tampered_completion_receipt_binding_fails_ready",
+    "ten_job_fixture_status"
+  ],
+  "missing_evidence": [
+    {
+      "gap_id": "GAP-V1-SOLVER-10OF10-CORPUS",
+      "description": "No checked-in immutable fixture contains ten Solver jobs and their submission/completion/event receipts.",
+      "impact": "The corpus proves the receipt contract for one synthetic job but cannot substantiate a ten-of-ten project claim."
+    },
+    {
+      "gap_id": "GAP-V1-SOLVER-10OF10-RUBRIC",
+      "description": "The runtime defines receipt_ready and event-binding semantics, not a literal machine-readable 10/10 score field or rubric.",
+      "impact": "Ten-of-ten remains a requested coverage label, not a value that may be invented from the current schema."
+    }
+  ]
+}

@@ -307,6 +307,10 @@ allows work to proceed after Step 13; `deliver_snapshot` separately authorizes
 one exact 64-character final snapshot. Both preserve the real verdict and set
 `quality_pass_fabricated=false`. A project-local
 `gate2_delivery_override.json` is at most a request or historical artifact.
+These control-plane grants do not resolve a project Human Decision or advance
+its scheduler; the schema-v9 request/instance in `.factory/state.db` remains the
+per-project workflow authority. Project decisions likewise grant no Web ACL or
+delivery override.
 
 **Quality checks** (introduced 2026-06-24):
 - **Excellent paper writing benchmark**: abstract structure (opening + per-question delivery), problem analysis indexing, result presentation order (adopted solution first), validation phrasing (support credibility, not amplify uncertainty), internal traces removal

@@ -54,14 +54,17 @@ def rebase_dirty_classifier_state(
     Unresolved causes are reconstructed per ``(flag, owner_stage)`` using the
     latest cause that has no later clear receipt.  Existing active rows are
     retained conservatively when historical reconstruction is incomplete.
-    Only the mutable active index receives the current classifier identity;
-    causes and historical clear receipts remain byte-for-byte historical.
+    Ordinary artifact causes are then routed through the current ownership
+    registry so a classifier release can move an active obligation without
+    preserving an obsolete upstream owner.  Only the mutable active index is
+    rewritten; causes and historical clear receipts remain byte-for-byte
+    historical.
     """
 
     ensure_dirty_rebase_schema(connection)
     if not _table_exists(connection, "dirty_flags"):
         return None
-    from .dirty import classifier_contract_sha256
+    from .dirty import classifier_contract_sha256, solver_receipt_job_id
 
     current_classifier = classifier_contract_sha256()
     active_rows = {
@@ -71,8 +74,8 @@ def rebase_dirty_classifier_state(
         ).fetchall()
     }
     reconstructed: dict[tuple[str, int], dict[str, Any]] = {}
+    clear_revisions: dict[tuple[str, int], list[int]] = defaultdict(list)
     if _table_exists(connection, "dirty_causes"):
-        clear_revisions: dict[tuple[str, int], list[int]] = defaultdict(list)
         if _table_exists(connection, "dirty_flag_clear_receipts"):
             for row in connection.execute(
                 "SELECT revision, flag, owner_stage "
@@ -93,21 +96,102 @@ def rebase_dirty_classifier_state(
             if prior is None or int(prior["cause_revision"]) <= cause_revision:
                 reconstructed[key] = record
 
-    obligations = dict(active_rows)
+    source_obligations = dict(active_rows)
     for key, record in reconstructed.items():
-        current = obligations.get(key)
+        current = source_obligations.get(key)
         if current is None or int(current["cause_revision"]) < int(record["cause_revision"]):
-            obligations[key] = record
+            source_obligations[key] = record
+
+    from .artifact_ownership import artifact_ownership
+
+    semantic_paper_flags = {
+        "MATH_DIRTY",
+        "PROSE_DIRTY",
+        "CITATION_DIRTY",
+        "FORMAT_DIRTY",
+    }
+
+    def current_key(
+        source_key: tuple[str, int], record: dict[str, Any]
+    ) -> tuple[str, int]:
+        artifact = str(record["cause_artifact"])
+        if artifact.startswith("@protected:"):
+            return ("MATH_DIRTY", 8)
+        # A paper semantic change stores the real ``*.tex`` path as its cause.
+        # Re-routing it through the raw path fallback would lose the domain
+        # (prose/citation/format/math), so retain that proven semantic key.
+        if artifact.lower().endswith(".tex") and source_key[0] in semantic_paper_flags:
+            return source_key
+        job_id = solver_receipt_job_id(artifact)
+        if job_id is not None and _table_exists(connection, "solver_jobs"):
+            job = connection.execute(
+                "SELECT owner_stage FROM solver_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if job is not None and job["owner_stage"] is not None:
+                return ("RESULT_DIRTY", int(job["owner_stage"]))
+        ownership = artifact_ownership(artifact)
+        if ownership is None:
+            return source_key
+        return (str(ownership.dirty_flag), int(ownership.owner_stage))
+
+    obligations: dict[tuple[str, int], dict[str, Any]] = {}
+    for source_key, source_record in source_obligations.items():
+        target_key = current_key(source_key, source_record)
+        cause_revision = int(source_record["cause_revision"])
+        if target_key != source_key and any(
+            revision >= cause_revision
+            for revision in clear_revisions.get(target_key, ())
+        ):
+            continue
+        record = dict(source_record)
+        record["_source_flag"] = source_key[0]
+        record["_source_owner_stage"] = source_key[1]
+        prior = obligations.get(target_key)
+        prior_source = (
+            (str(prior["_source_flag"]), int(prior["_source_owner_stage"]))
+            if prior is not None
+            else None
+        )
+        if (
+            prior is None
+            or int(prior["cause_revision"]) < cause_revision
+            or (
+                int(prior["cause_revision"]) == cause_revision
+                and source_key == target_key
+                and prior_source != target_key
+            )
+        ):
+            obligations[target_key] = record
+
     changed: list[dict[str, Any]] = []
-    old_hashes: set[str] = set()
+    old_hashes = {
+        str(record.get("classifier_contract_sha256") or "UNKNOWN")
+        for record in source_obligations.values()
+    }
+    stale_active_keys = sorted(set(active_rows) - set(obligations))
+    retired = [
+        {
+            "flag": flag,
+            "owner_stage": owner_stage,
+            "cause_artifact": str(active_rows[(flag, owner_stage)]["cause_artifact"]),
+        }
+        for flag, owner_stage in stale_active_keys
+    ]
+    for flag, owner_stage in stale_active_keys:
+        connection.execute(
+            "DELETE FROM dirty_flags WHERE flag=? AND owner_stage=?",
+            (flag, owner_stage),
+        )
     for (flag, owner_stage), record in sorted(obligations.items()):
         old_hash = str(record.get("classifier_contract_sha256") or "UNKNOWN")
         row = active_rows.get((flag, owner_stage))
+        source_flag = str(record.pop("_source_flag"))
+        source_owner_stage = int(record.pop("_source_owner_stage"))
+        migrated = (source_flag, source_owner_stage) != (flag, owner_stage)
         needs_insert = row is None
-        needs_rebase = needs_insert or old_hash != current_classifier
+        needs_rebase = needs_insert or migrated or old_hash != current_classifier
         if not needs_rebase:
             continue
-        old_hashes.add(old_hash)
         connection.execute(
             """
             INSERT INTO dirty_flags(
@@ -140,10 +224,15 @@ def rebase_dirty_classifier_state(
                 "cause_artifact": str(record["cause_artifact"]),
                 "old_classifier_sha256": old_hash,
                 "new_classifier_sha256": current_classifier,
-                "reconstructed_from_causes": needs_insert,
+                "previous_flag": source_flag,
+                "previous_owner_stage": source_owner_stage,
+                "ownership_migrated": migrated,
+                "reconstructed_from_causes": (
+                    (source_flag, source_owner_stage) not in active_rows
+                ),
             }
         )
-    if not changed:
+    if not changed and not retired:
         return None
     identity = {
         "schema_version": DIRTY_REBASE_SCHEMA,
@@ -152,6 +241,7 @@ def rebase_dirty_classifier_state(
         "old_classifier_sha256": sorted(old_hashes),
         "new_classifier_sha256": current_classifier,
         "obligations": changed,
+        "retired_obligations": retired,
     }
     rebase_id = canonical_hash(identity)
     receipt = {**identity, "rebase_id": rebase_id}

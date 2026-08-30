@@ -28,6 +28,7 @@
 - 证据驾驶舱汇总 canonical results、PRIMARY/AUXILIARY、Solver jobs/receipts、model/results/paper/final audits 与三角色状态。
 - 论文 artifact 分组来自完整活动 LaTeX dependency graph（含嵌套 bibliography）；决定 receipt 的缺失、符号链接、哈希或身份不一致显示为 `DECISION_RECEIPT_MISMATCH`，Approval Gate 不会继续放行。缺失 receipt 只能通过 `scripts/decision_receipt_repair.py <project> <request_id>` 从不可变 SQLite 决定重建，且重建字节必须匹配原 SHA-256；已有损坏证据不会被覆盖。
 - 交付就绪中心按红黄绿列出 PDF、canonical results、附件、内容冻结、确定性检查、视觉页数、三角色、最终快照和原子 release；PDF/ZIP 只从已验证的 current release 下载。
+- Phase 6 候选提供可选的“验证快照”只读页：它从独立 SQLite 展示与单一 revision 绑定的 snapshot/section 哈希证据，默认不进入前端包且后端默认不访问其数据库。该页不授予 Authority、项目 ACL、交付权或 dispatch 能力。
 
 ## 本地启动
 
@@ -140,6 +141,86 @@ revision 和当前 request identity；过期页面会收到 `409`，不会写入
 会解析 gate 并启动统一 Python worker。CLI 路径是现役合同，不能被 Web
 替代。
 
+## Phase 6 验证快照（默认关闭）
+
+Phase 6 是候选级 full-shadow 读路径，不是 v1 工作流或控制面的替代品。
+后端先完成认证和现有 `web/auth.db` 项目 ACL 校验，之后才检查 Phase 6
+开关、解析路径并延迟导入 shadow store。Phase 6 scoped grant 本身不会授予
+Web 项目访问权；HTTP API 也不会创建、签发、撤销或评估 grant。
+
+端到端启用必须同时满足：
+
+1. `PHASE6_SNAPSHOT_ENABLED` 为后端认可的 true 值；缺省为 `false`。
+2. 前端构建环境中的 `VITE_PHASE6_FULL_SHADOW_ENABLED` 精确等于小写字符串
+   `true`；`1`、`TRUE` 和布尔值都不会启用前端。
+3. `PHASE6_SNAPSHOT_DB_FILE` 指向已经由受审查 Phase 6 producer/harness
+   建立的绝对路径；其父目录必须预先存在且不能经过符号链接。未显式设置时，
+   默认是 `<FACTORY_ROOT>/run_state/phase6_snapshot_shadow.db`。
+
+本地后端非敏感配置可写入 gitignored 的 `web/.env`：
+
+```dotenv
+PHASE6_SNAPSHOT_ENABLED=true
+PHASE6_SNAPSHOT_DB_FILE=/home/tfisher/paper_factory/run_state/phase6_snapshot_shadow.db
+```
+
+Vite 不读取父目录的 `web/.env`。本地开发应把下行写入 gitignored 的
+`web/frontend/.env.local`，生产构建则写入
+`web/frontend/.env.production.local`：
+
+```dotenv
+VITE_PHASE6_FULL_SHADOW_ENABLED=true
+VITE_PHASE6_SNAPSHOT_DEADLINE_MS=15000
+```
+
+`VITE_PHASE6_SNAPSHOT_DEADLINE_MS` 是构建期正整数配置，范围 1–300000ms，
+缺省 15000ms；修改后必须重新构建。它是一份总预算，同时覆盖等待响应头、读取/
+解析 body 和最多一次 stale retry，不会为 retry 重新计时。deadline 同时触发
+AbortController 并与 transport Promise race，因此忽略 signal 的自定义 transport
+也不能让页面永久保持 loading。
+
+不要仅打开一侧：后端开、前端关时 V1 页面保持不变，但已授权调用方仍可访问
+API；前端开、后端关时标签页会把后端 404 映射为“暂不提供快照”。完整回滚是把
+两侧都设为 false（或移除本地前端 flag 文件）、重新构建前端并重启后端。
+回滚不会删除独立数据库。
+
+API 只读入口是：
+
+```text
+GET /api/projects/{base_name}/phase6-snapshot?expected_revision=<nonnegative integer>
+```
+
+成功响应使用 `phase6-project-snapshot-web-v1`，且
+`authoritative`、`authority_transferred`、`dispatch_performed` 必须全部为
+`false`。`expected_revision` 过期返回 409，并允许前端仅重试一次无 revision
+读取；认证/ACL 失败、禁用、PARTIAL/ineligible source、缺失、篡改或不可用状态
+都失败关闭。公开错误只返回
+有限 code，不包含数据库路径、SQL 或内部异常消息。前端保留 loading、ready、
+empty、legacy_unavailable、auth_error、api_error、unknown 七种状态；只有同一
+有效坐标的 ready 页面才能显示 sections 或“无待处理事项”。
+
+查询参数也服从 ACL-first：后端在项目 ACL 通过后才把原始
+`expected_revision` 解析为非负整数。因此，无项目权限的 active 用户无论省略、
+传入负数还是传入非数字，都会得到同一项目拒绝；有权限用户的非法值才得到干净的
+参数 4xx。Action ID 去除首尾空白后必须唯一，重复 ID（相同或不同 payload、任意
+顺序）使整个 ready 投影失败关闭。仅稳定 allowlist 中的错误有专用提示，其他后端、
+传输或本地异常统一显示“项目快照服务暂不可用”，内部路径、SQL、凭据和堆栈不进入
+页面。timeout 映射为安全的 unavailable；用户取消、reset、页面离开和新 generation
+替换均具有不同的内部原因并结束 loading，旧请求的 deadline、完成或取消不能覆盖
+新请求。
+
+`npm run test:phase6` 会执行真实 Vite production 双构建和 Chromium 挂载流程：
+默认关闭时 manifest、chunk、路由和网络资源均不得出现 Phase 6；启用时验证 lazy
+模块、实际请求、键盘焦点（方向键、Home/End、Tab、Enter/Space）、disabled 状态和
+ARIA busy/live/alert。该测试需要先 `npm ci` 并准备与 lockfile 匹配的 Chromium。
+Vite 会在构建时把 `virtual:optional-workspace-snapshot` 精确映射到 inert disabled
+模块或显式 enabled 模块；基础 `ProjectWorkspace` 只消费通用扩展接口。不要改成
+无条件 import 后再靠运行时 `v-if` 隐藏，否则默认构建的 manifest/module graph
+和浏览器资源门禁会失败。
+
+Phase 6 的完整身份、持久化、grant 生命周期和安全边界见
+[`../docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md`](../docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md)。
+
 ## API 概览
 
 公开只读：
@@ -168,6 +249,7 @@ revision 和当前 request identity；过期页面会收到 `409`，不会写入
 - `GET /api/projects/{base_name}/contest-dashboard`
 - `GET /api/projects/{base_name}/modeling-directions`（分层方法召回与结构化内容块）
 - `GET /api/projects/{base_name}/problem-plan`（经校验的问题专属 DAG）
+- `GET /api/projects/{base_name}/phase6-snapshot`（默认关闭、ACL-first、非权威只读 shadow）
 - `GET /api/projects/{base_name}/submission`（仅验证过的 current release ZIP）
 
 管理员：
@@ -198,6 +280,7 @@ web/
 │   ├── app.py            # 兼容启动器/重导出
 │   ├── auth_store.py     # SQLite 用户、审批、ACL、审计
 │   ├── project_api.py    # 上传、项目、咨询、选择、模型 API
+│   ├── phase6_api.py     # 默认关闭的 ACL-first Phase 6 只读适配器
 │   └── start.sh
 ├── frontend/
 │   ├── src/
@@ -214,12 +297,16 @@ web/
 ```bash
 .venv/bin/python -m pytest -q \
   tests/test_web_control_plane_api.py \
-  tests/test_web_frontend_runtime_helpers.py
+  tests/test_web_frontend_runtime_helpers.py \
+  tests/test_phase6_snapshot_grants.py \
+  tests/test_phase6_project_snapshot_ui.py \
+  tests/test_phase6_web_integration.py
 
 bash -n scripts/load_secrets.sh scripts/setup_secret_manager.sh \
   web/backend/start.sh web/backend_service_health.sh web/deploy.sh
 
-cd web/frontend && npm run build
+(cd web/frontend && npm run build)
+(cd web/frontend && VITE_PHASE6_FULL_SHADOW_ENABLED=true npm run build)
 ```
 
 完整仓库 pytest 可能受历史测试重名和可选 Web/runtime 依赖影响；优先使用与变更合同对应的聚焦测试。

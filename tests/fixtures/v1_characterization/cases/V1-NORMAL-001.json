@@ -1,0 +1,42 @@
+{
+  "schema": "v1-characterization-case-v1",
+  "fixture_id": "V1-NORMAL-001",
+  "category": "normal",
+  "fixture_kind": "pytest_runtime_tmp_path_descriptor",
+  "source_paths": [
+    "factory_core/stages.py",
+    "factory_core/engine.py",
+    "tests/test_stage_scheduler.py"
+  ],
+  "pytest_nodes": [
+    "tests/test_stage_scheduler.py::test_stage_scheduler_persists_all_subtask_checkpoints_and_atomic_cursor"
+  ],
+  "v1_expected": {
+    "workflow_status": "completed",
+    "last_completed_step": 16,
+    "last_completed_stage": 10,
+    "stage_checkpoint_count": 19,
+    "selected_event_source_step_matches_event_step": true,
+    "selected_event_stage_catalog_version": "factory-stage-catalog-v1"
+  },
+  "contracts": [
+    "INV-HIERARCHY-8-PHASE-10-STAGE-17-STEP",
+    "INV-STAGE-CURSOR-CHECKPOINT-ATOMICITY",
+    "INV-EVENT-SUBJECT-COORDINATE"
+  ],
+  "machine_readable_fields": [
+    "workflow_status",
+    "last_completed_step",
+    "last_completed_stage",
+    "stage_checkpoint_count",
+    "selected_event_source_step_matches_event_step",
+    "selected_event_stage_catalog_version"
+  ],
+  "missing_evidence": [
+    {
+      "gap_id": "GAP-V1-NORMAL-REAL-LIFECYCLES",
+      "description": "The characterization uses deterministic test lifecycles rather than the production model, solver, and final-delivery adapters.",
+      "impact": "It proves scheduler persistence and cursor behavior, not an external-provider end-to-end run."
+    }
+  ]
+}

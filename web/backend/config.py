@@ -17,6 +17,9 @@ _DEFAULT_WEAK_PASSWORDS = {
     "123456",
 }
 
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(ENV_FILE)
 
@@ -42,6 +45,8 @@ class Settings:
     gcp_project_id: str = ""
     gcp_region: str = "europe-west4"
     gcp_solver_service: str = "solver-api"
+    phase6_snapshot_enabled: bool = False
+    phase6_snapshot_db_file: Path | None = None
 
     @property
     def ongoing_dir(self) -> Path:
@@ -75,6 +80,27 @@ class Settings:
     def resolved_auth_db_file(self) -> Path:
         return self.auth_db_file or self.factory_root / "web" / "auth.db"
 
+    @property
+    def resolved_phase6_snapshot_db_file(self) -> Path:
+        return (
+            self.phase6_snapshot_db_file
+            or self.factory_root / "run_state" / "phase6_snapshot_shadow.db"
+        )
+
+
+def _parse_bool_environment(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    raise RuntimeError(
+        f"{name} must be one of: 1, true, yes, on, 0, false, no, off."
+    )
+
 
 def load_settings() -> Settings:
     cors_origins = tuple(
@@ -90,6 +116,7 @@ def load_settings() -> Settings:
         if showcase_projects_env is not None
         else Settings.showcase_projects
     )
+    phase6_db_env = (os.getenv("PHASE6_SNAPSHOT_DB_FILE") or "").strip()
 
     return Settings(
         jwt_secret=(os.getenv("JWT_SECRET") or os.getenv("JWT_SECRET_KEY") or "").strip(),
@@ -103,6 +130,10 @@ def load_settings() -> Settings:
         gcp_project_id=(os.getenv("GCP_PROJECT_ID") or "").strip(),
         gcp_region=(os.getenv("GCP_REGION") or "europe-west4").strip(),
         gcp_solver_service=(os.getenv("GCP_SOLVER_SERVICE") or "solver-api").strip(),
+        phase6_snapshot_enabled=_parse_bool_environment(
+            "PHASE6_SNAPSHOT_ENABLED", default=False
+        ),
+        phase6_snapshot_db_file=Path(phase6_db_env) if phase6_db_env else None,
     )
 
 
@@ -112,3 +143,11 @@ def validate_settings(settings: Settings) -> None:
 
     if settings.admin_password in _DEFAULT_WEAK_PASSWORDS:
         raise RuntimeError("ADMIN_PASSWORD is missing or uses a default weak value.")
+
+    if settings.phase6_snapshot_enabled:
+        phase6_db = settings.resolved_phase6_snapshot_db_file
+        if not phase6_db.is_absolute():
+            raise RuntimeError(
+                "PHASE6_SNAPSHOT_DB_FILE must be an absolute path when "
+                "PHASE6_SNAPSHOT_ENABLED is true."
+            )
