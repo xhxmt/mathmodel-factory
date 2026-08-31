@@ -1,5 +1,20 @@
 # Changelog
 
+- Phase9-PREP safety boundary: add a stdlib-only manifest validator and
+  operator runbook for preparation that may proceed while the Phase 7+8 Pro
+  review is pending. The validator reads one bounded strict JSON manifest and
+  a fixed allowlist of no-lock/no-external-diff Git facts with system/global
+  configuration disabled and hazardous repository-local features overridden;
+  it rejects every dirty-worktree class, out-of-scope committed path and
+  unsafe/overlapping runtime path, then emits a deterministic
+  `PREP_MANIFEST_VALID` report. All workflow/runtime SQLite, generation,
+  process, network, provider, outbox, migration, delivery, release and cutover
+  capabilities remain false; runtime-state, pin, replay, three-role and
+  clean-room checks remain `DEFERRED`. Add a non-receipt forensic evidence
+  skeleton and the minimum Phase9-A acceptance matrix. This change does not
+  create a run generation or authorize formal Phase 9, and it names the later
+  fresh clean-room run Phase10-B as an explicit alias for architecture Phase 10.
+
 - Phase 7+8 Pro second-round Minor repair: distinguish immutable reference-
   binding history from qualified effective current state. Historical binding
   loaders and status fallback now always report `current=false`; the current

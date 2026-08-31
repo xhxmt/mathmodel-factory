@@ -1,0 +1,138 @@
+{
+  "schema_version": "phase9-forensic-evidence-template-v1",
+  "template_state": "NOT_COLLECTED",
+  "formal_phase9_authorized": false,
+  "coordinate": {
+    "project_id": null,
+    "workflow_id": null,
+    "project_generation": null,
+    "proposed_run_generation": "run4-forensic-proposed-20260831-01",
+    "run_generation": null,
+    "run_generation_state": "NOT_CREATED",
+    "run_generation_creation_receipt_sha256": null,
+    "runtime_generation": null,
+    "scheduler_generation": null,
+    "run_mode": "FORENSIC_REPLAY",
+    "modeling_consultation_contract": "LEGACY_NOT_APPLICABLE",
+    "delivery_capability": "DISABLED"
+  },
+  "source_and_inputs": {
+    "source_commit": null,
+    "source_tree": null,
+    "source_fingerprint_sha256": null,
+    "contract_pin_set_sha256": null,
+    "official_input_manifest_sha256": null,
+    "official_input_generation": null,
+    "execution_context_receipt_sha256": null
+  },
+  "entry_gate": {
+    "pro_normal_flow_receipt_sha256": null,
+    "phase4_8_p0_exit_receipt_sha256": null,
+    "run_generation_api_review_sha256": null,
+    "old_generation_read_only_attestation_sha256": null,
+    "initial_resume_target": "STEP13_PACKET_REBUILD",
+    "active_process_count": null,
+    "pending_outbox_count": null,
+    "unresolved_migration_count": null,
+    "state_inventory_receipt_sha256": null,
+    "p0_gate_evidence": {
+      "AR_007_DELIVERY_BYPASS": null,
+      "HUMAN_DECISION_SINGLE_WRITER": null,
+      "PACKET_ZERO_DISPATCH_EFFECTIVE_VERDICT": null,
+      "COMMAND_READ_SET_CAS": null,
+      "WORKER_OUTBOX_PROCESS_TREE_RECEIPTS": null,
+      "OWNER_CHECKPOINT_REATTEST": null,
+      "REVISION_ATOMIC_SNAPSHOT": null,
+      "RUN_MODE_GENERATION_DELIVERY_PINS": null,
+      "OFFICIAL_INPUT_EXECUTION_CONTEXT": null
+    }
+  },
+  "packet": {
+    "packet_generation": null,
+    "packet_sha256": null,
+    "claim_manifest_sha256": null,
+    "preflight_receipt_sha256": null,
+    "dispatch_count": null
+  },
+  "roles": {
+    "math": {
+      "role_generation": null,
+      "dependency_fingerprint_sha256": null,
+      "raw_bytes_sha256": null,
+      "raw_byte_length": null,
+      "protocol_verdict": null,
+      "grounding_verdict": null,
+      "grounding_receipt_sha256": null,
+      "effective_verdict": null,
+      "call_receipt_sha256": null
+    },
+    "execution": {
+      "role_generation": null,
+      "dependency_fingerprint_sha256": null,
+      "raw_bytes_sha256": null,
+      "raw_byte_length": null,
+      "protocol_verdict": null,
+      "grounding_verdict": null,
+      "grounding_receipt_sha256": null,
+      "effective_verdict": null,
+      "call_receipt_sha256": null
+    },
+    "paper": {
+      "role_generation": null,
+      "dependency_fingerprint_sha256": null,
+      "raw_bytes_sha256": null,
+      "raw_byte_length": null,
+      "protocol_verdict": null,
+      "grounding_verdict": null,
+      "grounding_receipt_sha256": null,
+      "effective_verdict": null,
+      "call_receipt_sha256": null
+    }
+  },
+  "process_and_outbox": {
+    "start_inventory_receipt_sha256": null,
+    "attempt_receipt_sha256s": [],
+    "termination_receipt_sha256s": [],
+    "outbox_reconciliation_receipt_sha256": null,
+    "end_inventory_receipt_sha256": null
+  },
+  "terminal": {
+    "aggregate_policy_sha256": null,
+    "effective_verdict": null,
+    "terminal_reason": null,
+    "requested_resume_target": null,
+    "snapshot_coordinate_sha256": null,
+    "delivery_fence_receipt_sha256": null,
+    "delivery_allowed": false,
+    "active_process_count": null,
+    "pending_outbox_count": null,
+    "unresolved_migration_count": null,
+    "state_inventory_receipt_sha256": null
+  },
+  "acceptance_cases": {
+    "AC_RUN4_001": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_RUN4_002": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_PACKET_001": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_PACKET_002": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_PACKET_003": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_VERDICT_001": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_VERDICT_003": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_SNAP_001": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_SNAP_002": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_OUT_001": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_OUT_002": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_OUT_004": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_SUP_001": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_SUP_002": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_SUP_004": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_DEL_001": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null},
+    "AC_DEL_002": {"status": "NOT_RUN", "test_result_sha256": null, "receipt_sha256": null}
+  },
+  "fault_injection_receipts": [],
+  "parity": {
+    "match_count": null,
+    "expected_correction_count": null,
+    "unknown_or_unexplained_count": null,
+    "report_sha256": null
+  }
+}

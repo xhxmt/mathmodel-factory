@@ -17,6 +17,7 @@
 | 查看 v1 characterization corpus/index | [tests/fixtures/v1_characterization/README.md](tests/fixtures/v1_characterization/README.md) |
 | 查看 Phase 6 verified snapshot、scoped grant 与 Web shadow 契约 | [docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md](docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md) |
 | 查看 Phase 7+8 durable local sidecar、operator preflight 与 no-dispatch 契约 | [docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md](docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md) |
+| 查看 Pro 审计期间允许执行的 Phase9-PREP、安全边界与正式验收门槛 | [docs/operations/PHASE9_PREP_RUNBOOK.md](docs/operations/PHASE9_PREP_RUNBOOK.md) |
 | 查看源码、运行数据和兼容边界 | [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md) |
 | 编写模型、代码和论文 | [modeling_guide.md](modeling_guide.md) |
 | 检查建模口径 | [docs/guides/MODELING_CHECKLIST.md](docs/guides/MODELING_CHECKLIST.md) |
@@ -43,6 +44,7 @@
 - [docs/architecture/PHASE5_PAUSE_POLICY_SHADOW.md](docs/architecture/PHASE5_PAUSE_POLICY_SHADOW.md)：Phase 5 pause policy 与 durable shadow supervisor 的 scope fence、注入式观察端口及 default-off/no-dispatch 边界。
 - [docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md](docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md)：Phase 6A 冻结七状态投影与 Phase 6B verified durable snapshot/scoped-grant、独立 SQLite、ACL-first Web 只读适配器、双 default-off flag 和 D001-D018 验收映射。
 - [docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md](docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md)：Phase 7 三角色 exact-byte grounding、Phase 8 PDF/CAS/approval/decision、受控 OS 操作员 preflight、durable local work ledger、历史与 current 分离、总 deadline、default-off/no-dispatch 和启停/回滚边界。Phase 7+8 只接受已完成正规 migration 的具体 generation，不接受 `legacy_unknown`。
+- [docs/operations/PHASE9_PREP_RUNBOOK.md](docs/operations/PHASE9_PREP_RUNBOOK.md)：Pro 审计并行期的只读 Git manifest 验证、隔离路径、正式 Phase9-A entry/exit 门、最小验收矩阵、证据骨架和禁止行为；明确 `PREP_MANIFEST_VALID` 不等于 Phase 9 授权，并以 Phase10-B 作为 fresh clean-room Phase 10 的消歧别名。
 - [docs/architecture/decisions/ADR-0001-phase0-source-truth.md](docs/architecture/decisions/ADR-0001-phase0-source-truth.md)：以指定源码提交为基线，锁定 schema-v9、writer 现状/目标、控制面与项目 workflow authority 边界及层级不变量。
 - [docs/architecture/WORKFLOW_CONTRACT_BUNDLE.md](docs/architecture/WORKFLOW_CONTRACT_BUNDLE.md)：M0.1 纯函数合同编译、canonical JSON/SHA-256、v1 Owner 全匹配兼容诊断、严格验证与后续接线边界。
 - [docs/architecture/application_writer_allowlist_v1.json](docs/architecture/application_writer_allowlist_v1.json)：当前直接 Store mutation characterization 与未来 receiver-aware 静态依赖门禁规格；Phase 0 只校验清单漂移，不执行重构。
@@ -65,7 +67,7 @@
 
 ## 质量门禁与评测
 
-- `./bootstrap.sh`：冻结的 Phase 3–6 `100/274/146/29/108 = 657` 结构化门禁；`./bootstrap_phase78.sh`：独立的 Phase 7+8 unit/runtime/adapters/PDF-CAS/E2E 门禁。Phase 7+8 的当前精确数量只以 `python3 -m scripts.phase78_test_contract describe` 为准，不改写旧 657 合同。
+- `./bootstrap.sh`：冻结的 Phase 3–6 `100/274/146/29/108 = 657` 结构化门禁；`./bootstrap_phase78.sh`：独立的 Phase 7+8 unit/runtime/adapters/PDF-CAS/E2E 门禁。Phase 7+8 的当前精确数量只以 `python3 -m scripts.phase78_test_contract describe` 为准，不改写旧 657 合同。Phase9-PREP 仅运行隔离 Python 下的只读 Git/manifest 门禁，不触碰 runtime state、也不写 Git，不能替代正式 runtime state gate。
 - [docs/complete_project_contract_audit.md](docs/complete_project_contract_audit.md)：历史完成项目与当前交付契约的审计说明。
 - [evaluation/README.md](evaluation/README.md)：独立外部评估框架。
 - [evaluation/SELECTOR_ROLLOUT_PLAN.md](evaluation/SELECTOR_ROLLOUT_PLAN.md)：Selector 可靠性、影子 portfolio 与人工放权的现役实施计划。
@@ -118,4 +120,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料。
 
-**最后更新：2026-08-29**
+**最后更新：2026-08-31**
