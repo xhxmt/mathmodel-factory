@@ -60,7 +60,7 @@ GROUPS = (
     GroupContract(
         "runtime",
         "pytest-phase78-runtime",
-        58,
+        60,
         (
             "tests/test_phase7_grounding_runtime.py",
             "tests/test_phase8_evidence_egress_runtime.py",

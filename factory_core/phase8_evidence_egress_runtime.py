@@ -8,7 +8,7 @@ Authority authority and never dispatches a transfer.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import fcntl
 import json
 import os
@@ -1876,7 +1876,7 @@ class Phase8EvidenceEgressStore:
                             Phase8CurrentConflict,
                             "publication generation changed before binding replay",
                         )
-                    return replay
+                    return replace(replay, current=True)
                 publication_takeover = (
                     replay_current is not None
                     and int(replay_current["sequence"]) == int(existing["sequence"])
@@ -2021,7 +2021,7 @@ class Phase8EvidenceEgressStore:
                     post_commit_fence=replay_post_commit_fence,
                     post_commit_reconciler=reconcile_replayed_reference,
                 )
-                return replay
+                return replace(replay, current=True)
             conflict = connection.execute(
                 "SELECT request_sha256 FROM phase8_reference_bindings WHERE logical_id=?",
                 (logical,),
@@ -2247,7 +2247,12 @@ class Phase8EvidenceEgressStore:
             self._close(connection, primary)
 
     def _binding_result_from_row(
-        self, row: sqlite3.Row, *, replayed: bool, deadline: object | None
+        self,
+        row: sqlite3.Row,
+        *,
+        replayed: bool,
+        deadline: object | None,
+        current: bool = False,
     ) -> ReferenceBindingResult:
         binding = _decode_json(row["binding_json"], "reference binding")
         binding_sha = _hashed(binding, "binding_sha256", "reference binding")
@@ -2262,7 +2267,7 @@ class Phase8EvidenceEgressStore:
             None if row["previous_binding_sha256"] is None else str(row["previous_binding_sha256"]),
             str(row["idempotency_key"]),
             replayed,
-            True,
+            current,
             binding,
         )
 
@@ -2285,6 +2290,8 @@ class Phase8EvidenceEgressStore:
                 _fail(Phase8NotFound, "reference binding is unavailable")
             result = self._binding_result_from_row(row, replayed=False, deadline=deadline)
             self._verify_binding_deep(result.binding, deadline=deadline)
+            # Immutable history alone never proves that this binding is the
+            # effective current publication.
             return result
         except BaseException as error:
             primary = error
@@ -2315,6 +2322,8 @@ class Phase8EvidenceEgressStore:
                 row, replayed=True, deadline=deadline
             )
             self._verify_binding_deep(result.binding, deadline=deadline)
+            # Exact-key history remains durable and replayable even when its
+            # activation never succeeded or is no longer current.
             return result
         except BaseException as error:
             primary = error
@@ -2423,7 +2432,9 @@ class Phase8EvidenceEgressStore:
                 str(result.binding["phase7_commit_sha256"]),
             ):
                 _fail(Phase8CurrentConflict, "Phase-7 head drifted after binding")
-            return result
+            # Promote only after the pointer publication, exact winning
+            # generation, and live Phase-7 head have all been qualified.
+            return replace(result, current=True)
         except BaseException as error:
             primary = error
             raise

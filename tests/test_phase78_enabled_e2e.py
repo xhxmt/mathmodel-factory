@@ -1627,7 +1627,9 @@ def test_status_boundaries_preserve_deadline_and_cancellation_control_flow(
     from factory_core.phase7_grounding_runtime import Phase7GroundingStore
     from factory_core.phase78_current import Phase78CurrentHeadVerifier
     from factory_core.phase8_evidence_egress_runtime import (
+        Phase8CurrentConflict,
         Phase8EvidenceEgressStore,
+        Phase8NotFound,
     )
 
     raw_pdf = make_pdf("Phase 7+8 status control-flow propagation")
@@ -1702,6 +1704,40 @@ def test_status_boundaries_preserve_deadline_and_cancellation_control_flow(
                 control,
             )
             assert "CURRENT_HEAD_UNAVAILABLE" not in str(captured.value)
+
+    # History is audit evidence, never proof of effective currentness.  If the
+    # qualified current loader has no publication or rejects its generation,
+    # status must retain the historical binding with current=false.
+    for error_type, reason_code in (
+        (Phase8NotFound, None),
+        (Phase8CurrentConflict, "PUBLICATION_GENERATION_DRIFT"),
+    ):
+        def reject_current(*_args, error_type=error_type, **_kwargs):
+            raise error_type("synthetic current binding unavailable")
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                Phase8EvidenceEgressStore,
+                "load_current_reference_binding",
+                reject_current,
+            )
+            scoped.setattr(
+                Phase8EvidenceEgressStore,
+                "load_current_decision",
+                reject_current,
+            )
+            historical_status = load_phase78_status(
+                replace(settings),
+                "demo",
+                "alice",
+                payload["idempotency_key"],
+            )
+        assert historical_status["reference_binding"]["current"] is False
+        if reason_code is None:
+            assert historical_status["blocker"] is None
+        else:
+            assert historical_status["outcome"] == "denied"
+            assert historical_status["blocker"]["reason_code"] == reason_code
 
 
 class _CrossingDeadline:

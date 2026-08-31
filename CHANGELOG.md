@@ -1,5 +1,17 @@
 # Changelog
 
+- Phase 7+8 Pro second-round Minor repair: distinguish immutable reference-
+  binding history from qualified effective current state. Historical binding
+  loaders and status fallback now always report `current=false`; the current
+  loader and record/replay/takeover paths promote to `current=true` only after
+  exact publication identity, winning generation, Phase 7 head, activation,
+  and post-commit fences succeed. Add A-to-B activation, history-only/crash,
+  activation timeout/cancellation/supersession/head-drift, exact-key takeover,
+  status conflict, and successful replay/current-loader regressions. This does
+  not relax prior M1/M2/v1 failure-closed behavior or expand default-off,
+  shadow-only, no-provider, no-outbox, no-dispatch, no-release, or no-cutover
+  scope.
+
 - Phase 7+8 Pro Major repair candidate: preserve typed deadline and
   cancellation propagation while reconstructing status at all four Phase 7/8
   history/current boundaries, so CLI/service return stable nonzero codes and

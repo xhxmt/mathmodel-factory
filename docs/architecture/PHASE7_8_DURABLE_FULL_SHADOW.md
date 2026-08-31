@@ -91,6 +91,18 @@ inside activation, and a crash after activation all therefore fail closed.
 The exact same idempotency key and bytes may later be taken over and explicitly
 activated by the winning generation, while different bytes conflict.
 
+`ReferenceBindingResult.current` reports qualified effective publication, not
+mere historical durability. `load_reference_binding` and exact-idempotency-key
+history reads therefore always return `current=false`, even when the same
+binding is also the current pointer. `load_current_reference_binding` promotes
+the result to `current=true` only after verifying the pointer publication
+identity, exact winning generation, and live Phase 7 head. A successful record
+or exact-key takeover likewise returns `current=true` only after activation and
+its post-commit fence complete; history-only, uncertain, cancelled,
+superseded, or drifted outcomes remain `false`. Status reconstruction preserves
+that distinction when it reports historical evidence beside a currentness
+blocker.
+
 The v2 publication columns and terminal receipt table are intentionally not an
 in-place migration of a v1 Phase 8 database. On reopen, the store reads only
 the v1-compatible ownership marker before exact-schema verification and returns

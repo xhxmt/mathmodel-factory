@@ -611,6 +611,7 @@ def test_reference_binding_replay_restart_and_deep_current_load(tmp_path):
         expected_binding_sha256=binding.binding_sha256,
     )
     assert loaded.binding == binding.binding
+    assert loaded.current is True
     assert loaded.binding["authoritative"] is False
     assert loaded.binding["phase3_artifact_state_sha256"] == fixture["state"].state_sha256
     assert stat.S_IMODE(fixture["database"].stat().st_mode) == 0o600
@@ -634,6 +635,48 @@ def test_reference_binding_replay_restart_and_deep_current_load(tmp_path):
     )
     assert replay.binding_sha256 == binding.binding_sha256
     assert replay.replayed is True
+    assert replay.current is True
+    assert fixture["store"].load_reference_binding(
+        binding.binding_sha256
+    ).current is False
+    assert fixture["store"].load_reference_binding_by_idempotency_key(
+        "phase8-binding-1"
+    ).current is False
+
+
+def test_historical_binding_loaders_never_claim_successor_currentness(tmp_path):
+    fixture = runtime_fixture(tmp_path)
+    first = fixture["binding"]
+    second = fixture["store"].record_reference_binding(
+        **_reference_successor_kwargs(
+            fixture,
+            key="phase8-binding-successor-currentness",
+            logical_id="reference-binding-successor-currentness",
+        )
+    )
+
+    assert first.current is True
+    assert second.current is True
+    assert second.binding_sha256 != first.binding_sha256
+    assert fixture["store"].load_reference_binding(
+        first.binding_sha256
+    ).current is False
+    assert fixture["store"].load_reference_binding_by_idempotency_key(
+        "phase8-binding-1"
+    ).current is False
+    assert fixture["store"].load_reference_binding(
+        second.binding_sha256
+    ).current is False
+    assert fixture["store"].load_reference_binding_by_idempotency_key(
+        "phase8-binding-successor-currentness"
+    ).current is False
+    current = fixture["store"].load_current_reference_binding(
+        second.scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+        expected_binding_sha256=second.binding_sha256,
+    )
+    assert current.binding_sha256 == second.binding_sha256
+    assert current.current is True
 
 
 def test_reference_logical_id_rejects_different_valid_package_without_current_drift(tmp_path):
@@ -1200,6 +1243,9 @@ def test_reference_commit_crossing_is_uncertain_historical_and_same_key_replayab
     finally:
         connection.close()
 
+    assert fixture["store"].load_reference_binding_by_idempotency_key(
+        kwargs["idempotency_key"]
+    ).current is False
     replay = fixture["store"].record_reference_binding(**kwargs)
     assert replay.replayed is True
     assert replay.current is True
@@ -1477,9 +1523,11 @@ def test_history_commit_crash_and_concurrent_window_never_publish_current(
             **crash_kwargs,
             adapter_fence=crash_after_history,
         )
-    assert fixture["store"].load_reference_binding_by_idempotency_key(
+    crash_history = fixture["store"].load_reference_binding_by_idempotency_key(
         crash_kwargs["idempotency_key"]
-    ).binding_sha256
+    )
+    assert crash_history.binding_sha256
+    assert crash_history.current is False
     current = fixture["store"].load_current_reference_binding(
         fixture["binding"].scope_key,
         phase7_current_head_verifier=fixture["p7_current"],
@@ -1487,11 +1535,19 @@ def test_history_commit_crash_and_concurrent_window_never_publish_current(
     assert current.binding_sha256 == concurrent.binding_sha256
     replay = fixture["store"].record_reference_binding(**crash_kwargs)
     assert replay.replayed is True
+    assert replay.current is True
 
 
 @pytest.mark.parametrize(
     "crossing",
-    ["user_cancel", "shutdown", "superseded", "head_drift", "process_crash"],
+    [
+        "timeout",
+        "user_cancel",
+        "shutdown",
+        "superseded",
+        "head_drift",
+        "process_crash",
+    ],
 )
 def test_reference_activation_crossing_is_read_time_qualified_and_takeoverable(
     tmp_path,
@@ -1526,6 +1582,10 @@ def test_reference_activation_crossing_is_read_time_qualified_and_takeoverable(
         if commits != 2:
             return
         winner["value"] = "generation-2"
+        if crossing == "timeout":
+            raise Phase78DeadlineError(
+                "synthetic deadline crossing reference activation"
+            )
         if crossing == "head_drift":
             fixture["p7_alive"]["value"] = False
             raise Phase8CurrentConflict("synthetic Phase-7 head drift")
@@ -1538,6 +1598,8 @@ def test_reference_activation_crossing_is_read_time_qualified_and_takeoverable(
     expected_error = (
         SystemExit
         if crossing == "process_crash"
+        else Phase78OutcomeUncertain
+        if crossing == "timeout"
         else Phase8CurrentConflict
         if crossing == "head_drift"
         else Phase78CancellationError
@@ -1548,6 +1610,7 @@ def test_reference_activation_crossing_is_read_time_qualified_and_takeoverable(
             adapter_fence=lose_during_activation,
         )
     historical = fixture["store"].load_reference_binding_by_idempotency_key(key)
+    assert historical.current is False
     with pytest.raises(Phase8CurrentConflict):
         fixture["store"].load_current_reference_binding(
             historical.scope_key,
@@ -1565,6 +1628,7 @@ def test_reference_activation_crossing_is_read_time_qualified_and_takeoverable(
         }
     )
     assert replay.replayed is True
+    assert replay.current is True
     current = fixture["store"].load_current_reference_binding(
         replay.scope_key,
         phase7_current_head_verifier=fixture["p7_current"],
@@ -1572,6 +1636,7 @@ def test_reference_activation_crossing_is_read_time_qualified_and_takeoverable(
         expected_binding_sha256=replay.binding_sha256,
     )
     assert current.binding_sha256 == historical.binding_sha256
+    assert current.current is True
     with pytest.raises(Phase8ReplayConflict):
         fixture["store"].record_reference_binding(
             **{
