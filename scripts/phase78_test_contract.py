@@ -60,7 +60,7 @@ GROUPS = (
     GroupContract(
         "runtime",
         "pytest-phase78-runtime",
-        39,
+        58,
         (
             "tests/test_phase7_grounding_runtime.py",
             "tests/test_phase8_evidence_egress_runtime.py",
@@ -69,7 +69,7 @@ GROUPS = (
     GroupContract(
         "adapters",
         "pytest-phase78-adapters",
-        24,
+        29,
         (
             "tests/test_phase78_cli_gate.py",
             "tests/test_phase78_work_ledger.py",
@@ -85,7 +85,7 @@ GROUPS = (
     GroupContract(
         "e2e",
         "pytest-phase78-e2e",
-        31,
+        35,
         (
             "tests/test_phase2_8_shadow_integration.py",
             "tests/test_phase8_shadow_isolation.py",

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 import stat
+import threading
 
 import pytest
 
@@ -27,7 +28,14 @@ from factory_core.phase6_snapshot_grants import (
     build_authority_source_binding,
 )
 import factory_core.phase7_grounding_runtime as phase7
+from factory_core.phase78_deadline import (
+    Phase78CancellationError,
+    Phase78CancellationReason,
+    Phase78DeadlineError,
+    Phase78OutcomeUncertain,
+)
 from factory_core.phase8_evidence_egress_runtime import (
+    build_phase8_publication_identity,
     Phase8CurrentConflict,
     Phase8Disabled,
     Phase8DeadlineExceeded,
@@ -35,6 +43,7 @@ from factory_core.phase8_evidence_egress_runtime import (
     Phase8EvidenceEgressStore,
     Phase8NotFound,
     Phase8ReplayConflict,
+    Phase8SchemaIncompatible,
 )
 from factory_core.reference_materializer import (
     ReferenceMaterializerConfig,
@@ -319,6 +328,240 @@ def issue_active(fixture, *, key="approval-issue-1", approval_id="approval-1"):
         trusted_preflight_sha256=preflight.preflight["preflight_sha256"],
         phase7_current_head_verifier=fixture["p7_current"],
     )
+
+
+def _timeout_after_commit(stage: str) -> None:
+    if stage == "after_sqlite_commit":
+        raise Phase78DeadlineError("synthetic deadline crossing durable commit")
+
+
+def _publication(fixture, key: str, generation: str):
+    binding = fixture["binding"].binding
+    return build_phase8_publication_identity(
+        publication_kind="work-generation",
+        publication_key=key,
+        generation={"winning_generation": generation},
+        phase7_scope_key=binding["phase7_scope_key"],
+        phase7_commit_sha256=binding["phase7_commit_sha256"],
+    )
+
+
+def _revocation_publication(fixture, key: str, generation: str):
+    binding = fixture["binding"].binding
+    return build_phase8_publication_identity(
+        publication_kind="approval-revocation",
+        publication_key=key,
+        generation={"winning_generation": generation},
+        phase7_scope_key=binding["phase7_scope_key"],
+        phase7_commit_sha256=binding["phase7_commit_sha256"],
+    )
+
+
+def _publication_verifier(winner: dict[str, str]):
+    def verify(publication):
+        if publication.get("publication_kind") == "standalone-shadow":
+            return publication.get("generation") == {
+                "mode": "store-local",
+                "publication_key": publication.get("publication_key"),
+            }
+        return publication.get("generation") == {
+            "winning_generation": winner["value"]
+        }
+
+    return verify
+
+
+def _reference_successor_kwargs(fixture, *, key: str, logical_id: str):
+    return {
+        "idempotency_key": key,
+        "logical_id": logical_id,
+        "phase3_artifact_state": fixture["state"],
+        "phase3_artifact_occurrence": fixture["occurrence"],
+        "phase6_access_proof": fixture["proof"],
+        "phase7_result": fixture["p7_bundle"]["result"],
+        "phase7_receipt": fixture["p7_bundle"]["receipt"],
+        "phase7_effective_verdict": fixture["p7_bundle"]["effective_verdict"],
+        "reference_package_blob": fixture["package"].package_blob,
+        "reference_receipt_blob": fixture["package"].receipt_blob,
+        "phase7_current_head_verifier": fixture["p7_current"],
+        "expected_current_binding_sha256": fixture["binding"].binding_sha256,
+    }
+
+
+_PHASE8_V1_SCHEMA = (
+    """CREATE TABLE phase8_schema_state(
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        schema_version TEXT NOT NULL,
+        absolute_path_sha256 TEXT NOT NULL
+    )""",
+    """CREATE TABLE phase8_reference_bindings(
+        binding_sha256 TEXT PRIMARY KEY,
+        logical_id TEXT NOT NULL UNIQUE,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_sha256 TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        previous_binding_sha256 TEXT,
+        binding_json TEXT NOT NULL,
+        binding_blob_json TEXT NOT NULL,
+        UNIQUE(scope_key,sequence)
+    )""",
+    """CREATE TABLE phase8_reference_current(
+        scope_key TEXT PRIMARY KEY,
+        sequence INTEGER NOT NULL,
+        binding_sha256 TEXT NOT NULL,
+        FOREIGN KEY(binding_sha256)
+            REFERENCES phase8_reference_bindings(binding_sha256)
+    )""",
+    """CREATE TABLE phase8_trusted_approval_preflights(
+        preflight_sha256 TEXT PRIMARY KEY,
+        preflight_id TEXT NOT NULL UNIQUE,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_sha256 TEXT NOT NULL,
+        binding_sha256 TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        preflight_json TEXT NOT NULL,
+        preflight_blob_json TEXT NOT NULL,
+        FOREIGN KEY(binding_sha256)
+            REFERENCES phase8_reference_bindings(binding_sha256)
+    )""",
+    """CREATE TABLE phase8_approvals(
+        approval_id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_sha256 TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        binding_sha256 TEXT NOT NULL,
+        trusted_preflight_sha256 TEXT NOT NULL,
+        successor_of TEXT,
+        approval_sha256 TEXT NOT NULL UNIQUE,
+        approval_json TEXT NOT NULL,
+        approval_blob_json TEXT NOT NULL,
+        FOREIGN KEY(binding_sha256)
+            REFERENCES phase8_reference_bindings(binding_sha256),
+        FOREIGN KEY(trusted_preflight_sha256)
+            REFERENCES phase8_trusted_approval_preflights(preflight_sha256)
+    )""",
+    """CREATE TABLE phase8_approval_events(
+        event_sha256 TEXT PRIMARY KEY,
+        approval_id TEXT NOT NULL,
+        event_sequence INTEGER NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_sha256 TEXT NOT NULL,
+        event_json TEXT NOT NULL,
+        event_blob_json TEXT NOT NULL,
+        UNIQUE(approval_id,event_sequence),
+        FOREIGN KEY(approval_id) REFERENCES phase8_approvals(approval_id)
+    )""",
+    """CREATE TABLE phase8_approval_current(
+        approval_id TEXT PRIMARY KEY,
+        event_sequence INTEGER NOT NULL,
+        event_sha256 TEXT NOT NULL,
+        state TEXT NOT NULL,
+        FOREIGN KEY(approval_id) REFERENCES phase8_approvals(approval_id),
+        FOREIGN KEY(event_sha256)
+            REFERENCES phase8_approval_events(event_sha256)
+    )""",
+    """CREATE TABLE phase8_scope_approval_current(
+        scope_key TEXT PRIMARY KEY,
+        approval_id TEXT NOT NULL,
+        FOREIGN KEY(approval_id) REFERENCES phase8_approvals(approval_id)
+    )""",
+    """CREATE TABLE phase8_decisions(
+        decision_sha256 TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        request_sha256 TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        previous_decision_sha256 TEXT,
+        decision_json TEXT NOT NULL,
+        decision_blob_json TEXT NOT NULL,
+        UNIQUE(scope_key,sequence)
+    )""",
+    """CREATE TABLE phase8_decision_current(
+        scope_key TEXT PRIMARY KEY,
+        sequence INTEGER NOT NULL,
+        decision_sha256 TEXT NOT NULL,
+        FOREIGN KEY(decision_sha256)
+            REFERENCES phase8_decisions(decision_sha256)
+    )""",
+)
+
+
+def _create_phase8_v1_database(database: Path) -> None:
+    connection = sqlite3.connect(database)
+    try:
+        for statement in _PHASE8_V1_SCHEMA:
+            connection.execute(statement)
+        for table in (
+            "phase8_schema_state",
+            "phase8_reference_bindings",
+            "phase8_trusted_approval_preflights",
+            "phase8_approvals",
+            "phase8_approval_events",
+            "phase8_decisions",
+        ):
+            for action in ("UPDATE", "DELETE"):
+                connection.execute(
+                    f"""CREATE TRIGGER {table}_immutable_{action.lower()}
+                    BEFORE {action} ON {table} BEGIN
+                        SELECT RAISE(ABORT, '{table} is append-only');
+                    END"""
+                )
+        connection.execute(
+            "INSERT INTO phase8_schema_state VALUES(1,?,?)",
+            (
+                "phase8-evidence-egress-runtime-sqlite-v1",
+                canonical_sha256(
+                    {
+                        "schema_version": "phase8-absolute-database-path-v1",
+                        "absolute_path": str(database),
+                    }
+                ),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    database.chmod(0o600)
+
+
+def test_v1_reopen_fails_closed_before_v2_columns_and_never_mutates_store(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "phase8-v1.db"
+    cas = tmp_path / "cas-v1"
+    cas.mkdir()
+    _create_phase8_v1_database(database)
+    before = database.read_bytes()
+
+    for _attempt in range(2):
+        reopened = Phase8EvidenceEgressStore(database, cas, enabled=True)
+        with pytest.raises(Phase8SchemaIncompatible) as caught:
+            reopened.load_reference_binding(_h("1"))
+        assert caught.value.code == "PHASE8_SCHEMA_INCOMPATIBLE"
+        assert "in-place upgrade is unsupported" in str(caught.value)
+
+    assert database.read_bytes() == before
+    assert not Path(f"{database}-wal").exists()
+    assert not Path(f"{database}-shm").exists()
+    assert not Path(f"{database}-journal").exists()
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        assert connection.execute(
+            "SELECT schema_version FROM phase8_schema_state"
+        ).fetchone()[0] == "phase8-evidence-egress-runtime-sqlite-v1"
+        assert "publication_sha256" not in {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(phase8_reference_current)"
+            )
+        }
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='phase8_publication_receipts'"
+        ).fetchone() is None
+    finally:
+        connection.close()
 
 
 def test_default_off_precedes_paths_deadline_and_resources(tmp_path):
@@ -917,3 +1160,765 @@ def test_binding_publication_rolls_back_at_late_fence(tmp_path):
         ).fetchone()[0] == fixture["binding"].binding_sha256
     finally:
         connection.close()
+
+
+def test_reference_commit_crossing_is_uncertain_historical_and_same_key_replayable(
+    tmp_path,
+):
+    fixture = runtime_fixture(tmp_path)
+    kwargs = {
+        "idempotency_key": "phase8-binding-post-commit-timeout",
+        "logical_id": "reference-binding-post-commit-timeout",
+        "phase3_artifact_state": fixture["state"],
+        "phase3_artifact_occurrence": fixture["occurrence"],
+        "phase6_access_proof": fixture["proof"],
+        "phase7_result": fixture["p7_bundle"]["result"],
+        "phase7_receipt": fixture["p7_bundle"]["receipt"],
+        "phase7_effective_verdict": fixture["p7_bundle"]["effective_verdict"],
+        "reference_package_blob": fixture["package"].package_blob,
+        "reference_receipt_blob": fixture["package"].receipt_blob,
+        "phase7_current_head_verifier": fixture["p7_current"],
+        "expected_current_binding_sha256": fixture["binding"].binding_sha256,
+    }
+    with pytest.raises(Phase78OutcomeUncertain) as captured:
+        fixture["store"].record_reference_binding(
+            **kwargs, adapter_fence=_timeout_after_commit
+        )
+    assert captured.value.idempotency_key == kwargs["idempotency_key"]
+
+    connection = sqlite3.connect(fixture["database"])
+    try:
+        assert connection.execute(
+            "SELECT count(*) FROM phase8_reference_bindings "
+            "WHERE idempotency_key=?",
+            (kwargs["idempotency_key"],),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT binding_sha256 FROM phase8_reference_current WHERE scope_key=?",
+            (fixture["binding"].scope_key,),
+        ).fetchone()[0] == fixture["binding"].binding_sha256
+    finally:
+        connection.close()
+
+    replay = fixture["store"].record_reference_binding(**kwargs)
+    assert replay.replayed is True
+    assert replay.current is True
+    assert replay.sequence == 2
+    current = fixture["store"].load_current_reference_binding(
+        replay.scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+        expected_binding_sha256=replay.binding_sha256,
+    )
+    assert current.binding_sha256 == replay.binding_sha256
+    with pytest.raises(Phase8ReplayConflict):
+        fixture["store"].record_reference_binding(
+            **{**kwargs, "logical_id": "different-reference-binding-bytes"}
+        )
+
+
+def test_trusted_preflight_commit_crossing_is_uncertain_and_exactly_replayable(
+    tmp_path,
+):
+    fixture = runtime_fixture(tmp_path)
+    kwargs = {
+        "idempotency_key": "trusted-preflight-post-commit-timeout",
+        "preflight_id": "trusted-preflight-post-commit-timeout",
+        "approval_id": "approval-post-commit-preflight",
+        "binding_sha256": fixture["binding"].binding_sha256,
+        "issuer_id": "operator-1",
+        "issuer_generation": "operator-generation-1",
+        "subject_id": "alice",
+        "subject_generation": "membership-generation-1",
+        "logical_issued_at": 20,
+        "not_before": 21,
+        "expires_at": 100,
+        "decision_evaluated_at": 25,
+        "data_egress_request": egress_request(),
+        "phase7_current_head_verifier": fixture["p7_current"],
+    }
+    with pytest.raises(Phase78OutcomeUncertain) as captured:
+        fixture["store"].register_trusted_approval_preflight(
+            **kwargs, adapter_fence=_timeout_after_commit
+        )
+    assert captured.value.idempotency_key == kwargs["idempotency_key"]
+    connection = sqlite3.connect(fixture["database"])
+    try:
+        assert connection.execute(
+            "SELECT count(*) FROM phase8_trusted_approval_preflights "
+            "WHERE idempotency_key=?",
+            (kwargs["idempotency_key"],),
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
+    replay = fixture["store"].register_trusted_approval_preflight(**kwargs)
+    assert replay.replayed is True
+    loaded = fixture["store"].load_trusted_approval_preflight(
+        replay.preflight["preflight_sha256"]
+    )
+    assert loaded.preflight == replay.preflight
+    with pytest.raises(Phase8ReplayConflict):
+        fixture["store"].register_trusted_approval_preflight(
+            **{**kwargs, "preflight_id": "different-preflight-bytes"}
+        )
+
+
+def test_approval_issue_commit_crossing_keeps_history_without_effective_current(
+    tmp_path,
+):
+    fixture = runtime_fixture(tmp_path)
+    preflight = fixture["store"].register_trusted_approval_preflight(
+        idempotency_key="approval-post-commit-preflight",
+        preflight_id="approval-post-commit-preflight",
+        approval_id="approval-post-commit-timeout",
+        binding_sha256=fixture["binding"].binding_sha256,
+        issuer_id="operator-1",
+        issuer_generation="operator-generation-1",
+        subject_id="alice",
+        subject_generation="membership-generation-1",
+        logical_issued_at=20,
+        not_before=21,
+        expires_at=100,
+        decision_evaluated_at=25,
+        data_egress_request=egress_request(),
+        phase7_current_head_verifier=fixture["p7_current"],
+    )
+    kwargs = {
+        "idempotency_key": "approval-issue-post-commit-timeout",
+        "approval_id": "approval-post-commit-timeout",
+        "binding_sha256": fixture["binding"].binding_sha256,
+        "issuer_id": "operator-1",
+        "issuer_generation": "operator-generation-1",
+        "subject_id": "alice",
+        "subject_generation": "membership-generation-1",
+        "logical_issued_at": 20,
+        "not_before": 21,
+        "expires_at": 100,
+        "data_egress_request": egress_request(),
+        "trusted_preflight_sha256": preflight.preflight["preflight_sha256"],
+        "phase7_current_head_verifier": fixture["p7_current"],
+    }
+    with pytest.raises(Phase78OutcomeUncertain) as captured:
+        fixture["store"].issue_approval(
+            **kwargs, adapter_fence=_timeout_after_commit
+        )
+    assert captured.value.idempotency_key == kwargs["idempotency_key"]
+    assert fixture["store"].load_approval(
+        kwargs["approval_id"]
+    ).approval["approval_id"] == kwargs["approval_id"]
+    with pytest.raises(Phase8NotFound):
+        fixture["store"].load_current_approval(
+            fixture["binding"].scope_key,
+            phase7_current_head_verifier=fixture["p7_current"],
+        )
+    replay = fixture["store"].issue_approval(**kwargs)
+    assert replay.replayed is True
+    current = fixture["store"].load_current_approval(
+        fixture["binding"].scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+    )
+    assert current.approval["approval_id"] == kwargs["approval_id"]
+
+
+def test_approval_lifecycle_commit_crossing_replays_without_cancelled_head(
+    tmp_path,
+):
+    fixture = runtime_fixture(tmp_path)
+    active = issue_active(fixture)
+    kwargs = {
+        "idempotency_key": "approval-revoke-post-commit-timeout",
+        "approval_id": active.approval["approval_id"],
+        "expected_event_sha256": active.lifecycle_event["event_sha256"],
+        "revoked_at": 30,
+    }
+    with pytest.raises(Phase78OutcomeUncertain) as captured:
+        fixture["store"].revoke_approval(
+            **kwargs, adapter_fence=_timeout_after_commit
+        )
+    assert captured.value.idempotency_key == kwargs["idempotency_key"]
+    historical = fixture["store"].load_approval(kwargs["approval_id"])
+    assert historical.lifecycle_event["state"] == "ACTIVE"
+    connection = sqlite3.connect(fixture["database"])
+    try:
+        assert connection.execute(
+            "SELECT count(*) FROM phase8_approval_events WHERE idempotency_key=?",
+            (kwargs["idempotency_key"],),
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
+    replay = fixture["store"].revoke_approval(**kwargs)
+    assert replay.replayed is True
+    assert fixture["store"].load_approval(
+        kwargs["approval_id"]
+    ).lifecycle_event["state"] == "REVOKED"
+    with pytest.raises(Phase8ReplayConflict):
+        fixture["store"].revoke_approval(**{**kwargs, "revoked_at": 31})
+
+
+def test_egress_decision_commit_crossing_keeps_history_and_replays_exact_head(
+    tmp_path,
+):
+    fixture = runtime_fixture(tmp_path)
+    issue_active(fixture)
+    kwargs = {
+        "idempotency_key": "decision-post-commit-timeout",
+        "binding_sha256": fixture["binding"].binding_sha256,
+        "data_egress_request": egress_request(),
+        "evaluated_at": 25,
+        "phase7_current_head_verifier": fixture["p7_current"],
+    }
+    with pytest.raises(Phase78OutcomeUncertain) as captured:
+        fixture["store"].evaluate_egress(
+            **kwargs, adapter_fence=_timeout_after_commit
+        )
+    assert captured.value.idempotency_key == kwargs["idempotency_key"]
+    connection = sqlite3.connect(fixture["database"])
+    try:
+        decision_sha = connection.execute(
+            "SELECT decision_sha256 FROM phase8_decisions WHERE idempotency_key=?",
+            (kwargs["idempotency_key"],),
+        ).fetchone()[0]
+        assert connection.execute(
+            "SELECT count(*) FROM phase8_decision_current WHERE scope_key=?",
+            (fixture["binding"].scope_key,),
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+    assert fixture["store"].load_decision(
+        decision_sha
+    ).decision["status"] == "AUTHORIZED"
+    replay = fixture["store"].evaluate_egress(**kwargs)
+    assert replay.replayed is True
+    assert fixture["store"].load_current_decision(
+        fixture["binding"].scope_key,
+        evaluated_at=25,
+        phase7_current_head_verifier=fixture["p7_current"],
+    )["source_decision_sha256"] == replay.decision["decision_sha256"]
+    with pytest.raises(Phase8ReplayConflict):
+        fixture["store"].evaluate_egress(
+            **{
+                **kwargs,
+                "data_egress_request": {
+                    **egress_request(),
+                    "purpose": "different-purpose",
+                },
+            }
+        )
+
+
+def test_history_commit_crash_and_concurrent_window_never_publish_current(
+    tmp_path,
+):
+    fixture = runtime_fixture(tmp_path)
+    old_binding = fixture["binding"].binding_sha256
+    concurrent_kwargs = _reference_successor_kwargs(
+        fixture,
+        key="reference-concurrent-history-window",
+        logical_id="reference-concurrent-history-window",
+    )
+    first_commit = threading.Event()
+    release = threading.Event()
+    observed = {}
+    commits = 0
+
+    def block_after_history(stage):
+        nonlocal commits
+        if stage == "after_sqlite_commit":
+            commits += 1
+            if commits == 1:
+                first_commit.set()
+                assert release.wait(timeout=10)
+
+    def invoke():
+        try:
+            observed["result"] = fixture["store"].record_reference_binding(
+                **concurrent_kwargs,
+                adapter_fence=block_after_history,
+            )
+        except BaseException as exc:
+            observed["error"] = exc
+
+    thread = threading.Thread(target=invoke, name="phase8-history-window")
+    thread.start()
+    assert first_commit.wait(timeout=10)
+    reader = sqlite3.connect(fixture["database"])
+    try:
+        assert reader.execute(
+            "SELECT count(*) FROM phase8_reference_bindings "
+            "WHERE idempotency_key=?",
+            (concurrent_kwargs["idempotency_key"],),
+        ).fetchone()[0] == 1
+        assert reader.execute(
+            "SELECT binding_sha256 FROM phase8_reference_current WHERE scope_key=?",
+            (fixture["binding"].scope_key,),
+        ).fetchone()[0] == old_binding
+    finally:
+        reader.close()
+    release.set()
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert "error" not in observed
+    concurrent = observed["result"]
+
+    crash_kwargs = {
+        **_reference_successor_kwargs(
+            fixture,
+            key="reference-crash-after-history",
+            logical_id="reference-crash-after-history",
+        ),
+        "expected_current_binding_sha256": concurrent.binding_sha256,
+    }
+
+    def crash_after_history(stage):
+        if stage == "after_sqlite_commit":
+            raise SystemExit("synthetic process crash after history commit")
+
+    with pytest.raises(SystemExit):
+        fixture["store"].record_reference_binding(
+            **crash_kwargs,
+            adapter_fence=crash_after_history,
+        )
+    assert fixture["store"].load_reference_binding_by_idempotency_key(
+        crash_kwargs["idempotency_key"]
+    ).binding_sha256
+    current = fixture["store"].load_current_reference_binding(
+        fixture["binding"].scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+    )
+    assert current.binding_sha256 == concurrent.binding_sha256
+    replay = fixture["store"].record_reference_binding(**crash_kwargs)
+    assert replay.replayed is True
+
+
+@pytest.mark.parametrize(
+    "crossing",
+    ["user_cancel", "shutdown", "superseded", "head_drift", "process_crash"],
+)
+def test_reference_activation_crossing_is_read_time_qualified_and_takeoverable(
+    tmp_path,
+    monkeypatch,
+    crossing,
+):
+    fixture = runtime_fixture(tmp_path)
+    key = f"reference-activation-{crossing}"
+    kwargs = _reference_successor_kwargs(
+        fixture,
+        key=key,
+        logical_id=key,
+    )
+    winner = {"value": "generation-1"}
+    verifier = _publication_verifier(winner)
+    kwargs.update(
+        publication_identity=_publication(fixture, key, "generation-1"),
+        publication_head_verifier=verifier,
+    )
+    monkeypatch.setattr(
+        Phase8EvidenceEgressStore,
+        "_reconcile_post_commit",
+        lambda *_args, **_kwargs: None,
+    )
+    commits = 0
+
+    def lose_during_activation(stage):
+        nonlocal commits
+        if stage != "after_sqlite_commit":
+            return
+        commits += 1
+        if commits != 2:
+            return
+        winner["value"] = "generation-2"
+        if crossing == "head_drift":
+            fixture["p7_alive"]["value"] = False
+            raise Phase8CurrentConflict("synthetic Phase-7 head drift")
+        if crossing == "process_crash":
+            raise SystemExit("synthetic crash after activation commit")
+        raise Phase78CancellationError(
+            Phase78CancellationReason(crossing)
+        )
+
+    expected_error = (
+        SystemExit
+        if crossing == "process_crash"
+        else Phase8CurrentConflict
+        if crossing == "head_drift"
+        else Phase78CancellationError
+    )
+    with pytest.raises(expected_error):
+        fixture["store"].record_reference_binding(
+            **kwargs,
+            adapter_fence=lose_during_activation,
+        )
+    historical = fixture["store"].load_reference_binding_by_idempotency_key(key)
+    with pytest.raises(Phase8CurrentConflict):
+        fixture["store"].load_current_reference_binding(
+            historical.scope_key,
+            phase7_current_head_verifier=fixture["p7_current"],
+            publication_head_verifier=verifier,
+            expected_binding_sha256=historical.binding_sha256,
+        )
+    fixture["p7_alive"]["value"] = True
+    replay = fixture["store"].record_reference_binding(
+        **{
+            **kwargs,
+            "publication_identity": _publication(
+                fixture, key, "generation-2"
+            ),
+        }
+    )
+    assert replay.replayed is True
+    current = fixture["store"].load_current_reference_binding(
+        replay.scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+        publication_head_verifier=verifier,
+        expected_binding_sha256=replay.binding_sha256,
+    )
+    assert current.binding_sha256 == historical.binding_sha256
+    with pytest.raises(Phase8ReplayConflict):
+        fixture["store"].record_reference_binding(
+            **{
+                **kwargs,
+                "logical_id": f"{key}-different",
+                "publication_identity": _publication(
+                    fixture, key, "generation-2"
+                ),
+            }
+        )
+
+
+def _cancel_second_commit(winner: dict[str, str]):
+    commits = 0
+
+    def fence(stage):
+        nonlocal commits
+        if stage == "after_sqlite_commit":
+            commits += 1
+            if commits == 2:
+                winner["value"] = "generation-2"
+                raise Phase78CancellationError(
+                    Phase78CancellationReason.SUPERSEDED
+                )
+
+    return fence
+
+
+def test_approval_issue_activation_cancelled_generation_is_never_current(
+    tmp_path,
+    monkeypatch,
+):
+    fixture = runtime_fixture(tmp_path)
+    key = "approval-activation-superseded"
+    approval_id = "approval-activation-superseded"
+    winner = {"value": "generation-1"}
+    verifier = _publication_verifier(winner)
+    preflight = fixture["store"].register_trusted_approval_preflight(
+        idempotency_key=f"{key}:preflight",
+        preflight_id=f"{key}:preflight",
+        approval_id=approval_id,
+        binding_sha256=fixture["binding"].binding_sha256,
+        issuer_id="operator-1",
+        issuer_generation="operator-generation-1",
+        subject_id="alice",
+        subject_generation="membership-generation-1",
+        logical_issued_at=20,
+        not_before=21,
+        expires_at=100,
+        decision_evaluated_at=25,
+        data_egress_request=egress_request(),
+        phase7_current_head_verifier=fixture["p7_current"],
+        publication_head_verifier=verifier,
+    )
+    kwargs = {
+        "idempotency_key": key,
+        "approval_id": approval_id,
+        "binding_sha256": fixture["binding"].binding_sha256,
+        "issuer_id": "operator-1",
+        "issuer_generation": "operator-generation-1",
+        "subject_id": "alice",
+        "subject_generation": "membership-generation-1",
+        "logical_issued_at": 20,
+        "not_before": 21,
+        "expires_at": 100,
+        "data_egress_request": egress_request(),
+        "trusted_preflight_sha256": preflight.preflight["preflight_sha256"],
+        "phase7_current_head_verifier": fixture["p7_current"],
+        "publication_identity": _publication(fixture, key, "generation-1"),
+        "publication_head_verifier": verifier,
+    }
+    monkeypatch.setattr(
+        Phase8EvidenceEgressStore,
+        "_reconcile_post_commit",
+        lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(Phase78CancellationError):
+        fixture["store"].issue_approval(
+            **kwargs,
+            adapter_fence=_cancel_second_commit(winner),
+        )
+    assert fixture["store"].load_approval(approval_id).approval["approval_id"] == approval_id
+    with pytest.raises(Phase8CurrentConflict):
+        fixture["store"].load_current_approval(
+            fixture["binding"].scope_key,
+            phase7_current_head_verifier=fixture["p7_current"],
+            publication_head_verifier=verifier,
+        )
+    replay = fixture["store"].issue_approval(
+        **{
+            **kwargs,
+            "publication_identity": _publication(
+                fixture, key, "generation-2"
+            ),
+        }
+    )
+    assert replay.replayed is True
+    assert fixture["store"].load_current_approval(
+        fixture["binding"].scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+        publication_head_verifier=verifier,
+    ).approval["approval_id"] == approval_id
+
+
+def test_lifecycle_activation_cancelled_generation_is_never_current(
+    tmp_path,
+    monkeypatch,
+):
+    fixture = runtime_fixture(tmp_path)
+    active = issue_active(fixture)
+    key = "lifecycle-activation-superseded"
+    winner = {"value": "generation-1"}
+    verifier = _publication_verifier(winner)
+    kwargs = {
+        "idempotency_key": key,
+        "approval_id": active.approval["approval_id"],
+        "expected_event_sha256": active.lifecycle_event["event_sha256"],
+        "revoked_at": 30,
+        "phase7_current_head_verifier": fixture["p7_current"],
+        "publication_identity": _publication(fixture, key, "generation-1"),
+        "publication_head_verifier": verifier,
+    }
+    monkeypatch.setattr(
+        Phase8EvidenceEgressStore,
+        "_reconcile_post_commit",
+        lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(Phase78CancellationError):
+        fixture["store"].revoke_approval(
+            **kwargs,
+            adapter_fence=_cancel_second_commit(winner),
+        )
+    assert fixture["store"].load_approval(
+        active.approval["approval_id"]
+    ).lifecycle_event["state"] == "REVOKED"
+    with pytest.raises(Phase8CurrentConflict):
+        fixture["store"].load_current_approval(
+            fixture["binding"].scope_key,
+            phase7_current_head_verifier=fixture["p7_current"],
+            publication_head_verifier=verifier,
+        )
+    replay = fixture["store"].revoke_approval(
+        **{
+            **kwargs,
+            "publication_identity": _publication(
+                fixture, key, "generation-2"
+            ),
+        }
+    )
+    assert replay.replayed is True
+    assert fixture["store"].load_current_approval(
+        fixture["binding"].scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+        publication_head_verifier=verifier,
+    ).lifecycle_event["state"] == "REVOKED"
+
+
+@pytest.mark.parametrize("crossing", ["user_cancel", "head_drift", "process_crash"])
+def test_revocation_activation_requires_terminal_publication_receipt(
+    tmp_path,
+    monkeypatch,
+    crossing,
+):
+    fixture = runtime_fixture(tmp_path)
+    active = issue_active(fixture)
+    key = f"revocation-receipt-{crossing}"
+    winner = {"value": "generation-1"}
+    verifier = _publication_verifier(winner)
+    kwargs = {
+        "idempotency_key": key,
+        "approval_id": active.approval["approval_id"],
+        "expected_event_sha256": active.lifecycle_event["event_sha256"],
+        "revoked_at": 30,
+        "phase7_current_head_verifier": fixture["p7_current"],
+        "publication_identity": _revocation_publication(
+            fixture, key, "generation-1"
+        ),
+        "publication_head_verifier": verifier,
+    }
+    monkeypatch.setattr(
+        Phase8EvidenceEgressStore,
+        "_reconcile_post_commit",
+        lambda *_args, **_kwargs: None,
+    )
+    commits = 0
+
+    def cross_activation(stage):
+        nonlocal commits
+        if stage != "after_sqlite_commit":
+            return
+        commits += 1
+        if commits != 2:
+            return
+        winner["value"] = "generation-2"
+        if crossing == "head_drift":
+            fixture["p7_alive"]["value"] = False
+            raise Phase8CurrentConflict("synthetic revocation head drift")
+        if crossing == "process_crash":
+            raise SystemExit("synthetic revocation activation crash")
+        raise Phase78CancellationError(Phase78CancellationReason.USER_CANCEL)
+
+    expected_error = (
+        SystemExit
+        if crossing == "process_crash"
+        else Phase8CurrentConflict
+        if crossing == "head_drift"
+        else Phase78CancellationError
+    )
+    with pytest.raises(expected_error):
+        fixture["store"].revoke_approval(
+            **kwargs,
+            adapter_fence=cross_activation,
+        )
+    connection = sqlite3.connect(fixture["database"])
+    try:
+        assert connection.execute(
+            "SELECT count(*) FROM phase8_publication_receipts"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+    with pytest.raises(Phase8CurrentConflict):
+        fixture["store"].load_current_approval(
+            fixture["binding"].scope_key,
+            phase7_current_head_verifier=fixture["p7_current"],
+            publication_head_verifier=verifier,
+        )
+    fixture["p7_alive"]["value"] = True
+    replay = fixture["store"].revoke_approval(
+        **{
+            **kwargs,
+            "publication_identity": _revocation_publication(
+                fixture, key, "generation-2"
+            ),
+        }
+    )
+    assert replay.replayed is True
+    current = fixture["store"].load_current_approval(
+        fixture["binding"].scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+        publication_head_verifier=verifier,
+    )
+    assert current.lifecycle_event["state"] == "REVOKED"
+    connection = sqlite3.connect(fixture["database"])
+    try:
+        assert connection.execute(
+            "SELECT count(*) FROM phase8_publication_receipts"
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_revocation_receipt_commit_crossing_is_uncertain_and_exactly_replayable(
+    tmp_path,
+):
+    fixture = runtime_fixture(tmp_path)
+    active = issue_active(fixture)
+    key = "revocation-receipt-post-commit-timeout"
+    winner = {"value": "generation-1"}
+    verifier = _publication_verifier(winner)
+    kwargs = {
+        "idempotency_key": key,
+        "approval_id": active.approval["approval_id"],
+        "expected_event_sha256": active.lifecycle_event["event_sha256"],
+        "revoked_at": 30,
+        "phase7_current_head_verifier": fixture["p7_current"],
+        "publication_identity": _revocation_publication(
+            fixture, key, "generation-1"
+        ),
+        "publication_head_verifier": verifier,
+    }
+    commits = 0
+
+    def timeout_after_receipt(stage):
+        nonlocal commits
+        if stage == "after_sqlite_commit":
+            commits += 1
+            if commits == 3:
+                raise Phase78DeadlineError(
+                    "synthetic deadline crossing revocation receipt commit"
+                )
+
+    with pytest.raises(Phase78OutcomeUncertain) as captured:
+        fixture["store"].revoke_approval(
+            **kwargs,
+            adapter_fence=timeout_after_receipt,
+        )
+    assert captured.value.idempotency_key == key
+    assert fixture["store"].load_current_approval(
+        fixture["binding"].scope_key,
+        phase7_current_head_verifier=fixture["p7_current"],
+        publication_head_verifier=verifier,
+    ).lifecycle_event["state"] == "REVOKED"
+    replay = fixture["store"].revoke_approval(**kwargs)
+    assert replay.replayed is True
+    with pytest.raises(Phase8ReplayConflict):
+        fixture["store"].revoke_approval(**{**kwargs, "revoked_at": 31})
+
+
+def test_decision_activation_cancelled_generation_is_never_current(
+    tmp_path,
+    monkeypatch,
+):
+    fixture = runtime_fixture(tmp_path)
+    issue_active(fixture)
+    key = "decision-activation-superseded"
+    winner = {"value": "generation-1"}
+    verifier = _publication_verifier(winner)
+    kwargs = {
+        "idempotency_key": key,
+        "binding_sha256": fixture["binding"].binding_sha256,
+        "data_egress_request": egress_request(),
+        "evaluated_at": 25,
+        "phase7_current_head_verifier": fixture["p7_current"],
+        "publication_identity": _publication(fixture, key, "generation-1"),
+        "publication_head_verifier": verifier,
+    }
+    monkeypatch.setattr(
+        Phase8EvidenceEgressStore,
+        "_reconcile_post_commit",
+        lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(Phase78CancellationError):
+        fixture["store"].evaluate_egress(
+            **kwargs,
+            adapter_fence=_cancel_second_commit(winner),
+        )
+    historical = fixture["store"].load_decision_by_idempotency_key(key)
+    assert historical.decision["status"] == "AUTHORIZED"
+    with pytest.raises(Phase8CurrentConflict):
+        fixture["store"].load_current_decision(
+            fixture["binding"].scope_key,
+            evaluated_at=25,
+            phase7_current_head_verifier=fixture["p7_current"],
+            publication_head_verifier=verifier,
+        )
+    replay = fixture["store"].evaluate_egress(
+        **{
+            **kwargs,
+            "publication_identity": _publication(
+                fixture, key, "generation-2"
+            ),
+        }
+    )
+    assert replay.replayed is True
+    assert fixture["store"].load_current_decision(
+        fixture["binding"].scope_key,
+        evaluated_at=25,
+        phase7_current_head_verifier=fixture["p7_current"],
+        publication_head_verifier=verifier,
+    )["source_decision_sha256"] == historical.decision["decision_sha256"]

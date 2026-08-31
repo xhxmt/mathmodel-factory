@@ -14,6 +14,7 @@ from typing import Mapping
 from .canonical import canonical_sha256
 from .durable_operation import OperationStatus
 from .phase78_config import Phase78Settings
+from .phase78_current import Phase78CurrentHeadVerifier
 from .phase78_deadline import (
     Phase78CancellationError,
     Phase78CancellationReason,
@@ -35,8 +36,10 @@ from .phase7_grounding_runtime import (
 )
 from .phase8_evidence_egress_runtime import (
     ApprovalResult,
+    build_phase8_publication_identity,
     DecisionResult,
     Phase8EvidenceEgressStore,
+    Phase8CurrentConflict,
     Phase8NotFound,
     ReferenceBindingResult,
 )
@@ -118,6 +121,72 @@ def _decision_key(key: str) -> str:
     return f"{key}:phase8-decision"
 
 
+def _work_publication(
+    *,
+    publication_key: str,
+    request_key: str,
+    token: _WorkLeaseToken,
+    phase7_scope_key: str,
+    phase7_commit_sha256: str,
+) -> dict[str, object]:
+    return build_phase8_publication_identity(
+        publication_kind="work-generation",
+        publication_key=publication_key,
+        generation={
+            "request_idempotency_key": request_key,
+            "operation_identity_sha256": token.operation_identity_sha256,
+            "claim_generation": token.claim_generation,
+            "claim_owner_id": token.claim_owner_id,
+            "claim_owner_epoch": token.claim_owner_epoch,
+            "local_worker_nonce": token.local_worker_nonce,
+        },
+        phase7_scope_key=phase7_scope_key,
+        phase7_commit_sha256=phase7_commit_sha256,
+    )
+
+
+def _operator_publication_matches(
+    publication: Mapping[str, object],
+    request,
+    trusted_preflight: Mapping[str, object] | None,
+) -> bool:
+    return (
+        trusted_preflight is not None
+        and publication.get("publication_kind") == "operator-generation"
+        and publication.get("generation")
+        == {
+            "request_idempotency_key": request.idempotency_key,
+            "operator_id": request.approval["issuer_id"],
+            "operator_generation": request.approval["issuer_generation"],
+        }
+        and trusted_preflight.get("issuer")
+        == {
+            "id": request.approval["issuer_id"],
+            "generation": request.approval["issuer_generation"],
+        }
+        and trusted_preflight.get("approval_id")
+        == request.approval["approval_id"]
+        and trusted_preflight.get("phase7_scope_key")
+        == publication.get("phase7_scope_key")
+        and trusted_preflight.get("phase7_commit_sha256")
+        == publication.get("phase7_commit_sha256")
+    )
+
+
+def _revocation_publication_matches(
+    publication: Mapping[str, object], request
+) -> bool:
+    generation = publication.get("generation")
+    return (
+        publication.get("publication_kind") == "approval-revocation"
+        and isinstance(generation, Mapping)
+        and generation.get("actor_id") == request.approval["issuer_id"]
+        and generation.get("issuer_generation")
+        == request.approval["issuer_generation"]
+        and generation.get("approval_id") == request.approval["approval_id"]
+    )
+
+
 def _binding_summary(value: ReferenceBindingResult) -> dict[str, object]:
     return {
         "binding_sha256": value.binding_sha256,
@@ -194,10 +263,14 @@ def _phase8_fence(
     p7_current,
     p7_scope_key: str,
     p7_commit_sha256: str,
-    work_fence,
+    work_fence=None,
 ):
     def fence(_stage: str) -> None:
-        work_fence(_stage)
+        # Mutable activation passes the work fence.  Publication-source reads
+        # deliberately omit it: an exact durable SUCCEEDED generation remains
+        # a valid historical source even though it is no longer ACTIVE.
+        if work_fence is not None:
+            work_fence(_stage)
         deadline.check(_stage)
         current_verifier.verify(
             phase3_artifact_state=request.phase3_artifact_state,
@@ -289,6 +362,103 @@ def _work_fence(
             raise Phase78CancellationError(Phase78CancellationReason.SUPERSEDED)
 
     return fence
+
+
+def _worker_publication_source_verifier(
+    *,
+    scheduler: Phase78ShadowScheduler,
+    request,
+    token: _WorkLeaseToken,
+    deadline: TotalDeadline,
+    current_fence,
+    trusted_preflight: Mapping[str, object],
+):
+    """Qualify exact durable sources; activation is fenced independently."""
+
+    expected_work_generation = {
+        "request_idempotency_key": request.idempotency_key,
+        "operation_identity_sha256": token.operation_identity_sha256,
+        "claim_generation": token.claim_generation,
+        "claim_owner_id": token.claim_owner_id,
+        "claim_owner_epoch": token.claim_owner_epoch,
+        "local_worker_nonce": token.local_worker_nonce,
+    }
+    def verify(publication: Mapping[str, object]) -> bool:
+        if (
+            publication.get("publication_kind") == "work-generation"
+            and publication.get("generation") == expected_work_generation
+        ):
+            deadline.check("phase8_publication_source")
+            current = scheduler.ledger.load(
+                request.idempotency_key, deadline=deadline
+            )
+            state = current.state
+            if (
+                current.cancellation is not None
+                or current.status
+                not in {
+                    OperationStatus.DISPATCH_CHECKPOINTED,
+                    OperationStatus.ACTIVE,
+                    OperationStatus.SUCCEEDED,
+                }
+                or current.operation_identity_sha256
+                != token.operation_identity_sha256
+                or state.operation.claim_generation != token.claim_generation
+                or state.claim_owner_id != token.claim_owner_id
+                or state.claim_owner_epoch != token.claim_owner_epoch
+                or state.operation.dispatch_nonce != token.local_worker_nonce
+            ):
+                return False
+            current_fence("phase8_publication_source_upstream")
+            return True
+        if _operator_publication_matches(
+            publication, request, trusted_preflight
+        ) or _revocation_publication_matches(publication, request):
+            current_fence("phase8_publication_upstream")
+            return True
+        return False
+
+    return verify
+
+
+def _status_publication_verifier(
+    *,
+    settings: Phase78Settings,
+    request,
+    deadline: TotalDeadline,
+    current_fence,
+    trusted_preflight: Mapping[str, object] | None,
+):
+    scheduler = Phase78ShadowScheduler(settings, deadline=deadline)
+
+    def verify(publication: Mapping[str, object]) -> bool:
+        if publication.get("publication_kind") == "work-generation":
+            current = scheduler.load(request.idempotency_key, deadline=deadline)
+            state = current.state
+            expected_generation = {
+                "request_idempotency_key": request.idempotency_key,
+                "operation_identity_sha256": current.operation_identity_sha256,
+                "claim_generation": state.operation.claim_generation,
+                "claim_owner_id": state.claim_owner_id,
+                "claim_owner_epoch": state.claim_owner_epoch,
+                "local_worker_nonce": state.operation.dispatch_nonce,
+            }
+            if (
+                current.status is not OperationStatus.SUCCEEDED
+                or current.cancellation is not None
+                or publication.get("generation") != expected_generation
+            ):
+                return False
+            current_fence("phase8_status_publication_upstream")
+            return True
+        if _operator_publication_matches(
+            publication, request, trusted_preflight
+        ) or _revocation_publication_matches(publication, request):
+            current_fence("phase8_status_publication_upstream")
+            return True
+        return False
+
+    return verify
 
 
 def _terminal_transition(
@@ -474,6 +644,14 @@ def run_local_phase78_worker(
             p7_commit_sha256=p7_result.commit_sha256,
             work_fence=work_fence,
         )
+        phase8_publication_source_fence = _phase8_fence(
+            deadline=deadline,
+            current_verifier=current_verifier,
+            request=request,
+            p7_current=p7_current,
+            p7_scope_key=p7_result.scope_key,
+            p7_commit_sha256=p7_result.commit_sha256,
+        )
         p8_store = Phase8EvidenceEgressStore(
             settings.required_path("phase8_database"),
             settings.required_path("cas_root"),
@@ -485,10 +663,19 @@ def run_local_phase78_worker(
             deadline=deadline,
         ).preflight
         phase8_fence("trusted_preflight_load_after")
+        publication_verifier = _worker_publication_source_verifier(
+            scheduler=scheduler,
+            request=request,
+            token=work_token,
+            deadline=deadline,
+            current_fence=phase8_publication_source_fence,
+            trusted_preflight=trusted_preflight,
+        )
         preflight_binding_sha256 = str(trusted_preflight["binding_sha256"])
         persisted_binding = p8_store.load_current_reference_binding(
             str(trusted_preflight["scope_key"]),
             phase7_current_head_verifier=p7_current,
+            publication_head_verifier=publication_verifier,
             expected_binding_sha256=preflight_binding_sha256,
             deadline=deadline,
         )
@@ -519,6 +706,14 @@ def run_local_phase78_worker(
                 "reference_receipt_blob"
             ],
             phase7_current_head_verifier=p7_current,
+            publication_identity=_work_publication(
+                publication_key=_binding_key(request.idempotency_key),
+                request_key=request.idempotency_key,
+                token=work_token,
+                phase7_scope_key=p7_result.scope_key,
+                phase7_commit_sha256=p7_result.commit_sha256,
+            ),
+            publication_head_verifier=publication_verifier,
             expected_current_binding_sha256=request.reference[
                 "expected_current_binding_sha256"
             ],
@@ -547,6 +742,14 @@ def run_local_phase78_worker(
                 "trusted_preflight_sha256"
             ],
             phase7_current_head_verifier=p7_current,
+            publication_identity=_work_publication(
+                publication_key=_approval_key(request.idempotency_key),
+                request_key=request.idempotency_key,
+                token=work_token,
+                phase7_scope_key=p7_result.scope_key,
+                phase7_commit_sha256=p7_result.commit_sha256,
+            ),
+            publication_head_verifier=publication_verifier,
             successor_of=request.approval["successor_of"],
             expected_predecessor_event_sha256=request.approval[
                 "expected_predecessor_event_sha256"
@@ -560,6 +763,14 @@ def run_local_phase78_worker(
             data_egress_request=request.approval["data_egress_request"],
             evaluated_at=int(trusted_preflight["decision_evaluated_at"]),
             phase7_current_head_verifier=p7_current,
+            publication_identity=_work_publication(
+                publication_key=_decision_key(request.idempotency_key),
+                request_key=request.idempotency_key,
+                token=work_token,
+                phase7_scope_key=p7_result.scope_key,
+                phase7_commit_sha256=p7_result.commit_sha256,
+            ),
+            publication_head_verifier=publication_verifier,
             expected_previous_decision_sha256=request.approval[
                 "expected_previous_decision_sha256"
             ],
@@ -571,6 +782,7 @@ def run_local_phase78_worker(
             binding.scope_key,
             evaluated_at=trusted_evaluated_at,
             phase7_current_head_verifier=p7_current,
+            publication_head_verifier=publication_verifier,
             deadline=deadline,
         )
         phase8_fence("effective_decision_load_after")
@@ -635,11 +847,13 @@ def run_local_phase78_worker(
         # The durable checkpoint deliberately remains replayable.  A commit in
         # an inner store may already exist, so callers must reuse this exact key.
         raise Phase78OutcomeUncertain(request.idempotency_key) from exc
-    except Phase78OutcomeUncertain:
+    except Phase78OutcomeUncertain as exc:
         # The terminal commit may already have crossed its durable boundary.
         # Preserve the checkpoint for exact-key query/replay; never rewrite an
         # uncertain result into a deterministic FAILED terminal state.
-        raise
+        if exc.idempotency_key == request.idempotency_key:
+            raise
+        raise Phase78OutcomeUncertain(request.idempotency_key) from exc
     except Phase78CancellationError:
         raise
     except BaseException as primary:
@@ -718,26 +932,77 @@ def load_local_phase78_status(
                 replayed=True,
             )
         p7_current = _p7_current_callback(p7_store, upstream_current, deadline)
+        status_upstream_fence = current_verifier.fence(
+            phase3_artifact_state=request.phase3_artifact_state,
+            phase3_artifact_occurrence=request.phase3_artifact_occurrence,
+            phase6_access_proof=request.phase6_access_proof,
+            deadline=deadline,
+        )
         p8_store = Phase8EvidenceEgressStore(
             settings.required_path("phase8_database"),
             settings.required_path("cas_root"),
             enabled=True,
         )
+        try:
+            trusted_preflight = p8_store.load_trusted_approval_preflight(
+                request.approval["trusted_preflight_sha256"],
+                deadline=deadline,
+            ).preflight
+        except Phase8NotFound:
+            trusted_preflight = None
+        publication_verifier = _status_publication_verifier(
+            settings=settings,
+            request=request,
+            deadline=deadline,
+            current_fence=status_upstream_fence,
+            trusted_preflight=trusted_preflight,
+        )
         scope = _phase8_scope(request, project_id)
+        try:
+            historical_binding = (
+                p8_store.load_reference_binding_by_idempotency_key(
+                    _binding_key(request.idempotency_key),
+                    deadline=deadline,
+                )
+            )
+            binding_wire = _binding_summary(historical_binding)
+        except Phase8NotFound:
+            pass
+        try:
+            historical_decision = p8_store.load_decision_by_idempotency_key(
+                _decision_key(request.idempotency_key),
+                deadline=deadline,
+            )
+            decision_wire = _decision_summary(historical_decision)
+        except Phase8NotFound:
+            pass
         try:
             current_binding = p8_store.load_current_reference_binding(
                 scope,
                 phase7_current_head_verifier=p7_current,
+                publication_head_verifier=publication_verifier,
                 deadline=deadline,
             )
             binding_wire = _binding_summary(current_binding)
         except Phase8NotFound:
             pass
+        except Phase8CurrentConflict as exc:
+            if work_succeeded:
+                outcome = "denied"
+            blocker = {
+                "schema_version": "phase78-current-unavailable-v1",
+                "reason_code": "PUBLICATION_GENERATION_DRIFT",
+                "error_code": exc.code,
+                "authoritative": False,
+                "authority_transferred": False,
+                "dispatch_performed": False,
+            }
         try:
             current_decision = p8_store.load_current_decision(
                 scope,
                 evaluated_at=trusted_evaluated_at,
                 phase7_current_head_verifier=p7_current,
+                publication_head_verifier=publication_verifier,
                 deadline=deadline,
             )
             decision_wire = _decision_summary(current_decision)
@@ -753,8 +1018,24 @@ def load_local_phase78_status(
                 and phase7_wire["aggregate_verdict"] != "PASS"
             ):
                 outcome = "indeterminate"
+        except Phase8CurrentConflict as exc:
+            if work_succeeded:
+                outcome = "denied"
+            blocker = {
+                "schema_version": "phase78-current-unavailable-v1",
+                "reason_code": "PUBLICATION_GENERATION_DRIFT",
+                "error_code": exc.code,
+                "authoritative": False,
+                "authority_transferred": False,
+                "dispatch_performed": False,
+            }
     except Phase7GroundingNotFound:
         pass
+    except (Phase78DeadlineError, Phase78CancellationError):
+        # Deadline and cancellation are public control-flow outcomes, not
+        # evidence-currentness failures.  Preserve their stable code/reason
+        # across worker, service, CLI and Web status reads.
+        raise
     except Exception as exc:
         # History remains visible, but a current head can never be inferred
         # from an unverifiable cross-store state.
@@ -812,14 +1093,119 @@ def revoke_local_phase78_approval(
         from .phase8_evidence_egress_runtime import Phase8CurrentConflict
 
         raise Phase8CurrentConflict("approval belongs to another project")
-    result = store.revoke_approval(
-        idempotency_key=idempotency_key,
-        approval_id=approval_id,
-        expected_event_sha256=expected_event_sha256,
-        revoked_at=revoked_at,
-        reason_code=reason_code,
+    current_verifier = Phase78CurrentHeadVerifier(settings)
+    current_verifier.verify(
+        phase3_artifact_state=binding.binding["phase3_artifact_state"],
+        phase3_artifact_occurrence=binding.binding[
+            "phase3_artifact_occurrence"
+        ],
+        phase6_access_proof=binding.binding["phase6_access_proof"],
         deadline=deadline,
     )
+    upstream_current = current_verifier.current_callback(deadline=deadline)
+    upstream_fence = current_verifier.fence(
+        phase3_artifact_state=binding.binding["phase3_artifact_state"],
+        phase3_artifact_occurrence=binding.binding[
+            "phase3_artifact_occurrence"
+        ],
+        phase6_access_proof=binding.binding["phase6_access_proof"],
+        deadline=deadline,
+    )
+    p7_store = Phase7GroundingStore(settings.required_path("phase7_database"))
+    p7_current = _p7_current_callback(p7_store, upstream_current, deadline)
+    revocation_generation = {
+        "request_idempotency_key": idempotency_key,
+        "actor_id": actor_id,
+        "issuer_generation": loaded.approval["issuer"]["generation"],
+        "approval_id": approval_id,
+    }
+    publication = build_phase8_publication_identity(
+        publication_kind="approval-revocation",
+        publication_key=idempotency_key,
+        generation=revocation_generation,
+        phase7_scope_key=str(binding.binding["phase7_scope_key"]),
+        phase7_commit_sha256=str(binding.binding["phase7_commit_sha256"]),
+    )
+    scheduler = Phase78ShadowScheduler(settings, deadline=deadline)
+
+    def publication_is_current(value: Mapping[str, object]) -> bool:
+        upstream_fence("approval revocation publication upstream")
+        if not p7_current(
+            str(value.get("phase7_scope_key")),
+            str(value.get("phase7_commit_sha256")),
+        ):
+            return False
+        if (
+            value.get("publication_kind") == "approval-revocation"
+            and value.get("generation") == revocation_generation
+        ):
+            return True
+        generation = value.get("generation")
+        if value.get("publication_kind") == "work-generation" and isinstance(
+            generation, Mapping
+        ):
+            root_key = generation.get("request_idempotency_key")
+            if type(root_key) is not str:
+                return False
+            current = scheduler.load(root_key, deadline=deadline)
+            state = current.state
+            return (
+                current.status is OperationStatus.SUCCEEDED
+                and current.cancellation is None
+                and generation
+                == {
+                    "request_idempotency_key": root_key,
+                    "operation_identity_sha256": current.operation_identity_sha256,
+                    "claim_generation": state.operation.claim_generation,
+                    "claim_owner_id": state.claim_owner_id,
+                    "claim_owner_epoch": state.claim_owner_epoch,
+                    "local_worker_nonce": state.operation.dispatch_nonce,
+                }
+            )
+        return (
+            value.get("publication_kind") == "operator-generation"
+            and isinstance(generation, Mapping)
+            and generation.get("operator_id") == actor_id
+            and generation.get("operator_generation")
+            == loaded.approval["issuer"]["generation"]
+        )
+
+    try:
+        result = store.revoke_approval(
+            idempotency_key=idempotency_key,
+            approval_id=approval_id,
+            expected_event_sha256=expected_event_sha256,
+            revoked_at=revoked_at,
+            reason_code=reason_code,
+            phase7_current_head_verifier=p7_current,
+            publication_identity=publication,
+            publication_head_verifier=publication_is_current,
+            deadline=deadline,
+        )
+        terminal = store.load_current_approval(
+            binding.scope_key,
+            phase7_current_head_verifier=p7_current,
+            publication_head_verifier=publication_is_current,
+            deadline=deadline,
+        )
+        if (
+            terminal.approval["approval_id"] != approval_id
+            or terminal.lifecycle_event["event_sha256"]
+            != result.lifecycle_event["event_sha256"]
+            or terminal.lifecycle_event["state"] != "REVOKED"
+        ):
+            from .phase8_evidence_egress_runtime import Phase8CurrentConflict
+
+            raise Phase8CurrentConflict(
+                "approval revocation lost its exact terminal publication"
+            )
+        deadline.check("approval revocation response")
+    except Phase78OutcomeUncertain as exc:
+        if exc.idempotency_key == idempotency_key:
+            raise
+        raise Phase78OutcomeUncertain(idempotency_key) from exc
+    except Phase78DeadlineError as exc:
+        raise Phase78OutcomeUncertain(idempotency_key) from exc
     return {
         "schema_version": "phase78-shadow-approval-revoke-result-v1",
         "project_id": project_id,

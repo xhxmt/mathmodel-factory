@@ -25,7 +25,7 @@ from scripts.phase78_test_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = "0123456789abcdef0123456789abcdef"
 FROZEN_CONTRACT_SHA256 = (
-    "8a0efcfd8abc82c86ebb3f2cc0ae91447e9ff3e5e33c752a17aac9a8f1f56166"
+    "1e01fd83919b3f05e339839849bbf737bfa5c050e14412c021ec1143b9b9e598"
 )
 
 
@@ -196,11 +196,11 @@ def test_contract_has_five_disjoint_nonempty_groups_and_versioned_exact_counts()
         "pdf-cas",
         "e2e",
     ]
-    assert tuple(group.expected for group in GROUPS) == (148, 39, 24, 12, 31)
+    assert tuple(group.expected for group in GROUPS) == (148, 58, 29, 12, 35)
     paths = [path for group in GROUPS for path in group.files]
     assert len(paths) == len(set(paths))
     assert all((ROOT / path).is_file() for path in paths)
-    assert EXPECTED_TOTAL == sum(group.expected for group in GROUPS) == 254
+    assert EXPECTED_TOTAL == sum(group.expected for group in GROUPS) == 282
     assert "tests/test_phase78_enabled_e2e.py" in GROUPS[-1].files
     assert CONTRACT_SHA256 == FROZEN_CONTRACT_SHA256
 

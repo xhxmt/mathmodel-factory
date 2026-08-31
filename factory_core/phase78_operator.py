@@ -235,45 +235,101 @@ def prepare_phase78_trusted_preflight(
         settings.required_path("cas_root"),
         enabled=True,
     )
-    binding = p8_store.record_reference_binding(
-        idempotency_key=f"{request.idempotency_key}:phase8-binding",
-        logical_id=request.reference["logical_id"],
-        phase3_artifact_state=request.phase3_artifact_state,
-        phase3_artifact_occurrence=request.phase3_artifact_occurrence,
-        phase6_access_proof=request.phase6_access_proof,
-        phase7_result=p7_bundle["result"],
-        phase7_receipt=p7_bundle["receipt"],
-        phase7_effective_verdict=p7_bundle["effective_verdict"],
-        reference_package_blob=package.package_blob,
-        reference_receipt_blob=package.receipt_blob,
-        phase7_current_head_verifier=p7_current,
-        expected_current_binding_sha256=request.reference[
-            "expected_current_binding_sha256"
-        ],
-        deadline=total,
+    binding_key = f"{request.idempotency_key}:phase8-binding"
+    operator_generation = {
+        "request_idempotency_key": request.idempotency_key,
+        "operator_id": operator,
+        "operator_generation": trusted_generation,
+    }
+
+    def publication_is_current(publication: Mapping[str, object]) -> bool:
+        if (
+            publication.get("publication_kind") != "operator-generation"
+            or publication.get("generation") != operator_generation
+        ):
+            return False
+        total.check("operator publication generation")
+        upstream_fence("operator publication upstream")
+        return p7_current(
+            str(publication.get("phase7_scope_key")),
+            str(publication.get("phase7_commit_sha256")),
+        )
+
+    binding_publication = phase8_module.build_phase8_publication_identity(
+        publication_kind="operator-generation",
+        publication_key=binding_key,
+        generation=operator_generation,
+        phase7_scope_key=p7_result.scope_key,
+        phase7_commit_sha256=p7_result.commit_sha256,
     )
+    try:
+        binding = p8_store.record_reference_binding(
+            idempotency_key=binding_key,
+            logical_id=request.reference["logical_id"],
+            phase3_artifact_state=request.phase3_artifact_state,
+            phase3_artifact_occurrence=request.phase3_artifact_occurrence,
+            phase6_access_proof=request.phase6_access_proof,
+            phase7_result=p7_bundle["result"],
+            phase7_receipt=p7_bundle["receipt"],
+            phase7_effective_verdict=p7_bundle["effective_verdict"],
+            reference_package_blob=package.package_blob,
+            reference_receipt_blob=package.receipt_blob,
+            phase7_current_head_verifier=p7_current,
+            publication_identity=binding_publication,
+            publication_head_verifier=publication_is_current,
+            expected_current_binding_sha256=request.reference[
+                "expected_current_binding_sha256"
+            ],
+            deadline=total,
+        )
+    except deadline_module.Phase78OutcomeUncertain as exc:
+        raise deadline_module.Phase78OutcomeUncertain(
+            request.idempotency_key
+        ) from exc
     approval = request.approval
-    preflight = p8_store.register_trusted_approval_preflight(
-        idempotency_key=f"{request.idempotency_key}:trusted-preflight",
-        preflight_id=f"{approval['approval_id']}-trusted-preflight",
-        approval_id=approval["approval_id"],
-        binding_sha256=binding.binding_sha256,
-        issuer_id=approval["issuer_id"],
-        issuer_generation=approval["issuer_generation"],
-        subject_id=approval["subject_id"],
-        subject_generation=approval["subject_generation"],
-        logical_issued_at=approval["logical_issued_at"],
-        not_before=approval["not_before"],
-        expires_at=approval["expires_at"],
-        decision_evaluated_at=trusted_now,
-        data_egress_request=approval["data_egress_request"],
-        phase7_current_head_verifier=p7_current,
-        successor_of=approval["successor_of"],
-        expected_predecessor_event_sha256=approval[
-            "expected_predecessor_event_sha256"
-        ],
-        deadline=total,
-    )
+    try:
+        preflight = p8_store.register_trusted_approval_preflight(
+            idempotency_key=f"{request.idempotency_key}:trusted-preflight",
+            preflight_id=f"{approval['approval_id']}-trusted-preflight",
+            approval_id=approval["approval_id"],
+            binding_sha256=binding.binding_sha256,
+            issuer_id=approval["issuer_id"],
+            issuer_generation=approval["issuer_generation"],
+            subject_id=approval["subject_id"],
+            subject_generation=approval["subject_generation"],
+            logical_issued_at=approval["logical_issued_at"],
+            not_before=approval["not_before"],
+            expires_at=approval["expires_at"],
+            decision_evaluated_at=trusted_now,
+            data_egress_request=approval["data_egress_request"],
+            phase7_current_head_verifier=p7_current,
+            publication_head_verifier=publication_is_current,
+            successor_of=approval["successor_of"],
+            expected_predecessor_event_sha256=approval[
+                "expected_predecessor_event_sha256"
+            ],
+            deadline=total,
+        )
+        total.check("operator preflight terminal")
+        upstream_fence("operator preflight terminal upstream")
+        p8_store.load_current_reference_binding(
+            binding.scope_key,
+            phase7_current_head_verifier=p7_current,
+            publication_head_verifier=publication_is_current,
+            expected_binding_sha256=binding.binding_sha256,
+            deadline=total,
+        )
+        total.check("operator preflight response")
+    except deadline_module.Phase78OutcomeUncertain as exc:
+        raise deadline_module.Phase78OutcomeUncertain(
+            request.idempotency_key
+        ) from exc
+    except deadline_module.Phase78DeadlineError as exc:
+        # Reference/preflight history may already be durable.  The operator
+        # must query or replay this exact root request key.
+        raise deadline_module.Phase78OutcomeUncertain(
+            request.idempotency_key
+        ) from exc
     return {
         "schema_version": PHASE78_OPERATOR_PREFLIGHT_RESULT_SCHEMA,
         "project_id": project,

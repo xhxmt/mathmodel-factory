@@ -75,6 +75,7 @@ from factory_core.phase78_work_ledger import (
     Phase78WorkIdempotencyConflict,
     Phase78WorkLedger,
 )
+import factory_core.phase78_worker as phase78_worker
 from factory_core.phase8_evidence_egress_runtime import (
     Phase8CurrentConflict,
     Phase8NotFound,
@@ -766,6 +767,7 @@ def test_real_enabled_pipeline_concurrency_restart_conflict_and_revoke(tmp_path:
     assert {result["outcome"] for result in results} == {"shadow_authorized"}
     assert {result["decision"]["status"] for result in results} == {"AUTHORIZED"}
     assert all(result["work"]["status"] == "succeeded" for result in results)
+    assert any(result["replayed"] is True for result in results)
     for result in results:
         encoded = json.dumps(result, sort_keys=True)
         assert "provider_call_performed\": true" not in encoded
@@ -845,6 +847,65 @@ def test_real_enabled_pipeline_concurrency_restart_conflict_and_revoke(tmp_path:
     assert after_source_drift["outcome"] == "denied"
     assert after_source_drift["work"]["status"] == "succeeded"
     assert after_source_drift["blocker"]["reason_code"] == "SOURCE_HEAD_DRIFT"
+
+
+def test_completed_work_is_a_valid_publication_source_but_not_an_activation_fence(
+    tmp_path: Path,
+) -> None:
+    """History qualification and mutable activation have distinct fences."""
+
+    del tmp_path
+    operation = SimpleNamespace(claim_generation=7, dispatch_nonce="nonce-7")
+    state = SimpleNamespace(
+        operation=operation,
+        claim_owner_id="worker-7",
+        claim_owner_epoch=3,
+    )
+    completed = SimpleNamespace(
+        operation_identity_sha256="a" * 64,
+        state=state,
+        status=phase78_worker.OperationStatus.SUCCEEDED,
+        cancellation=None,
+    )
+    scheduler = SimpleNamespace(
+        ledger=SimpleNamespace(load=lambda _key, deadline: completed)
+    )
+    request = SimpleNamespace(idempotency_key="completed-publication-source")
+    token = phase78_worker._WorkLeaseToken(
+        operation_identity_sha256="a" * 64,
+        claim_generation=7,
+        claim_owner_id="worker-7",
+        claim_owner_epoch=3,
+        local_worker_nonce="nonce-7",
+    )
+    publication = {
+        "publication_kind": "work-generation",
+        "generation": {
+            "request_idempotency_key": request.idempotency_key,
+            "operation_identity_sha256": token.operation_identity_sha256,
+            "claim_generation": token.claim_generation,
+            "claim_owner_id": token.claim_owner_id,
+            "claim_owner_epoch": token.claim_owner_epoch,
+            "local_worker_nonce": token.local_worker_nonce,
+        },
+    }
+    source_checks: list[str] = []
+    deadline = TotalDeadline(30_000)
+    source_verifier = phase78_worker._worker_publication_source_verifier(
+        scheduler=scheduler,
+        request=request,
+        token=token,
+        deadline=deadline,
+        current_fence=source_checks.append,
+        trusted_preflight={},
+    )
+
+    assert source_verifier(publication) is True
+    assert source_checks == ["phase8_publication_source_upstream"]
+    with pytest.raises(phase78_worker._WorkAlreadyCompleted):
+        phase78_worker._work_fence(
+            scheduler, request, token, deadline
+        )("mutable_activation")
 
 
 def test_operator_missing_pdf_fails_closed_before_work_is_enqueued(tmp_path: Path):
@@ -1555,3 +1616,214 @@ def test_actual_cli_service_worker_pipeline_then_authenticated_web_read(
     assert expired_wire["decision"]["status"] == "DENIED"
     assert expired_wire["decision"]["reason_code"] == "APPROVAL_EXPIRED"
     assert expired_wire["work"]["status"] == "succeeded"
+
+
+def test_status_boundaries_preserve_deadline_and_cancellation_control_flow(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """M1: no status boundary may synthesize a denied success response."""
+
+    from factory_core.phase7_grounding_runtime import Phase7GroundingStore
+    from factory_core.phase78_current import Phase78CurrentHeadVerifier
+    from factory_core.phase8_evidence_egress_runtime import (
+        Phase8EvidenceEgressStore,
+    )
+
+    raw_pdf = make_pdf("Phase 7+8 status control-flow propagation")
+    fixture, coordinate, state, occurrence, _source = _authority_pdf(
+        tmp_path, raw_pdf
+    )
+    phase6_store, proof = _phase6_proof(tmp_path, coordinate, state)
+    settings = _settings(fixture, tmp_path, phase6_store.path)
+    payload = _payload(state, occurrence, proof, raw_pdf)
+    payload["idempotency_key"] = "pipeline-status-control-flow"
+    payload["reference"]["reference_id"] = "reference-status-control-flow"
+    payload["reference"]["logical_id"] = "binding-status-control-flow"
+    payload["approval"]["approval_id"] = "approval-status-control-flow"
+    _register_operator_preflight(settings, payload)
+    completed = run_phase78_worker_once(settings, "demo", "alice", payload)
+    assert completed["outcome"] == "shadow_authorized"
+
+    boundaries = (
+        (Phase7GroundingStore, "load_bundle", "phase7_history_load"),
+        (Phase78CurrentHeadVerifier, "verify", "live_current_verification"),
+        (
+            Phase8EvidenceEgressStore,
+            "load_reference_binding_by_idempotency_key",
+            "phase8_binding_load",
+        ),
+        (
+            Phase8EvidenceEgressStore,
+            "load_decision_by_idempotency_key",
+            "phase8_decision_load",
+        ),
+    )
+    controls = (
+        (
+            "timeout",
+            lambda: Phase78DeadlineError("synthetic status deadline"),
+            "PHASE78_DEADLINE_EXCEEDED",
+            "timeout",
+        ),
+        *(
+            (
+                reason.value,
+                lambda reason=reason: Phase78CancellationError(reason),
+                "PHASE78_REQUEST_CANCELLED",
+                reason.value,
+            )
+            for reason in (
+                Phase78CancellationReason.USER_CANCEL,
+                Phase78CancellationReason.SHUTDOWN,
+                Phase78CancellationReason.SUPERSEDED,
+            )
+        ),
+    )
+    for owner, method_name, boundary in boundaries:
+        for control, factory, code, reason in controls:
+            def explode(*_args, factory=factory, **_kwargs):
+                raise factory()
+
+            with monkeypatch.context() as scoped:
+                scoped.setattr(owner, method_name, explode)
+                with pytest.raises(
+                    (Phase78DeadlineError, Phase78CancellationError)
+                ) as captured:
+                    load_phase78_status(
+                        replace(settings),
+                        "demo",
+                        "alice",
+                        payload["idempotency_key"],
+                    )
+            assert captured.value.code == code, (boundary, control)
+            assert getattr(captured.value, "reason", None) == reason, (
+                boundary,
+                control,
+            )
+            assert "CURRENT_HEAD_UNAVAILABLE" not in str(captured.value)
+
+
+class _CrossingDeadline:
+    def __init__(self, crossing_stage: str):
+        self._base = TotalDeadline(300_000)
+        self._crossing_stage = crossing_stage
+        self._crossed = False
+
+    def check(self, stage=None):
+        self._base.check(stage)
+        if stage == self._crossing_stage and not self._crossed:
+            self._crossed = True
+            raise Phase78DeadlineError(f"synthetic crossing at {stage}")
+
+    def remaining_seconds(self):
+        return self._base.remaining_seconds()
+
+    def remaining_milliseconds(self):
+        return self._base.remaining_milliseconds()
+
+
+def test_terminal_operator_preflight_deadline_is_root_uncertain_and_replayable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import factory_core.phase78_operator as operator_module
+
+    raw_pdf = make_pdf("Phase 7+8 terminal operator preflight crossing")
+    fixture, coordinate, state, occurrence, _source = _authority_pdf(
+        tmp_path, raw_pdf
+    )
+    phase6_store, proof = _phase6_proof(tmp_path, coordinate, state)
+    settings = _settings(fixture, tmp_path, phase6_store.path)
+    payload = _payload(state, occurrence, proof, raw_pdf)
+    payload["idempotency_key"] = "operator-terminal-uncertain"
+    payload["reference"]["reference_id"] = "operator-terminal-reference"
+    payload["reference"]["logical_id"] = "operator-terminal-binding"
+    payload["approval"]["approval_id"] = "operator-terminal-approval"
+    trusted_now = int(payload["approval"]["not_before"])
+    monkeypatch.setattr(operator_module.time, "time", lambda: trusted_now)
+    environment = {
+        "PHASE78_TRUSTED_OPERATOR_ID": payload["approval"]["issuer_id"],
+        "PHASE78_TRUSTED_OPERATOR_GENERATION": payload["approval"][
+            "issuer_generation"
+        ],
+    }
+    with patch.dict(os.environ, environment, clear=False):
+        with pytest.raises(Phase78OutcomeUncertain) as captured:
+            prepare_phase78_trusted_preflight(
+                settings,
+                "demo",
+                str(payload["approval"]["issuer_id"]),
+                payload,
+                deadline=_CrossingDeadline("operator preflight response"),
+            )
+    assert captured.value.idempotency_key == payload["idempotency_key"]
+    connection = sqlite3.connect(settings.required_path("phase8_database"))
+    try:
+        assert connection.execute(
+            "SELECT count(*) FROM phase8_trusted_approval_preflights "
+            "WHERE idempotency_key=?",
+            (f"{payload['idempotency_key']}:trusted-preflight",),
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
+    with patch.dict(os.environ, environment, clear=False):
+        replay = prepare_phase78_trusted_preflight(
+            settings,
+            "demo",
+            str(payload["approval"]["issuer_id"]),
+            payload,
+        )
+    assert replay["idempotency_key"] == payload["idempotency_key"]
+    assert replay["binding_replayed"] is True
+    assert replay["preflight_replayed"] is True
+
+
+def test_terminal_revocation_deadline_is_root_uncertain_and_read_time_safe(
+    tmp_path: Path,
+) -> None:
+    raw_pdf = make_pdf("Phase 7+8 terminal revocation crossing")
+    fixture, coordinate, state, occurrence, _source = _authority_pdf(
+        tmp_path, raw_pdf
+    )
+    phase6_store, proof = _phase6_proof(tmp_path, coordinate, state)
+    settings = _settings(fixture, tmp_path, phase6_store.path)
+    payload = _payload(state, occurrence, proof, raw_pdf)
+    payload["idempotency_key"] = "revocation-terminal-pipeline"
+    payload["reference"]["reference_id"] = "revocation-terminal-reference"
+    payload["reference"]["logical_id"] = "revocation-terminal-binding"
+    payload["approval"]["approval_id"] = "revocation-terminal-approval"
+    _register_operator_preflight(settings, payload)
+    completed = run_phase78_worker_once(settings, "demo", "alice", payload)
+    approval = completed["approval"]
+    revoke_key = "revocation-terminal-uncertain"
+    revoke_payload = {
+        "schema_version": "phase78-approval-revoke-request-v1",
+        "idempotency_key": revoke_key,
+        "expected_event_sha256": approval["event_sha256"],
+        "revoked_at": int(time.time()) + 1,
+        "reason_code": "OPERATOR_REVOKED",
+    }
+    with pytest.raises(Phase78OutcomeUncertain) as captured:
+        revoke_phase78_approval(
+            settings,
+            "demo",
+            str(payload["approval"]["issuer_id"]),
+            approval["approval_id"],
+            revoke_payload,
+            deadline=_CrossingDeadline("approval revocation response"),
+        )
+    assert captured.value.idempotency_key == revoke_key
+    status = load_phase78_status(
+        replace(settings), "demo", "alice", payload["idempotency_key"]
+    )
+    assert status["outcome"] == "denied"
+    assert status["decision"]["reason_code"] == "APPROVAL_REVOKED"
+    replay = revoke_phase78_approval(
+        settings,
+        "demo",
+        str(payload["approval"]["issuer_id"]),
+        approval["approval_id"],
+        revoke_payload,
+    )
+    assert replay["approval"]["state"] == "REVOKED"

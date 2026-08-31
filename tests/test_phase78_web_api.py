@@ -439,6 +439,45 @@ def test_cancellation_errors_expose_only_stable_reason(
     asyncio.run(exercise())
 
 
+def test_status_deadline_is_504_and_never_a_denied_success(
+    monkeypatch, tmp_path
+):
+    from fastapi import FastAPI
+    from web.backend import phase78_api
+
+    settings = _settings(tmp_path)
+    store, headers = _access(settings)
+    store.grant_project_owner("demo", "alice", actor="admin")
+    monkeypatch.setattr(phase78_api, "_enabled_settings", lambda _settings: object())
+
+    class Deadline(RuntimeError):
+        code = "PHASE78_DEADLINE_EXCEEDED"
+
+    def timed_out(**_kwargs):
+        raise Deadline("private status deadline")
+
+    app = FastAPI()
+    app.include_router(
+        phase78_api.create_phase78_router(settings, status_loader=timed_out)
+    )
+
+    async def exercise():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://phase78.test"
+        ) as client:
+            response = await client.get(
+                "/api/projects/demo/phase78-shadow/request-1",
+                headers=headers,
+            )
+        assert response.status_code == 504
+        assert response.json() == {"detail": "PHASE78_DEADLINE_EXCEEDED"}
+        assert "CURRENT_HEAD_UNAVAILABLE" not in response.text
+        assert '"outcome":"denied"' not in response.text
+
+    asyncio.run(exercise())
+
+
 def test_default_web_process_has_no_phase78_route_core_import_or_resource(tmp_path):
     environment = os.environ.copy()
     environment.update(

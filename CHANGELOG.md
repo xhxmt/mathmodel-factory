@@ -1,5 +1,30 @@
 # Changelog
 
+- Phase 7+8 Pro Major repair candidate: preserve typed deadline and
+  cancellation propagation while reconstructing status at all four Phase 7/8
+  history/current boundaries, so CLI/service return stable nonzero codes and
+  reasons and Web maps timeout to 504 and cancellation to 409 instead of
+  returning a synthetic `DENIED/CURRENT_HEAD_UNAVAILABLE` success. Upgrade the
+  Phase 8 store to a versioned two-stage immutable-history/current-activation
+  contract. Every current projection now carries a hashed publication identity
+  bound to its exact work, operator, or revocation generation and Phase 7 head,
+  and every production current read requalifies that identity. Activation
+  compensation remains cleanup only and is not a safety boundary. Terminal
+  revocation additionally requires an append-only publication receipt, so a
+  crash or losing generation between activation and receipt also fails closed.
+  Post-commit deadline crossing reports typed `PHASE78_OUTCOME_UNCERTAIN` with
+  the original idempotency key; durable history supports exact same-key replay
+  and rejects different bytes. Add commit-crossing, skipped-reconciler,
+  concurrent-window, activation cancellation/head-drift, post-activation
+  crash, winning-generation takeover, CLI and Web regressions, and update the
+  versioned exact Phase 7+8 machine test contract. Default-off, shadow-only,
+  no-provider, no-outbox, no-release, and the Phase 4-6 exact 657 gate are
+  unchanged. Phase 8 v1 databases are not silently upgraded: reopen returns
+  stable `PHASE8_SCHEMA_INCOMPATIBLE` before any v2-column read and leaves the
+  old file byte-identical; operators must preserve it as audit history and use
+  a freshly provisioned private v2 path. This entry records a local review
+  candidate, not deployment or release authorization.
+
 - Phase 7+8 durable full-shadow candidate: add a strictly default-off,
   synchronous local sidecar that binds the complete current Phase-3 Authority
   aggregate, one exact revision-level artifact occurrence, the Phase-6 current

@@ -76,6 +76,30 @@ an A→B→A semantic cycle, a newer Authority or Phase 6 head, a replaced Phase
 7 result, or a superseded worker generation retains history but makes the old
 current result unavailable or denied.
 
+Phase 8 mutable projections use the versioned v2 store contract. Reference
+bindings, approval issue and lifecycle, and egress decisions first commit their
+immutable history and only then attempt a separate current activation. Every
+current row carries a hashed publication identity that binds its publication
+kind and key, exact work/operator/revocation generation, and exact Phase 7
+scope and commit. The second commit is not itself a trust boundary: every
+production current read revalidates that publication identity against the
+winning durable work generation or protected operator/revocation generation
+and the live upstream Phase 7 head. Compensation after a failed activation is
+best-effort cleanup only; correctness never depends on it. A crash after the
+history commit, a reader between the two commits, a cancellation or head change
+inside activation, and a crash after activation all therefore fail closed.
+The exact same idempotency key and bytes may later be taken over and explicitly
+activated by the winning generation, while different bytes conflict.
+
+The v2 publication columns and terminal receipt table are intentionally not an
+in-place migration of a v1 Phase 8 database. On reopen, the store reads only
+the v1-compatible ownership marker before exact-schema verification and returns
+stable `PHASE8_SCHEMA_INCOMPATIBLE`; it does not query v2 columns, mutate the
+database, or create SQLite sidecars. Operators must preserve the v1 database as
+immutable audit history and configure a new private v2 database path before
+enabling this candidate. Silent upgrade and partial mixed-schema operation are
+unsupported and fail closed.
+
 Phase 7/8 rejects `legacy_unknown` project, run, runtime, or scheduler
 generations. A legacy Authority database must first complete the normal
 production migration that records concrete generations; operators must not
@@ -135,6 +159,15 @@ historical receipt and decision. Status reads use service-owned current time,
 not a request-supplied evaluation time, so expiry remains effective after
 restart.
 
+Terminal approval revocation has one additional append-only publication
+receipt. The receipt binds the activation publication hash, revocation event,
+approval, issuer generation, and Phase 7 head. Current approval and decision
+reads require the exact receipt for a revocation publication. Consequently a
+process crash, cancellation, supersession, or head drift after the activation
+commit but before the receipt commit cannot expose that activation as effective
+current. An exact-key winning generation can finish publication without
+rewriting the immutable revocation event.
+
 ## Work, deadlines, and recovery
 
 The local work ledger uses a private `0700` spool, `0600` canonical jobs, and
@@ -162,6 +195,25 @@ second result. The exact claim generation, owner, epoch and nonce plus current
 Phase 3/6/7 heads are fenced before every Phase 7/8 publication. A cancelled or
 superseded worker that returns late may leave immutable history or an orphan
 CAS blob, but cannot publish current or complete the newer work generation.
+
+Reference binding, trusted preflight, approval issue, approval lifecycle,
+egress decision, terminal operator preflight, and terminal revocation all
+perform post-commit deadline and generation/head checks. If a commit crosses
+the deadline, the caller receives typed `PHASE78_OUTCOME_UNCERTAIN` carrying
+the original operation idempotency key. The immutable fact remains queryable
+and exactly replayable with that key; different request bytes still conflict.
+Cancellation, supersession, or upstream drift after a commit may preserve
+history but cannot qualify an effective current projection.
+
+Status reconstruction preserves `Phase78DeadlineError` and
+`Phase78CancellationError` across Phase 7 history load, live-current
+verification, Phase 8 binding history load, and Phase 8 decision history load.
+Timeout, user cancellation, shutdown, and supersession therefore retain their
+stable CLI/service/Web code and reason rather than being collapsed into a
+synthetic `DENIED/CURRENT_HEAD_UNAVAILABLE` success. Missing Phase 7 history
+continues to use the documented grounding-not-found path. Historical Phase 8
+facts may still be reported for audit, but only a separately qualified current
+publication can affect the effective result.
 
 ## Entry points and default-off isolation
 
@@ -254,3 +306,10 @@ documented information-level boundary. The same-credential assumption also
 means that an attacker already able to execute as the trusted operator OS
 account is outside this local trust model; the two operator environment labels
 do not mitigate such compromise.
+
+The Phase 8 v1 database is historical audit evidence only. This candidate has
+no automatic data migration from v1 to v2 because v1 current rows lack the
+publication identity needed to prove a winning generation. Reusing a v1 path
+is a stable incompatibility error; an operator-provisioned fresh v2 path is
+required. This is an operational compatibility boundary, not permission to
+copy or infer effective current state from v1.
