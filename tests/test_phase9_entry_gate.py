@@ -392,6 +392,78 @@ def _git(repository: Path, *args: str) -> str:
     ).stdout.strip()
 
 
+def _write_candidate_metadata(
+    fresh: Path,
+    *,
+    candidate: CandidateIdentity,
+    payload: dict[str, tuple[bytes, int]],
+) -> None:
+    archive_root = "candidate"
+    files = [
+        {
+            "archive_path": f"{archive_root}/{path}",
+            "mode": mode,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "size": len(raw),
+            "source_path": path,
+        }
+        for path, (raw, mode) in sorted(payload.items())
+    ]
+    paths_raw = "".join(f"{path}\n" for path in sorted(payload)).encode()
+    manifest = {
+        "archive_root": archive_root,
+        "builder": "paper-factory-deterministic-zip-v1",
+        "closure": {
+            "checksums": f"{archive_root}/checksums/SHA256SUMS",
+            "checksums_cover": "every payload member plus MANIFEST.json",
+            "checksums_exclude": "checksums/SHA256SUMS (self-reference is forbidden)",
+            "manifest": f"{archive_root}/MANIFEST.json",
+        },
+        "deterministic_timestamp": "1980-01-01T00:00:00Z",
+        "files": files,
+        "inventory_sha256": hashlib.sha256(paths_raw).hexdigest(),
+        "metadata": {
+            "authorization_scope": {
+                "cutover": False,
+                "delivery": False,
+                "deployment": False,
+                "migration": False,
+                "phase9_a_forensic_replay": False,
+                "production_outbox": False,
+                "provider_or_network": False,
+                "release": False,
+            },
+            "candidate_commit": candidate.commit,
+            "candidate_parent": candidate.parent,
+            "candidate_tree": candidate.tree,
+            "freeze_utc": "2026-01-01T00:00:00Z",
+            "purpose": "candidate binding test",
+            "schema": "phase1-8-phase9-candidate-build-metadata-v1",
+            "shadow_only": True,
+        },
+        "schema": "paper-factory-full-shadow-candidate-manifest-v2",
+    }
+    manifest_raw = (
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    (fresh / "MANIFEST.json").write_bytes(manifest_raw)
+    (fresh / "checksums").mkdir()
+    checksum_values = {
+        row["archive_path"]: row["sha256"]
+        for row in files
+    }
+    checksum_values[f"{archive_root}/MANIFEST.json"] = hashlib.sha256(
+        manifest_raw
+    ).hexdigest()
+    (fresh / "checksums" / "SHA256SUMS").write_text(
+        "".join(
+            f"{digest}  {path}\n"
+            for path, digest in sorted(checksum_values.items())
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_source_verifier_proves_git_and_no_git_fresh_tree(tmp_path):
     repository = tmp_path / "source"
     repository.mkdir()
@@ -429,17 +501,66 @@ def test_source_verifier_proves_git_and_no_git_fresh_tree(tmp_path):
     assert no_git["verified_tree"] == candidate.tree
     assert no_git["candidate_metadata_present"] is False
 
-    (fresh / "MANIFEST.json").write_bytes(b"candidate metadata\n")
-    (fresh / "checksums").mkdir()
-    (fresh / "checksums" / "SHA256SUMS").write_bytes(b"candidate checksums\n")
+    _write_candidate_metadata(
+        fresh,
+        candidate=candidate,
+        payload={"a.txt": (raw, 0o644)},
+    )
     extracted = verify_candidate_source(
         fresh, candidate=candidate, inventory=inventory
     )
     assert extracted["candidate_metadata_present"] is True
+    assert extracted["candidate_metadata"]["binding"] == (
+        "CANONICAL_MANIFEST_AND_EXACT_PAYLOAD_CHECKSUMS"
+    )
 
     (fresh / "extra.txt").write_bytes(b"not frozen")
     with pytest.raises(Phase9EntryError, match="files differ"):
         verify_candidate_source(fresh, candidate=candidate, inventory=inventory)
+
+
+def test_source_verifier_binds_filtered_payload_through_candidate_metadata(tmp_path):
+    repository = tmp_path / "source"
+    repository.mkdir()
+    _git(repository, "init", "-q")
+    _git(repository, "config", "user.email", "entry@example.invalid")
+    _git(repository, "config", "user.name", "Phase9 Entry")
+    (repository / "a.txt").write_bytes(b"first\n")
+    (repository / "excluded.lock").write_bytes(b"runtime state\n")
+    _git(repository, "add", "a.txt", "excluded.lock")
+    _git(repository, "commit", "-qm", "parent")
+    raw = b"second\n"
+    (repository / "a.txt").write_bytes(raw)
+    _git(repository, "commit", "-qam", "candidate")
+    candidate = CandidateIdentity(
+        _git(repository, "rev-parse", "HEAD^{commit}"),
+        _git(repository, "rev-parse", "HEAD^{tree}"),
+        _git(repository, "rev-parse", "HEAD^"),
+    )
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    (fresh / "a.txt").write_bytes(raw)
+    inventory = tmp_path / "inventory.tsv"
+    inventory.write_text(
+        "path\tsize\tmode\tsha256\n"
+        f"a.txt\t{len(raw)}\t0644\t{hashlib.sha256(raw).hexdigest()}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Phase9EntryError, match="Git tree differs"):
+        verify_candidate_source(fresh, candidate=candidate, inventory=inventory)
+
+    _write_candidate_metadata(
+        fresh,
+        candidate=candidate,
+        payload={"a.txt": (raw, 0o644)},
+    )
+    verified = verify_candidate_source(
+        fresh, candidate=candidate, inventory=inventory
+    )
+    assert verified["verified_tree"] == candidate.tree
+    assert verified["payload_tree"] != candidate.tree
+    assert verified["candidate_metadata_present"] is True
 
 
 def test_receipt_files_must_be_canonical_json(tmp_path):

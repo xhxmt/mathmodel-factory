@@ -403,6 +403,162 @@ def _tree_id(entries: dict[str, object]) -> bytes:
     return _git_object_id("tree", raw)
 
 
+def _verify_candidate_metadata(
+    repository: Path,
+    *,
+    candidate: CandidateIdentity,
+    inventory_rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    manifest_path = repository / "MANIFEST.json"
+    checksums_path = repository / "checksums" / "SHA256SUMS"
+    manifest_raw = _regular_file_bytes(
+        manifest_path,
+        maximum_bytes=8 * 1024 * 1024,
+        label="candidate MANIFEST.json",
+    )
+    try:
+        manifest_value = json.loads(manifest_raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise Phase9EntryError("candidate MANIFEST.json is not strict UTF-8 JSON") from exc
+    expected_manifest_raw = (
+        json.dumps(manifest_value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if type(manifest_value) is not dict or manifest_raw != expected_manifest_raw:
+        raise Phase9EntryError("candidate MANIFEST.json bytes are not canonical JSON")
+    manifest = _exact_mapping(
+        manifest_value,
+        "candidate_manifest",
+        {
+            "schema",
+            "builder",
+            "archive_root",
+            "deterministic_timestamp",
+            "inventory_sha256",
+            "metadata",
+            "closure",
+            "files",
+        },
+    )
+    if (
+        manifest["schema"] != "paper-factory-full-shadow-candidate-manifest-v2"
+        or manifest["builder"] != "paper-factory-deterministic-zip-v1"
+        or manifest["deterministic_timestamp"] != "1980-01-01T00:00:00Z"
+    ):
+        raise Phase9EntryError("candidate MANIFEST.json schema/builder differs")
+    archive_root = _safe_relative_path(
+        manifest["archive_root"], "candidate_manifest.archive_root"
+    )
+    if "/" in archive_root:
+        raise Phase9EntryError("candidate manifest archive root must be one component")
+    metadata = _exact_mapping(
+        manifest["metadata"],
+        "candidate_manifest.metadata",
+        {
+            "authorization_scope",
+            "candidate_commit",
+            "candidate_parent",
+            "candidate_tree",
+            "freeze_utc",
+            "purpose",
+            "schema",
+            "shadow_only",
+        },
+    )
+    if (
+        metadata["schema"] != "phase1-8-phase9-candidate-build-metadata-v1"
+        or metadata["shadow_only"] is not True
+        or metadata["candidate_commit"] != candidate.commit
+        or metadata["candidate_tree"] != candidate.tree
+        or metadata["candidate_parent"] != candidate.parent
+    ):
+        raise Phase9EntryError("candidate manifest identity metadata differs")
+    authorization_scope = _exact_mapping(
+        metadata["authorization_scope"],
+        "candidate_manifest.metadata.authorization_scope",
+        {
+            "cutover",
+            "delivery",
+            "deployment",
+            "migration",
+            "phase9_a_forensic_replay",
+            "production_outbox",
+            "provider_or_network",
+            "release",
+        },
+    )
+    if any(value is not False for value in authorization_scope.values()):
+        raise Phase9EntryError("candidate manifest claims forbidden authorization")
+
+    expected_files = [
+        {
+            "archive_path": f"{archive_root}/{row['path']}",
+            "mode": 0o755 if row["mode"] == "0755" else 0o644,
+            "sha256": row["sha256"],
+            "size": row["size"],
+            "source_path": row["path"],
+        }
+        for row in inventory_rows
+    ]
+    if manifest["files"] != expected_files:
+        raise Phase9EntryError("candidate manifest files differ from frozen inventory")
+    paths_raw = "".join(f"{row['path']}\n" for row in inventory_rows).encode("utf-8")
+    if manifest["inventory_sha256"] != hashlib.sha256(paths_raw).hexdigest():
+        raise Phase9EntryError("candidate manifest inventory hash differs")
+    closure = _exact_mapping(
+        manifest["closure"],
+        "candidate_manifest.closure",
+        {"manifest", "checksums", "checksums_cover", "checksums_exclude"},
+    )
+    if closure != {
+        "manifest": f"{archive_root}/MANIFEST.json",
+        "checksums": f"{archive_root}/checksums/SHA256SUMS",
+        "checksums_cover": "every payload member plus MANIFEST.json",
+        "checksums_exclude": "checksums/SHA256SUMS (self-reference is forbidden)",
+    }:
+        raise Phase9EntryError("candidate manifest checksum closure differs")
+
+    checksums_raw = _regular_file_bytes(
+        checksums_path,
+        maximum_bytes=8 * 1024 * 1024,
+        label="candidate checksums/SHA256SUMS",
+    )
+    try:
+        checksums_text = checksums_raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Phase9EntryError("candidate checksums are not UTF-8") from exc
+    if not checksums_text.endswith("\n") or "\r" in checksums_text:
+        raise Phase9EntryError("candidate checksums are not canonical text")
+    checksums: dict[str, str] = {}
+    previous = ""
+    for index, line in enumerate(checksums_text.splitlines(), start=1):
+        digest, separator, member = line.partition("  ")
+        member = _safe_relative_path(member, f"candidate checksums line {index}.path")
+        if (
+            separator != "  "
+            or _SHA256.fullmatch(digest) is None
+            or member <= previous
+            or member in checksums
+        ):
+            raise Phase9EntryError("candidate checksums are malformed or unsorted")
+        checksums[member] = digest
+        previous = member
+    expected_checksums = {
+        f"{archive_root}/{row['path']}": str(row["sha256"])
+        for row in inventory_rows
+    }
+    expected_checksums[f"{archive_root}/MANIFEST.json"] = hashlib.sha256(
+        manifest_raw
+    ).hexdigest()
+    if checksums != expected_checksums:
+        raise Phase9EntryError("candidate checksums differ from payload and manifest")
+    return {
+        "archive_root": archive_root,
+        "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+        "checksums_sha256": hashlib.sha256(checksums_raw).hexdigest(),
+        "binding": "CANONICAL_MANIFEST_AND_EXACT_PAYLOAD_CHECKSUMS",
+    }
+
+
 def _verify_fresh_inventory(
     repository: Path, inventory: Path, candidate: CandidateIdentity
 ) -> dict[str, object]:
@@ -416,6 +572,7 @@ def _verify_fresh_inventory(
     if not lines or lines[0] != "path\tsize\tmode\tsha256":
         raise Phase9EntryError("candidate inventory header differs")
     paths: list[str] = []
+    inventory_rows: list[dict[str, object]] = []
     tree: dict[str, object] = {}
     total_bytes = 0
     for index, line in enumerate(lines[1:], start=2):
@@ -433,6 +590,9 @@ def _verify_fresh_inventory(
         if paths and relative <= paths[-1]:
             raise Phase9EntryError("candidate inventory paths are not unique bytewise sorted")
         paths.append(relative)
+        inventory_rows.append(
+            {"path": relative, "size": size, "mode": fields[2], "sha256": digest}
+        )
         file_path = repository.joinpath(*PurePosixPath(relative).parts)
         file_raw = _regular_file_bytes(
             file_path,
@@ -485,18 +645,29 @@ def _verify_fresh_inventory(
     actual_files.sort()
     if actual_files != paths:
         raise Phase9EntryError("fresh extraction files differ from the frozen inventory")
-    tree_sha = _tree_id(tree).hex()
-    if tree_sha != candidate.tree:
+    payload_tree = _tree_id(tree).hex()
+    metadata_evidence: dict[str, object] | None = None
+    if metadata_present:
+        metadata_evidence = _verify_candidate_metadata(
+            repository,
+            candidate=candidate,
+            inventory_rows=inventory_rows,
+        )
+    elif payload_tree != candidate.tree:
         raise Phase9EntryError("fresh extraction Git tree differs from candidate")
-    return {
+    result: dict[str, object] = {
         "mode": "FRESH_INVENTORY",
         "candidate": candidate.as_dict(),
         "inventory_sha256": hashlib.sha256(raw).hexdigest(),
         "path_count": len(paths),
         "total_bytes": total_bytes,
-        "verified_tree": tree_sha,
+        "verified_tree": candidate.tree,
+        "payload_tree": payload_tree,
         "candidate_metadata_present": bool(metadata_present),
     }
+    if metadata_evidence is not None:
+        result["candidate_metadata"] = metadata_evidence
+    return result
 
 
 def verify_candidate_source(
