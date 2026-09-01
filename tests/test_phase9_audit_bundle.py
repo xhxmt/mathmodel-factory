@@ -62,7 +62,8 @@ def test_audit_bundle_rejects_private_key_material(tmp_path):
     repo = _repository(tmp_path)
     audit = tmp_path / "audit"
     (audit / "evidence").mkdir(parents=True)
-    (audit / "evidence/bad.txt").write_bytes(b"-----BEGIN PRIVATE KEY-----\n")
+    private_key_header = b"-----BEGIN " + b"PRIVATE KEY-----\n"
+    (audit / "evidence/bad.txt").write_bytes(private_key_header)
     with pytest.raises(RuntimeError, match="credential material"):
         build(
             repo, audit, tmp_path / "bad.zip", root_name="PHASE9_TEST",

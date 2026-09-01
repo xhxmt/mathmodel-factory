@@ -133,8 +133,10 @@ def _copy_audit_evidence(audit_root: Path, payload: dict[str, bytes]) -> None:
 
 
 def _secret_scan(payload: dict[str, bytes]) -> None:
+    private_key_header = b"-----BEGIN " + b"PRIVATE KEY-----"
+    openssh_private_key_header = b"-----BEGIN OPENSSH " + b"PRIVATE KEY-----"
     forbidden = (
-        b"-----BEGIN PRIVATE KEY-----", b"-----BEGIN OPENSSH PRIVATE KEY-----",
+        private_key_header, openssh_private_key_header,
         b"AIzaSy", b"AKIA",
     )
     for path, raw in payload.items():
