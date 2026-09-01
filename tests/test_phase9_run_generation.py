@@ -38,7 +38,7 @@ from factory_core.workflow_contract_v2 import compile_workflow_contract_bundle_v
 from tests.support.authority_production import install_foundation
 
 
-SOURCE_REPOSITORY = Path(__file__).resolve().parents[1]
+DEFAULT_SOURCE_REPOSITORY = Path(__file__).resolve().parents[1]
 OFFICIAL_BYTES = b"verified official phase9 bytes\n"
 RUN_TABLES = (
     "authority_production_run_generations",
@@ -49,6 +49,18 @@ RUN_TABLES = (
 )
 
 
+def _source_repository() -> Path:
+    """Use a real Git identity root when code runs from a no-.git extraction."""
+
+    raw = os.environ.get("PHASE9_TEST_SOURCE_REPOSITORY")
+    if raw is None:
+        return DEFAULT_SOURCE_REPOSITORY
+    path = Path(raw)
+    if not path.is_absolute():
+        raise AssertionError("PHASE9_TEST_SOURCE_REPOSITORY must be absolute")
+    return path
+
+
 def _request(
     *,
     operation_kind: str = CREATE,
@@ -57,7 +69,7 @@ def _request(
     predecessor_receipt: str | None = None,
     occurred_at: int = 2000,
 ) -> RunGenerationRequestV1:
-    source = read_current_git_source_identity(SOURCE_REPOSITORY)
+    source = read_current_git_source_identity(_source_repository())
     authorization = OperatorAuthorizationEvidenceV1(
         OPERATOR_AUTHORIZATION_EVIDENCE_SCHEMA,
         f"authorization-{key}",
@@ -143,7 +155,7 @@ def _service(
     return Phase9RunGenerationService(
         fixture.database,
         expected_source_fence_sha256=fixture.preflight.source_fence_sha256,
-        source_repository=SOURCE_REPOSITORY,
+        source_repository=_source_repository(),
         official_input_root=official_root,
         execution_context_receipt_path=context,
         fault_hook=fault_hook,
@@ -376,7 +388,7 @@ def test_default_off_fence_rejects_enabled_writer(tmp_path):
     with pytest.raises(Phase9RunGenerationSafetyError, match="writer and consumer disabled"):
         official_root, context = _evidence_paths(fixture, _request())
         operations.create_or_rotate_run_generation(
-            _request(), source_repository=SOURCE_REPOSITORY,
+            _request(), source_repository=_source_repository(),
             official_input_root=official_root,
             execution_context_receipt_path=context,
         )
