@@ -25,6 +25,8 @@ class Phase78Settings:
     enabled: bool = False
     authority_database: Path | None = None
     authority_source_fence_sha256: str | None = None
+    phase4_database: Path | None = None
+    phase5_database: Path | None = None
     phase6_database: Path | None = None
     phase7_database: Path | None = None
     phase8_database: Path | None = None
@@ -121,6 +123,8 @@ def load_phase78_settings(
         enabled=True,
         authority_database=_absolute(values, "PHASE78_AUTHORITY_DB_FILE"),
         authority_source_fence_sha256=fence,
+        phase4_database=_absolute(values, "PHASE78_PHASE4_DB_FILE"),
+        phase5_database=_absolute(values, "PHASE78_PHASE5_DB_FILE"),
         phase6_database=_absolute(values, "PHASE78_PHASE6_DB_FILE"),
         phase7_database=_absolute(values, "PHASE78_PHASE7_DB_FILE"),
         phase8_database=_absolute(values, "PHASE78_PHASE8_DB_FILE"),

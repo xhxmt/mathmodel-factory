@@ -88,14 +88,12 @@ def gate2_delivery_override(
 
 def gate2_delivery_allowed(project: Path, root: Path | None = None) -> bool:
     record = final_audit_record(project)
+    if record.get("decision") == "ABLATE_NO_JUDGE":
+        return False
     return (
         gate2_passed(project)
         or gate2_delivery_override(project, root)
         or delivered_snapshot_override(project, root)
-        or (
-            record.get("decision") == "ABLATE_NO_JUDGE"
-            and final_audit_is_current(project, root)
-        )
     )
 
 
@@ -105,6 +103,9 @@ def delivered_snapshot_override(
     try:
         from factory_core.audit.acceptance import verify_final_acceptance_receipt
 
+        audit = final_audit_record(project)
+        if audit.get("decision") == "ABLATE_NO_JUDGE":
+            return False
         receipt = json.loads(
             read_text(project / "judge_outputs/final_acceptance_receipt.json")
         )
@@ -114,7 +115,6 @@ def delivered_snapshot_override(
             expected_snapshot_id=snapshot_id,
             expected_status="OVERRIDDEN",
         )
-        audit = final_audit_record(project)
         evidence = audit.get("evidence")
         override_id = (
             evidence.get("override_id") if isinstance(evidence, dict) else None
@@ -157,6 +157,8 @@ def final_audit_is_current(project: Path, root: Path | None = None) -> bool:
     status = record.get("status")
     if record.get("profile") != "final":
         return False
+    if record.get("decision") == "ABLATE_NO_JUDGE":
+        return False
     if status not in {"PASS", "OVERRIDDEN"}:
         return False
     if record.get("delivery_allowed") is not True:
@@ -188,18 +190,6 @@ def final_audit_is_current(project: Path, root: Path | None = None) -> bool:
     if not acceptance_valid:
         return False
     if status == "OVERRIDDEN":
-        ablation_path = project / "judge_outputs/final_submission.ablation.json"
-        try:
-            ablation = json.loads(read_text(ablation_path))
-        except (json.JSONDecodeError, OSError):
-            ablation = {}
-        if (
-            record.get("decision") == "ABLATE_NO_JUDGE"
-            and ablation.get("judge_executed") is False
-            and ablation.get("snapshot_id") == snapshot_id
-            and ablation.get("quality_pass_fabricated") is False
-        ):
-            return True
         try:
             route = json.loads(read_text(project / "judge_outputs/decision_route.json"))
         except (json.JSONDecodeError, OSError):

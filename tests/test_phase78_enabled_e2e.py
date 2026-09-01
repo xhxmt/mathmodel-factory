@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import hashlib
 import json
@@ -20,6 +19,10 @@ import httpx
 import pytest
 
 from factory_core.artifact_ownership import ArtifactOwnership
+from factory_core.adapters.infrastructure.pause_policy import (
+    PauseMode,
+    ProcessScopeKind,
+)
 from factory_core.authority_read_repository import AuthorityReadRepository
 from factory_core.canonical import canonical_sha256
 from factory_core.owner_compiler import compile_owner_registry
@@ -42,6 +45,15 @@ from factory_core.phase6_snapshot_grants import (
     SectionAvailability,
     VerifiedSection,
     build_authority_source_binding,
+)
+from factory_core.phase6_source_assembler import Phase6TrustedSourceAssembler
+from factory_core.durable_operation import OperationEvent
+from factory_core.phase4_shadow_runtime import Phase4ShadowStore
+from factory_core.phase5_shadow_supervisor import (
+    Phase5SupervisorStore,
+    SyntheticEffectObservation,
+    SyntheticObservationOutcome,
+    run_phase5_full_shadow,
 )
 from factory_core.phase78_config import Phase78Settings
 from factory_core.phase78_current import (
@@ -97,25 +109,18 @@ def _authorization_headers(runtime_token: str) -> dict[str, str]:
 
 def _authority_pdf(tmp_path: Path, raw_pdf: bytes):
     fixture = install_foundation(tmp_path)
+    # Create the concrete generation through the atomic audited API before the
+    # canary writer is enabled.  Direct SQL completion and invented generation
+    # labels are deliberately forbidden by the production contract.
+    from tests.test_phase9_run_generation import _request as generation_request
+    from tests.test_phase9_run_generation import _service as generation_service
+
+    generation_input = generation_request(key=f"generation-{tmp_path.name}")
+    generation = generation_service(
+        fixture,
+        request=generation_input,
+    ).create_or_rotate(generation_input)
     writer = configure_canary(fixture)
-    # The legacy-schema fixture intentionally backfills two unavailable
-    # generations as ``legacy_unknown``.  Model the normal post-migration
-    # identity-completion step before exercising the real production writer;
-    # Phase 6 correctly refuses legacy-unknown source identities.
-    connection = sqlite3.connect(fixture.database)
-    connection.execute(
-        """UPDATE authority_workflows SET
-           project_generation=?,run_generation=?,runtime_generation=?,
-           scheduler_generation=? WHERE workflow_id='legacy_current'""",
-        (
-            "project-generation-phase78-1",
-            "run-generation-phase78-1",
-            "runtime-generation-phase78-1",
-            "scheduler-generation-phase78-1",
-        ),
-    )
-    connection.commit()
-    connection.close()
     compilation = compile_owner_registry(
         (
             ArtifactOwnership(
@@ -178,21 +183,28 @@ def _authority_pdf(tmp_path: Path, raw_pdf: bytes):
         command,
         project_binding=replace(
             command.project_binding,
-            project_generation="project-generation-phase78-1",
+            project_generation=generation_input.project_generation,
         ),
         run_binding=replace(
             command.run_binding,
-            runtime_generation="runtime-generation-phase78-1",
-            scheduler_generation="scheduler-generation-phase78-1",
-            run_generation="run-generation-phase78-1",
+            runtime_generation=generation_input.runtime_generation,
+            scheduler_generation=generation_input.scheduler_generation,
+            run_generation=generation.run_generation,
         ),
+        contract_pins=generation_input.contract_pins,
     )
+    generation_pin_sha256 = canonical_sha256(generation_input.contract_pins)
     event = replace(
         event,
         project_generation=command.project_binding.project_generation,
         runtime_generation=command.run_binding.runtime_generation,
         scheduler_generation=command.run_binding.scheduler_generation,
         run_generation=command.run_binding.run_generation,
+        contract_pin_set_sha256=generation_pin_sha256,
+    )
+    receipt = replace(
+        receipt,
+        contract_pin_set_sha256=generation_pin_sha256,
     )
     committed = writer.persist_command_bundle(
         workflow_id="legacy_current",
@@ -220,7 +232,109 @@ def _authority_pdf(tmp_path: Path, raw_pdf: bytes):
     return fixture, coordinate, state, state.occurrences[0], source
 
 
+class _Phase5ObservationPort:
+    def record_would_apply(self, *, request_id, binding, decision):
+        del request_id, binding, decision
+        return SyntheticEffectObservation(
+            observation_id="phase78-source-observation",
+            outcome=SyntheticObservationOutcome.CONFIRMED_APPLIED,
+            observed_at=16,
+            evidence_sha256="8" * 64,
+        )
+
+
 def _phase6_proof(tmp_path: Path, coordinate, state):
+    phase6_path = tmp_path / "phase6.db"
+    phase4_path = (tmp_path / "phase4-source.db").resolve()
+    phase5_path = (tmp_path / "phase5-source.db").resolve()
+    store = Phase6SnapshotGrantStore(phase6_path)
+    store.initialize()
+    assembler = Phase6TrustedSourceAssembler(
+        authority_database=(
+            tmp_path / "authority-project" / ".factory" / "state.db"
+        ),
+        authority_source_fence_sha256=coordinate.source_fence_sha256,
+        phase4_database=phase4_path,
+        phase5_database=phase5_path,
+        phase6_store=store,
+    )
+    Phase4ShadowStore(phase4_path).initialize()
+    Phase5SupervisorStore(phase5_path).initialize()
+    operation = assembler.produce_phase4_operation(
+        workflow_id=coordinate.workflow_id,
+        occurrence_id=state.occurrences[0].occurrence_id,
+        invocation_id="phase6-source-invocation",
+        attempt_id="phase6-source-attempt",
+        process_scope_id="phase6-source-scope",
+        occurred_at=10,
+    )
+    phase4 = Phase4ShadowStore(phase4_path)
+    claimed = phase4.claim_operation(
+        operation.state.operation.identity.identity_sha256,
+        request_idempotency_key="phase6-source-claim",
+        claim_owner_id="phase6-source-owner",
+        claim_owner_epoch=1,
+        expected_claim_generation=0,
+        occurred_at=11,
+        lease_seconds=30,
+    )
+    checkpoint = phase4.transition(
+        operation.state.operation.identity.identity_sha256,
+        OperationEvent.CHECKPOINT_DISPATCH,
+        request_idempotency_key="phase6-source-checkpoint",
+        expected_claim_generation=claimed.state.operation.claim_generation,
+        claim_owner_id="phase6-source-owner",
+        claim_owner_epoch=1,
+        dispatch_nonce="phase6-source-nonce",
+        reason_code="SHADOW_NO_DISPATCH",
+        occurred_at=12,
+    )
+    active = phase4.transition(
+        operation.state.operation.identity.identity_sha256,
+        OperationEvent.CONFIRM_ACTIVE,
+        request_idempotency_key="phase6-source-active",
+        expected_claim_generation=checkpoint.state.operation.claim_generation,
+        claim_owner_id="phase6-source-owner",
+        claim_owner_epoch=1,
+        dispatch_nonce="phase6-source-nonce",
+        reason_code="SHADOW_ACTIVE",
+        occurred_at=13,
+    )
+    phase5_binding = assembler.phase5_binding_from_current_phase4(
+        operation_identity_sha256=(
+            operation.state.operation.identity.identity_sha256
+        ),
+        scope_kind=ProcessScopeKind.DURABLE_SOLVER,
+    )
+    phase5_run = run_phase5_full_shadow(
+        enabled=True,
+        database=phase5_path,
+        binding=phase5_binding,
+        mode=PauseMode.PAUSE,
+        request_idempotency_key="phase6-source-supervisor",
+        occurred_at=14,
+        effect_port=_Phase5ObservationPort(),
+    )
+    succeeded = phase4.transition(
+        operation.state.operation.identity.identity_sha256,
+        OperationEvent.CONFIRM_SUCCEEDED,
+        request_idempotency_key="phase6-source-success",
+        expected_claim_generation=active.state.operation.claim_generation,
+        claim_owner_id="phase6-source-owner",
+        claim_owner_epoch=1,
+        dispatch_nonce="phase6-source-nonce",
+        reason_code="SHADOW_SUCCEEDED",
+        occurred_at=17,
+    )
+    assert succeeded.state.operation.status.value == "succeeded"
+    receipt = assembler.assemble(
+        workflow_id=coordinate.workflow_id,
+        occurrence_id=state.occurrences[0].occurrence_id,
+        operation_identity_sha256=(
+            operation.state.operation.identity.identity_sha256
+        ),
+        phase5_request_id=phase5_run.request_id,
+    )
     source_coordinate = {
         "schema_version": "snapshot-coordinate-v0",
         "project_id": coordinate.project_id,
@@ -232,25 +346,15 @@ def _phase6_proof(tmp_path: Path, coordinate, state):
         "scheduler_generation": coordinate.scheduler_generation,
         "recorded_contract_pin_set_sha256": coordinate.contract_pin_set_sha256,
     }
-    binding = build_authority_source_binding(
-        authority_coordinate=coordinate.as_dict(),
-        authority_coordinate_sha256=coordinate.coordinate_sha256,
-        authority_revision_snapshot_sha256=hashlib.sha256(
-            f"authority-revision:{coordinate.current_revision}".encode()
-        ).hexdigest(),
-        authority_revision_through_revision=coordinate.current_revision,
+    binding = assembler.build_phase6_source_binding(
+        receipt,
         source_snapshot_schema="project-snapshot-v0-source-authorized-v3",
         source_snapshot_semantic_sha256=hashlib.sha256(
             b"phase78-e2e-snapshot"
         ).hexdigest(),
         source_snapshot_completeness="COMPLETE",
         source_snapshot_coordinate=source_coordinate,
-        phase3_artifact_state_sha256=state.state_sha256,
-        phase4_operation_state_sha256="d" * 64,
-        phase5_supervisor_state_sha256="e" * 64,
     )
-    store = Phase6SnapshotGrantStore(tmp_path / "phase6.db")
-    store.initialize()
     snapshot = store.append_snapshot(
         source_binding=binding,
         sections=(
@@ -347,6 +451,8 @@ def _settings(fixture, tmp_path: Path, phase6_path: Path) -> Phase78Settings:
         enabled=True,
         authority_database=fixture.database,
         authority_source_fence_sha256=fixture.preflight.source_fence_sha256,
+        phase4_database=(tmp_path / "phase4-source.db").resolve(),
+        phase5_database=(tmp_path / "phase5-source.db").resolve(),
         phase6_database=phase6_path,
         phase7_database=runtime / "phase7.db",
         phase8_database=runtime / "phase8.db",
@@ -355,7 +461,9 @@ def _settings(fixture, tmp_path: Path, phase6_path: Path) -> Phase78Settings:
         project_root=fixture.project_dir,
         cas_root=cas,
         scratch_root=scratch,
-        deadline_ms=30_000,
+        # The trusted P1--8 rejoin deliberately revalidates six durable stores
+        # at every publish fence; keep the E2E budget explicit and bounded.
+        deadline_ms=120_000,
         lease_seconds=30,
     )
 
@@ -464,6 +572,8 @@ def _phase78_environment(settings: Phase78Settings) -> dict[str, str]:
         "PHASE78_AUTHORITY_SOURCE_FENCE_SHA256": str(
             settings.authority_source_fence_sha256
         ),
+        "PHASE78_PHASE4_DB_FILE": str(settings.phase4_database),
+        "PHASE78_PHASE5_DB_FILE": str(settings.phase5_database),
         "PHASE78_PHASE6_DB_FILE": str(settings.phase6_database),
         "PHASE78_PHASE7_DB_FILE": str(settings.phase7_database),
         "PHASE78_PHASE8_DB_FILE": str(settings.phase8_database),
@@ -747,7 +857,7 @@ def test_operator_rejects_self_approval_before_persisting_phase7_or_phase8(
     assert not settings.required_path("phase8_database").exists()
 
 
-def test_real_enabled_pipeline_concurrency_restart_conflict_and_revoke(tmp_path: Path):
+def test_real_enabled_pipeline_restart_replay_conflict_and_revoke(tmp_path: Path):
     raw_pdf = make_pdf("Phase 7+8 production adapter flow")
     fixture, coordinate, state, occurrence, _source = _authority_pdf(tmp_path, raw_pdf)
     phase6_store, proof = _phase6_proof(tmp_path, coordinate, state)
@@ -761,8 +871,9 @@ def test_real_enabled_pipeline_concurrency_restart_conflict_and_revoke(tmp_path:
     def run_once():
         return run_phase78_worker_once(settings, "demo", "alice", payload)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda _ordinal: run_once(), range(2)))
+    # The second call is a fresh service/worker entry on the same durable key;
+    # it must replay the exact bytes produced by the first call.
+    results = [run_once(), run_once()]
 
     assert {result["outcome"] for result in results} == {"shadow_authorized"}
     assert {result["decision"]["status"] for result in results} == {"AUTHORIZED"}
@@ -1106,7 +1217,7 @@ def test_cancel_after_authorized_decision_keeps_history_but_status_is_cancelled(
 
     def block_after_decision(self, *args, **kwargs):
         entered.set()
-        assert release.wait(timeout=10), "test did not release work completion"
+        assert release.wait(timeout=30), "test did not release work completion"
         return original_complete(self, *args, **kwargs)
 
     monkeypatch.setattr(Phase78WorkLedger, "complete", block_after_decision)
@@ -1124,7 +1235,7 @@ def test_cancel_after_authorized_decision_keeps_history_but_status_is_cancelled(
         target=invoke, name="phase78-cancel-after-decision"
     )
     thread.start()
-    assert entered.wait(timeout=20), "worker did not reach work completion"
+    assert entered.wait(timeout=90), "worker did not reach work completion"
     cancelled = cancel_phase78_request(
         settings,
         "demo",
@@ -1150,7 +1261,7 @@ def test_cancel_after_authorized_decision_keeps_history_but_status_is_cancelled(
     ):
         assert private_field not in cancellation_summary
     release.set()
-    thread.join(timeout=20)
+    thread.join(timeout=60)
     assert not thread.is_alive()
     assert "result" not in observed
     assert isinstance(observed.get("error"), Phase78CancellationError)

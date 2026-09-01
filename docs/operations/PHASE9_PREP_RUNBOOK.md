@@ -115,9 +115,15 @@ below against immutable evidence:
 4. Read-only state checks show zero active processes, zero pending outbox items,
    and zero unresolved migrations. Project, run, runtime, and scheduler
    generations are concrete; `legacy_unknown` is forbidden.
-5. A reviewed production API can create and persist a new `run_generation`
-   atomically. The current source does not contain such a create/rotate API;
-   direct SQL updates or invented generation labels are forbidden.
+5. Use only the reviewed `Phase9RunGenerationService` / narrow
+   `AuthorityOperations.create_or_rotate_run_generation` boundary to create or
+   rotate a `run_generation`. It derives both initial project and run generation
+   identities from canonical content, reads and rechecks the exact official
+   input bytes and execution-context receipt, validates the controlled OS
+   account, and commits predecessor/receipt/idempotency/current-pointer facts in
+   one transaction. Direct SQL updates and invented generation labels remain
+   forbidden. The API's existence is not authorization to call it against a
+   non-test database.
 6. Old generation history is read-only. The new generation fixes
    `modeling_consultation_contract=LEGACY_NOT_APPLICABLE`,
    `delivery_capability=DISABLED`, and begins at the Step 13 packet rebuild.
@@ -127,6 +133,17 @@ components, but must not use `factory_core.cli diagnostics` for forensic state:
 that path can open the project database read-write, enable WAL, and upgrade the
 schema. `factory_core.phase78_operator prepare` is also excluded because it
 writes Phase 7/8 stores and CAS objects.
+
+The reviewed collector and gate are `factory_core.phase9_entry` and
+`scripts/phase9_entry_gate.py`. They open only explicit databases read-only,
+hold one query-only transaction while joining the workflow/current generation/
+creation receipt/migration/delivery/outbox/process facts, and require all nine
+candidate-bound P0 receipts including AR-007. A `READY` gate result proves only
+that those entry prerequisites are current; its authorization scope explicitly
+keeps Phase9-A, provider/network, production outbox/delivery, release,
+deployment, migration, and cutover false. Missing official input, execution
+context, controlled-account authorization, runtime database, or receipt
+produces `BLOCKED` and must not be filled from a template or test fixture.
 
 ## Phase9-A minimum acceptance matrix
 
@@ -140,7 +157,7 @@ The formal replay must bind each case to a test result and immutable receipt.
 | Snapshot | `AC-SNAP-001`, `002` | Every section has one revision coordinate; read failures are `ERROR`, not an invented empty state. |
 | Outbox | `AC-OUT-001`, `002`, `004` | Pre-commit crash launches nothing; committed work reclaims once; uncertain dispatch is reconciled without automatic resend. |
 | Supervisor | `AC-SUP-001`, `002`, `004` | Failed/pause/kill paths retain process-scope receipts and leave no live descendant. |
-| Delivery fence | `AC-DEL-001`, `AC-DEL-002` | Technical and `ABLATE_NO_JUDGE` forensic modes keep delivery disabled and create no release or final-acceptance side effect; this closes AR-007. |
+| Delivery fence | `AC-DEL-001`, `AC-DEL-002` | Technical and `ABLATE_NO_JUDGE` forensic modes keep delivery disabled and create no release or final-acceptance side effect. No-judge emits the typed nonzero `PERMANENT_ABLATION_NO_DELIVERY` marker/result, writes no `final_submission.sha256` or final-acceptance receipt, is never reusable, and takes precedence over an exact-snapshot delivery override; workflow-state and release readers reject it. This closes AR-007. |
 | Entry/terminal inventory | formal state gate | Active process, pending outbox, and unresolved migration counts are zero at both boundaries. |
 
 Exit additionally requires:

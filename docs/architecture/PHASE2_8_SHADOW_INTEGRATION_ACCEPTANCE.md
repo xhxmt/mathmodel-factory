@@ -5,6 +5,14 @@ with no required fixes before this joint acceptance was implemented. This
 document does not approve production cutover; current v1 remains the sole
 production authority and route.
 
+This is a historical compatibility acceptance, not the current Phase7/8 entry
+contract. Its unpackaged `shadow_contracts` adapter, `legacy_unknown`
+coordinates and caller-composed hashes are explicitly ineligible for a
+Phase6 proof used by Phase7/8. The current durable producer/current-reader
+contract is owned by
+`docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md` and
+`factory_core.phase6_source_assembler`.
+
 Phase 3 was subsequently expanded into the packaged, default-disabled full
 shadow foundation documented in
 `docs/architecture/PHASE3_ARTIFACT_REGISTRATION_SHADOW.md`. The acceptance flow

@@ -33,7 +33,7 @@ from .canonical import canonical_bytes, canonical_sha256
 from .domain import SCHEMA_VERSION
 
 
-AUTHORITY_PRODUCTION_SCHEMA_VERSION = 2
+AUTHORITY_PRODUCTION_SCHEMA_VERSION = 3
 AUTHORITY_PRODUCTION_SOURCE_SCHEMA = "authority-production-source-v1"
 PRODUCTION_MIGRATION_RUNNING = "RUNNING"
 PRODUCTION_MIGRATION_INTERRUPTED = "INTERRUPTED"
@@ -481,6 +481,230 @@ PRODUCTION_MIGRATIONS = (
             """,
         ),
     ),
+    _ProductionMigration(
+        "A2_0015_PHASE9_RUN_GENERATION",
+        (
+            """
+            CREATE TABLE authority_production_run_generations (
+                run_generation TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                project_revision INTEGER NOT NULL CHECK (project_revision >= 0),
+                project_generation TEXT NOT NULL,
+                runtime_generation TEXT NOT NULL,
+                scheduler_generation TEXT NOT NULL,
+                predecessor_run_generation TEXT,
+                predecessor_creation_receipt_sha256 TEXT,
+                operation_kind TEXT NOT NULL CHECK (
+                    operation_kind IN ('CREATE', 'ROTATE')
+                ),
+                run_mode TEXT NOT NULL,
+                modeling_consultation_contract TEXT NOT NULL,
+                delivery_capability TEXT NOT NULL CHECK (
+                    delivery_capability = 'DISABLED'
+                ),
+                source_commit TEXT NOT NULL,
+                source_tree TEXT NOT NULL,
+                source_parent TEXT NOT NULL,
+                contract_pin_set_sha256 TEXT NOT NULL,
+                official_input_manifest_sha256 TEXT NOT NULL,
+                official_input_raw_bytes_set_sha256 TEXT NOT NULL,
+                execution_context_receipt_sha256 TEXT NOT NULL,
+                operator_authorization_receipt_sha256 TEXT NOT NULL,
+                request_sha256 TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL CHECK (created_at >= 0),
+                UNIQUE(workflow_id, run_generation),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(predecessor_run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(predecessor_creation_receipt_sha256)
+                    REFERENCES authority_production_run_generation_creation_receipts(
+                        receipt_sha256
+                    ) DEFERRABLE INITIALLY DEFERRED,
+                FOREIGN KEY(contract_pin_set_sha256)
+                    REFERENCES authority_contract_pin_sets(pin_set_sha256)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_run_generation_creation_receipts (
+                receipt_id TEXT PRIMARY KEY,
+                run_generation TEXT NOT NULL UNIQUE,
+                workflow_id TEXT NOT NULL,
+                operation_kind TEXT NOT NULL CHECK (
+                    operation_kind IN ('CREATE', 'ROTATE')
+                ),
+                request_sha256 TEXT NOT NULL UNIQUE,
+                occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+                receipt_json TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_run_generation_idempotency (
+                workflow_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                request_sha256 TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                creation_receipt_sha256 TEXT NOT NULL,
+                PRIMARY KEY(workflow_id, idempotency_key),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(creation_receipt_sha256)
+                    REFERENCES authority_production_run_generation_creation_receipts(
+                        receipt_sha256
+                    )
+            )
+            """,
+            """
+            CREATE TABLE authority_production_run_generation_successions (
+                run_generation TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                predecessor_run_generation TEXT,
+                predecessor_creation_receipt_sha256 TEXT,
+                succession_json TEXT NOT NULL,
+                succession_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(predecessor_run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(predecessor_creation_receipt_sha256)
+                    REFERENCES authority_production_run_generation_creation_receipts(
+                        receipt_sha256
+                    ),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_run_generation_current (
+                workflow_id TEXT PRIMARY KEY,
+                run_generation TEXT NOT NULL UNIQUE,
+                creation_receipt_sha256 TEXT NOT NULL,
+                updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(creation_receipt_sha256)
+                    REFERENCES authority_production_run_generation_creation_receipts(
+                        receipt_sha256
+                    )
+            )
+            """,
+            *_immutable_statements(
+                "authority_production_run_generations",
+                (("run_generation",), ("request_sha256",)),
+            ),
+            *_immutable_statements(
+                "authority_production_run_generation_creation_receipts",
+                (("receipt_id",), ("run_generation",), ("receipt_sha256",)),
+            ),
+            *_immutable_statements(
+                "authority_production_run_generation_idempotency",
+                (("workflow_id", "idempotency_key"),),
+            ),
+            *_immutable_statements(
+                "authority_production_run_generation_successions",
+                (("run_generation",), ("succession_sha256",)),
+            ),
+            """
+            CREATE TRIGGER authority_production_run_generation_current_insert_guard
+            BEFORE INSERT ON authority_production_run_generation_current
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_run_generations g
+                JOIN authority_production_run_generation_creation_receipts r
+                  ON r.run_generation=g.run_generation
+                 AND r.receipt_sha256=NEW.creation_receipt_sha256
+                JOIN authority_production_run_generation_successions s
+                  ON s.run_generation=g.run_generation
+                WHERE g.run_generation=NEW.run_generation
+                  AND g.workflow_id=NEW.workflow_id
+                  AND g.operation_kind='CREATE'
+                  AND g.predecessor_run_generation IS NULL
+                  AND g.predecessor_creation_receipt_sha256 IS NULL
+                  AND s.predecessor_run_generation IS NULL
+                  AND s.predecessor_creation_receipt_sha256 IS NULL
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation current insert lacks creation graph');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_run_generation_current_update_guard
+            BEFORE UPDATE ON authority_production_run_generation_current
+            WHEN NEW.workflow_id != OLD.workflow_id
+              OR NEW.updated_at < OLD.updated_at
+              OR NOT EXISTS (
+                SELECT 1
+                FROM authority_production_run_generations g
+                JOIN authority_production_run_generation_creation_receipts r
+                  ON r.run_generation=g.run_generation
+                 AND r.receipt_sha256=NEW.creation_receipt_sha256
+                JOIN authority_production_run_generation_successions s
+                  ON s.run_generation=g.run_generation
+                 AND s.predecessor_run_generation=OLD.run_generation
+                 AND s.predecessor_creation_receipt_sha256=
+                     OLD.creation_receipt_sha256
+                WHERE g.run_generation=NEW.run_generation
+                  AND g.workflow_id=OLD.workflow_id
+                  AND g.operation_kind='ROTATE'
+                  AND g.predecessor_run_generation=OLD.run_generation
+                  AND g.predecessor_creation_receipt_sha256=
+                      OLD.creation_receipt_sha256
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation current update lacks succession graph');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_run_generation_current_delete_guard
+            BEFORE DELETE ON authority_production_run_generation_current
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation current pointer cannot be deleted');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_workflows_run_generation_update_guard
+            BEFORE UPDATE OF project_generation, run_generation,
+                             runtime_generation, scheduler_generation
+            ON authority_workflows
+            WHEN NEW.project_generation != OLD.project_generation
+              OR NEW.run_generation != OLD.run_generation
+              OR NEW.runtime_generation != OLD.runtime_generation
+              OR NEW.scheduler_generation != OLD.scheduler_generation
+            BEGIN
+                SELECT CASE WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM authority_production_run_generation_current c
+                    JOIN authority_production_run_generations g
+                      ON g.run_generation=c.run_generation
+                    JOIN authority_production_run_generation_creation_receipts r
+                      ON r.run_generation=c.run_generation
+                     AND r.receipt_sha256=c.creation_receipt_sha256
+                    WHERE c.workflow_id=NEW.workflow_id
+                      AND g.workflow_id=NEW.workflow_id
+                      AND g.project_id=NEW.project_id
+                      AND g.project_revision=NEW.current_revision
+                      AND g.project_generation=NEW.project_generation
+                      AND g.run_generation=NEW.run_generation
+                      AND g.runtime_generation=NEW.runtime_generation
+                      AND g.scheduler_generation=NEW.scheduler_generation
+                ) THEN RAISE(
+                    ABORT,
+                    'workflow generation update lacks current companion graph'
+                ) END;
+            END
+            """,
+            """
+            UPDATE authority_production_schema_state
+            SET production_schema_version=3
+            WHERE singleton=1
+            """,
+        ),
+    ),
 )
 
 PRODUCTION_MIGRATION_IDS = tuple(item.migration_id for item in PRODUCTION_MIGRATIONS)
@@ -769,6 +993,7 @@ def _expected_production_objects(applied_count: int) -> tuple[tuple[object, ...]
             );
             CREATE TABLE authority_workflows(workflow_id TEXT PRIMARY KEY);
             CREATE TABLE authority_commands(command_id TEXT PRIMARY KEY);
+            CREATE TABLE authority_contract_pin_sets(pin_set_sha256 TEXT PRIMARY KEY);
             CREATE TABLE authority_outbox(
                 message_id TEXT PRIMARY KEY,
                 workflow_id TEXT,
@@ -1273,7 +1498,7 @@ class AuthorityProductionMigrationRunner:
                 ).fetchone()
                 if (
                     row is not None
-                    and row["production_schema_version"] in {1, 2}
+                    and row["production_schema_version"] in {1, 2, 3}
                     and row["lock_owner"] == owner
                 ):
                     connection.execute(
@@ -1327,7 +1552,7 @@ class AuthorityProductionMigrationRunner:
                 if state["production_schema_version"] > AUTHORITY_PRODUCTION_SCHEMA_VERSION:
                     raise AuthorityProductionFutureSchema("future production schema")
                 if (
-                    state["production_schema_version"] not in {1, 2}
+                    state["production_schema_version"] not in {1, 2, 3}
                     or state["source_schema_version"] != SCHEMA_VERSION
                     or state["source_schema_identity_sha256"] != schema_identity
                     or state["source_fence_sha256"] != source_fence
@@ -1343,7 +1568,10 @@ class AuthorityProductionMigrationRunner:
                 _verify_production_objects(connection, len(rows))
                 if state["state"] == PRODUCTION_MIGRATION_READY:
                     if len(rows) == len(PRODUCTION_MIGRATIONS):
-                        if state["production_schema_version"] != 2:
+                        if (
+                            state["production_schema_version"]
+                            != AUTHORITY_PRODUCTION_SCHEMA_VERSION
+                        ):
                             raise AuthorityProductionSchemaDrift(
                                 "READY foundation schema version differs"
                             )

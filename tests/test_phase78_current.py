@@ -19,6 +19,8 @@ def _settings(tmp_path: Path):
             "PHASE78_ENABLED": "true",
             "PHASE78_AUTHORITY_DB_FILE": str(tmp_path / "authority.db"),
             "PHASE78_AUTHORITY_SOURCE_FENCE_SHA256": "a" * 64,
+            "PHASE78_PHASE4_DB_FILE": str(tmp_path / "phase4.db"),
+            "PHASE78_PHASE5_DB_FILE": str(tmp_path / "phase5.db"),
             "PHASE78_PHASE6_DB_FILE": str(tmp_path / "phase6.db"),
             "PHASE78_PHASE7_DB_FILE": str(tmp_path / "phase7.db"),
             "PHASE78_PHASE8_DB_FILE": str(tmp_path / "phase8.db"),
@@ -53,8 +55,13 @@ def _facts(scope: GrantScope = GrantScope.SNAPSHOT_VIEW):
     source = SimpleNamespace(
         authority_coordinate=authority_wire,
         phase3_artifact_state_sha256="b" * 64,
+        trusted_source_chain_receipt={"schema_version": "trusted-source-chain-v1"},
     )
-    proof = SimpleNamespace(requested_scope=scope, source_binding=source)
+    proof = SimpleNamespace(
+        requested_scope=scope,
+        source_binding=source,
+        snapshot=SimpleNamespace(snapshot_id="snapshot-1"),
+    )
     return coordinate, state, occurrence, proof
 
 
@@ -69,21 +76,6 @@ def test_current_verifier_rechecks_authority_state_occurrence_and_phase6(
     coordinate, state, occurrence, proof = _facts()
     calls: list[str] = []
 
-    class Repository:
-        def __init__(self, *args, **kwargs):
-            calls.append("repository")
-
-        def workflow_coordinate(self, workflow_id):
-            assert workflow_id == coordinate.workflow_id
-            calls.append("coordinate")
-            return coordinate
-
-        def phase3_artifact_state(self, workflow_id, through_revision):
-            assert workflow_id == coordinate.workflow_id
-            assert through_revision == coordinate.current_revision
-            calls.append("state")
-            return state
-
     class ProofStore:
         def __init__(self, *args, **kwargs):
             calls.append("phase6")
@@ -93,6 +85,21 @@ def test_current_verifier_rechecks_authority_state_occurrence_and_phase6(
             calls.append("proof")
             return value
 
+    receipt = SimpleNamespace(
+        authority_coordinate=coordinate,
+        phase3_artifact_state=state,
+        selected_occurrence=occurrence,
+    )
+
+    class Assembler:
+        def __init__(self, *args, **kwargs):
+            calls.append("assembler")
+
+        def verify_current(self, value):
+            assert value is receipt
+            calls.append("source")
+            return value
+
     monkeypatch.setattr("factory_core.phase78_current._state", lambda value: state)
     monkeypatch.setattr(
         "factory_core.phase78_current._occurrence", lambda value: occurrence
@@ -100,12 +107,24 @@ def test_current_verifier_rechecks_authority_state_occurrence_and_phase6(
     monkeypatch.setattr(
         "factory_core.phase78_current.verify_shadow_access_proof", lambda value: proof
     )
-    monkeypatch.setattr("factory_core.phase78_current.AuthorityReadRepository", Repository)
     monkeypatch.setattr("factory_core.phase78_current.Phase6SnapshotGrantStore", ProofStore)
+    monkeypatch.setattr(
+        "factory_core.phase78_current.trusted_source_chain_receipt_from_dict",
+        lambda value: receipt,
+    )
+    monkeypatch.setattr(
+        "factory_core.phase78_current.Phase6TrustedSourceAssembler", Assembler
+    )
+    monkeypatch.setattr(
+        "factory_core.phase78_current.verify_receipt_bound_snapshot",
+        lambda value, snapshot: calls.append("snapshot"),
+    )
     verified = Phase78CurrentHeadVerifier(_settings(tmp_path)).verify(
         phase3_artifact_state=state,
         phase3_artifact_occurrence=occurrence,
         phase6_access_proof=proof,
     )
     assert verified.artifact_occurrence == occurrence
-    assert calls == ["repository", "coordinate", "state", "phase6", "proof"]
+    assert calls == [
+        "phase6", "proof", "phase6", "assembler", "source", "snapshot"
+    ]

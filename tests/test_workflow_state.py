@@ -50,14 +50,12 @@ def mark_final_judge_current(project: Path, base: str) -> None:
     write_file(project / "judge_outputs/visual_gate.json", '{"status":"PASS"}\n')
     write_file(
         project / "judge_outputs/decision_route.json",
-        '{"effective_decision":"CONTINUE_TO_STEP16",'
+        '{"effective_decision":"PASS",'
         '"quality_pass_fabricated":false}\n',
     )
     write_file(
-        project / "judge_outputs/final_submission.ablation.json",
-        '{"judge_executed":false,"snapshot_id":"'
-        + fingerprint
-        + '","quality_pass_fabricated":false}\n',
+        project / "judge_outputs/judgment_receipt.json",
+        '{"status":"VALID"}\n',
     )
     snapshot = AuditSnapshot(
         snapshot_id=fingerprint,
@@ -69,8 +67,7 @@ def mark_final_judge_current(project: Path, base: str) -> None:
     build_final_acceptance_receipt(
         project,
         snapshot,
-        status="OVERRIDDEN",
-        override_receipt="judge_outputs/final_submission.ablation.json",
+        status="PASS",
     )
     write_file(
         project / ".factory" / "audits" / "latest.json",
@@ -78,8 +75,8 @@ def mark_final_judge_current(project: Path, base: str) -> None:
         + fingerprint
         + '","base":"'
         + base
-        + '","status":"OVERRIDDEN","profile":"final",'
-        '"decision":"ABLATE_NO_JUDGE","judge_completed":false'
+        + '","status":"PASS","profile":"final",'
+        '"decision":"PASS","judge_completed":true'
         + ',"delivery_allowed":true,"override":false}\n',
     )
     write_file(
@@ -107,7 +104,7 @@ def publish_current(project: Path, root: Path) -> None:
     ReleasePublisher(root / "papers").publish(
         project,
         snapshot_id,
-        status="OVERRIDDEN",
+        status="PASS",
         package_builder=package,
     )
 
@@ -167,7 +164,7 @@ def test_final_audit_current_requires_final_profile(tmp_path):
     assert final_audit_is_current(project) is False
 
 
-def test_delivery_artifacts_and_step16_ready(tmp_path):
+def test_delivery_artifacts_and_step16_ready(tmp_path, monkeypatch):
     root = tmp_path
     project = root / "complete" / "demo"
     write_file(project / "reviewer_entry_map.md", "# map\n")
@@ -183,6 +180,10 @@ def test_delivery_artifacts_and_step16_ready(tmp_path):
 
     from scripts.workflow_state import delivery_artifacts_ready, step16_ready
 
+    monkeypatch.setattr(
+        "scripts.judgment_receipt.verify_receipt",
+        lambda *_args, **_kwargs: (True, []),
+    )
     assert delivery_artifacts_ready(root, "demo") is True
     assert step16_ready(project, root, "demo") is True
 
@@ -190,33 +191,74 @@ def test_delivery_artifacts_and_step16_ready(tmp_path):
     assert step16_ready(project, root, "demo") is False
 
 
-def test_gate2_delivery_override_allows_step16_without_faking_pass(tmp_path):
+def test_no_judge_ablation_blocks_step16_even_with_delivery_override(tmp_path):
     root = tmp_path
     project = root / "ongoing" / "demo"
     write_file(project / "reviewer_entry_map.md", "# map\n")
     write_file(project / "anchor_figure_plan.md", "# anchors\n")
     write_file(project / "entry_gate.md", "VERDICT: PASS\n")
     write_file(project / "judge_evaluation.md", "VERDICT: REOPEN_REVISION_MODEL\n")
-    write_file(
-        project / "gate2_delivery_override.json",
-        '{"enabled": true, "scope": "continue_to_step16", "reason": "user_requested"}\n',
-    )
-    write_file(root / "papers" / "demo_paper.pdf", "pdf\n")
     mark_final_judge_current(project, "demo")
     publish_current(project, root)
+    snapshot_id = (
+        project / "judge_outputs/final_submission.sha256"
+    ).read_text(encoding="ascii").strip()
+    from web.backend.auth_store import AuthStore
+
+    store = AuthStore(root / "web/auth.db")
+    store.initialize()
+    store.bootstrap_admin("correct horse battery staple test only")
+    store.issue_delivery_override(
+        base_name="demo",
+        scope="deliver_snapshot",
+        bound_snapshot_id=snapshot_id,
+        source_verdict="REOPEN_REVISION_MODEL",
+        reason="test ablation fail-closed precedence",
+        actor="admin",
+    )
+    latest_path = project / ".factory/audits/latest.json"
+    latest = json.loads(latest_path.read_text(encoding="utf-8"))
+    latest.update(
+        {
+            "status": "OVERRIDDEN",
+            "decision": "ABLATE_NO_JUDGE",
+            "judge_completed": False,
+            "delivery_allowed": False,
+            "error_class": "PERMANENT_ABLATION_NO_DELIVERY",
+            "returncode": 2,
+        }
+    )
+    write_file(latest_path, json.dumps(latest) + "\n")
+    write_file(
+        project / "judge_outputs/final_submission.ablation.json",
+        json.dumps(
+            {
+                "ablation": "ABLATE_NO_JUDGE",
+                "judge_executed": False,
+                "snapshot_id": snapshot_id,
+                "quality_pass_fabricated": False,
+                "delivery_allowed": False,
+            }
+        )
+        + "\n",
+    )
 
     from scripts.workflow_state import (
         delivered_snapshot_override,
+        final_audit_is_current,
         gate2_delivery_allowed,
         gate2_delivery_override,
         gate2_passed,
         step16_ready,
     )
+    from factory_core.delivery.release import resolve_current_release
 
     assert gate2_passed(project) is False
-    assert gate2_delivery_override(project) is False
-    # This fixture is the explicit no-judge ablation path. It can remain
-    # deliverable without being misclassified as an administrator override.
+    assert gate2_delivery_override(project) is True
     assert delivered_snapshot_override(project) is False
-    assert gate2_delivery_allowed(project) is True
-    assert step16_ready(project, root, "demo") is True
+    assert gate2_delivery_allowed(project) is False
+    assert final_audit_is_current(project) is False
+    assert step16_ready(project, root, "demo") is False
+    current = resolve_current_release(root / "papers", "demo")
+    assert current is not None
+    assert current.release_id == snapshot_id

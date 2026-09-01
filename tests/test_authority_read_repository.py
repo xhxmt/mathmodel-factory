@@ -241,5 +241,8 @@ def test_read_repository_has_no_table_count_or_mutation_surface():
         "command_bundle",
         "phase3_artifact_state",
         "revision_snapshot",
+        "revision_command_identity",
+        "current_run_generation",
+        "trusted_phase3_source_snapshot",
         "outbox_delivery_state",
     }

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from .authority_read_repository import (
     AuthorityPhase3ArtifactState,
-    AuthorityReadRepository,
     AuthorityWorkflowCoordinate,
     authority_phase3_artifact_state_from_dict,
     validate_authority_phase3_artifact_state,
@@ -21,6 +20,12 @@ from .phase6_snapshot_grants import (
     Phase6SnapshotGrantStore,
     ShadowAccessProof,
     verify_shadow_access_proof,
+)
+from .phase6_source_assembler import (
+    Phase6TrustedSourceAssembler,
+    TrustedSourceChainError,
+    trusted_source_chain_receipt_from_dict,
+    verify_receipt_bound_snapshot,
 )
 from .phase78_config import Phase78Settings
 from .phase78_deadline import (
@@ -96,21 +101,33 @@ class Phase78CurrentHeadVerifier:
         authority_wire = source.authority_coordinate
         workflow_id = authority_wire["workflow_id"]
         try:
-            repository = AuthorityReadRepository(
-                self._settings.required_path("authority_database"),
-                expected_source_fence_sha256=(
-                    self._settings.authority_source_fence_sha256 or ""
-                ),
-                deadline=deadline,
-            )
-            live_coordinate = repository.workflow_coordinate(workflow_id)
-            live_state = repository.phase3_artifact_state(
-                workflow_id,
-                through_revision=live_coordinate.current_revision,
-            )
             live_proof = Phase6SnapshotGrantStore(
                 self._settings.required_path("phase6_database")
             ).verify_current_access_proof(supplied_proof, deadline=deadline)
+            receipt_wire = supplied_proof.source_binding.trusted_source_chain_receipt
+            if receipt_wire is None:
+                raise TrustedSourceChainError(
+                    "Phase-6 proof has no trusted durable source chain"
+                )
+            receipt = trusted_source_chain_receipt_from_dict(receipt_wire)
+            assembler = Phase6TrustedSourceAssembler(
+                authority_database=self._settings.required_path(
+                    "authority_database"
+                ),
+                authority_source_fence_sha256=(
+                    self._settings.authority_source_fence_sha256 or ""
+                ),
+                phase4_database=self._settings.required_path("phase4_database"),
+                phase5_database=self._settings.required_path("phase5_database"),
+                phase6_store=Phase6SnapshotGrantStore(
+                    self._settings.required_path("phase6_database")
+                ),
+                deadline=deadline,
+            )
+            assembler.verify_current(receipt)
+            verify_receipt_bound_snapshot(receipt, supplied_proof.snapshot)
+            live_coordinate = receipt.authority_coordinate
+            live_state = receipt.phase3_artifact_state
         except (Phase78CancellationError, Phase78DeadlineError):
             raise
         except Exception as exc:
@@ -139,6 +156,13 @@ class Phase78CurrentHeadVerifier:
             )
         if live_proof != supplied_proof:
             raise Phase78CurrentHeadError("Phase 6 access proof is not current")
+        if (
+            receipt.phase3_artifact_state != supplied_state
+            or receipt.selected_occurrence != supplied_occurrence
+        ):
+            raise Phase78CurrentHeadError(
+                "trusted source receipt differs from selected Phase-3 facts"
+            )
         return Phase78CurrentFacts(
             live_coordinate,
             live_state,

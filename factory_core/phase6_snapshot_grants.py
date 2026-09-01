@@ -407,6 +407,7 @@ class AuthoritySourceBinding:
     phase3_artifact_state_sha256: str
     phase4_operation_state_sha256: str
     phase5_supervisor_state_sha256: str
+    trusted_source_chain_receipt: dict[str, object] | None
     binding_sha256: str
 
     @property
@@ -430,6 +431,11 @@ class AuthoritySourceBinding:
             "phase3_artifact_state_sha256": self.phase3_artifact_state_sha256,
             "phase4_operation_state_sha256": self.phase4_operation_state_sha256,
             "phase5_supervisor_state_sha256": self.phase5_supervisor_state_sha256,
+            "trusted_source_chain_receipt": (
+                None
+                if self.trusted_source_chain_receipt is None
+                else dict(self.trusted_source_chain_receipt)
+            ),
             "binding_sha256": self.binding_sha256,
         }
 
@@ -447,6 +453,7 @@ def build_authority_source_binding(
     phase3_artifact_state_sha256: str,
     phase4_operation_state_sha256: str,
     phase5_supervisor_state_sha256: str,
+    trusted_source_chain_receipt: dict[str, object] | None = None,
 ) -> AuthoritySourceBinding:
     """Validate and bind exact Phase3/4/5 and source-Authority identities."""
 
@@ -480,6 +487,36 @@ def build_authority_source_binding(
     completeness = _plain_text(source_snapshot_completeness, "source_snapshot_completeness")
     if completeness not in _SOURCE_COMPLETENESS:
         raise Phase6ContractError("source snapshot completeness is unsupported")
+    trusted_receipt: dict[str, object] | None = None
+    if trusted_source_chain_receipt is not None:
+        try:
+            from .phase6_source_assembler import (
+                trusted_source_chain_receipt_from_dict,
+            )
+
+            checked_receipt = trusted_source_chain_receipt_from_dict(
+                trusted_source_chain_receipt
+            )
+        except Exception as exc:
+            raise Phase6ContractError(
+                "trusted source-chain receipt does not revalidate"
+            ) from exc
+        if (
+            checked_receipt.authority_coordinate.as_dict() != coordinate
+            or checked_receipt.authority_coordinate_sha256 != coordinate_sha
+            or checked_receipt.authority_revision_snapshot_sha256
+            != authority_revision_snapshot_sha256
+            or checked_receipt.phase3_artifact_state.state_sha256
+            != phase3_artifact_state_sha256
+            or checked_receipt.phase4_state.state_sha256
+            != phase4_operation_state_sha256
+            or checked_receipt.phase5_state.state_sha256
+            != phase5_supervisor_state_sha256
+        ):
+            raise Phase6ContractError(
+                "trusted source-chain receipt differs from source binding"
+            )
+        trusted_receipt = checked_receipt.as_dict()
     body: dict[str, object] = {
         "schema_version": PHASE6_SOURCE_BINDING_SCHEMA,
         "authority_coordinate": coordinate,
@@ -505,6 +542,7 @@ def build_authority_source_binding(
         "phase5_supervisor_state_sha256": _sha(
             phase5_supervisor_state_sha256, "phase5_supervisor_state_sha256"
         ),
+        "trusted_source_chain_receipt": trusted_receipt,
     }
     digest = canonical_sha256(body)
     return AuthoritySourceBinding(
@@ -519,6 +557,7 @@ def build_authority_source_binding(
         body["phase3_artifact_state_sha256"],
         body["phase4_operation_state_sha256"],
         body["phase5_supervisor_state_sha256"],
+        trusted_receipt,
         digest,
     )
 
@@ -539,6 +578,7 @@ def _source_binding_from_dict(value: object) -> AuthoritySourceBinding:
         "phase3_artifact_state_sha256",
         "phase4_operation_state_sha256",
         "phase5_supervisor_state_sha256",
+        "trusted_source_chain_receipt",
         "binding_sha256",
     }
     if set(value) != expected or value.get("schema_version") != PHASE6_SOURCE_BINDING_SCHEMA:
@@ -556,6 +596,7 @@ def _source_binding_from_dict(value: object) -> AuthoritySourceBinding:
             phase3_artifact_state_sha256=value["phase3_artifact_state_sha256"],
             phase4_operation_state_sha256=value["phase4_operation_state_sha256"],
             phase5_supervisor_state_sha256=value["phase5_supervisor_state_sha256"],
+            trusted_source_chain_receipt=value["trusted_source_chain_receipt"],
         )
     except (KeyError, TypeError, Phase6ContractError) as exc:
         raise Phase6StoreError("source binding does not revalidate") from exc

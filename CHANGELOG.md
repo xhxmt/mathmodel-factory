@@ -1,5 +1,53 @@
 # Changelog
 
+- Phase1–8 durable continuous-chain closure: add the packaged
+  `Phase6TrustedSourceAssembler`, an Authority revision-atomic compound reader,
+  and immutable read-only Phase4/5 current/head readers. The trusted receipt
+  binds the exact workflow/project/revision command and predecessor, complete
+  Phase3 graph/current occurrence, all project/run/runtime/scheduler
+  generations, contract pins, Phase4 current/predecessor, Phase5 current, and
+  the Phase6 predecessor. Phase7/8 now rejects receiptless direct-test bindings
+  and reopens Phase4/5 on every current-proof use. A real durable E2E covers
+  restart/replay/conflict, missing/stale/mismatched/partial/cancelled/
+  superseded heads, semantic A→B→A occurrences, wrong Phase6/7 heads and
+  default-off resource silence; the former direct SQL and placeholder-hash E2E
+  setup is replaced by the reviewed generation and durable producer paths.
+
+- Phase9 candidate-bound entry foundation: append A2_0015 without changing
+  A2_0010-A2_0014 bytes, and add a narrow atomic create/rotate service for
+  run generations. It derives generation identity from a typed canonical
+  request and durably binds exact predecessor receipt, source commit/tree/
+  parent, current project/workflow/revision and project/run/runtime/scheduler
+  generations, source-authorized contract pins, official-input byte hashes,
+  execution context, and operator authorization. Same-key replay is exact,
+  different bytes conflict, injected failures roll back every row and pointer,
+  official inputs and the canonical execution-context receipt are read and
+  reverified from explicit paths before commit, initial project generation is
+  content-derived, and controlled-account authorization is checked against the
+  executing UID/account rather than trusted as a label. Immutable succession,
+  receipt, current-pointer, and workflow-coordinate triggers close direct
+  pointer-update gaps,
+  and create/rotate requires `V1_ONLY`, disabled writer/consumer, and disabled
+  delivery. The operator CLI is dry-run unless explicitly confirmed. This
+  capability does not start Phase9-A or authorize provider, network, outbox,
+  delivery, release, deployment, migration, or cutover activity.
+  Add the query-only candidate-bound collector and formal entry verifier for
+  the exact generation/receipt/source/input/context/authorization coordinates,
+  delivery and quiescence fences, old-generation read-only state, and all nine
+  P0 receipts including AR-007. Missing controlled runtime inputs returns a
+  candidate-bound `BLOCKED`; a test-fixture creation receipt is never treated
+  as a formal entry receipt.
+
+- AR-007 delivery-bypass closure: make `ABLATE_NO_JUDGE` an auditable,
+  typed `PERMANENT_ABLATION_NO_DELIVERY` terminal with a nonzero result and
+  `delivery_allowed=false`, including when technical-flow validation or an
+  exact-snapshot delivery override is present. No-judge final audit now skips
+  Judge execution, cached acceptance, and override consumption; it writes only
+  its ablation marker and audit result, never `final_submission.sha256` or a
+  final-acceptance receipt. Workflow-state and atomic-release readers reject
+  both new and historical ablation records, so an override cannot make one
+  current, reusable, Step-16-ready, or publishable.
+
 - Phase9-PREP safety boundary: add a stdlib-only manifest validator and
   operator runbook for preparation that may proceed while the Phase 7+8 Pro
   review is pending. The validator reads one bounded strict JSON manifest and

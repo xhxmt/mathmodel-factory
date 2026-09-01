@@ -163,6 +163,82 @@ class AuthorityCommandBundle:
 
 
 @dataclass(frozen=True)
+class AuthorityRevisionCommandIdentity:
+    """Hash-only identity of the exact command bundle at one revision."""
+
+    workflow_id: str
+    revision: int
+    command_id: str
+    message_id: str
+    command_sha256: str
+    event_sha256: str
+    receipt_sha256: str
+    outbox_sha256: str
+    bundle_sha256: str
+    phase3_mutation_sha256: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema": "authority-read-revision-command-identity-v1",
+            "workflow_id": self.workflow_id,
+            "revision": self.revision,
+            "command_id": self.command_id,
+            "message_id": self.message_id,
+            "command_sha256": self.command_sha256,
+            "event_sha256": self.event_sha256,
+            "receipt_sha256": self.receipt_sha256,
+            "outbox_sha256": self.outbox_sha256,
+            "bundle_sha256": self.bundle_sha256,
+            "phase3_mutation_sha256": self.phase3_mutation_sha256,
+        }
+
+    @property
+    def identity_sha256(self) -> str:
+        return canonical_sha256(self.as_dict())
+
+
+@dataclass(frozen=True)
+class AuthorityCurrentRunGeneration:
+    """Current atomic Phase-9 generation and its immutable creation receipt."""
+
+    workflow_id: str
+    project_id: str
+    project_revision: int
+    project_generation: str
+    run_generation: str
+    runtime_generation: str
+    scheduler_generation: str
+    predecessor_run_generation: str | None
+    predecessor_creation_receipt_sha256: str | None
+    operation_kind: str
+    run_mode: str
+    delivery_capability: str
+    source_commit: str
+    source_tree: str
+    source_parent: str
+    contract_pin_set_sha256: str
+    official_input_manifest_sha256: str
+    official_input_raw_bytes_set_sha256: str
+    execution_context_receipt_sha256: str
+    operator_authorization_receipt_sha256: str
+    request_sha256: str
+    creation_receipt_sha256: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema": "authority-current-run-generation-v1",
+            **{
+                name: getattr(self, name)
+                for name in self.__dataclass_fields__
+            },
+        }
+
+    @property
+    def identity_sha256(self) -> str:
+        return canonical_sha256(self.as_dict())
+
+
+@dataclass(frozen=True)
 class AuthorityPhase3MutationBundle:
     workflow_id: str
     revision: int
@@ -369,6 +445,19 @@ class AuthorityRevisionSnapshot:
 
 
 @dataclass(frozen=True)
+class AuthorityTrustedPhase3SourceSnapshot:
+    """One transaction's complete current Phase-3 trusted-source facts."""
+
+    coordinate: AuthorityWorkflowCoordinate
+    artifact_state: AuthorityPhase3ArtifactState
+    selected_occurrence: ArtifactLedgerOccurrence
+    revision_command: AuthorityRevisionCommandIdentity
+    revision_snapshot: AuthorityRevisionSnapshot
+    predecessor_event_sha256: str | None
+    run_generation: AuthorityCurrentRunGeneration
+
+
+@dataclass(frozen=True)
 class AuthorityOutboxDeliveryView:
     message_id: str
     workflow_id: str
@@ -529,6 +618,161 @@ class AuthorityReadRepository:
         with self._snapshot() as connection:
             return self._coordinate(connection, workflow_id)
 
+    def _current_run_generation(
+        self,
+        connection: sqlite3.Connection,
+        coordinate: AuthorityWorkflowCoordinate,
+    ) -> AuthorityCurrentRunGeneration:
+        rows = connection.execute(
+            """
+            SELECT g.*,c.creation_receipt_sha256,
+                   r.receipt_json,r.receipt_sha256,
+                   s.succession_json,s.succession_sha256
+            FROM authority_production_run_generation_current c
+            JOIN authority_production_run_generations g
+              ON g.run_generation=c.run_generation
+             AND g.workflow_id=c.workflow_id
+            JOIN authority_production_run_generation_creation_receipts r
+              ON r.run_generation=g.run_generation
+             AND r.workflow_id=g.workflow_id
+             AND r.receipt_sha256=c.creation_receipt_sha256
+            JOIN authority_production_run_generation_successions s
+              ON s.run_generation=g.run_generation
+             AND s.workflow_id=g.workflow_id
+            WHERE c.workflow_id=?
+            """,
+            (coordinate.workflow_id,),
+        ).fetchall()
+        if len(rows) != 1:
+            raise AuthorityReadError(
+                "workflow does not have exactly one atomic current run generation"
+            )
+        row = rows[0]
+        receipt_bytes = _canonical_envelope(
+            row["receipt_json"], row["receipt_sha256"], "run-generation receipt"
+        )
+        succession_bytes = _canonical_envelope(
+            row["succession_json"],
+            row["succession_sha256"],
+            "run-generation succession",
+        )
+        try:
+            receipt = json.loads(receipt_bytes)
+            succession = json.loads(succession_bytes)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityReadError(
+                "run-generation receipt JSON is malformed"
+            ) from exc
+        request = receipt.get("request") if type(receipt) is dict else None
+        if type(request) is not dict:
+            raise AuthorityReadError("run-generation receipt request is unavailable")
+        comparisons = {
+            "workflow_id": coordinate.workflow_id,
+            "project_id": coordinate.project_id,
+            "project_revision": row["project_revision"],
+            "project_generation": coordinate.project_generation,
+            "runtime_generation": coordinate.runtime_generation,
+            "scheduler_generation": coordinate.scheduler_generation,
+            "predecessor_run_generation": row["predecessor_run_generation"],
+            "predecessor_creation_receipt_sha256": row[
+                "predecessor_creation_receipt_sha256"
+            ],
+            "operation_kind": row["operation_kind"],
+            "run_mode": row["run_mode"],
+            "delivery_capability": "DISABLED",
+        }
+        source = request.get("source")
+        if (
+            row["run_generation"] != coordinate.run_generation
+            or row["project_id"] != coordinate.project_id
+            or row["project_generation"] != coordinate.project_generation
+            or row["runtime_generation"] != coordinate.runtime_generation
+            or row["scheduler_generation"] != coordinate.scheduler_generation
+            or row["contract_pin_set_sha256"]
+            != coordinate.contract_pin_set_sha256
+            or canonical_sha256(request.get("contract_pins"))
+            != row["contract_pin_set_sha256"]
+            or row["delivery_capability"] != "DISABLED"
+            or any(request.get(name) != expected for name, expected in comparisons.items())
+            or type(source) is not dict
+            or source.get("source_commit") != row["source_commit"]
+            or source.get("source_tree") != row["source_tree"]
+            or source.get("source_parent") != row["source_parent"]
+            or receipt.get("run_generation") != row["run_generation"]
+            or receipt.get("workflow_id") != coordinate.workflow_id
+            or receipt.get("request_sha256") != row["request_sha256"]
+            or receipt.get("official_input_manifest_sha256")
+            != row["official_input_manifest_sha256"]
+            or receipt.get("official_input_raw_bytes_set_sha256")
+            != row["official_input_raw_bytes_set_sha256"]
+            or receipt.get("execution_context_receipt_sha256")
+            != row["execution_context_receipt_sha256"]
+            or receipt.get("operator_authorization_receipt_sha256")
+            != row["operator_authorization_receipt_sha256"]
+            or canonical_sha256(request) != row["request_sha256"]
+            or succession
+            != {
+                "schema": "authority-phase9-run-generation-succession-v1",
+                "workflow_id": coordinate.workflow_id,
+                "run_generation": row["run_generation"],
+                "predecessor_run_generation": row["predecessor_run_generation"],
+                "predecessor_creation_receipt_sha256": row[
+                    "predecessor_creation_receipt_sha256"
+                ],
+                "request_sha256": row["request_sha256"],
+            }
+        ):
+            raise AuthorityReadError(
+                "current run-generation coordinate or receipt differs"
+            )
+        for field in (
+            "contract_pin_set_sha256", "official_input_manifest_sha256",
+            "official_input_raw_bytes_set_sha256",
+            "execution_context_receipt_sha256",
+            "operator_authorization_receipt_sha256", "request_sha256",
+            "creation_receipt_sha256",
+        ):
+            _sha(row[field], field)
+        for field in ("source_commit", "source_tree", "source_parent"):
+            value = row[field]
+            if (
+                type(value) is not str
+                or len(value) != 40
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise AuthorityReadError(f"{field} is not a concrete Git object ID")
+        return AuthorityCurrentRunGeneration(
+            coordinate.workflow_id,
+            coordinate.project_id,
+            int(row["project_revision"]),
+            coordinate.project_generation,
+            coordinate.run_generation,
+            coordinate.runtime_generation,
+            coordinate.scheduler_generation,
+            row["predecessor_run_generation"],
+            row["predecessor_creation_receipt_sha256"],
+            str(row["operation_kind"]),
+            str(row["run_mode"]),
+            "DISABLED",
+            str(row["source_commit"]),
+            str(row["source_tree"]),
+            str(row["source_parent"]),
+            str(row["contract_pin_set_sha256"]),
+            str(row["official_input_manifest_sha256"]),
+            str(row["official_input_raw_bytes_set_sha256"]),
+            str(row["execution_context_receipt_sha256"]),
+            str(row["operator_authorization_receipt_sha256"]),
+            str(row["request_sha256"]),
+            str(row["creation_receipt_sha256"]),
+        )
+
+    def current_run_generation(
+        self, workflow_id: str
+    ) -> AuthorityCurrentRunGeneration:
+        with self._snapshot() as connection:
+            coordinate = self._coordinate(connection, workflow_id)
+            return self._current_run_generation(connection, coordinate)
+
     def command_bundle(
         self, *, workflow_id: str, idempotency_key: str
     ) -> AuthorityCommandBundle:
@@ -680,6 +924,118 @@ class AuthorityReadRepository:
                 checkpoint_occurrences,
             )
 
+    def revision_command_identity(
+        self,
+        workflow_id: str,
+        revision: int,
+    ) -> AuthorityRevisionCommandIdentity:
+        """Read and fully revalidate the Phase-3 command at one revision."""
+
+        key = str(_identifier(workflow_id, "workflow_id"))
+        boundary = _nonnegative(revision, "revision")
+        if boundary < 1:
+            raise AuthorityReadError("revision must be positive")
+        with self._snapshot() as connection:
+            coordinate = self._coordinate(connection, key)
+            if boundary > coordinate.current_revision:
+                raise AuthorityReadError("revision exceeds the current head")
+            rows = connection.execute(
+                """
+                SELECT c.command_id,c.envelope_json AS command_json,
+                       c.envelope_sha256 AS command_sha256,
+                       e.envelope_json AS event_json,e.envelope_sha256 AS event_sha256,
+                       r.envelope_json AS receipt_json,r.envelope_sha256 AS receipt_sha256,
+                       o.message_id,o.envelope_json AS outbox_json,
+                       o.envelope_sha256 AS outbox_sha256,
+                       pc.bundle_sha256,i.request_schema,i.request_sha256
+                FROM authority_commands c
+                JOIN authority_events e ON e.command_id=c.command_id
+                JOIN authority_receipts r ON r.event_id=e.event_id
+                JOIN authority_outbox o ON o.event_id=e.event_id
+                JOIN authority_production_command_commits pc
+                  ON pc.command_id=c.command_id
+                JOIN authority_idempotency_records i
+                  ON i.command_id=c.command_id
+                 AND i.scope_kind='workflow' AND i.scope_id=c.workflow_id
+                WHERE c.workflow_id=? AND c.persisted_revision=? AND e.revision=?
+                """,
+                (key, boundary, boundary),
+            ).fetchall()
+            if len(rows) != 1:
+                raise AuthorityReadError(
+                    "revision command companion cardinality differs"
+                )
+            row = rows[0]
+            command_bytes = _canonical_envelope(
+                row["command_json"], row["command_sha256"], "command"
+            )
+            event_bytes = _canonical_envelope(
+                row["event_json"], row["event_sha256"], "event"
+            )
+            receipt_bytes = _canonical_envelope(
+                row["receipt_json"], row["receipt_sha256"], "receipt"
+            )
+            outbox_bytes = _canonical_envelope(
+                row["outbox_json"], row["outbox_sha256"], "outbox"
+            )
+            del command_bytes, event_bytes, receipt_bytes, outbox_bytes
+            phase3 = _phase3_mutation_at_revision(
+                connection,
+                workflow_id=key,
+                revision=boundary,
+                command_id=str(row["command_id"]),
+            )
+            if phase3 is None:
+                raise AuthorityReadError(
+                    "revision command has no complete Phase-3 mutation"
+                )
+            try:
+                continuity = _production_writer._validated_phase3_bundles_through(
+                    connection,
+                    workflow_id=key,
+                    through_revision=boundary,
+                )
+            except AuthorityEnvelopePersistenceError as exc:
+                raise AuthorityReadError(str(exc)) from exc
+            if (
+                not continuity
+                or continuity[-1].revision != boundary
+                or continuity[-1].command_id != row["command_id"]
+                or continuity[-1].mutation != phase3.mutation
+            ):
+                raise AuthorityReadError("Phase-3 revision continuity differs")
+            request_sha256 = _production_writer._phase3_request_sha256(
+                str(row["command_sha256"]), phase3.mutation.mutation_sha256
+            )
+            bundle_sha256 = _production_writer._phase3_bundle_sha256(
+                str(row["command_sha256"]),
+                str(row["event_sha256"]),
+                str(row["receipt_sha256"]),
+                str(row["outbox_sha256"]),
+                phase3.mutation.mutation_sha256,
+            )
+            if (
+                row["request_schema"]
+                != _production_writer.AUTHORITY_PHASE3_IDEMPOTENCY_REQUEST_SCHEMA
+                or row["request_sha256"] != request_sha256
+                or row["bundle_sha256"] != bundle_sha256
+            ):
+                raise AuthorityReadError(
+                    "revision command request or bundle identity differs"
+                )
+            return AuthorityRevisionCommandIdentity(
+                key,
+                boundary,
+                str(row["command_id"]),
+                str(row["message_id"]),
+                str(row["command_sha256"]),
+                str(row["event_sha256"]),
+                str(row["receipt_sha256"]),
+                str(row["outbox_sha256"]),
+                bundle_sha256,
+                phase3.mutation.mutation_sha256,
+            )
+
     def phase3_artifact_state(
         self,
         workflow_id: str,
@@ -767,6 +1123,223 @@ class AuthorityReadRepository:
                 )
                 last = int(row["revision"])
             return AuthorityRevisionSnapshot(coordinate, boundary, tuple(events))
+
+    def trusted_phase3_source_snapshot(
+        self,
+        *,
+        workflow_id: str,
+        occurrence_id: str,
+    ) -> AuthorityTrustedPhase3SourceSnapshot:
+        """Read coordinate, complete P3 graph and selected command atomically."""
+
+        key = str(_identifier(workflow_id, "workflow_id"))
+        selected_id = str(_identifier(occurrence_id, "occurrence_id"))
+        with self._snapshot() as connection:
+            coordinate = self._coordinate(connection, key)
+            run_generation = self._current_run_generation(connection, coordinate)
+            boundary = coordinate.current_revision
+            try:
+                bundles = _production_writer._validated_phase3_bundles_through(
+                    connection,
+                    workflow_id=key,
+                    through_revision=boundary,
+                )
+            except AuthorityEnvelopePersistenceError as exc:
+                raise AuthorityReadError(str(exc)) from exc
+            latest: dict[str, ArtifactLedgerOccurrence] = {}
+            for bundle in bundles:
+                for occurrence in bundle.artifact_occurrences:
+                    latest[occurrence.normalized_path] = occurrence
+            artifact_state = validate_authority_phase3_artifact_state(
+                AuthorityPhase3ArtifactState(
+                    key,
+                    boundary,
+                    tuple(latest[path] for path in sorted(latest)),
+                )
+            )
+            selected = tuple(
+                occurrence
+                for occurrence in artifact_state.occurrences
+                if occurrence.occurrence_id == selected_id
+            )
+            if len(selected) != 1:
+                raise AuthorityReadError(
+                    "selected occurrence is not the exact current path head"
+                )
+            selected_occurrence = selected[0]
+            revision = selected_occurrence.revision
+            if revision < 1 or revision > boundary:
+                raise AuthorityReadError("selected occurrence revision is invalid")
+
+            rows = connection.execute(
+                """
+                SELECT c.command_id,c.envelope_json AS command_json,
+                       c.envelope_sha256 AS command_sha256,
+                       e.envelope_json AS event_json,e.envelope_sha256 AS event_sha256,
+                       r.envelope_json AS receipt_json,r.envelope_sha256 AS receipt_sha256,
+                       o.message_id,o.envelope_json AS outbox_json,
+                       o.envelope_sha256 AS outbox_sha256,
+                       pc.bundle_sha256,i.request_schema,i.request_sha256
+                FROM authority_commands c
+                JOIN authority_events e ON e.command_id=c.command_id
+                JOIN authority_receipts r ON r.event_id=e.event_id
+                JOIN authority_outbox o ON o.event_id=e.event_id
+                JOIN authority_production_command_commits pc
+                  ON pc.command_id=c.command_id
+                JOIN authority_idempotency_records i
+                  ON i.command_id=c.command_id
+                 AND i.scope_kind='workflow' AND i.scope_id=c.workflow_id
+                WHERE c.workflow_id=? AND c.persisted_revision=? AND e.revision=?
+                """,
+                (key, revision, revision),
+            ).fetchall()
+            if len(rows) != 1:
+                raise AuthorityReadError(
+                    "selected revision command companion cardinality differs"
+                )
+            row = rows[0]
+            _canonical_envelope(
+                row["command_json"], row["command_sha256"], "command"
+            )
+            _canonical_envelope(row["event_json"], row["event_sha256"], "event")
+            _canonical_envelope(
+                row["receipt_json"], row["receipt_sha256"], "receipt"
+            )
+            _canonical_envelope(
+                row["outbox_json"], row["outbox_sha256"], "outbox"
+            )
+            phase3 = _phase3_mutation_at_revision(
+                connection,
+                workflow_id=key,
+                revision=revision,
+                command_id=str(row["command_id"]),
+            )
+            if phase3 is None:
+                raise AuthorityReadError(
+                    "selected revision command has no complete Phase-3 mutation"
+                )
+            matching_bundles = tuple(
+                bundle
+                for bundle in bundles
+                if bundle.revision == revision
+                and bundle.command_id == row["command_id"]
+            )
+            if (
+                len(matching_bundles) != 1
+                or matching_bundles[0].mutation != phase3.mutation
+            ):
+                raise AuthorityReadError("selected Phase-3 continuity differs")
+            request_sha256 = _production_writer._phase3_request_sha256(
+                str(row["command_sha256"]), phase3.mutation.mutation_sha256
+            )
+            bundle_sha256 = _production_writer._phase3_bundle_sha256(
+                str(row["command_sha256"]),
+                str(row["event_sha256"]),
+                str(row["receipt_sha256"]),
+                str(row["outbox_sha256"]),
+                phase3.mutation.mutation_sha256,
+            )
+            if (
+                row["request_schema"]
+                != _production_writer.AUTHORITY_PHASE3_IDEMPOTENCY_REQUEST_SCHEMA
+                or row["request_sha256"] != request_sha256
+                or row["bundle_sha256"] != bundle_sha256
+            ):
+                raise AuthorityReadError(
+                    "selected revision request or bundle identity differs"
+                )
+            command = AuthorityRevisionCommandIdentity(
+                key,
+                revision,
+                str(row["command_id"]),
+                str(row["message_id"]),
+                str(row["command_sha256"]),
+                str(row["event_sha256"]),
+                str(row["receipt_sha256"]),
+                str(row["outbox_sha256"]),
+                bundle_sha256,
+                phase3.mutation.mutation_sha256,
+            )
+
+            event_rows = connection.execute(
+                """
+                SELECT event_id,workflow_id,revision,command_id,event_type,
+                       envelope_json,envelope_sha256
+                FROM authority_events
+                WHERE workflow_id=? AND revision>=1 AND revision<=?
+                ORDER BY revision
+                """,
+                (key, boundary),
+            ).fetchall()
+            event_revisions = tuple(int(item["revision"]) for item in event_rows)
+            if (
+                not event_revisions
+                or event_revisions[-1] != boundary
+                or event_revisions
+                != tuple(range(event_revisions[0], boundary + 1))
+                or any(
+                    bundle.revision not in event_revisions for bundle in bundles
+                )
+            ):
+                raise AuthorityReadError(
+                    "Authority revision graph is partial or non-contiguous"
+                )
+            events: list[AuthorityEventRecord] = []
+            for event_row in event_rows:
+                raw = _canonical_envelope(
+                    event_row["envelope_json"],
+                    event_row["envelope_sha256"],
+                    "event",
+                )
+                events.append(
+                    AuthorityEventRecord(
+                        str(event_row["event_id"]),
+                        str(event_row["workflow_id"]),
+                        int(event_row["revision"]),
+                        str(event_row["command_id"]),
+                        str(event_row["event_type"]),
+                        raw,
+                        str(event_row["envelope_sha256"]),
+                    )
+                )
+            revision_snapshot = AuthorityRevisionSnapshot(
+                coordinate,
+                boundary,
+                tuple(events),
+            )
+            selected_events = tuple(
+                event
+                for event in events
+                if event.revision == revision
+                and event.command_id == selected_occurrence.command_id
+                and event.envelope_sha256 == command.event_sha256
+            )
+            if len(selected_events) != 1:
+                raise AuthorityReadError(
+                    "selected occurrence command is absent from revision graph"
+                )
+            predecessor = None
+            if revision > 1:
+                predecessors = tuple(
+                    event.envelope_sha256
+                    for event in events
+                    if event.revision == revision - 1
+                )
+                if len(predecessors) > 1:
+                    raise AuthorityReadError(
+                        "selected occurrence predecessor is ambiguous"
+                    )
+                if predecessors:
+                    predecessor = predecessors[0]
+            return AuthorityTrustedPhase3SourceSnapshot(
+                coordinate,
+                artifact_state,
+                selected_occurrence,
+                command,
+                revision_snapshot,
+                predecessor,
+                run_generation,
+            )
 
     def outbox_delivery_state(self, message_id: str) -> AuthorityOutboxDeliveryView:
         message = str(_identifier(message_id, "message_id"))

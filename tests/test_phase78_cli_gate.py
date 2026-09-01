@@ -72,6 +72,8 @@ def test_enabled_cli_rejects_noncanonical_work_key_before_resources(
             "PHASE78_ENABLED": "true",
             "PHASE78_AUTHORITY_SOURCE_FENCE_SHA256": "a" * 64,
             "PHASE78_AUTHORITY_DB_FILE": str(runtime / "authority.db"),
+            "PHASE78_PHASE4_DB_FILE": str(runtime / "phase4.db"),
+            "PHASE78_PHASE5_DB_FILE": str(runtime / "phase5.db"),
             "PHASE78_PHASE6_DB_FILE": str(runtime / "phase6.db"),
             "PHASE78_PHASE7_DB_FILE": str(runtime / "phase7.db"),
             "PHASE78_PHASE8_DB_FILE": str(runtime / "phase8.db"),

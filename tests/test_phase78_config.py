@@ -16,6 +16,8 @@ def _enabled(tmp_path: Path) -> dict[str, str]:
         "PHASE78_ENABLED": "true",
         "PHASE78_AUTHORITY_DB_FILE": str(tmp_path / "authority.db"),
         "PHASE78_AUTHORITY_SOURCE_FENCE_SHA256": "a" * 64,
+        "PHASE78_PHASE4_DB_FILE": str(tmp_path / "phase4.db"),
+        "PHASE78_PHASE5_DB_FILE": str(tmp_path / "phase5.db"),
         "PHASE78_PHASE6_DB_FILE": str(tmp_path / "phase6.db"),
         "PHASE78_PHASE7_DB_FILE": str(tmp_path / "phase7.db"),
         "PHASE78_PHASE8_DB_FILE": str(tmp_path / "phase8.db"),
@@ -73,6 +75,8 @@ def test_enabled_invalid_configuration_fails_with_stable_public_code(
 def test_enabled_missing_each_required_path_fails_closed(tmp_path: Path) -> None:
     for name in (
         "PHASE78_AUTHORITY_DB_FILE",
+        "PHASE78_PHASE4_DB_FILE",
+        "PHASE78_PHASE5_DB_FILE",
         "PHASE78_PHASE6_DB_FILE",
         "PHASE78_PHASE7_DB_FILE",
         "PHASE78_PHASE8_DB_FILE",

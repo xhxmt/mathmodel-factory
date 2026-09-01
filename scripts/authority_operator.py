@@ -190,6 +190,18 @@ def build_parser() -> argparse.ArgumentParser:
     switch.add_argument("--occurred-at", required=True, type=int)
     switch.add_argument("--confirm", action="store_true")
 
+    run_generation = sub.add_parser(
+        "run-generation",
+        help="atomically create/rotate one default-off candidate-bound run generation",
+    )
+    run_generation.add_argument("--database", required=True)
+    run_generation.add_argument("--expected-source-fence", required=True)
+    run_generation.add_argument("--source-repository", required=True)
+    run_generation.add_argument("--official-input-root", required=True)
+    run_generation.add_argument("--execution-context-receipt", required=True)
+    run_generation.add_argument("--request", required=True)
+    run_generation.add_argument("--confirm", action="store_true")
+
     health = sub.add_parser("health", help="read-only explicit-policy alert evaluation")
     health.add_argument("--database", required=True)
     health.add_argument("--expected-source-fence", required=True)
@@ -304,6 +316,37 @@ def main(argv: list[str] | None = None) -> int:
                     occurred_at=args.occurred_at,
                 )
             _emit(asdict(result))
+            return 0
+        if args.command == "run-generation":
+            from factory_core.phase9_run_generation import (
+                run_generation_request_from_dict,
+            )
+
+            request = run_generation_request_from_dict(
+                _read_evidence_object(args.request)
+            )
+            if not args.confirm:
+                _emit(
+                    {
+                        "schema": "authority-operator-dry-run-v1",
+                        "operation": "run-generation",
+                        "database": str(Path(args.database)),
+                        "confirmed": False,
+                        "request_sha256": request.request_sha256,
+                        "derived_run_generation": request.derived_run_generation,
+                    }
+                )
+                return 0
+            result = AuthorityOperations(
+                args.database,
+                expected_source_fence_sha256=args.expected_source_fence,
+            ).create_or_rotate_run_generation(
+                request,
+                source_repository=args.source_repository,
+                official_input_root=args.official_input_root,
+                execution_context_receipt_path=args.execution_context_receipt,
+            )
+            _emit(result.as_dict())
             return 0
         if args.command == "health":
             policy = AuthorityHealthPolicy(

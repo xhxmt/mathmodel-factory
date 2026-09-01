@@ -163,6 +163,10 @@ class FinalAuditService:
             "yes",
             "on",
         }
+        if ablate_judge:
+            # A no-judge run is an auditable non-delivery terminal, never a
+            # request to consume a cached PASS or delivery override.
+            reuse_pass = False
         prepare_packets = (
             None if ablate_judge else getattr(self.judge, "prepare_packets", None)
         )
@@ -292,6 +296,9 @@ class FinalAuditService:
                 )
                 return AuditOutcome(execution, cached, snapshot)
 
+        if ablate_judge:
+            return self._finish_ablation(project, snapshot)
+
         delivery_override = self._delivery_override(project, snapshot.snapshot_id)
         if delivery_override is not None:
             return self._finish_judge_result(
@@ -304,13 +311,6 @@ class FinalAuditService:
                     gate2_override_id=delivery_override.override_id,
                 ),
                 snapshot=snapshot,
-            )
-
-        if ablate_judge:
-            return self._finish_ablation(
-                project,
-                self.judge.execute(context),
-                snapshot,
             )
 
         execute_prepared = getattr(self.judge, "execute_prepared", None)
@@ -624,19 +624,8 @@ class FinalAuditService:
     def _finish_ablation(
         self,
         project: Path,
-        judge_result: ExecutionResult,
         snapshot: AuditSnapshot,
     ) -> AuditOutcome:
-        if judge_result.returncode != 0:
-            return self._failure(
-                project,
-                snapshot=snapshot,
-                decision="ABLATE_NO_JUDGE_FAILED",
-                status=AuditStatus.INDETERMINATE,
-                error_class=judge_result.error_class or "TRANSIENT_JUDGE_INFRASTRUCTURE",
-                returncode=judge_result.returncode,
-                evidence=judge_result.metadata,
-            )
         marker = project / "judge_outputs" / "final_submission.ablation.json"
         _atomic_write_json(
             marker,
@@ -646,33 +635,12 @@ class FinalAuditService:
                 "judge_executed": False,
                 "quality_pass_fabricated": False,
                 "snapshot_id": snapshot.snapshot_id,
+                "technical_flow_validation": self.technical_flow_validation,
+                "delivery_allowed": False,
+                "terminal_reason": "PERMANENT_ABLATION_NO_DELIVERY",
+                "returncode": 2,
             },
         )
-        self._record_override_decision(
-            project,
-            "ABLATE_NO_JUDGE",
-            {"judge_completed": False, "judge_failure_stage": "ablation"},
-        )
-        (project / "judge_outputs/final_submission.sha256").write_text(
-            snapshot.snapshot_id + "\n", encoding="ascii"
-        )
-        try:
-            final_receipt = build_final_acceptance_receipt(
-                project,
-                snapshot,
-                status=AuditStatus.OVERRIDDEN.value,
-                override_receipt=str(marker.relative_to(project)),
-            )
-        except (OSError, ValueError) as exc:
-            return self._failure(
-                project,
-                snapshot=snapshot,
-                decision="ABLATE_NO_JUDGE",
-                status=AuditStatus.INDETERMINATE,
-                error_class="PERMANENT_FINAL_ACCEPTANCE_RECEIPT",
-                returncode=2,
-                evidence={"receipt_error": str(exc)},
-            )
         record = AuditRecord(
             snapshot_id=snapshot.snapshot_id,
             base=project.name,
@@ -680,25 +648,32 @@ class FinalAuditService:
             status=AuditStatus.OVERRIDDEN,
             decision="ABLATE_NO_JUDGE",
             judge_completed=False,
-            delivery_allowed=True,
+            delivery_allowed=False,
             created_at=_utc_now(),
+            error_class="PERMANENT_ABLATION_NO_DELIVERY",
+            returncode=2,
             evidence={
                 "governance": "ABLATE_NO_JUDGE",
-                "final_acceptance_receipt": str(FINAL_ACCEPTANCE_RECEIPT_PATH),
-                "final_acceptance_content_sha256": final_receipt.get(
-                    "content_sha256"
-                ),
+                "ablation_marker": str(marker.relative_to(project)),
+                "technical_flow_validation": self.technical_flow_validation,
+                "quality_pass_fabricated": False,
+                "delivery_allowed": False,
             },
         )
         record = self._persist(project, snapshot, record)
         return AuditOutcome(
-            ExecutionResult.succeeded(
+            ExecutionResult.failed(
+                "PERMANENT_ABLATION_NO_DELIVERY",
+                returncode=2,
                 audit_status=record.status.value,
                 audit_snapshot=snapshot.snapshot_id,
                 audit_result=str(self._latest_path(project).relative_to(project)),
                 final_decision=record.decision,
                 gate2_delivery_override=False,
                 ablation="ABLATE_NO_JUDGE",
+                technical_flow_validation=self.technical_flow_validation,
+                quality_pass_fabricated=False,
+                delivery_allowed=False,
             ),
             record,
             snapshot,
@@ -1050,6 +1025,8 @@ class FinalAuditService:
             AuditStatus.OVERRIDDEN,
         } or value.get("profile") != self.profile:
             return None
+        if value.get("decision") == "ABLATE_NO_JUDGE":
+            return None
         if value.get("delivery_allowed") is not True:
             return None
         if status is AuditStatus.PASS and (
@@ -1086,40 +1063,19 @@ class FinalAuditService:
             if not acceptance_valid:
                 return None
         else:
-            ablation = value.get("decision") == "ABLATE_NO_JUDGE"
-            if ablation:
-                try:
-                    marker = json.loads(
-                        (
-                            project
-                            / "judge_outputs/final_submission.ablation.json"
-                        ).read_text(encoding="utf-8")
-                    )
-                except (OSError, json.JSONDecodeError):
-                    return None
-                if (
-                    os.getenv("ABLATE_NO_JUDGE", "0").lower()
-                    not in {"1", "true", "yes", "on"}
-                    or marker.get("judge_executed") is not False
-                    or marker.get("snapshot_id") != snapshot.snapshot_id
-                ):
-                    return None
-            elif not override or not self._consumed_delivery_override(
+            if not override or not self._consumed_delivery_override(
                 project, snapshot.snapshot_id, value
             ):
                 return None
-            if ablation:
-                route = None
-            else:
-                try:
-                    route = json.loads(
-                        (project / "judge_outputs/decision_route.json").read_text(
-                            encoding="utf-8"
-                        )
+            try:
+                route = json.loads(
+                    (project / "judge_outputs/decision_route.json").read_text(
+                        encoding="utf-8"
                     )
-                except (OSError, json.JSONDecodeError):
-                    return None
-            if route is not None and (
+                )
+            except (OSError, json.JSONDecodeError):
+                return None
+            if (
                 route.get("effective_decision") != "CONTINUE_TO_STEP16"
                 or route.get("quality_pass_fabricated") is not False
             ):

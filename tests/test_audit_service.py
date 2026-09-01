@@ -508,7 +508,7 @@ def test_no_judge_ablation_is_visible_and_never_fabricates_pass(
     class AblatedJudge:
         @staticmethod
         def execute(_context):
-            return ExecutionResult.succeeded(ablation="ABLATE_NO_JUDGE")
+            raise AssertionError("ABLATE_NO_JUDGE must not execute the judge")
 
     root = tmp_path / "factory"
     project = root / "ongoing" / "demo"
@@ -527,6 +527,12 @@ def test_no_judge_ablation_is_visible_and_never_fabricates_pass(
     assert outcome.record.status is AuditStatus.OVERRIDDEN
     assert outcome.record.decision == "ABLATE_NO_JUDGE"
     assert outcome.record.judge_completed is False
+    assert outcome.record.delivery_allowed is False
+    assert outcome.record.error_class == "PERMANENT_ABLATION_NO_DELIVERY"
+    assert outcome.record.returncode == 2
+    assert outcome.execution.returncode == 2
+    assert outcome.execution.error_class == "PERMANENT_ABLATION_NO_DELIVERY"
+    assert outcome.execution.metadata["delivery_allowed"] is False
     marker = json.loads(
         (project / "judge_outputs/final_submission.ablation.json").read_text(
             encoding="utf-8"
@@ -534,6 +540,134 @@ def test_no_judge_ablation_is_visible_and_never_fabricates_pass(
     )
     assert marker["judge_executed"] is False
     assert marker["quality_pass_fabricated"] is False
+    assert marker["delivery_allowed"] is False
+    assert marker["terminal_reason"] == "PERMANENT_ABLATION_NO_DELIVERY"
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
     from scripts.workflow_state import final_audit_is_current
 
-    assert final_audit_is_current(project) is True
+    assert final_audit_is_current(project) is False
+
+
+def test_no_judge_ablation_precedes_delivery_override(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class AblatedJudge:
+        @staticmethod
+        def execute(_context):
+            raise AssertionError("delivery override must not bypass no-judge ablation")
+
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    snapshot_id = "4" * 64
+    store = AuthStore(root / "web/auth.db")
+    store.initialize()
+    store.bootstrap_admin("correct horse battery staple test only")
+    authorization = store.issue_delivery_override(
+        base_name="demo",
+        scope="deliver_snapshot",
+        bound_snapshot_id=snapshot_id,
+        source_verdict="REOPEN_REVISION_MODEL",
+        reason="test ablation priority",
+        actor="admin",
+    )
+    provider = SQLiteOverrideProvider(root / "web/auth.db")
+    monkeypatch.setenv("ABLATE_NO_JUDGE", "1")
+    service = FinalAuditService(
+        root,
+        AblatedJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: snapshot_id,
+        override_provider=provider,
+    )
+
+    outcome = service.run(make_context(project), reuse_pass=True)
+
+    assert outcome.record.decision == "ABLATE_NO_JUDGE"
+    assert outcome.record.delivery_allowed is False
+    assert outcome.record.override is False
+    assert outcome.execution.returncode == 2
+    persisted = provider.get_override(authorization.override_id)
+    assert persisted is not None
+    assert persisted.consumed_at is None
+    assert not (project / "judge_outputs/delivery_override_receipt.json").exists()
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
+
+
+def test_no_judge_ablation_result_is_never_reusable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class AblatedJudge:
+        @staticmethod
+        def execute(_context):
+            raise AssertionError("no-judge audit must not execute the judge")
+
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    snapshot_id = "7" * 64
+    monkeypatch.setenv("ABLATE_NO_JUDGE", "1")
+    ablation = FinalAuditService(
+        root,
+        AblatedJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: snapshot_id,
+    ).run(make_context(project), reuse_pass=True)
+    monkeypatch.delenv("ABLATE_NO_JUDGE")
+    judge = PassingJudge()
+    normal = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: snapshot_id,
+    ).run(make_context(project), compile_pdf=False, reuse_pass=True)
+
+    assert ablation.record.delivery_allowed is False
+    assert normal.record.status is AuditStatus.PASS
+    assert normal.record.reused is False
+    assert judge.judge_calls == 1
+
+
+def test_technical_flow_plus_no_judge_ablation_is_non_delivery_terminal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class AblatedJudge:
+        @staticmethod
+        def execute(_context):
+            raise AssertionError("technical ablation must not execute the judge")
+
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    authorization = project / ".factory/technical_flow/authorization.json"
+    authorization.parent.mkdir(parents=True)
+    authorization.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("ABLATE_NO_JUDGE", "1")
+    service = FinalAuditService(
+        root,
+        AblatedJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "5" * 64,
+        technical_flow_validation=True,
+    )
+    monkeypatch.setattr(
+        service,
+        "_technical_authorization",
+        lambda _project: SimpleNamespace(path=authorization, sha256="6" * 64),
+    )
+
+    outcome = service.run(make_context(project), reuse_pass=True)
+
+    assert outcome.record.decision == "ABLATE_NO_JUDGE"
+    assert outcome.record.delivery_allowed is False
+    assert outcome.record.evidence["technical_flow_validation"] is True
+    assert outcome.execution.returncode == 2
+    assert outcome.execution.metadata["technical_flow_validation"] is True
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()

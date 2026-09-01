@@ -43,9 +43,11 @@ PHASE4_SHADOW_DEFAULT_ENABLED = False
 PHASE4_SHADOW_SCHEMA_VERSION = "phase4-durable-shadow-store-v1"
 PHASE4_SHADOW_RECEIPT_SCHEMA = "phase4-durable-shadow-commit-receipt-v1"
 PHASE4_SHADOW_RUN_SCHEMA = "phase4-durable-full-shadow-run-v1"
+PHASE4_SOURCE_CHAIN_BINDING_SCHEMA = "phase4-trusted-source-chain-binding-v1"
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_GIT_OID = re.compile(r"[0-9a-f]{40}\Z")
 _SQLITE_HEADER = b"SQLite format 3\x00"
 _SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _EXPECTED_SCHEMA_DIGEST = (
@@ -244,6 +246,147 @@ class Phase4ShadowFenceError(Phase4ShadowError):
     """Raised when operation, claim, lease or state CAS ownership is stale."""
 
 
+@dataclass(frozen=True, slots=True)
+class Phase4SourceChainBinding:
+    """Immutable Phase-2/3 coordinate captured by the trusted P4 producer.
+
+    The binding is optional for the historical standalone Phase-4 contract.
+    A Phase-6 trusted-source chain, however, requires it and revalidates every
+    field against the live Authority/Phase-3 readers before use.
+    """
+
+    project_id: str
+    workflow_id: str
+    authority_revision: int
+    project_generation: str
+    run_generation: str
+    runtime_generation: str
+    scheduler_generation: str
+    contract_pin_set_sha256: str
+    phase3_artifact_state_sha256: str
+    selected_occurrence_id: str
+    selected_occurrence_semantic_sha256: str
+    phase3_current_graph_sha256: str
+    authority_command_id: str
+    authority_command_sha256: str
+    authority_mutation_sha256: str
+    authority_revision_snapshot_sha256: str
+    authority_outbox_message_id: str
+    authority_predecessor_event_sha256: str | None
+    implementation_identity_sha256: str
+    source_commit: str
+    source_tree: str
+    source_parent: str
+    run_generation_request_sha256: str
+    run_generation_creation_receipt_sha256: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "project_id", "workflow_id", "project_generation", "run_generation",
+            "runtime_generation", "scheduler_generation", "selected_occurrence_id",
+            "authority_command_id", "authority_outbox_message_id",
+        ):
+            value = _text(getattr(self, name), name)
+            if name.endswith("generation") and value == "legacy_unknown":
+                raise Phase4ShadowError("legacy_unknown generations are ineligible")
+        _nonnegative(self.authority_revision, "authority_revision")
+        if self.authority_revision < 1:
+            raise Phase4ShadowError("authority_revision must be positive")
+        for name in (
+            "contract_pin_set_sha256", "phase3_artifact_state_sha256",
+            "selected_occurrence_semantic_sha256", "phase3_current_graph_sha256",
+            "authority_command_sha256", "authority_mutation_sha256",
+            "authority_revision_snapshot_sha256", "implementation_identity_sha256",
+            "run_generation_request_sha256",
+            "run_generation_creation_receipt_sha256",
+        ):
+            _sha(getattr(self, name), name)
+        for name in ("source_commit", "source_tree", "source_parent"):
+            if _GIT_OID.fullmatch(getattr(self, name)) is None:
+                raise Phase4ShadowError(f"{name} must be a concrete Git object ID")
+        if self.authority_predecessor_event_sha256 is not None:
+            _sha(
+                self.authority_predecessor_event_sha256,
+                "authority_predecessor_event_sha256",
+            )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": PHASE4_SOURCE_CHAIN_BINDING_SCHEMA,
+            "project_id": self.project_id,
+            "workflow_id": self.workflow_id,
+            "authority_revision": self.authority_revision,
+            "project_generation": self.project_generation,
+            "run_generation": self.run_generation,
+            "runtime_generation": self.runtime_generation,
+            "scheduler_generation": self.scheduler_generation,
+            "contract_pin_set_sha256": self.contract_pin_set_sha256,
+            "phase3_artifact_state_sha256": self.phase3_artifact_state_sha256,
+            "selected_occurrence_id": self.selected_occurrence_id,
+            "selected_occurrence_semantic_sha256": (
+                self.selected_occurrence_semantic_sha256
+            ),
+            "phase3_current_graph_sha256": self.phase3_current_graph_sha256,
+            "authority_command_id": self.authority_command_id,
+            "authority_command_sha256": self.authority_command_sha256,
+            "authority_mutation_sha256": self.authority_mutation_sha256,
+            "authority_revision_snapshot_sha256": (
+                self.authority_revision_snapshot_sha256
+            ),
+            "authority_outbox_message_id": self.authority_outbox_message_id,
+            "authority_predecessor_event_sha256": (
+                self.authority_predecessor_event_sha256
+            ),
+            "implementation_identity_sha256": (
+                self.implementation_identity_sha256
+            ),
+            "source_commit": self.source_commit,
+            "source_tree": self.source_tree,
+            "source_parent": self.source_parent,
+            "run_generation_request_sha256": self.run_generation_request_sha256,
+            "run_generation_creation_receipt_sha256": (
+                self.run_generation_creation_receipt_sha256
+            ),
+        }
+
+    @property
+    def binding_sha256(self) -> str:
+        return canonical_sha256(self.as_dict())
+
+
+def phase4_source_chain_binding_from_dict(
+    value: object,
+) -> Phase4SourceChainBinding:
+    expected = {
+        "schema_version", "project_id", "workflow_id", "authority_revision",
+        "project_generation", "run_generation", "runtime_generation",
+        "scheduler_generation", "contract_pin_set_sha256",
+        "phase3_artifact_state_sha256", "selected_occurrence_id",
+        "selected_occurrence_semantic_sha256", "phase3_current_graph_sha256",
+        "authority_command_id", "authority_command_sha256",
+        "authority_mutation_sha256", "authority_revision_snapshot_sha256",
+        "authority_outbox_message_id", "authority_predecessor_event_sha256",
+        "implementation_identity_sha256",
+        "source_commit", "source_tree", "source_parent",
+        "run_generation_request_sha256",
+        "run_generation_creation_receipt_sha256",
+    }
+    if (
+        type(value) is not dict
+        or set(value) != expected
+        or value.get("schema_version") != PHASE4_SOURCE_CHAIN_BINDING_SCHEMA
+    ):
+        raise Phase4ShadowStoreError("Phase-4 source-chain binding is malformed")
+    try:
+        return Phase4SourceChainBinding(
+            **{name: value[name] for name in expected if name != "schema_version"}
+        )
+    except (TypeError, ValueError, Phase4ShadowError) as exc:
+        raise Phase4ShadowStoreError(
+            "Phase-4 source-chain binding does not revalidate"
+        ) from exc
+
+
 def _text(value: object, field: str) -> str:
     if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
         raise Phase4ShadowError(f"{field} must be a canonical identifier")
@@ -326,10 +469,26 @@ class Phase4RuntimeState:
     claim_owner_epoch: int | None = None
     lease_expires_at: int | None = None
     retry_count: int = 0
+    source_chain_binding: Phase4SourceChainBinding | None = None
 
     def __post_init__(self) -> None:
         if type(self.operation) is not DurableOperation:
             raise Phase4ShadowError("operation must be DurableOperation")
+        if (
+            self.source_chain_binding is not None
+            and type(self.source_chain_binding) is not Phase4SourceChainBinding
+        ):
+            raise Phase4ShadowError(
+                "source_chain_binding must be Phase4SourceChainBinding"
+            )
+        if (
+            self.source_chain_binding is not None
+            and self.operation.identity.outbox_command_id
+            != self.source_chain_binding.authority_outbox_message_id
+        ):
+            raise Phase4ShadowError(
+                "operation command does not match Authority outbox predecessor"
+            )
         _nonnegative(self.retry_count, "retry_count")
         claim_values = (self.claim_owner_id, self.claim_owner_epoch)
         if any(value is None for value in claim_values):
@@ -365,6 +524,11 @@ class Phase4RuntimeState:
             "claim_owner_epoch": self.claim_owner_epoch,
             "lease_expires_at": self.lease_expires_at,
             "retry_count": self.retry_count,
+            "source_chain_binding": (
+                None
+                if self.source_chain_binding is None
+                else self.source_chain_binding.as_dict()
+            ),
             "authoritative": False,
             "dispatch_performed": False,
         }
@@ -396,9 +560,22 @@ def _state_from_dict(value: object) -> Phase4RuntimeState:
             claim_owner_epoch=value["claim_owner_epoch"],
             lease_expires_at=value["lease_expires_at"],
             retry_count=value["retry_count"],
+            source_chain_binding=(
+                None
+                if value.get("source_chain_binding") is None
+                else phase4_source_chain_binding_from_dict(
+                    value["source_chain_binding"]
+                )
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise Phase4ShadowStoreError("operation state is malformed") from exc
+
+
+def phase4_runtime_state_from_dict(value: object) -> Phase4RuntimeState:
+    """Public strict parser used by cross-store trusted-chain verification."""
+
+    return _state_from_dict(value)
 
 
 @dataclass(frozen=True)
@@ -1084,7 +1261,7 @@ class Phase4ShadowStore:
                     primary=preflight_error,
                 )
 
-    def _connect(self) -> _AnchoredConnection:
+    def _connect(self, *, read_only: bool = False) -> _AnchoredConnection:
         lease: OwnedDescriptor | None = None
         connection: _AnchoredConnection | None = None
         try:
@@ -1092,9 +1269,12 @@ class Phase4ShadowStore:
                 owner="phase4-connect"
             )
             connection = sqlite3.connect(
-                self._fd_uri(lease.fileno("phase4-connect"), "mode=rw"),
+                self._fd_uri(
+                    lease.fileno("phase4-connect"),
+                    "mode=ro&immutable=1" if read_only else "mode=rw",
+                ),
                 uri=True,
-                timeout=2,
+                timeout=0 if read_only else 2,
                 factory=_AnchoredConnection,
             )
             connection._adopt_anchor(lease, owner="phase4-connect")
@@ -1105,6 +1285,8 @@ class Phase4ShadowStore:
             )
             self._assert_no_sidecars()
             connection.row_factory = sqlite3.Row
+            if read_only:
+                connection.execute("PRAGMA query_only=ON")
             connection.execute("PRAGMA foreign_keys=ON")
             self._verify_schema(
                 connection, after_open, expected_profile=profile
@@ -1735,10 +1917,18 @@ class Phase4ShadowStore:
         identity: DurableOperationIdentity,
         *,
         occurred_at: int,
+        source_chain_binding: Phase4SourceChainBinding | None = None,
     ) -> Phase4CommitResult:
         if type(identity) is not DurableOperationIdentity:
             raise Phase4ShadowError("identity must be DurableOperationIdentity")
         now = _nonnegative(occurred_at, "occurred_at")
+        if (
+            source_chain_binding is not None
+            and type(source_chain_binding) is not Phase4SourceChainBinding
+        ):
+            raise Phase4ShadowError(
+                "source_chain_binding must be Phase4SourceChainBinding"
+            )
         request = {
             "schema_version": "phase4-shadow-launch-intent-request-v1",
             "operation_type": identity.operation_type.value,
@@ -1747,6 +1937,11 @@ class Phase4ShadowStore:
             "process_scope_id": identity.process_scope_id,
             "payload_sha256": identity.payload_sha256,
             "logical_idempotency_key": identity.idempotency_key,
+            "source_chain_binding": (
+                None
+                if source_chain_binding is None
+                else source_chain_binding.as_dict()
+            ),
         }
         request_sha = canonical_sha256(request)
         request_key = _text(identity.idempotency_key, "logical_idempotency_key")
@@ -1771,7 +1966,10 @@ class Phase4ShadowStore:
             ).fetchone()
             if existing is not None:
                 raise Phase4ShadowStoreError("launch intent lacks its atomic idempotency result")
-            state = Phase4RuntimeState(DurableOperation(identity))
+            state = Phase4RuntimeState(
+                DurableOperation(identity),
+                source_chain_binding=source_chain_binding,
+            )
             receipt = Phase4CommitReceipt(
                 PHASE4_SHADOW_RECEIPT_SCHEMA,
                 "INTENT_RESERVED",
@@ -1858,7 +2056,7 @@ class Phase4ShadowStore:
 
     def load(self, operation_identity_sha256: str) -> Phase4RuntimeState:
         identity_sha = _sha(operation_identity_sha256, "operation_identity_sha256")
-        connection = self._connect()
+        connection = self._connect(read_only=True)
         load_error: BaseException | None = None
         try:
             self._begin(connection, immediate=False)
@@ -1877,6 +2075,120 @@ class Phase4ShadowStore:
                     )
                 ],
                 primary=load_error,
+            )
+
+    def load_current_by_state_sha256(self, state_sha256: str) -> Phase4RuntimeState:
+        """Load the one exact current P4 head selected by its bound state hash."""
+
+        digest = _sha(state_sha256, "state_sha256")
+        connection = self._connect(read_only=True)
+        error: BaseException | None = None
+        try:
+            row = connection.execute(
+                "SELECT * FROM phase4_shadow_current WHERE state_sha256=?",
+                (digest,),
+            ).fetchone()
+            if row is None:
+                raise Phase4ShadowFenceError("durable operation current head is unavailable")
+            state = self._state_row(row)
+            if state.state_sha256 != digest:
+                raise Phase4ShadowStoreError("current state identity differs")
+            return state
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            run_cleanup(
+                [("close Phase-4 current-head reader", RetryableCleanup(connection.close))],
+                primary=error,
+            )
+
+    def load_current_for_source_chain(
+        self,
+        *,
+        workflow_id: str,
+        source_chain_binding_sha256: str,
+    ) -> Phase4RuntimeState:
+        """Select the unique current P4 head for one trusted logical source.
+
+        An operation identity supplied by a caller is not a current selector:
+        an older successful operation remains loadable after another operation
+        is reserved for the same Authority/Phase-3 source.  This reader parses
+        every durable current row and rejects both absence and ambiguity.
+        """
+
+        workflow = _text(workflow_id, "workflow_id")
+        binding_sha = _sha(
+            source_chain_binding_sha256,
+            "source_chain_binding_sha256",
+        )
+        connection = self._connect(read_only=True)
+        error: BaseException | None = None
+        try:
+            self._begin(connection, immediate=False)
+            rows = connection.execute(
+                "SELECT * FROM phase4_shadow_current"
+            ).fetchall()
+            matches: list[Phase4RuntimeState] = []
+            for row in rows:
+                state = self._state_row(row)
+                source = state.source_chain_binding
+                if (
+                    source is not None
+                    and source.workflow_id == workflow
+                    and source.binding_sha256 == binding_sha
+                ):
+                    matches.append(state)
+            if len(matches) != 1:
+                raise Phase4ShadowFenceError(
+                    "trusted source does not have exactly one durable P4 current head"
+                )
+            self._commit_anchored(connection)
+            return matches[0]
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            run_cleanup(
+                [
+                    (
+                        "close Phase-4 trusted-source current reader",
+                        RetryableCleanup(connection.close),
+                    )
+                ],
+                primary=error,
+            )
+
+    def load_state_by_sha256(self, state_sha256: str) -> Phase4RuntimeState:
+        """Load a hash-bound historical/current state from immutable results."""
+
+        digest = _sha(state_sha256, "state_sha256")
+        connection = self._connect(read_only=True)
+        error: BaseException | None = None
+        try:
+            rows = connection.execute(
+                """
+                SELECT result_state_json AS state_json,
+                       result_state_sha256 AS state_sha256
+                FROM phase4_shadow_idempotency
+                WHERE result_state_sha256=?
+                UNION
+                SELECT state_json,state_sha256 FROM phase4_shadow_current
+                WHERE state_sha256=?
+                """,
+                (digest, digest),
+            ).fetchall()
+            states = tuple(self._state_row(row) for row in rows)
+            if len(states) != 1 or states[0].state_sha256 != digest:
+                raise Phase4ShadowFenceError("durable operation state is unavailable")
+            return states[0]
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            run_cleanup(
+                [("close Phase-4 state reader", RetryableCleanup(connection.close))],
+                primary=error,
             )
 
     def claim_operation(
@@ -1948,6 +2260,7 @@ class Phase4ShadowStore:
                 claim_owner_epoch=owner_epoch,
                 lease_expires_at=now + lease,
                 retry_count=retry_count,
+                source_chain_binding=current.source_chain_binding,
             )
             receipt = Phase4CommitReceipt(
                 PHASE4_SHADOW_RECEIPT_SCHEMA,
@@ -2085,6 +2398,7 @@ class Phase4ShadowStore:
                     else None
                 ),
                 retry_count=current.retry_count,
+                source_chain_binding=current.source_chain_binding,
             )
             receipt = Phase4CommitReceipt(
                 PHASE4_SHADOW_RECEIPT_SCHEMA,

@@ -67,6 +67,11 @@ PHASE2_8_PURE_MODULE_CONSUMERS = {
     "factory_core/phase4_shadow_runtime.py": frozenset({"canonical"}),
     "factory_core/phase5_shadow_supervisor.py": frozenset({"canonical"}),
     "factory_core/phase6_snapshot_grants.py": frozenset({"canonical"}),
+    "factory_core/phase6_source_assembler.py": frozenset({"canonical"}),
+    "factory_core/phase9_entry.py": frozenset({"canonical"}),
+    "factory_core/phase9_run_generation.py": frozenset(
+        {"canonical", "workflow_contract"}
+    ),
     "factory_core/phase78_service.py": frozenset({"canonical"}),
     "factory_core/phase78_work_ledger.py": frozenset({"canonical"}),
     "factory_core/phase78_worker.py": frozenset({"canonical"}),
@@ -227,6 +232,11 @@ def test_phase2_8_pure_module_consumers_are_an_exact_closed_set() -> None:
         "factory_core/phase4_shadow_runtime.py": frozenset({"canonical"}),
         "factory_core/phase5_shadow_supervisor.py": frozenset({"canonical"}),
         "factory_core/phase6_snapshot_grants.py": frozenset({"canonical"}),
+        "factory_core/phase6_source_assembler.py": frozenset({"canonical"}),
+        "factory_core/phase9_entry.py": frozenset({"canonical"}),
+        "factory_core/phase9_run_generation.py": frozenset(
+            {"canonical", "workflow_contract"}
+        ),
         "factory_core/phase78_service.py": frozenset({"canonical"}),
         "factory_core/phase78_work_ledger.py": frozenset({"canonical"}),
         "factory_core/phase78_worker.py": frozenset({"canonical"}),
@@ -237,7 +247,7 @@ def test_phase2_8_pure_module_consumers_are_an_exact_closed_set() -> None:
     }
 
     assert PHASE2_8_PURE_MODULE_CONSUMERS == expected
-    assert len(PHASE2_8_PURE_MODULE_CONSUMERS) == 19
+    assert len(PHASE2_8_PURE_MODULE_CONSUMERS) == 22
     assert set(PHASE2_8_PURE_MODULE_CONSUMERS).isdisjoint(PURE_M01_MODULES)
     assert all((ROOT / path).is_file() for path in PHASE2_8_PURE_MODULE_CONSUMERS)
 

@@ -50,6 +50,7 @@ still fail closed.
 | `A2_0012_TRANSACTIONAL_OUTBOX_DELIVERY` | `721a36e275de130172a06faf82d5b298d7418bf0f7561177ea580e79b7d7caf2` |
 | `A2_0013_OPERATIONAL_EVIDENCE` | `be46c339e1e564aa40aa205fbb249e907281c8cf0b5e31a7833d90cd0e0f8c25` |
 | `A2_0014_DATABASE_IDENTITY_AND_BACKUP_LINEAGE` | `1cdf905f5712eb04445eed9da73ac8a48cf3fb3c6115a02c4a6ccb1c54b99a75` |
+| `A2_0015_PHASE9_RUN_GENERATION` | `69f50ea0989018d6dc7db8743fdf7f2875152f292933054bb21b5760fcd42b15` |
 
 The suffix is resumable by the same explicit owner token. Every step checks:
 
@@ -60,12 +61,31 @@ The suffix is resumable by the same explicit owner token. Every step checks:
 5. exact ordered production migration IDs, checksums, and SQLite objects;
 6. the persisted immutable database identity and initial pre-Authority backup
    lineage introduced by A2_0014;
-7. the same durable migration owner inside `BEGIN IMMEDIATE`.
+7. the Phase9 run-generation lineage, receipt, idempotency, and current-pointer
+   tables introduced by the additive A2_0015 suffix; and
+8. the same durable migration owner inside `BEGIN IMMEDIATE`.
 
 Future schema versions, missing facts, owner changes, SQLite busy locks,
 source-row drift, DDL drift, or interrupted prefixes fail closed. No generation,
 owner, revision, writer, or delivery fact is inferred from PID, time, mtime,
-file adjacency, or nearby database rows.
+file adjacency, or nearby unrelated database rows.
+
+A2_0015 adds only a default-off Phase9 run-generation creation/rotation
+boundary. The service binds a live Git commit/tree/single-parent identity,
+source-authorized contract pins, typed official-input byte-hash evidence,
+typed execution-context and operator-authorization evidence, and exact
+project/workflow/revision/project/run/runtime/scheduler coordinates in one
+`BEGIN IMMEDIATE` transaction. It requires `V1_ONLY` with both writer and
+consumer disabled. It neither starts Phase9-A nor enables delivery, providers,
+outbox dispatch, release, deployment, migration, or cutover.
+The service reads every manifest-listed official-input file itself through a
+no-follow, non-hardlinked regular-file descriptor, rejects extra paths, and
+repeats the exact byte/hash inventory before commit. It likewise reads an
+explicit canonical execution-context receipt before and immediately before
+commit. Initial `project_generation` is content-derived rather than a caller
+label. Creation authorization currently supports only a controlled OS account
+whose UID and account name match the executing process; the API does not claim
+unimplemented detached-signature verification.
 
 ## Backup and restore boundary
 

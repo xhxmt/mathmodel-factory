@@ -54,6 +54,23 @@ form two different trust steps even when they run on one host.
 
 ## Upstream currentness
 
+The only packaged producer eligible to assemble the Phase3/4/5 source for a
+Phase6 proof used here is `Phase6TrustedSourceAssembler`. It reads the
+Authority coordinate, complete revision and Phase3 graph, exact revision
+command/predecessor and selected current occurrence in one query-only
+Authority transaction. It then opens the typed read-only Phase4 and Phase5
+current/head readers and binds their exact workflow, invocation, attempt,
+process scope, predecessor, four generations and contract pins into a
+canonical `trusted-source-chain-v1` receipt. Caller-supplied Phase3/4/5 hashes,
+the historical direct-test adapter, receiptless Phase6 bindings and
+`legacy_unknown` generations are not eligible.
+
+The Phase6 snapshot embeds that receipt and its exact Phase6 predecessor.
+Every Phase7/8 proof use reopens the Phase4/5 readers and revalidates the
+receipt-bound Phase6 snapshot before accepting current state. Missing,
+ambiguous, stale, cancelled, superseded or differently coordinated Phase4/5
+heads therefore leave immutable history but fail the current entry fence.
+
 Every Phase 7/8 commit binds and revalidates all of these facts:
 
 - the complete canonical `AuthorityPhase3ArtifactState`, including workflow,

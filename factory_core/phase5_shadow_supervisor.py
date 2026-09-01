@@ -196,6 +196,8 @@ class SupervisorScopeBinding:
     process_scope_id: str
     operation_identity_sha256: str
     scope_kind: ProcessScopeKind
+    phase4_predecessor_state_sha256: str | None = None
+    phase4_source_chain_binding_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _text(self.workflow_id, "workflow_id")
@@ -205,6 +207,24 @@ class SupervisorScopeBinding:
         _sha(self.operation_identity_sha256, "operation_identity_sha256")
         if type(self.scope_kind) is not ProcessScopeKind:
             raise Phase5SupervisorError("scope_kind must be ProcessScopeKind")
+        chain_values = (
+            self.phase4_predecessor_state_sha256,
+            self.phase4_source_chain_binding_sha256,
+        )
+        if any(value is None for value in chain_values):
+            if any(value is not None for value in chain_values):
+                raise Phase5SupervisorError(
+                    "Phase-4 predecessor chain binding must be complete"
+                )
+        else:
+            _sha(
+                self.phase4_predecessor_state_sha256,
+                "phase4_predecessor_state_sha256",
+            )
+            _sha(
+                self.phase4_source_chain_binding_sha256,
+                "phase4_source_chain_binding_sha256",
+            )
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -215,6 +235,12 @@ class SupervisorScopeBinding:
             "process_scope_id": self.process_scope_id,
             "operation_identity_sha256": self.operation_identity_sha256,
             "scope_kind": self.scope_kind.value,
+            "phase4_predecessor_state_sha256": (
+                self.phase4_predecessor_state_sha256
+            ),
+            "phase4_source_chain_binding_sha256": (
+                self.phase4_source_chain_binding_sha256
+            ),
         }
 
     @property
@@ -223,7 +249,7 @@ class SupervisorScopeBinding:
 
 
 def _binding_from_dict(value: object) -> SupervisorScopeBinding:
-    if not isinstance(value, dict) or set(value) != {
+    base_keys = {
         "schema_version",
         "workflow_id",
         "invocation_id",
@@ -231,7 +257,12 @@ def _binding_from_dict(value: object) -> SupervisorScopeBinding:
         "process_scope_id",
         "operation_identity_sha256",
         "scope_kind",
-    }:
+    }
+    extended_keys = base_keys | {
+        "phase4_predecessor_state_sha256",
+        "phase4_source_chain_binding_sha256",
+    }
+    if not isinstance(value, dict) or set(value) not in {frozenset(base_keys), frozenset(extended_keys)}:
         raise Phase5SupervisorStoreError("scope binding is malformed")
     if value["schema_version"] != PHASE5_SCOPE_BINDING_SCHEMA:
         raise Phase5SupervisorStoreError("scope binding schema differs")
@@ -243,6 +274,12 @@ def _binding_from_dict(value: object) -> SupervisorScopeBinding:
             process_scope_id=value["process_scope_id"],
             operation_identity_sha256=value["operation_identity_sha256"],
             scope_kind=ProcessScopeKind(value["scope_kind"]),
+            phase4_predecessor_state_sha256=value.get(
+                "phase4_predecessor_state_sha256"
+            ),
+            phase4_source_chain_binding_sha256=value.get(
+                "phase4_source_chain_binding_sha256"
+            ),
         )
     except (TypeError, ValueError, Phase5SupervisorError) as exc:
         raise Phase5SupervisorStoreError("scope binding is malformed") from exc
@@ -438,6 +475,12 @@ def _state_from_dict(value: object) -> SupervisorState:
         if isinstance(exc, Phase5SupervisorStoreError):
             raise
         raise Phase5SupervisorStoreError("supervisor state is malformed") from exc
+
+
+def supervisor_state_from_dict(value: object) -> SupervisorState:
+    """Public strict parser used by cross-store trusted-chain verification."""
+
+    return _state_from_dict(value)
 
 
 @dataclass(frozen=True)
@@ -2626,6 +2669,76 @@ class Phase5SupervisorStore:
                         RetryableCleanup(connection.close),
                     )
                 ],
+                primary=load_error,
+            )
+
+    def load_current_by_state_sha256(self, state_sha256: str) -> SupervisorState:
+        """Return the unique exact Phase-5 request head bound by state hash."""
+
+        digest = _sha(state_sha256, "state_sha256")
+        connection = self._connect(read_only=True)
+        load_error: BaseException | None = None
+        try:
+            self._verify_schema(connection)
+            rows = connection.execute(
+                "SELECT * FROM phase5_shadow_current WHERE state_sha256=?",
+                (digest,),
+            ).fetchall()
+            if len(rows) != 1:
+                raise Phase5SupervisorFenceError(
+                    "supervisor current head is unavailable or ambiguous"
+                )
+            state = self._load_state_row(rows[0])
+            if state.state_sha256 != digest:
+                raise Phase5SupervisorStoreError(
+                    "supervisor current-head identity differs"
+                )
+            return state
+        except BaseException as error:
+            load_error = error
+            raise
+        finally:
+            run_cleanup(
+                [("close Phase-5 current-head reader", RetryableCleanup(connection.close))],
+                primary=load_error,
+            )
+
+    def load_current_for_operation(
+        self,
+        *,
+        workflow_id: str,
+        operation_identity_sha256: str,
+    ) -> SupervisorState:
+        """Resolve the sole typed current P5 head for a workflow/P4 operation."""
+
+        workflow = _text(workflow_id, "workflow_id")
+        operation = _sha(
+            operation_identity_sha256, "operation_identity_sha256"
+        )
+        connection = self._connect(read_only=True)
+        load_error: BaseException | None = None
+        try:
+            self._verify_schema(connection)
+            rows = connection.execute(
+                "SELECT * FROM phase5_shadow_current ORDER BY request_id"
+            ).fetchall()
+            matches = tuple(
+                state
+                for state in (self._load_state_row(row) for row in rows)
+                if state.binding.workflow_id == workflow
+                and state.binding.operation_identity_sha256 == operation
+            )
+            if len(matches) != 1:
+                raise Phase5SupervisorFenceError(
+                    "supervisor operation head is unavailable or ambiguous"
+                )
+            return matches[0]
+        except BaseException as error:
+            load_error = error
+            raise
+        finally:
+            run_cleanup(
+                [("close Phase-5 operation-head reader", RetryableCleanup(connection.close))],
                 primary=load_error,
             )
 

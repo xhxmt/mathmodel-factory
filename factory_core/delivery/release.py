@@ -411,6 +411,8 @@ class ReleasePublisher:
             snapshot = AuditSnapshot(**snapshot_value)
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"release source is missing or invalid: {exc}") from exc
+        if audit_value.get("decision") == "ABLATE_NO_JUDGE":
+            raise ValueError("no-judge ablation never authorizes a release")
         if (
             audit_value.get("snapshot_id") != snapshot_id
             or audit_value.get("base") != project.name
@@ -427,10 +429,7 @@ class ReleasePublisher:
             or audit_value.get("judge_completed") is not True
         ):
             raise ValueError("PASS release does not have a completed PASS judgment")
-        if status == "OVERRIDDEN" and not (
-            audit_value.get("override") is True
-            or audit_value.get("decision") == "ABLATE_NO_JUDGE"
-        ):
+        if status == "OVERRIDDEN" and audit_value.get("override") is not True:
             raise ValueError("OVERRIDDEN release has no recognized authorization")
         valid, errors = verify_final_acceptance_receipt(
             project,

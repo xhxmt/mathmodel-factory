@@ -17,7 +17,13 @@ import re
 import sqlite3
 import stat
 import tempfile
-from typing import Callable, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping
+
+if TYPE_CHECKING:
+    from .phase9_run_generation import (
+        RunGenerationCreationResult,
+        RunGenerationRequestV1,
+    )
 
 from .authority_production_schema import (
     EMPTY_PRODUCTION_PREFIX_SHA256,
@@ -1355,6 +1361,30 @@ class AuthorityOperations:
             raise
         finally:
             connection.close()
+
+    def create_or_rotate_run_generation(
+        self,
+        request: "RunGenerationRequestV1",
+        *,
+        source_repository: str | Path,
+        official_input_root: str | Path,
+        execution_context_receipt_path: str | Path,
+    ) -> "RunGenerationCreationResult":
+        """Use the reviewed Phase9 service without exposing SQLite or SQL.
+
+        The local import keeps Phase9 creation out of older operational import
+        graphs until an operator explicitly invokes this narrow method.
+        """
+
+        from .phase9_run_generation import Phase9RunGenerationService
+
+        return Phase9RunGenerationService(
+            self.path,
+            expected_source_fence_sha256=self.expected_source_fence_sha256,
+            source_repository=source_repository,
+            official_input_root=official_input_root,
+            execution_context_receipt_path=execution_context_receipt_path,
+        ).create_or_rotate(request)
 
 
 def evaluate_authority_health(

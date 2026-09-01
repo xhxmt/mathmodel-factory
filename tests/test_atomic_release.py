@@ -204,6 +204,77 @@ def test_failed_release_keeps_previous_current_release(tmp_path: Path) -> None:
     assert not (tmp_path / "papers/releases/demo" / second_id).exists()
 
 
+def test_no_judge_ablation_cannot_replace_current_release(tmp_path: Path) -> None:
+    first_id = "3" * 64
+    ablation_id = "4" * 64
+    project = _project(tmp_path, "demo", first_id)
+    publisher = ReleasePublisher(tmp_path / "papers")
+    publisher.publish(
+        project,
+        first_id,
+        status="PASS",
+        package_builder=_package(project, "demo"),
+    )
+    _write_approved_audit(project, ablation_id)
+    marker = project / "judge_outputs/final_submission.ablation.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "schema_version": "final-submission-ablation-v1",
+                "ablation": "ABLATE_NO_JUDGE",
+                "judge_executed": False,
+                "quality_pass_fabricated": False,
+                "snapshot_id": ablation_id,
+                "delivery_allowed": False,
+                "terminal_reason": "PERMANENT_ABLATION_NO_DELIVERY",
+                "returncode": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot = AuditSnapshot(
+        **json.loads(
+            (
+                project / ".factory/audits" / ablation_id / "snapshot.json"
+            ).read_text(encoding="utf-8")
+        )
+    )
+    build_final_acceptance_receipt(
+        project,
+        snapshot,
+        status="OVERRIDDEN",
+        override_receipt=str(marker.relative_to(project)),
+    )
+    latest_path = project / ".factory/audits/latest.json"
+    legacy_ablation = json.loads(latest_path.read_text(encoding="utf-8"))
+    legacy_ablation.update(
+        {
+            "status": "OVERRIDDEN",
+            "decision": "ABLATE_NO_JUDGE",
+            "judge_completed": False,
+            # Model the historical vulnerable record so release itself proves
+            # it will not trust a caller-supplied delivery flag.
+            "delivery_allowed": True,
+            "override": False,
+        }
+    )
+    latest_path.write_text(json.dumps(legacy_ablation) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no-judge ablation"):
+        publisher.publish(
+            project,
+            ablation_id,
+            status="OVERRIDDEN",
+            package_builder=_package(project, "demo"),
+        )
+
+    current = resolve_current_release(tmp_path / "papers", "demo")
+    assert current is not None
+    assert current.release_id == first_id
+    assert not (tmp_path / "papers/releases/demo" / ablation_id).exists()
+
+
 def test_release_recovery_is_idempotent_and_repairs_legacy_aliases(
     tmp_path: Path,
 ) -> None:
