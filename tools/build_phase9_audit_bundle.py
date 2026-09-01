@@ -84,7 +84,7 @@ def _candidate_inventory(repository: Path, commit: str) -> tuple[bytes, set[str]
     raw = _git(repository, "ls-tree", "-rz", "--full-tree", commit)
     entries = []
     paths: set[str] = set()
-    oids = []
+    blob_oids = []
     for record in raw.split(b"\0"):
         if not record:
             continue
@@ -94,9 +94,12 @@ def _candidate_inventory(repository: Path, commit: str) -> tuple[bytes, set[str]
         if path in paths:
             raise RuntimeError(f"duplicate Git path: {path}")
         paths.add(path)
-        oids.append(oid)
+        if kind == "blob":
+            blob_oids.append(oid)
+        elif kind != "commit":
+            raise RuntimeError(f"unsupported recursive Git object kind: {path}: {kind}")
         entries.append((path, mode, kind, oid))
-    query = b"".join(f"{oid}\n".encode() for oid in oids)
+    query = b"".join(f"{oid}\n".encode() for oid in blob_oids)
     sizes_raw = _git(
         repository, "cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)",
         input_bytes=query,
@@ -107,10 +110,14 @@ def _candidate_inventory(repository: Path, commit: str) -> tuple[bytes, set[str]
         sizes[oid] = (kind, int(size))
     lines = ["path\tmode\ttype\tobject_id\tbytes"]
     for path, mode, kind, oid in sorted(entries):
-        observed_kind, size = sizes[oid]
-        if observed_kind != kind:
-            raise RuntimeError(f"Git object kind differs: {path}")
-        lines.append(f"{path}\t{mode}\t{kind}\t{oid}\t{size}")
+        if kind == "blob":
+            observed_kind, size = sizes[oid]
+            if observed_kind != kind:
+                raise RuntimeError(f"Git object kind differs: {path}")
+            size_value = str(size)
+        else:
+            size_value = "-"
+        lines.append(f"{path}\t{mode}\t{kind}\t{oid}\t{size_value}")
     return ("\n".join(lines) + "\n").encode(), paths
 
 
@@ -135,9 +142,11 @@ def _copy_audit_evidence(audit_root: Path, payload: dict[str, bytes]) -> None:
 def _secret_scan(payload: dict[str, bytes]) -> None:
     private_key_header = b"-----BEGIN " + b"PRIVATE KEY-----"
     openssh_private_key_header = b"-----BEGIN OPENSSH " + b"PRIVATE KEY-----"
+    google_api_key_prefix = b"AIza" + b"Sy"
+    aws_access_key_prefix = b"AK" + b"IA"
     forbidden = (
         private_key_header, openssh_private_key_header,
-        b"AIzaSy", b"AKIA",
+        google_api_key_prefix, aws_access_key_prefix,
     )
     for path, raw in payload.items():
         if any(marker in raw for marker in forbidden):

@@ -25,6 +25,14 @@ def _repository(tmp_path: Path) -> Path:
     _git(repo, "commit", "-qm", "parent")
     (repo / "tracked.txt").write_text("candidate\n", encoding="utf-8")
     _git(repo, "commit", "-qam", "candidate")
+    _git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        "160000,1111111111111111111111111111111111111111,missing-submodule",
+    )
+    _git(repo, "commit", "-qm", "record missing gitlink")
     return repo
 
 
@@ -56,6 +64,13 @@ def test_audit_bundle_is_deterministic_single_root_and_closed(tmp_path):
         assert "PHASE9_TEST/checksums/SHA256SUMS" in archive.namelist()
         assert "PHASE9_TEST/identity/CANDIDATE_FILE_INVENTORY.tsv" in archive.namelist()
         assert "PHASE9_TEST/source/tracked.txt" in archive.namelist()
+        inventory = archive.read(
+            "PHASE9_TEST/identity/CANDIDATE_FILE_INVENTORY.tsv"
+        ).decode("utf-8")
+        assert (
+            "missing-submodule\t160000\tcommit\t"
+            "1111111111111111111111111111111111111111\t-\n"
+        ) in inventory
 
 
 def test_audit_bundle_rejects_private_key_material(tmp_path):
