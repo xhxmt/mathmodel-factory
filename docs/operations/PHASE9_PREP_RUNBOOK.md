@@ -1,8 +1,11 @@
 # Phase9-PREP Runbook
 
-Status: PREP only. This runbook does not authorize formal Phase 9 execution,
-run-generation creation, provider calls, outbox dispatch, migration, delivery,
-release, or production cutover.
+Status: the default-off Phase9-A control plane is implemented and tested; the
+production run remains `BLOCKED` because its real inputs and authorization were
+not supplied. This runbook does not authorize run-generation creation,
+provider calls, outbox dispatch, migration, delivery, release, or production
+cutover. Current operation and rollback are owned by
+`PHASE9_IMPLEMENTATION_AND_ROLLBACK.md`.
 
 ## Outcome and phase names
 
@@ -18,13 +21,13 @@ Older planning material called the clean-room run “Phase 9”. That numbering 
 obsolete. This repository uses `Phase9-A` and `Phase10-B` so that evidence from
 the two runs cannot be mixed.
 
-The Phase 7+8 candidate at frozen commit
-`fb58241077ce6874bdfe2df6c23322d431930d38` remains default-off,
-non-authoritative, no-provider, no-production-outbox, and no-dispatch. Its Pro
-review is still pending. Therefore only the preparation work in this document
-is permitted in parallel with that review.
+The paragraph and table below preserve the 2026-08-31 preparation snapshot;
+they are provenance, not current repository identity or review status. Current
+identity and evidence are recorded in the final Phase9 audit package. The
+default-off, no-provider, no-production-outbox, no-dispatch constraints remain
+current.
 
-## What this preparation establishes
+## Historical preparation snapshot
 
 The preparation branch is isolated from both the main checkout and the frozen
 Phase 7+8 worktree:
@@ -173,6 +176,11 @@ Exit additionally requires:
 This can prove closure of known downstream Run4 failures. It cannot prove the
 modeling-collaboration layer, scientific quality, production delivery, or
 clean-room operation.
+
+The A2_0016 implementation validates and atomically finalizes this matrix from
+an exact candidate/run/input-bound local evidence set. It does not create the
+underlying role, process, outbox, or snapshot evidence and therefore cannot
+convert templates or test fixtures into a production pass.
 
 ## Evidence skeleton
 

@@ -33,7 +33,7 @@ from .canonical import canonical_bytes, canonical_sha256
 from .domain import SCHEMA_VERSION
 
 
-AUTHORITY_PRODUCTION_SCHEMA_VERSION = 3
+AUTHORITY_PRODUCTION_SCHEMA_VERSION = 4
 AUTHORITY_PRODUCTION_SOURCE_SCHEMA = "authority-production-source-v1"
 PRODUCTION_MIGRATION_RUNNING = "RUNNING"
 PRODUCTION_MIGRATION_INTERRUPTED = "INTERRUPTED"
@@ -701,6 +701,218 @@ PRODUCTION_MIGRATIONS = (
             """
             UPDATE authority_production_schema_state
             SET production_schema_version=3
+            WHERE singleton=1
+            """,
+        ),
+    ),
+    _ProductionMigration(
+        "A2_0016_PHASE9_FORENSIC_REPLAY",
+        (
+            """
+            CREATE TABLE authority_production_phase9_replays (
+                replay_id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                project_revision INTEGER NOT NULL CHECK (project_revision >= 0),
+                project_generation TEXT NOT NULL,
+                run_generation TEXT NOT NULL UNIQUE,
+                run_generation_creation_receipt_sha256 TEXT NOT NULL,
+                operation_kind TEXT NOT NULL CHECK (
+                    operation_kind IN ('CREATE', 'ROTATE')
+                ),
+                predecessor_replay_id TEXT,
+                predecessor_terminal_receipt_sha256 TEXT,
+                replay_mode TEXT NOT NULL CHECK (
+                    replay_mode IN ('TECHNICAL', 'ABLATE_NO_JUDGE')
+                ),
+                requested_resume_target TEXT NOT NULL CHECK (
+                    requested_resume_target = 'STEP13_PACKET_REBUILD'
+                ),
+                delivery_capability TEXT NOT NULL CHECK (
+                    delivery_capability = 'DISABLED'
+                ),
+                source_commit TEXT NOT NULL,
+                source_tree TEXT NOT NULL,
+                source_parent TEXT NOT NULL,
+                entry_gate_result_sha256 TEXT NOT NULL,
+                evidence_set_sha256 TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                request_sha256 TEXT NOT NULL UNIQUE,
+                started_at INTEGER NOT NULL CHECK (started_at >= 0),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(run_generation_creation_receipt_sha256)
+                    REFERENCES authority_production_run_generation_creation_receipts(
+                        receipt_sha256
+                    ),
+                FOREIGN KEY(predecessor_replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id),
+                FOREIGN KEY(predecessor_terminal_receipt_sha256)
+                    REFERENCES authority_production_phase9_terminal_receipts(
+                        receipt_sha256
+                    ) DEFERRABLE INITIALLY DEFERRED
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_events (
+                replay_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL CHECK (sequence >= 1),
+                event_kind TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (
+                    state IN (
+                        'READY', 'PACKET_REBUILT', 'ROLES_COLLECTED',
+                        'VERDICT_COMPUTED', 'SNAPSHOT_CAPTURED', 'COMPLETED'
+                    )
+                ),
+                predecessor_event_sha256 TEXT,
+                event_json TEXT NOT NULL,
+                event_sha256 TEXT NOT NULL UNIQUE,
+                occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+                PRIMARY KEY(replay_id, sequence),
+                FOREIGN KEY(replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id),
+                FOREIGN KEY(predecessor_event_sha256)
+                    REFERENCES authority_production_phase9_replay_events(event_sha256)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_terminal_receipts (
+                receipt_id TEXT PRIMARY KEY,
+                replay_id TEXT NOT NULL UNIQUE,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL UNIQUE,
+                terminal_reason TEXT NOT NULL CHECK (
+                    terminal_reason IN (
+                        'FORENSIC_REPLAY_COMPLETED',
+                        'PERMANENT_ABLATION_NO_DELIVERY'
+                    )
+                ),
+                exit_code INTEGER NOT NULL,
+                effective_verdict TEXT NOT NULL,
+                final_event_sha256 TEXT NOT NULL UNIQUE,
+                receipt_json TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL UNIQUE,
+                occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+                FOREIGN KEY(replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(final_event_sha256)
+                    REFERENCES authority_production_phase9_replay_events(event_sha256)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_idempotency (
+                workflow_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                request_sha256 TEXT NOT NULL,
+                replay_id TEXT NOT NULL,
+                terminal_receipt_sha256 TEXT NOT NULL,
+                PRIMARY KEY(workflow_id, idempotency_key),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id),
+                FOREIGN KEY(terminal_receipt_sha256)
+                    REFERENCES authority_production_phase9_terminal_receipts(
+                        receipt_sha256
+                    )
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_current (
+                workflow_id TEXT PRIMARY KEY,
+                replay_id TEXT NOT NULL UNIQUE,
+                run_generation TEXT NOT NULL UNIQUE,
+                terminal_receipt_sha256 TEXT NOT NULL,
+                final_event_sha256 TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state = 'COMPLETED'),
+                updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(terminal_receipt_sha256)
+                    REFERENCES authority_production_phase9_terminal_receipts(
+                        receipt_sha256
+                    ),
+                FOREIGN KEY(final_event_sha256)
+                    REFERENCES authority_production_phase9_replay_events(event_sha256)
+            )
+            """,
+            *_immutable_statements(
+                "authority_production_phase9_replays",
+                (("replay_id",), ("request_sha256",), ("run_generation",)),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_replay_events",
+                (("replay_id", "sequence"), ("event_sha256",)),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_terminal_receipts",
+                (("receipt_id",), ("replay_id",), ("receipt_sha256",)),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_replay_idempotency",
+                (("workflow_id", "idempotency_key"),),
+            ),
+            """
+            CREATE TRIGGER authority_production_phase9_replay_current_insert_guard
+            BEFORE INSERT ON authority_production_phase9_replay_current
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_phase9_replays p
+                JOIN authority_production_phase9_terminal_receipts r
+                  ON r.replay_id=p.replay_id
+                 AND r.receipt_sha256=NEW.terminal_receipt_sha256
+                 AND r.final_event_sha256=NEW.final_event_sha256
+                WHERE p.replay_id=NEW.replay_id
+                  AND p.workflow_id=NEW.workflow_id
+                  AND p.run_generation=NEW.run_generation
+                  AND p.operation_kind='CREATE'
+                  AND p.predecessor_replay_id IS NULL
+                  AND p.predecessor_terminal_receipt_sha256 IS NULL
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'phase9 current insert lacks terminal graph');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_replay_current_update_guard
+            BEFORE UPDATE ON authority_production_phase9_replay_current
+            WHEN NEW.workflow_id != OLD.workflow_id
+              OR NEW.updated_at < OLD.updated_at
+              OR NOT EXISTS (
+                SELECT 1
+                FROM authority_production_phase9_replays p
+                JOIN authority_production_phase9_terminal_receipts r
+                  ON r.replay_id=p.replay_id
+                 AND r.receipt_sha256=NEW.terminal_receipt_sha256
+                 AND r.final_event_sha256=NEW.final_event_sha256
+                WHERE p.replay_id=NEW.replay_id
+                  AND p.workflow_id=OLD.workflow_id
+                  AND p.run_generation=NEW.run_generation
+                  AND p.operation_kind='ROTATE'
+                  AND p.predecessor_replay_id=OLD.replay_id
+                  AND p.predecessor_terminal_receipt_sha256=
+                      OLD.terminal_receipt_sha256
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'phase9 current update lacks succession graph');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_replay_current_delete_guard
+            BEFORE DELETE ON authority_production_phase9_replay_current
+            BEGIN
+                SELECT RAISE(ABORT, 'phase9 current pointer cannot be deleted');
+            END
+            """,
+            """
+            UPDATE authority_production_schema_state
+            SET production_schema_version=4
             WHERE singleton=1
             """,
         ),
@@ -1498,7 +1710,7 @@ class AuthorityProductionMigrationRunner:
                 ).fetchone()
                 if (
                     row is not None
-                    and row["production_schema_version"] in {1, 2, 3}
+                    and row["production_schema_version"] in {1, 2, 3, 4}
                     and row["lock_owner"] == owner
                 ):
                     connection.execute(
@@ -1552,7 +1764,7 @@ class AuthorityProductionMigrationRunner:
                 if state["production_schema_version"] > AUTHORITY_PRODUCTION_SCHEMA_VERSION:
                     raise AuthorityProductionFutureSchema("future production schema")
                 if (
-                    state["production_schema_version"] not in {1, 2, 3}
+                    state["production_schema_version"] not in {1, 2, 3, 4}
                     or state["source_schema_version"] != SCHEMA_VERSION
                     or state["source_schema_identity_sha256"] != schema_identity
                     or state["source_fence_sha256"] != source_fence
@@ -1582,7 +1794,13 @@ class AuthorityProductionMigrationRunner:
                             AUTHORITY_PRODUCTION_SCHEMA_VERSION, PRODUCTION_MIGRATION_READY,
                             (), PRODUCTION_MIGRATION_IDS,
                         )
-                    if len(rows) != len(PRODUCTION_MIGRATIONS) - 1:
+                    expected_prefix_version = max(1, len(rows) - 3)
+                    if (
+                        len(rows) < 5
+                        or len(rows) >= len(PRODUCTION_MIGRATIONS)
+                        or state["production_schema_version"]
+                        != expected_prefix_version
+                    ):
                         raise AuthorityProductionSchemaDrift(
                             "READY foundation lacks an upgradeable migration prefix"
                         )

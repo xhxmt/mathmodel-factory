@@ -19,6 +19,7 @@
 | 查看 Phase 7+8 durable local sidecar、operator preflight 与 no-dispatch 契约 | [docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md](docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md) |
 | 查看 Pro 审计期间允许执行的 Phase9-PREP、安全边界与正式验收门槛 | [docs/operations/PHASE9_PREP_RUNBOOK.md](docs/operations/PHASE9_PREP_RUNBOOK.md) |
 | 查看 Phase9 原子 generation API、只读 state collector 与 candidate-bound entry gate | [docs/operations/PHASE9_ENTRY_GATE.md](docs/operations/PHASE9_ENTRY_GATE.md) |
+| 查看 Phase9-A 默认关闭主流程、操作、阻塞条件与回滚 | [docs/operations/PHASE9_IMPLEMENTATION_AND_ROLLBACK.md](docs/operations/PHASE9_IMPLEMENTATION_AND_ROLLBACK.md) |
 | 查看源码、运行数据和兼容边界 | [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md) |
 | 编写模型、代码和论文 | [modeling_guide.md](modeling_guide.md) |
 | 检查建模口径 | [docs/guides/MODELING_CHECKLIST.md](docs/guides/MODELING_CHECKLIST.md) |
@@ -47,6 +48,8 @@
 - [docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md](docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md)：Phase 7 三角色 exact-byte grounding、Phase 8 PDF/CAS/approval/decision、受控 OS 操作员 preflight、durable local work ledger、历史与 current 分离、总 deadline、default-off/no-dispatch 和启停/回滚边界。Phase 7+8 只接受已完成正规 migration 的具体 generation，不接受 `legacy_unknown`。
 - [docs/operations/PHASE9_PREP_RUNBOOK.md](docs/operations/PHASE9_PREP_RUNBOOK.md)：Pro 审计并行期的只读 Git manifest 验证、隔离路径、正式 Phase9-A entry/exit 门、最小验收矩阵、证据骨架和禁止行为；明确 `PREP_MANIFEST_VALID` 不等于 Phase 9 授权，并以 Phase10-B 作为 fresh clean-room Phase 10 的消歧别名。
 - [docs/operations/PHASE9_ENTRY_GATE.md](docs/operations/PHASE9_ENTRY_GATE.md)：当前受审的原子 run-generation create/rotate、真实 official-input/context/OS-account 验证、只读 revision-atomic state collector、9 项 candidate-bound P0 receipt gate，以及 `READY` 仍不授权 Phase9-A 或生产行为的边界。
+- [docs/operations/PHASE9_IMPLEMENTATION_AND_ROLLBACK.md](docs/operations/PHASE9_IMPLEMENTATION_AND_ROLLBACK.md)：A2_0016 默认关闭的 forensic evidence finalization、原子事件/receipt/current-pointer 状态机、显式命令、生产阻塞条件与仅前滚/备份恢复策略。
+- [docs/operations/PHASE9_REQUIREMENT_IMPLEMENTATION_TEST_EVIDENCE_MAP.tsv](docs/operations/PHASE9_REQUIREMENT_IMPLEMENTATION_TEST_EVIDENCE_MAP.tsv)、[docs/operations/PHASE9_GAP_MATRIX.md](docs/operations/PHASE9_GAP_MATRIX.md) 和 [docs/operations/PHASE9_TEST_EVIDENCE_MATRIX.md](docs/operations/PHASE9_TEST_EVIDENCE_MATRIX.md)：Phase9 需求、实现、测试、证据闭环，剩余外部阻塞和 source/fresh 统计所有权。
 - [docs/architecture/decisions/ADR-0001-phase0-source-truth.md](docs/architecture/decisions/ADR-0001-phase0-source-truth.md)：以指定源码提交为基线，锁定 schema-v9、writer 现状/目标、控制面与项目 workflow authority 边界及层级不变量。
 - [docs/architecture/WORKFLOW_CONTRACT_BUNDLE.md](docs/architecture/WORKFLOW_CONTRACT_BUNDLE.md)：M0.1 纯函数合同编译、canonical JSON/SHA-256、v1 Owner 全匹配兼容诊断、严格验证与后续接线边界。
 - [docs/architecture/application_writer_allowlist_v1.json](docs/architecture/application_writer_allowlist_v1.json)：当前直接 Store mutation characterization 与未来 receiver-aware 静态依赖门禁规格；Phase 0 只校验清单漂移，不执行重构。

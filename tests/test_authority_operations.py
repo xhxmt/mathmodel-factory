@@ -445,7 +445,7 @@ def test_future_production_schema_is_a_fail_closed_health_condition(tmp_path):
     connection = sqlite3.connect(fixture.database)
     connection.execute(
         "UPDATE authority_production_schema_state "
-        "SET production_schema_version=4 WHERE singleton=1"
+        "SET production_schema_version=5 WHERE singleton=1"
     )
     connection.commit()
     connection.close()
@@ -787,6 +787,7 @@ def test_fresh_active_cli_imports_no_production_authority_modules_and_has_only_t
         "factory_core/phase6_source_assembler.py": {"authority_read_repository"},
         "factory_core/phase78_current.py": {"authority_read_repository"},
         "factory_core/phase9_entry.py": {"authority_production_schema"},
+        "factory_core/phase9_forensic_replay.py": {"authority_production_schema"},
         "factory_core/phase9_run_generation.py": {"authority_production_schema"},
     }
     matches = {}

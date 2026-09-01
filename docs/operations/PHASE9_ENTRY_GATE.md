@@ -1,7 +1,9 @@
 # Phase9 candidate-bound entry gate
 
-This document owns the current reviewed entry boundary. It does not authorize
-Phase9-A forensic replay or any production behavior.
+This document owns the current reviewed entry boundary. It does not by itself
+authorize Phase9-A forensic replay or any production behavior. The separately
+default-off post-entry finalization boundary is documented in
+`PHASE9_IMPLEMENTATION_AND_ROLLBACK.md`.
 
 ## Generation creation and rotation
 
@@ -71,3 +73,17 @@ does not authorize Phase9-A, provider/network access, production outbox or
 delivery, release, deployment, migration, or cutover. When a controlled runtime
 database, official input, execution context, or formal authorization has not
 been supplied, the only honest result is `BLOCKED`.
+
+## Post-entry boundary
+
+A2_0016 and `factory_core.phase9_forensic_replay` consume a real entry `READY`
+artifact plus a distinct controlled-account start authorization. They validate
+an exact local evidence inventory and atomically append the Phase9-A event and
+terminal graph. The service never turns the entry result's deliberately false
+authorization scope into a provider, network, outbox, delivery, release,
+migration, deployment, or cutover grant. The explicit Phase9 start receipt may
+grant only local forensic finalization; all other capabilities remain false.
+
+The production status for this repository delivery remains `BLOCKED`: no live
+Authority database, official input/context, start authorization, or real
+forensic evidence was supplied, and no production mutation was attempted.

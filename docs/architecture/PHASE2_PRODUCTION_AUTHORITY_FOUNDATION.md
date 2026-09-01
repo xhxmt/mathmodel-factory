@@ -51,6 +51,7 @@ still fail closed.
 | `A2_0013_OPERATIONAL_EVIDENCE` | `be46c339e1e564aa40aa205fbb249e907281c8cf0b5e31a7833d90cd0e0f8c25` |
 | `A2_0014_DATABASE_IDENTITY_AND_BACKUP_LINEAGE` | `1cdf905f5712eb04445eed9da73ac8a48cf3fb3c6115a02c4a6ccb1c54b99a75` |
 | `A2_0015_PHASE9_RUN_GENERATION` | `69f50ea0989018d6dc7db8743fdf7f2875152f292933054bb21b5760fcd42b15` |
+| `A2_0016_PHASE9_FORENSIC_REPLAY` | `6fa6c71a5f76388eab41a6d9e301cbce1fdce7ee041b71c9f72824eee1cb7e37` |
 
 The suffix is resumable by the same explicit owner token. Every step checks:
 
@@ -63,7 +64,9 @@ The suffix is resumable by the same explicit owner token. Every step checks:
    lineage introduced by A2_0014;
 7. the Phase9 run-generation lineage, receipt, idempotency, and current-pointer
    tables introduced by the additive A2_0015 suffix; and
-8. the same durable migration owner inside `BEGIN IMMEDIATE`.
+8. the Phase9-A replay/event/terminal-receipt/idempotency/current graph added
+   by A2_0016; and
+9. the same durable migration owner inside `BEGIN IMMEDIATE`.
 
 Future schema versions, missing facts, owner changes, SQLite busy locks,
 source-row drift, DDL drift, or interrupted prefixes fail closed. No generation,
@@ -86,6 +89,20 @@ commit. Initial `project_generation` is content-derived rather than a caller
 label. Creation authorization currently supports only a controlled OS account
 whose UID and account name match the executing process; the API does not claim
 unimplemented detached-signature verification.
+
+A2_0016 adds the default-off Phase9-A evidence-finalization state machine. It
+does not run a worker or provider. After a separately produced entry `READY`
+result and controlled-account start authorization, the narrow service verifies
+the exact packet, three new role generations (or the typed no-judge ablation),
+raw/protocol/grounding/effective verdict layers, revision-atomic snapshot,
+process/outbox safety receipts, all minimum acceptance cases, and the delivery
+fence. One `BEGIN IMMEDIATE` transaction appends the replay and six-event hash
+chain, terminal receipt and idempotency row, then inserts or CAS-rotates the
+guarded current pointer. Exact replay returns the recorded receipt; conflicts
+and injected failures roll back every A2_0016 row. The query-only collector
+reconstructs and verifies the complete current graph without creating WAL/SHM
+state. Neither migration installation nor API availability is production
+authorization.
 
 ## Backup and restore boundary
 

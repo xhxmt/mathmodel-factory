@@ -150,6 +150,18 @@ CLI, Web/API/frontend, launcher, model, Solver, provider, or Phase 3-8 path
 imports or calls the production foundation. The current v1 writer inventory
 and route remain active and are not dual-written.
 
+The default-off Phase9 control plane is documented in
+`docs/operations/PHASE9_ENTRY_GATE.md` and
+`docs/operations/PHASE9_IMPLEMENTATION_AND_ROLLBACK.md`. A2_0015 owns atomic
+candidate/input/context-bound run-generation create/rotate. A2_0016 owns the
+immutable replay/event/terminal/idempotency graph and guarded current pointer.
+`factory_core.phase9_forensic_replay` only validates and finalizes an already
+produced exact local evidence set; it does not launch roles, workers, Solver,
+models or providers, use a network, dispatch outbox, deliver, release, migrate,
+deploy or cut over. `PHASE9_ENABLED` defaults false, and delivery is fixed to
+`DISABLED` in request, schema and receipt. Test fixtures never establish
+production `READY` or authorization.
+
 The complete Phase-3 shadow foundation is documented in
 `docs/architecture/PHASE3_ARTIFACT_REGISTRATION_SHADOW.md`. Its canonical,
 packaged modules are `factory_core/phase3_artifacts.py` and the explicitly

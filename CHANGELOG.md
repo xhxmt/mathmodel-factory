@@ -1,5 +1,19 @@
 # Changelog
 
+- Phase9-A default-off control plane: append A2_0016 without changing the
+  published A2_0010-A2_0015 statement bytes. Add a candidate/run/entry/evidence
+  bound forensic finalizer with one-transaction replay/event/terminal receipt,
+  exact idempotent replay, conflict detection, full rollback, guarded current
+  pointer rotation, evidence and Git rechecks before commit, and a query-only
+  state collector. It validates the Step-13 packet claim fence, three new role
+  generations or typed no-judge ablation, layered/effective verdicts,
+  revision-atomic snapshots, outbox/process safety, all minimum acceptance
+  cases, and the delivery-disabled terminal. The explicit CLI and environment
+  configuration are disabled by default and cannot enable provider/network,
+  outbox, delivery, release, deployment, migration, or cutover. Offline tests
+  and fault injection are complete; production remains honestly `BLOCKED`
+  without real Authority/input/context/authorization/evidence and Pro review.
+
 - Phase1–8 durable continuous-chain closure: add the packaged
   `Phase6TrustedSourceAssembler`, an Authority revision-atomic compound reader,
   and immutable read-only Phase4/5 current/head readers. The trusted receipt
