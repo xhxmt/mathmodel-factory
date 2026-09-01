@@ -48,7 +48,19 @@ from factory_core.workflow_contract_v2 import compile_workflow_contract_bundle_v
 from tests.support.authority_production import install_foundation
 
 
-SOURCE_ROOT = Path(__file__).resolve().parents[1]
+EXECUTION_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _source_repository() -> Path:
+    """Use the exact Git identity root for tests run from a no-.git extraction."""
+
+    raw = os.environ.get("PHASE9_TEST_SOURCE_REPOSITORY")
+    if raw is None:
+        return EXECUTION_ROOT
+    path = Path(raw)
+    if not path.is_absolute():
+        raise AssertionError("PHASE9_TEST_SOURCE_REPOSITORY must be absolute")
+    return path
 
 
 def _creation_request(input_root: Path) -> RunGenerationRequestV1:
@@ -56,7 +68,7 @@ def _creation_request(input_root: Path) -> RunGenerationRequestV1:
     path = input_root / "official"
     path.mkdir(parents=True)
     (path / "problem.pdf").write_bytes(raw)
-    source = read_current_git_source_identity(SOURCE_ROOT)
+    source = read_current_git_source_identity(_source_repository())
     request = RunGenerationRequestV1(
         RUN_GENERATION_REQUEST_SCHEMA,
         "phase9-entry-generation-key",
@@ -195,7 +207,7 @@ def _ready_fixture(tmp_path: Path):
     result = Phase9RunGenerationService(
         fixture.database,
         expected_source_fence_sha256=fixture.preflight.source_fence_sha256,
-        source_repository=SOURCE_ROOT,
+        source_repository=_source_repository(),
         official_input_root=input_root,
         execution_context_receipt_path=context_receipt,
     ).create_or_rotate(request)
@@ -443,7 +455,7 @@ def test_receipt_files_must_be_canonical_json(tmp_path):
 
 
 def test_entry_cli_is_default_off_and_does_not_create_missing_database(tmp_path):
-    source = read_current_git_source_identity(SOURCE_ROOT)
+    source = read_current_git_source_identity(_source_repository())
     database = tmp_path / "must-not-be-created.db"
     request = {
         "schema": "phase9-entry-state-collection-request-v1",
@@ -463,7 +475,7 @@ def test_entry_cli_is_default_off_and_does_not_create_missing_database(tmp_path)
             "--request",
             str(request_path),
         ],
-        cwd=SOURCE_ROOT,
+        cwd=EXECUTION_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -477,7 +489,7 @@ def test_entry_cli_is_default_off_and_does_not_create_missing_database(tmp_path)
 
 
 def test_blocked_result_preserves_only_prevalidated_source_and_nine_p0_hashes():
-    source = read_current_git_source_identity(SOURCE_ROOT)
+    source = read_current_git_source_identity(_source_repository())
     candidate = _candidate(source)
     receipts = _p0_receipts(candidate)
     p0_hashes = {
