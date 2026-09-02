@@ -20,6 +20,7 @@ import sqlite3
 import stat
 import subprocess
 from typing import Callable, Mapping
+import unicodedata
 
 from .authority_production_schema import (
     authority_database_path,
@@ -406,6 +407,7 @@ def validate_official_inputs(
             "official_inputs.files must be a non-empty immutable tuple"
         )
     paths: list[str] = []
+    collision_keys: set[str] = set()
     for index, item in enumerate(value.files):
         path = f"official_inputs.files[{index}]"
         _exact(item, OfficialInputFileEvidenceV1, path)
@@ -415,10 +417,22 @@ def validate_official_inputs(
             )
         logical = _text(item.logical_path, f"{path}.logical_path")
         pure = PurePosixPath(logical)
-        if pure.is_absolute() or logical != pure.as_posix() or ".." in pure.parts:
+        if (
+            pure.is_absolute()
+            or logical != pure.as_posix()
+            or "\\" in logical
+            or any(part in {"", ".", ".."} for part in pure.parts)
+            or any(ord(character) < 32 for character in logical)
+        ):
             raise Phase9RunGenerationSafetyError(
                 f"{path}.logical_path must be a normalized relative POSIX path"
             )
+        collision_key = unicodedata.normalize("NFC", logical).casefold()
+        if collision_key in collision_keys:
+            raise Phase9RunGenerationSafetyError(
+                "official input paths collide by Unicode normalization or case"
+            )
+        collision_keys.add(collision_key)
         _nonnegative(item.byte_length, f"{path}.byte_length")
         _sha(item.raw_bytes_sha256, f"{path}.raw_bytes_sha256")
         paths.append(logical)
@@ -772,7 +786,7 @@ def _regular_file_bytes(
     return raw
 
 
-def _verified_official_input_snapshot(
+def verify_official_input_snapshot(
     root_value: str | Path,
     evidence: OfficialInputManifestEvidenceV1,
 ) -> tuple[tuple[str, int, str], ...]:
@@ -788,14 +802,23 @@ def _verified_official_input_snapshot(
         )
     root = root.resolve()
     actual_paths: list[str] = []
+    actual_collision_keys: set[str] = set()
     for directory, directory_names, file_names in os.walk(root, followlinks=False):
         current = Path(directory)
         for name in directory_names:
-            metadata = (current / name).lstat()
+            directory_path = current / name
+            metadata = directory_path.lstat()
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
                 raise Phase9RunGenerationSafetyError(
                     "official input tree contains a symlink or special directory"
                 )
+            relative = directory_path.relative_to(root).as_posix()
+            collision_key = unicodedata.normalize("NFC", relative).casefold()
+            if collision_key in actual_collision_keys:
+                raise Phase9RunGenerationSafetyError(
+                    "official input tree paths collide by Unicode normalization or case"
+                )
+            actual_collision_keys.add(collision_key)
         for name in file_names:
             path = current / name
             metadata = path.lstat()
@@ -807,7 +830,14 @@ def _verified_official_input_snapshot(
                 raise Phase9RunGenerationSafetyError(
                     "official input tree contains a symlink, hardlink, or special file"
                 )
-            actual_paths.append(path.relative_to(root).as_posix())
+            relative = path.relative_to(root).as_posix()
+            collision_key = unicodedata.normalize("NFC", relative).casefold()
+            if collision_key in actual_collision_keys:
+                raise Phase9RunGenerationSafetyError(
+                    "official input tree paths collide by Unicode normalization or case"
+                )
+            actual_collision_keys.add(collision_key)
+            actual_paths.append(relative)
     expected_paths = [item.logical_path for item in evidence.files]
     if sorted(actual_paths) != expected_paths:
         raise Phase9RunGenerationSafetyError(
@@ -839,8 +869,14 @@ def _verified_official_input_snapshot(
     if (
         root_before.st_dev,
         root_before.st_ino,
+        root_before.st_mode,
         root_before.st_mtime_ns,
-    ) != (root_after.st_dev, root_after.st_ino, root_after.st_mtime_ns):
+    ) != (
+        root_after.st_dev,
+        root_after.st_ino,
+        root_after.st_mode,
+        root_after.st_mtime_ns,
+    ):
         raise Phase9RunGenerationSafetyError(
             "official input root changed while being verified"
         )
@@ -1134,7 +1170,7 @@ class Phase9RunGenerationService:
         self, request: RunGenerationRequestV1
     ) -> RunGenerationCreationResult:
         value = validate_run_generation_request(request)
-        official_snapshot = _verified_official_input_snapshot(
+        official_snapshot = verify_official_input_snapshot(
             self.official_input_root, value.official_inputs
         )
         execution_context_bytes = _verified_execution_context_receipt(
@@ -1333,7 +1369,7 @@ class Phase9RunGenerationService:
                 raise Phase9RunGenerationConflict(
                     "current source changed during run-generation transaction"
                 )
-            if _verified_official_input_snapshot(
+            if verify_official_input_snapshot(
                 self.official_input_root, value.official_inputs
             ) != official_snapshot:
                 raise Phase9RunGenerationConflict(

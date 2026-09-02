@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import socket
 import subprocess
 
 import pytest
@@ -24,6 +25,7 @@ from factory_core.phase9_entry import (
     blocked_phase9_entry_result,
     collect_phase9_entry_state,
     verify_candidate_source,
+    verify_official_input_manifest,
     verify_phase9_entry_gate,
 )
 from factory_core.phase9_run_generation import (
@@ -573,6 +575,89 @@ def test_receipt_files_must_be_canonical_json(tmp_path):
         read_canonical_json_file(path)
     path.write_bytes(canonical_bytes(value))
     assert read_canonical_json_file(path) == {"a": 1, "b": 2}
+
+
+@pytest.mark.parametrize("kind", ("fifo", "socket"))
+def test_gate_official_input_snapshot_rejects_special_members(tmp_path, kind):
+    root = tmp_path / "official-input"
+    request = _creation_request(root)
+    special = root / f"unexpected-{kind}"
+    if kind == "fifo":
+        os.mkfifo(special)
+        bound = None
+    else:
+        bound = socket.socket(socket.AF_UNIX)
+        bound.bind(str(special))
+    try:
+        with pytest.raises(Phase9EntryError, match="special file"):
+            verify_official_input_manifest(
+                request.official_inputs.as_dict(), input_root=root
+            )
+    finally:
+        if bound is not None:
+            bound.close()
+
+
+def test_gate_official_input_snapshot_rejects_symlink_root_and_directory(tmp_path):
+    real_root = tmp_path / "real-official-input"
+    request = _creation_request(real_root)
+    linked_root = tmp_path / "linked-official-input"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+    with pytest.raises(Phase9EntryError, match="non-symlink directory"):
+        verify_official_input_manifest(
+            request.official_inputs.as_dict(), input_root=linked_root
+        )
+
+    outside = tmp_path / "outside-directory"
+    outside.mkdir()
+    (outside / "problem.pdf").write_bytes(b"official-input-bytes\n")
+    (real_root / "official" / "problem.pdf").unlink()
+    (real_root / "official").rmdir()
+    (real_root / "official").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(Phase9EntryError, match="symlink or special directory"):
+        verify_official_input_manifest(
+            request.official_inputs.as_dict(), input_root=real_root
+        )
+
+
+def test_gate_official_input_snapshot_rejects_hardlink(tmp_path):
+    root = tmp_path / "official-input"
+    request = _creation_request(root)
+    official = root / "official" / "problem.pdf"
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(official.read_bytes())
+    official.unlink()
+    os.link(outside, official)
+    with pytest.raises(Phase9EntryError, match="hardlink"):
+        verify_official_input_manifest(
+            request.official_inputs.as_dict(), input_root=root
+        )
+
+
+def test_gate_official_input_snapshot_rejects_root_replacement(tmp_path, monkeypatch):
+    import factory_core.phase9_run_generation as run_generation
+
+    root = tmp_path / "official-input"
+    request = _creation_request(root)
+    original = run_generation._regular_file_bytes
+    replaced = False
+
+    def replace_after_read(path, *, maximum_bytes, label):
+        nonlocal replaced
+        raw = original(path, maximum_bytes=maximum_bytes, label=label)
+        if not replaced and label.startswith("official input "):
+            replaced = True
+            old = tmp_path / "official-input-original"
+            root.rename(old)
+            (root / "official").mkdir(parents=True)
+            (root / "official" / "problem.pdf").write_bytes(raw)
+        return raw
+
+    monkeypatch.setattr(run_generation, "_regular_file_bytes", replace_after_read)
+    with pytest.raises(Phase9EntryError, match="root changed"):
+        verify_official_input_manifest(
+            request.official_inputs.as_dict(), input_root=root
+        )
 
 
 def test_entry_cli_is_default_off_and_does_not_create_missing_database(tmp_path):

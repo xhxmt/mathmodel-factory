@@ -27,6 +27,14 @@ from .authority_production_schema import (
     verify_production_installation,
 )
 from .canonical import canonical_bytes, canonical_sha256
+from .phase9_run_generation import (
+    OFFICIAL_INPUT_FILE_EVIDENCE_SCHEMA,
+    OFFICIAL_INPUT_MANIFEST_EVIDENCE_SCHEMA,
+    OfficialInputFileEvidenceV1,
+    OfficialInputManifestEvidenceV1,
+    Phase9RunGenerationSafetyError,
+    verify_official_input_snapshot,
+)
 
 
 PHASE9_ENTRY_STATE_SCHEMA = "phase9-entry-state-receipt-v1"
@@ -746,8 +754,7 @@ def verify_official_input_manifest(
     )
     if type(item["files"]) is not list or not item["files"]:
         raise Phase9EntryError("official input entries must be a non-empty list")
-    root = Path(input_root).resolve(strict=True)
-    entries: list[dict[str, object]] = []
+    files: list[OfficialInputFileEvidenceV1] = []
     previous = ""
     for index, raw_entry in enumerate(item["files"]):
         entry = _exact_mapping(
@@ -770,33 +777,24 @@ def verify_official_input_manifest(
             entry["raw_bytes_sha256"],
             f"official_input.entries[{index}].raw_bytes_sha256",
         )
-        raw = _regular_file_bytes(
-            root.joinpath(*PurePosixPath(relative).parts),
-            maximum_bytes=max(size, 1),
-            label=f"official input {relative}",
+        files.append(
+            OfficialInputFileEvidenceV1(
+                OFFICIAL_INPUT_FILE_EVIDENCE_SCHEMA,
+                relative,
+                size,
+                digest,
+            )
         )
-        if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
-            raise Phase9EntryError(f"official input bytes differ: {relative}")
-        entries.append(
-            {
-                "logical_path": relative,
-                "byte_length": size,
-                "raw_bytes_sha256": digest,
-            }
-        )
-    actual_paths = sorted(
-        path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
+    evidence = OfficialInputManifestEvidenceV1(
+        OFFICIAL_INPUT_MANIFEST_EVIDENCE_SCHEMA,
+        str(item["input_generation"]),
+        tuple(files),
     )
-    if actual_paths != [entry["logical_path"] for entry in entries]:
-        raise Phase9EntryError("official input directory differs from its manifest")
-    manifest_sha = canonical_sha256(item)
-    raw_set = canonical_sha256(
-        {
-            "schema": "authority-phase9-official-input-raw-bytes-set-v1",
-            "files": entries,
-        }
-    )
-    return manifest_sha, raw_set
+    try:
+        verify_official_input_snapshot(input_root, evidence)
+    except Phase9RunGenerationSafetyError as exc:
+        raise Phase9EntryError(str(exc)) from exc
+    return evidence.manifest_sha256, evidence.raw_bytes_set_sha256
 
 
 def validate_execution_context(
