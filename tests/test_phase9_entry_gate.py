@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import copy
 import hashlib
 import json
 import os
@@ -18,12 +19,14 @@ from factory_core.phase9_entry import (
     PHASE9_OFFICIAL_INPUT_FILE_SCHEMA,
     PHASE9_OFFICIAL_INPUT_MANIFEST_SCHEMA,
     PHASE9_OPERATOR_AUTHORIZATION_SCHEMA,
+    PHASE9_P0_COMMAND_RECORD_SCHEMA,
     PHASE9_P0_RECEIPT_SCHEMA,
     P0_REQUIREMENTS,
     CandidateIdentity,
     Phase9EntryError,
     blocked_phase9_entry_result,
     collect_phase9_entry_state,
+    p0_evidence_root_sha256,
     verify_candidate_source,
     verify_official_input_manifest,
     verify_phase9_entry_gate,
@@ -138,41 +141,74 @@ def _candidate(source: GitSourceIdentityV1) -> CandidateIdentity:
     return CandidateIdentity(source.source_commit, source.source_tree, source.source_parent)
 
 
-def _p0_receipts(candidate: CandidateIdentity) -> dict[str, object]:
+def _p0_receipts(
+    candidate: CandidateIdentity, evidence_root: Path
+) -> dict[str, object]:
+    (evidence_root / "command_records").mkdir(parents=True, exist_ok=True)
+    (evidence_root / "test_results").mkdir(parents=True, exist_ok=True)
+    (evidence_root / "evidence").mkdir(parents=True, exist_ok=True)
     receipts: dict[str, object] = {}
-    for index, requirement in enumerate(P0_REQUIREMENTS, start=1):
+    for requirement in P0_REQUIREMENTS:
+        evidence_raw = canonical_bytes(
+            {
+                "candidate": candidate.as_dict(),
+                "requirement": requirement,
+                "verified": True,
+            }
+        )
+        evidence_path = f"evidence/{requirement}.json"
+        (evidence_root / evidence_path).write_bytes(evidence_raw)
         evidence = [
             {
-                "path": f"evidence/{requirement}.json",
-                "sha256": hashlib.sha256(
-                    f"evidence:{requirement}".encode("ascii")
-                ).hexdigest(),
+                "path": evidence_path,
+                "sha256": hashlib.sha256(evidence_raw).hexdigest(),
             }
         ]
+        test_result_raw = f"PASS {requirement}\n".encode("ascii")
+        test_result_path = f"test_results/{requirement}.log"
+        (evidence_root / test_result_path).write_bytes(test_result_raw)
+        capabilities = {
+            "network_access": False,
+            "provider_call": False,
+            "outbox_dispatch": False,
+            "delivery": False,
+            "release": False,
+            "migration": False,
+            "deployment": False,
+            "cutover": False,
+        }
+        command_record = {
+            "schema": PHASE9_P0_COMMAND_RECORD_SCHEMA,
+            "requirement": requirement,
+            "candidate": candidate.as_dict(),
+            "command_argv": [
+                "python3",
+                "-m",
+                "pytest",
+                f"tests/p0/{requirement}.py",
+            ],
+            "exit_code": 0,
+            "test_result_path": test_result_path,
+            "test_result_sha256": hashlib.sha256(test_result_raw).hexdigest(),
+            "evidence": evidence,
+            "evidence_sha256": canonical_sha256(evidence),
+            "capabilities": capabilities,
+        }
+        command_record_raw = canonical_bytes(command_record)
+        (evidence_root / "command_records" / f"{requirement}.json").write_bytes(
+            command_record_raw
+        )
         body = {
             "schema": PHASE9_P0_RECEIPT_SCHEMA,
             "requirement": requirement,
             "candidate": candidate.as_dict(),
             "status": "PASS",
-            "test_result_sha256": hashlib.sha256(
-                f"test:{requirement}".encode("ascii")
-            ).hexdigest(),
-            "command_record_sha256": hashlib.sha256(
-                f"command:{requirement}".encode("ascii")
-            ).hexdigest(),
+            "test_result_sha256": hashlib.sha256(test_result_raw).hexdigest(),
+            "command_record_sha256": hashlib.sha256(command_record_raw).hexdigest(),
             "command_exit_code": 0,
             "evidence": evidence,
             "evidence_sha256": canonical_sha256(evidence),
-            "capabilities": {
-                "network_access": False,
-                "provider_call": False,
-                "outbox_dispatch": False,
-                "delivery": False,
-                "release": False,
-                "migration": False,
-                "deployment": False,
-                "cutover": False,
-            },
+            "capabilities": capabilities,
         }
         body["receipt_sha256"] = canonical_sha256(body)
         receipts[requirement] = body
@@ -180,7 +216,9 @@ def _p0_receipts(candidate: CandidateIdentity) -> dict[str, object]:
 
 
 def _entry_authorization(
-    candidate: CandidateIdentity, request: RunGenerationRequestV1
+    candidate: CandidateIdentity,
+    request: RunGenerationRequestV1,
+    p0_root_sha256: str,
 ) -> dict[str, object]:
     body = {
         "schema": PHASE9_OPERATOR_AUTHORIZATION_SCHEMA,
@@ -191,9 +229,11 @@ def _entry_authorization(
         "authorized_operation": "PHASE9_ENTRY",
         "authorization_mechanism": "CONTROLLED_OS_ACCOUNT",
         "authorization_evidence_sha256": "f" * 64,
+        "p0_evidence_root_sha256": p0_root_sha256,
         "operator_account": pwd.getpwuid(os.geteuid()).pw_name,
         "operator_uid": os.geteuid(),
         "authorized": True,
+        "issued_at": 2000,
         "expires_at": 2500,
     }
     body["receipt_sha256"] = canonical_sha256(body)
@@ -212,17 +252,33 @@ def _ready_fixture(tmp_path: Path):
         source_repository=_source_repository(),
         official_input_root=input_root,
         execution_context_receipt_path=context_receipt,
+        clock=lambda: 2000,
     ).create_or_rotate(request)
     candidate = _candidate(request.source)
+    p0_root = tmp_path / "p0-evidence"
+    p0_receipts = _p0_receipts(candidate, p0_root)
+    p0_root_sha = p0_evidence_root_sha256(p0_root)
     state = collect_phase9_entry_state(
         fixture.database, workflow_id=request.workflow_id, candidate=candidate
     )
     assert state.creation_receipt_sha256 == result.receipt_sha256
-    return fixture, input_root, request, candidate, state
+    return (
+        fixture,
+        input_root,
+        request,
+        candidate,
+        state,
+        p0_root,
+        p0_root_sha,
+        p0_receipts,
+    )
 
 
 def test_read_only_collector_and_candidate_bound_gate_are_ready(tmp_path):
-    fixture, input_root, request, candidate, state = _ready_fixture(tmp_path)
+    (
+        fixture, input_root, request, candidate, state,
+        p0_root, p0_root_sha, p0_receipts,
+    ) = _ready_fixture(tmp_path)
     before = hashlib.sha256(fixture.database.read_bytes()).hexdigest()
     source = {
         "mode": "GIT",
@@ -234,17 +290,23 @@ def test_read_only_collector_and_candidate_bound_gate_are_ready(tmp_path):
     result = verify_phase9_entry_gate(
         state=state,
         source_verification=source,
-        p0_receipts=_p0_receipts(candidate),
-        operator_authorization=_entry_authorization(candidate, request),
+        p0_receipts=p0_receipts,
+        p0_evidence_root=p0_root,
+        p0_evidence_root_sha256=p0_root_sha,
+        operator_authorization=_entry_authorization(
+            candidate, request, p0_root_sha
+        ),
         official_input_manifest=request.official_inputs.as_dict(),
         official_input_root=input_root,
         execution_context=request.execution_context.as_dict(),
         evaluated_at=2100,
+        trusted_now=2100,
     )
 
     assert result["status"] == "READY"
     assert result["blockers"] == []
     assert set(result["p0_receipt_sha256s"]) == set(P0_REQUIREMENTS)
+    assert result["p0_evidence_root_sha256"] == p0_root_sha
     assert result["authorization_scope"] == {
         "phase9_a_forensic_replay": False,
         "provider_or_network": False,
@@ -273,7 +335,10 @@ def test_read_only_collector_and_candidate_bound_gate_are_ready(tmp_path):
     ),
 )
 def test_gate_blocks_each_quiescence_and_delivery_fence(tmp_path, field, value, code):
-    _, input_root, request, candidate, state = _ready_fixture(tmp_path)
+    (
+        _, input_root, request, candidate, state,
+        p0_root, p0_root_sha, p0_receipts,
+    ) = _ready_fixture(tmp_path)
     result = verify_phase9_entry_gate(
         state=replace(state, **{field: value}),
         source_verification={
@@ -281,20 +346,28 @@ def test_gate_blocks_each_quiescence_and_delivery_fence(tmp_path, field, value, 
             "candidate": candidate.as_dict(),
             "verified_tree": candidate.tree,
         },
-        p0_receipts=_p0_receipts(candidate),
-        operator_authorization=_entry_authorization(candidate, request),
+        p0_receipts=p0_receipts,
+        p0_evidence_root=p0_root,
+        p0_evidence_root_sha256=p0_root_sha,
+        operator_authorization=_entry_authorization(
+            candidate, request, p0_root_sha
+        ),
         official_input_manifest=request.official_inputs.as_dict(),
         official_input_root=input_root,
         execution_context=request.execution_context.as_dict(),
         evaluated_at=2100,
+        trusted_now=2100,
     )
     assert result["status"] == "BLOCKED"
     assert code in {item["code"] for item in result["blockers"]}
 
 
 def test_gate_requires_ar007_and_all_other_candidate_bound_p0_receipts(tmp_path):
-    _, input_root, request, candidate, state = _ready_fixture(tmp_path)
-    receipts = _p0_receipts(candidate)
+    (
+        _, input_root, request, candidate, state,
+        p0_root, p0_root_sha, receipts,
+    ) = _ready_fixture(tmp_path)
+    receipts = dict(receipts)
     receipts.pop("AR_007_DELIVERY_BYPASS")
 
     result = verify_phase9_entry_gate(
@@ -305,11 +378,16 @@ def test_gate_requires_ar007_and_all_other_candidate_bound_p0_receipts(tmp_path)
             "verified_tree": candidate.tree,
         },
         p0_receipts=receipts,
-        operator_authorization=_entry_authorization(candidate, request),
+        p0_evidence_root=p0_root,
+        p0_evidence_root_sha256=p0_root_sha,
+        operator_authorization=_entry_authorization(
+            candidate, request, p0_root_sha
+        ),
         official_input_manifest=request.official_inputs.as_dict(),
         official_input_root=input_root,
         execution_context=request.execution_context.as_dict(),
         evaluated_at=2100,
+        trusted_now=2100,
     )
 
     assert result["status"] == "BLOCKED"
@@ -317,38 +395,47 @@ def test_gate_requires_ar007_and_all_other_candidate_bound_p0_receipts(tmp_path)
 
 
 def test_each_of_nine_p0_receipts_is_required_and_hash_verified(tmp_path):
-    _, input_root, request, candidate, state = _ready_fixture(tmp_path)
+    (
+        _, input_root, request, candidate, state,
+        p0_root, p0_root_sha, receipts,
+    ) = _ready_fixture(tmp_path)
     source = {
         "mode": "GIT",
         "candidate": candidate.as_dict(),
         "verified_tree": candidate.tree,
     }
-    authorization = _entry_authorization(candidate, request)
+    authorization = _entry_authorization(candidate, request, p0_root_sha)
     for requirement in P0_REQUIREMENTS:
-        missing = _p0_receipts(candidate)
+        missing = dict(receipts)
         missing.pop(requirement)
         missing_result = verify_phase9_entry_gate(
             state=state,
             source_verification=source,
             p0_receipts=missing,
+            p0_evidence_root=p0_root,
+            p0_evidence_root_sha256=p0_root_sha,
             operator_authorization=authorization,
             official_input_manifest=request.official_inputs.as_dict(),
             official_input_root=input_root,
             execution_context=request.execution_context.as_dict(),
             evaluated_at=2100,
+            trusted_now=2100,
         )
         assert missing_result["status"] == "BLOCKED", requirement
-        tampered = _p0_receipts(candidate)
+        tampered = copy.deepcopy(receipts)
         tampered[requirement]["evidence_sha256"] = "0" * 64
         tampered_result = verify_phase9_entry_gate(
             state=state,
             source_verification=source,
             p0_receipts=tampered,
+            p0_evidence_root=p0_root,
+            p0_evidence_root_sha256=p0_root_sha,
             operator_authorization=authorization,
             official_input_manifest=request.official_inputs.as_dict(),
             official_input_root=input_root,
             execution_context=request.execution_context.as_dict(),
             evaluated_at=2100,
+            trusted_now=2100,
         )
         assert tampered_result["status"] == "BLOCKED", requirement
         assert {item["code"] for item in tampered_result["blockers"]} == {
@@ -356,11 +443,107 @@ def test_each_of_nine_p0_receipts_is_required_and_hash_verified(tmp_path):
         }
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "command_records/AR_007_DELIVERY_BYPASS.json",
+        "test_results/AR_007_DELIVERY_BYPASS.log",
+        "evidence/AR_007_DELIVERY_BYPASS.json",
+    ),
+)
+def test_gate_rejects_recomputed_root_when_external_p0_artifact_is_missing(
+    tmp_path, relative_path
+):
+    (
+        _, input_root, request, candidate, state,
+        p0_root, _, receipts,
+    ) = _ready_fixture(tmp_path)
+    (p0_root / relative_path).unlink()
+    recomputed_root_sha = p0_evidence_root_sha256(p0_root)
+    result = verify_phase9_entry_gate(
+        state=state,
+        source_verification={
+            "mode": "GIT",
+            "candidate": candidate.as_dict(),
+            "verified_tree": candidate.tree,
+        },
+        p0_receipts=receipts,
+        p0_evidence_root=p0_root,
+        p0_evidence_root_sha256=recomputed_root_sha,
+        operator_authorization=_entry_authorization(
+            candidate, request, recomputed_root_sha
+        ),
+        official_input_manifest=request.official_inputs.as_dict(),
+        official_input_root=input_root,
+        execution_context=request.execution_context.as_dict(),
+        evaluated_at=2100,
+        trusted_now=2100,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "P0_RECEIPTS_INVALID" in {
+        item["code"] for item in result["blockers"]
+    }
+
+
+def test_gate_rejects_recomputed_receipt_hashes_without_any_p0_evidence_root(
+    tmp_path,
+):
+    (
+        _, input_root, request, candidate, state,
+        _, _, receipts,
+    ) = _ready_fixture(tmp_path)
+    forged = copy.deepcopy(receipts)
+    for requirement, receipt in forged.items():
+        receipt["test_result_sha256"] = hashlib.sha256(
+            f"forged-test:{requirement}".encode("ascii")
+        ).hexdigest()
+        receipt["command_record_sha256"] = hashlib.sha256(
+            f"forged-command:{requirement}".encode("ascii")
+        ).hexdigest()
+        receipt["evidence"][0]["sha256"] = hashlib.sha256(
+            f"forged-evidence:{requirement}".encode("ascii")
+        ).hexdigest()
+        receipt["evidence_sha256"] = canonical_sha256(receipt["evidence"])
+        receipt.pop("receipt_sha256")
+        receipt["receipt_sha256"] = canonical_sha256(receipt)
+    missing_root = tmp_path / "nonexistent-p0-evidence"
+    forged_root_sha = "a" * 64
+    result = verify_phase9_entry_gate(
+        state=state,
+        source_verification={
+            "mode": "GIT",
+            "candidate": candidate.as_dict(),
+            "verified_tree": candidate.tree,
+        },
+        p0_receipts=forged,
+        p0_evidence_root=missing_root,
+        p0_evidence_root_sha256=forged_root_sha,
+        operator_authorization=_entry_authorization(
+            candidate, request, forged_root_sha
+        ),
+        official_input_manifest=request.official_inputs.as_dict(),
+        official_input_root=input_root,
+        execution_context=request.execution_context.as_dict(),
+        evaluated_at=2100,
+        trusted_now=2100,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "P0 evidence root is unavailable" in next(
+        item["detail"]
+        for item in result["blockers"]
+        if item["code"] == "P0_RECEIPTS_INVALID"
+    )
+
+
 def test_gate_rejects_cross_candidate_receipt_expired_auth_and_changed_input(tmp_path):
-    _, input_root, request, candidate, state = _ready_fixture(tmp_path)
-    receipts = _p0_receipts(candidate)
+    (
+        _, input_root, request, candidate, state,
+        p0_root, p0_root_sha, receipts,
+    ) = _ready_fixture(tmp_path)
+    receipts = dict(receipts)
     wrong = CandidateIdentity("a" * 40, "b" * 40, "c" * 40)
-    receipts["AR_007_DELIVERY_BYPASS"] = _p0_receipts(wrong)[
+    wrong_receipts = _p0_receipts(wrong, tmp_path / "wrong-p0-evidence")
+    receipts["AR_007_DELIVERY_BYPASS"] = wrong_receipts[
         "AR_007_DELIVERY_BYPASS"
     ]
     (input_root / "official" / "problem.pdf").write_bytes(b"changed")
@@ -373,11 +556,16 @@ def test_gate_rejects_cross_candidate_receipt_expired_auth_and_changed_input(tmp
             "verified_tree": candidate.tree,
         },
         p0_receipts=receipts,
-        operator_authorization=_entry_authorization(candidate, request),
+        p0_evidence_root=p0_root,
+        p0_evidence_root_sha256=p0_root_sha,
+        operator_authorization=_entry_authorization(
+            candidate, request, p0_root_sha
+        ),
         official_input_manifest=request.official_inputs.as_dict(),
         official_input_root=input_root,
         execution_context=request.execution_context.as_dict(),
         evaluated_at=2600,
+        trusted_now=2600,
     )
 
     codes = {item["code"] for item in result["blockers"]}
@@ -386,6 +574,54 @@ def test_gate_rejects_cross_candidate_receipt_expired_auth_and_changed_input(tmp
         "OPERATOR_AUTHORIZATION_INVALID",
         "OFFICIAL_INPUT_INVALID",
     }
+
+
+@pytest.mark.parametrize(
+    ("authorization_changes", "requested_time", "trusted_now", "expected_code"),
+    (
+        ({"issued_at": 1900, "expires_at": 2000}, 1950, 2100,
+         "OPERATOR_AUTHORIZATION_INVALID"),
+        ({"issued_at": 2200, "expires_at": 2500}, 2100, 2100,
+         "OPERATOR_AUTHORIZATION_INVALID"),
+        ({}, 1700, 2100, "REQUEST_TIME_INVALID"),
+    ),
+)
+def test_gate_authorization_uses_trusted_clock_not_request_time(
+    tmp_path,
+    authorization_changes,
+    requested_time,
+    trusted_now,
+    expected_code,
+):
+    (
+        _, input_root, request, candidate, state,
+        p0_root, p0_root_sha, p0_receipts,
+    ) = _ready_fixture(tmp_path)
+    authorization = _entry_authorization(candidate, request, p0_root_sha)
+    authorization.update(authorization_changes)
+    authorization.pop("receipt_sha256")
+    authorization["receipt_sha256"] = canonical_sha256(authorization)
+    result = verify_phase9_entry_gate(
+        state=state,
+        source_verification={
+            "mode": "GIT",
+            "candidate": candidate.as_dict(),
+            "verified_tree": candidate.tree,
+        },
+        p0_receipts=p0_receipts,
+        p0_evidence_root=p0_root,
+        p0_evidence_root_sha256=p0_root_sha,
+        operator_authorization=authorization,
+        official_input_manifest=request.official_inputs.as_dict(),
+        official_input_root=input_root,
+        execution_context=request.execution_context.as_dict(),
+        evaluated_at=requested_time,
+        trusted_now=trusted_now,
+    )
+    assert result["status"] == "BLOCKED"
+    assert expected_code in {item["code"] for item in result["blockers"]}
+    assert result["evaluated_at"] == trusted_now
+    assert result["request_evaluated_at"] == requested_time
 
 
 def _git(repository: Path, *args: str) -> str:
@@ -697,9 +933,9 @@ def test_entry_cli_is_default_off_and_does_not_create_missing_database(tmp_path)
 def test_blocked_result_preserves_only_prevalidated_source_and_nine_p0_hashes():
     source = read_current_git_source_identity(_source_repository())
     candidate = _candidate(source)
-    receipts = _p0_receipts(candidate)
     p0_hashes = {
-        name: receipt["receipt_sha256"] for name, receipt in receipts.items()
+        name: hashlib.sha256(name.encode("ascii")).hexdigest()
+        for name in P0_REQUIREMENTS
     }
     result = blocked_phase9_entry_result(
         candidate=candidate,

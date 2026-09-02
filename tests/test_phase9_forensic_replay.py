@@ -54,7 +54,10 @@ PHASE9_TABLES = (
 )
 
 
-def _ready_gate(input_root, request, candidate, state):
+def _ready_gate(
+    input_root, request, candidate, state,
+    p0_root, p0_root_sha, p0_receipts,
+):
     source = {
         "mode": "GIT",
         "candidate": candidate.as_dict(),
@@ -64,12 +67,17 @@ def _ready_gate(input_root, request, candidate, state):
     result = verify_phase9_entry_gate(
         state=state,
         source_verification=source,
-        p0_receipts=_p0_receipts(candidate),
-        operator_authorization=_entry_authorization(candidate, request),
+        p0_receipts=p0_receipts,
+        p0_evidence_root=p0_root,
+        p0_evidence_root_sha256=p0_root_sha,
+        operator_authorization=_entry_authorization(
+            candidate, request, p0_root_sha
+        ),
         official_input_manifest=request.official_inputs.as_dict(),
         official_input_root=input_root,
         execution_context=request.execution_context.as_dict(),
         evaluated_at=2100,
+        trusted_now=2100,
     )
     assert result["status"] == "READY"
     return result
@@ -88,6 +96,7 @@ def _authorization(request, *, occurred_at=2200):
         "workflow_id": request.workflow_id,
         "run_generation": request.run_generation,
         "source_commit": request.source_commit,
+        "entry_gate_result_sha256": request.entry_gate_result_sha256,
         "issued_at": occurred_at - 100,
         "expires_at": occurred_at + 100,
         "authorization_scope": {
@@ -275,6 +284,7 @@ def _request_for_evidence(
         "project_revision": generation_request.project_revision,
         "run_generation": state.run_generation,
         "source_commit": generation_request.source.source_commit,
+        "entry_gate_result_sha256": gate["gate_result_sha256"],
         "occurred_at": 2200,
     }
     _write_evidence(
@@ -316,8 +326,14 @@ def _request_for_evidence(
 
 
 def _fixture(tmp_path, *, mode=TECHNICAL, **evidence_options):
-    foundation, input_root, generation_request, candidate, state = _ready_fixture(tmp_path)
-    gate = _ready_gate(input_root, generation_request, candidate, state)
+    (
+        foundation, input_root, generation_request, candidate, state,
+        p0_root, p0_root_sha, p0_receipts,
+    ) = _ready_fixture(tmp_path)
+    gate = _ready_gate(
+        input_root, generation_request, candidate, state,
+        p0_root, p0_root_sha, p0_receipts,
+    )
     root = tmp_path / "phase9-replay-evidence"
     request = _request_for_evidence(
         root, generation_request, state, gate, mode=mode, **evidence_options
@@ -327,6 +343,7 @@ def _fixture(tmp_path, *, mode=TECHNICAL, **evidence_options):
         expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
         source_repository=_source_repository(),
         evidence_root=root,
+        clock=lambda: request.occurred_at,
     )
     return foundation, root, request, service
 
@@ -340,6 +357,23 @@ def _counts(database: Path):
         }
     finally:
         connection.close()
+
+
+def _reindex_evidence(
+    root: Path, request: Phase9ForensicReplayRequestV1
+) -> Phase9ForensicReplayRequestV1:
+    files = []
+    paths = [item for item in root.rglob("*") if item.is_file()]
+    for path in sorted(paths, key=lambda item: item.relative_to(root).as_posix()):
+        raw = path.read_bytes()
+        files.append(
+            ReplayEvidenceFileV1(
+                path.relative_to(root).as_posix(),
+                len(raw),
+                hashlib.sha256(raw).hexdigest(),
+            )
+        )
+    return replace(request, evidence_files=tuple(files))
 
 
 def test_configuration_is_default_off_and_does_not_parse_paths():
@@ -357,7 +391,9 @@ def test_configuration_is_default_off_and_does_not_parse_paths():
 
 def test_preflight_atomic_execute_exact_replay_and_read_only_collection(tmp_path):
     foundation, root, request, service = _fixture(tmp_path)
-    preflight = preflight_phase9_forensic_replay(request, evidence_root=root)
+    preflight = preflight_phase9_forensic_replay(
+        request, evidence_root=root, trusted_now=request.occurred_at
+    )
     assert preflight["status"] == "READY"
     first = service.execute(request)
     replay = service.execute(request)
@@ -392,6 +428,40 @@ def test_same_idempotency_key_with_different_request_conflicts(tmp_path):
         service.execute(changed)
 
 
+def test_start_authorization_uses_trusted_clock_and_exact_gate_result(tmp_path):
+    _foundation, root, request, _service = _fixture(tmp_path)
+    authorization_path = root / "start_authorization.json"
+
+    expired = _authorization(request, occurred_at=request.occurred_at)
+    expired["issued_at"] = request.occurred_at - 200
+    expired["expires_at"] = request.occurred_at + 50
+    expired.pop("authorization_receipt_sha256")
+    expired["authorization_receipt_sha256"] = canonical_sha256(expired)
+    authorization_path.write_bytes(canonical_bytes(expired))
+    expired_request = _reindex_evidence(root, request)
+    result = preflight_phase9_forensic_replay(
+        expired_request,
+        evidence_root=root,
+        trusted_now=request.occurred_at + 100,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "not valid at trusted current time" in result["blockers"][0]["detail"]
+
+    wrong_gate = _authorization(request, occurred_at=request.occurred_at)
+    wrong_gate["entry_gate_result_sha256"] = "a" * 64
+    wrong_gate.pop("authorization_receipt_sha256")
+    wrong_gate["authorization_receipt_sha256"] = canonical_sha256(wrong_gate)
+    authorization_path.write_bytes(canonical_bytes(wrong_gate))
+    wrong_gate_request = _reindex_evidence(root, request)
+    result = preflight_phase9_forensic_replay(
+        wrong_gate_request,
+        evidence_root=root,
+        trusted_now=request.occurred_at,
+    )
+    assert result["status"] == "BLOCKED"
+    assert "start authorization coordinate differs" in result["blockers"][0]["detail"]
+
+
 @pytest.mark.parametrize(
     "checkpoint",
     [
@@ -412,6 +482,7 @@ def test_fault_injection_rolls_back_every_phase9_table(tmp_path, checkpoint):
         source_repository=_source_repository(),
         evidence_root=root,
         fault_hook=fault,
+        clock=lambda: request.occurred_at,
     )
     with pytest.raises(RuntimeError, match="fault"):
         service.execute(request)
@@ -420,7 +491,9 @@ def test_fault_injection_rolls_back_every_phase9_table(tmp_path, checkpoint):
 
 def test_missing_claims_are_blocked_and_dispatch_must_be_zero(tmp_path):
     _foundation, root, request, service = _fixture(tmp_path, missing_claim=True)
-    preflight = preflight_phase9_forensic_replay(request, evidence_root=root)
+    preflight = preflight_phase9_forensic_replay(
+        request, evidence_root=root, trusted_now=request.occurred_at
+    )
     assert preflight["status"] == "BLOCKED"
     assert [item["code"] for item in preflight["blockers"]] == ["MISSING_PACKET_CLAIMS"]
     with pytest.raises(Phase9ForensicReplaySafetyError, match="BLOCKED"):
@@ -430,7 +503,9 @@ def test_missing_claims_are_blocked_and_dispatch_must_be_zero(tmp_path):
     foundation, root2, request2, _ = _fixture(
         other, missing_claim=True, missing_dispatch_count=1
     )
-    result = preflight_phase9_forensic_replay(request2, evidence_root=root2)
+    result = preflight_phase9_forensic_replay(
+        request2, evidence_root=root2, trusted_now=request2.occurred_at
+    )
     assert [item["code"] for item in result["blockers"]] == [
         "DISPATCH_WITH_MISSING_CLAIMS", "MISSING_PACKET_CLAIMS"
     ]
@@ -446,7 +521,9 @@ def test_missing_claims_are_blocked_and_dispatch_must_be_zero(tmp_path):
 )
 def test_verdict_and_snapshot_fail_closed(tmp_path, option, message):
     _foundation, root, request, service = _fixture(tmp_path, **option)
-    result = preflight_phase9_forensic_replay(request, evidence_root=root)
+    result = preflight_phase9_forensic_replay(
+        request, evidence_root=root, trusted_now=request.occurred_at
+    )
     assert result["status"] == "BLOCKED"
     assert message in result["blockers"][0]["detail"]
     with pytest.raises(Phase9ForensicReplaySafetyError, match=message):
@@ -455,7 +532,9 @@ def test_verdict_and_snapshot_fail_closed(tmp_path, option, message):
 
 def test_ablation_is_typed_nonzero_nonreusable_and_delivery_disabled(tmp_path):
     foundation, root, request, service = _fixture(tmp_path, mode=ABLATE_NO_JUDGE)
-    assert preflight_phase9_forensic_replay(request, evidence_root=root)["status"] == "READY"
+    assert preflight_phase9_forensic_replay(
+        request, evidence_root=root, trusted_now=request.occurred_at
+    )["status"] == "READY"
     result = service.execute(request)
     assert result.terminal_reason == "PERMANENT_ABLATION_NO_DELIVERY"
     assert result.effective_verdict == "NOT_APPLICABLE"
@@ -470,7 +549,9 @@ def test_ablation_is_typed_nonzero_nonreusable_and_delivery_disabled(tmp_path):
 
 def test_delivery_evidence_cannot_enable_or_create_release(tmp_path):
     foundation, root, request, service = _fixture(tmp_path, delivery_enabled=True)
-    result = preflight_phase9_forensic_replay(request, evidence_root=root)
+    result = preflight_phase9_forensic_replay(
+        request, evidence_root=root, trusted_now=request.occurred_at
+    )
     assert result["status"] == "BLOCKED"
     assert result["blockers"] == [
         {"code": "DELIVERY_FENCE", "detail": "delivery evidence differs"}
@@ -493,6 +574,7 @@ def test_evidence_toctou_before_commit_rolls_back(tmp_path):
         expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
         source_repository=_source_repository(), evidence_root=root,
         fault_hook=mutate,
+        clock=lambda: request.occurred_at,
     )
     with pytest.raises(Phase9ForensicReplaySafetyError, match="evidence bytes differ"):
         service.execute(request)
@@ -517,8 +599,14 @@ def test_current_pointer_guards_reject_direct_update_and_delete(tmp_path):
 
 
 def test_generation_rotation_cas_switches_phase9_current_pointer(tmp_path):
-    foundation, input_root, generation_request, candidate, first_state = _ready_fixture(tmp_path)
-    first_gate = _ready_gate(input_root, generation_request, candidate, first_state)
+    (
+        foundation, input_root, generation_request, candidate, first_state,
+        p0_root, p0_root_sha, p0_receipts,
+    ) = _ready_fixture(tmp_path)
+    first_gate = _ready_gate(
+        input_root, generation_request, candidate, first_state,
+        p0_root, p0_root_sha, p0_receipts,
+    )
     first_root = tmp_path / "first-replay"
     first_request = _request_for_evidence(
         first_root, generation_request, first_state, first_gate
@@ -527,6 +615,7 @@ def test_generation_rotation_cas_switches_phase9_current_pointer(tmp_path):
         foundation.database,
         expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
         source_repository=_source_repository(), evidence_root=first_root,
+        clock=lambda: first_request.occurred_at,
     )
     first = first_service.execute(first_request)
 
@@ -550,6 +639,7 @@ def test_generation_rotation_cas_switches_phase9_current_pointer(tmp_path):
         expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
         source_repository=_source_repository(), official_input_root=input_root,
         execution_context_receipt_path=context,
+        clock=lambda: 2300,
     ).create_or_rotate(rotation_request)
     from factory_core.phase9_entry import collect_phase9_entry_state
 
@@ -559,7 +649,10 @@ def test_generation_rotation_cas_switches_phase9_current_pointer(tmp_path):
         candidate=candidate,
     )
     assert second_state.run_generation == rotation.run_generation
-    second_gate = _ready_gate(input_root, rotation_request, candidate, second_state)
+    second_gate = _ready_gate(
+        input_root, rotation_request, candidate, second_state,
+        p0_root, p0_root_sha, p0_receipts,
+    )
     second_root = tmp_path / "second-replay"
     second_request = _request_for_evidence(
         second_root, rotation_request, second_state, second_gate
@@ -591,6 +684,7 @@ def test_generation_rotation_cas_switches_phase9_current_pointer(tmp_path):
         foundation.database,
         expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
         source_repository=_source_repository(), evidence_root=second_root,
+        clock=lambda: second_request.occurred_at,
     )
     second = second_service.execute(second_request)
     state = collect_phase9_forensic_replay_state(
@@ -610,7 +704,9 @@ def test_symlinked_evidence_is_blocked_before_database_mutation(tmp_path):
     outside.write_bytes(packet.read_bytes())
     packet.unlink()
     packet.symlink_to(outside)
-    result = preflight_phase9_forensic_replay(request, evidence_root=root)
+    result = preflight_phase9_forensic_replay(
+        request, evidence_root=root, trusted_now=request.occurred_at
+    )
     assert result["status"] == "BLOCKED"
     assert "symlink" in result["blockers"][0]["detail"]
     with pytest.raises(Phase9ForensicReplaySafetyError, match="symlink"):

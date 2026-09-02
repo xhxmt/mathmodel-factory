@@ -19,6 +19,7 @@ import pwd
 import re
 import sqlite3
 import stat
+import time
 from typing import Callable, Mapping
 
 from .authority_production_schema import (
@@ -29,15 +30,18 @@ from .authority_production_schema import (
     verify_production_installation,
 )
 from .canonical import canonical_bytes, canonical_sha256
-from .phase9_entry import P0_REQUIREMENTS
-from .phase9_run_generation import read_current_git_source_identity
+from .phase9_entry import PHASE9_ENTRY_GATE_SCHEMA, P0_REQUIREMENTS
+from .phase9_run_generation import (
+    PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS,
+    read_current_git_source_identity,
+)
 
 
 PHASE9_REPLAY_REQUEST_SCHEMA = "authority-phase9-forensic-replay-request-v1"
 PHASE9_REPLAY_RESULT_SCHEMA = "authority-phase9-forensic-replay-result-v1"
 PHASE9_REPLAY_PREFLIGHT_SCHEMA = "authority-phase9-forensic-preflight-v1"
 PHASE9_REPLAY_STATE_SCHEMA = "authority-phase9-forensic-state-v1"
-PHASE9_START_AUTHORIZATION_SCHEMA = "authority-phase9-start-authorization-v1"
+PHASE9_START_AUTHORIZATION_SCHEMA = "authority-phase9-start-authorization-v2"
 
 CREATE = "CREATE"
 ROTATE = "ROTATE"
@@ -525,7 +529,7 @@ def _self_hash(body: Mapping[str, object], field: str, path: str) -> str:
 def _verify_entry_gate(
     body: dict[str, object], request: Phase9ForensicReplayRequestV1
 ) -> None:
-    if body.get("schema") != "phase9-entry-gate-result-v1":
+    if body.get("schema") != PHASE9_ENTRY_GATE_SCHEMA:
         raise Phase9ForensicReplaySafetyError("entry gate schema is unsupported")
     if body.get("status") != "READY" or body.get("blockers") != []:
         raise Phase9ForensicReplaySafetyError("entry gate is not READY")
@@ -565,19 +569,23 @@ def _verify_entry_gate(
         "state_receipt_sha256", "source_verification_sha256",
         "operator_authorization_receipt_sha256",
         "official_input_manifest_sha256", "official_input_raw_bytes_set_sha256",
-        "execution_context_receipt_sha256",
+        "execution_context_receipt_sha256", "p0_evidence_root_sha256",
     ):
         _sha(body.get(field), f"entry_gate.{field}")
 
 
 def _verify_start_authorization(
-    body: dict[str, object], request: Phase9ForensicReplayRequestV1
+    body: dict[str, object],
+    request: Phase9ForensicReplayRequestV1,
+    *,
+    trusted_now: int,
 ) -> str:
     expected_keys = {
         "schema", "authorization_id", "authorization_mechanism", "authorized",
         "operator_uid", "operator_account", "operation", "project_id",
         "workflow_id", "run_generation", "source_commit", "issued_at",
-        "expires_at", "authorization_scope", "authorization_receipt_sha256",
+        "expires_at", "entry_gate_result_sha256", "authorization_scope",
+        "authorization_receipt_sha256",
     }
     if set(body) != expected_keys:
         raise Phase9ForensicReplaySafetyError("start authorization keys differ")
@@ -592,12 +600,15 @@ def _verify_start_authorization(
         or body.get("workflow_id") != request.workflow_id
         or body.get("run_generation") != request.run_generation
         or body.get("source_commit") != request.source_commit
+        or body.get("entry_gate_result_sha256") != request.entry_gate_result_sha256
     ):
         raise Phase9ForensicReplaySafetyError("start authorization coordinate differs")
     issued = _integer(body.get("issued_at"), "start_authorization.issued_at")
     expires = _integer(body.get("expires_at"), "start_authorization.expires_at")
-    if expires < issued or not issued <= request.occurred_at <= expires:
-        raise Phase9ForensicReplaySafetyError("start authorization is expired")
+    if expires < issued or not issued <= trusted_now <= expires:
+        raise Phase9ForensicReplaySafetyError(
+            "start authorization is not valid at trusted current time"
+        )
     try:
         uid = os.geteuid()
         account = pwd.getpwuid(uid).pw_name
@@ -638,14 +649,23 @@ def _effective(values: list[str]) -> str:
 
 
 def _evaluate_evidence(
-    request: Phase9ForensicReplayRequestV1, values: Mapping[str, bytes]
+    request: Phase9ForensicReplayRequestV1,
+    values: Mapping[str, bytes],
+    *,
+    trusted_now: int,
 ) -> dict[str, object]:
-    entry = _control(values, "entry_gate.json", "phase9-entry-gate-result-v1")
+    if abs(request.occurred_at - trusted_now) > PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS:
+        raise Phase9ForensicReplaySafetyError(
+            "request occurrence metadata exceeds trusted clock skew"
+        )
+    entry = _control(values, "entry_gate.json", PHASE9_ENTRY_GATE_SCHEMA)
     _verify_entry_gate(entry, request)
     authorization = _control(
         values, "start_authorization.json", PHASE9_START_AUTHORIZATION_SCHEMA
     )
-    authorization_sha = _verify_start_authorization(authorization, request)
+    authorization_sha = _verify_start_authorization(
+        authorization, request, trusted_now=trusted_now
+    )
     packet = _control(values, "packet.json", "authority-phase9-packet-evidence-v1")
     roles = _control(values, "roles.json", "authority-phase9-role-evidence-v1")
     verdict = _control(values, "verdict.json", "authority-phase9-verdict-evidence-v1")
@@ -851,11 +871,15 @@ def preflight_phase9_forensic_replay(
     request: Phase9ForensicReplayRequestV1,
     *,
     evidence_root: str | Path,
+    trusted_now: int | None = None,
 ) -> dict[str, object]:
     value = validate_phase9_forensic_replay_request(request)
+    now = int(time.time()) if trusted_now is None else _integer(
+        trusted_now, "trusted_now"
+    )
     try:
         evidence = _read_evidence_set(evidence_root, value)
-        evaluation = _evaluate_evidence(value, evidence)
+        evaluation = _evaluate_evidence(value, evidence, trusted_now=now)
         blockers = list(evaluation["blockers"])
         return _preflight_body(value, evaluation, blockers)
     except Phase9ForensicReplayError as exc:
@@ -914,6 +938,7 @@ class Phase9ForensicReplayService:
         source_repository: str | Path,
         evidence_root: str | Path,
         fault_hook: Callable[[str], None] | None = None,
+        clock: Callable[[], int] | None = None,
     ) -> None:
         self.path = authority_database_path(database)
         self.expected_source_fence_sha256 = _sha(
@@ -923,7 +948,13 @@ class Phase9ForensicReplayService:
         self.evidence_root = Path(evidence_root)
         if fault_hook is not None and not callable(fault_hook):
             raise Phase9ForensicReplaySafetyError("fault_hook must be callable")
+        if clock is not None and not callable(clock):
+            raise Phase9ForensicReplaySafetyError("clock must be callable")
         self.fault_hook = fault_hook
+        self._clock = (lambda: int(time.time())) if clock is None else clock
+
+    def _trusted_now(self) -> int:
+        return _integer(self._clock(), "trusted_now")
 
     def _fault(self, checkpoint: str) -> None:
         if self.fault_hook is not None:
@@ -1024,7 +1055,9 @@ class Phase9ForensicReplayService:
     ) -> Phase9ForensicReplayResult:
         value = validate_phase9_forensic_replay_request(request)
         first_values = _read_evidence_set(self.evidence_root, value)
-        evaluation = _evaluate_evidence(value, first_values)
+        evaluation = _evaluate_evidence(
+            value, first_values, trusted_now=self._trusted_now()
+        )
         if evaluation["blockers"]:
             raise Phase9ForensicReplaySafetyError(
                 "Phase9 replay preflight is BLOCKED: "
@@ -1191,7 +1224,9 @@ class Phase9ForensicReplayService:
                     raise Phase9ForensicReplayConflict("Phase9 current pointer CAS is stale")
             self._fault("after_current_pointer")
             second_values = _read_evidence_set(self.evidence_root, value)
-            second_evaluation = _evaluate_evidence(value, second_values)
+            second_evaluation = _evaluate_evidence(
+                value, second_values, trusted_now=self._trusted_now()
+            )
             if second_values != first_values or second_evaluation != evaluation:
                 raise Phase9ForensicReplayConflict("evidence changed during transaction")
             current_source = read_current_git_source_identity(self.source_repository)

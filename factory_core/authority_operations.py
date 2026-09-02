@@ -1369,6 +1369,7 @@ class AuthorityOperations:
         source_repository: str | Path,
         official_input_root: str | Path,
         execution_context_receipt_path: str | Path,
+        clock: Callable[[], int] | None = None,
     ) -> "RunGenerationCreationResult":
         """Use the reviewed Phase9 service without exposing SQLite or SQL.
 
@@ -1384,6 +1385,7 @@ class AuthorityOperations:
             source_repository=source_repository,
             official_input_root=official_input_root,
             execution_context_receipt_path=execution_context_receipt_path,
+            clock=clock,
         ).create_or_rotate(request)
 
 

@@ -159,6 +159,7 @@ def _service(
         official_input_root=official_root,
         execution_context_receipt_path=context,
         fault_hook=fault_hook,
+        clock=lambda: 2000,
     )
 
 
@@ -225,7 +226,9 @@ def test_atomic_create_binds_candidate_inputs_coordinates_and_exact_replay(tmp_p
 
 def test_typed_request_json_round_trip_is_canonical_identity_stable():
     request = _request()
-    decoded = run_generation_request_from_dict(request.as_dict())
+    decoded = run_generation_request_from_dict(
+        request.as_dict(), trusted_now=2000
+    )
     assert decoded == request
     assert decoded.request_sha256 == request.request_sha256
     assert decoded.derived_run_generation == request.derived_run_generation
@@ -391,6 +394,7 @@ def test_default_off_fence_rejects_enabled_writer(tmp_path):
             _request(), source_repository=_source_repository(),
             official_input_root=official_root,
             execution_context_receipt_path=context,
+            clock=lambda: 2000,
         )
 
     assert _counts(fixture.database) == {table: 0 for table in RUN_TABLES}
@@ -409,6 +413,56 @@ def test_request_rejects_legacy_generation_and_unbound_authorization(tmp_path):
         _service(fixture).create_or_rotate(
             replace(request, operator_authorization=wrong_auth)
         )
+    assert _counts(fixture.database) == {table: 0 for table in RUN_TABLES}
+
+
+def test_create_authorization_uses_trusted_clock_not_backfilled_occurrence(tmp_path):
+    fixture = install_foundation(tmp_path)
+    request = _request(occurred_at=1940)
+    request = replace(
+        request,
+        execution_context=replace(request.execution_context, captured_at=1930),
+        operator_authorization=replace(
+            request.operator_authorization,
+            issued_at=1900,
+            expires_at=1950,
+        ),
+    )
+    with pytest.raises(
+        Phase9RunGenerationSafetyError,
+        match="not valid at trusted current time",
+    ):
+        _service(fixture, request=request).create_or_rotate(request)
+    assert _counts(fixture.database) == {table: 0 for table in RUN_TABLES}
+
+
+def test_create_rejects_future_authorization_and_request_clock_skew(tmp_path):
+    fixture = install_foundation(tmp_path)
+    request = _request()
+    future = replace(
+        request,
+        operator_authorization=replace(
+            request.operator_authorization,
+            issued_at=2001,
+            expires_at=3000,
+        ),
+    )
+    with pytest.raises(
+        Phase9RunGenerationSafetyError,
+        match="not valid at trusted current time",
+    ):
+        _service(fixture, request=future).create_or_rotate(future)
+
+    skewed = replace(
+        request,
+        occurred_at=1600,
+        execution_context=replace(request.execution_context, captured_at=1500),
+    )
+    with pytest.raises(
+        Phase9RunGenerationSafetyError,
+        match="exceeds trusted clock skew",
+    ):
+        _service(fixture, request=skewed).create_or_rotate(skewed)
     assert _counts(fixture.database) == {table: 0 for table in RUN_TABLES}
 
 

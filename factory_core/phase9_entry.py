@@ -19,6 +19,7 @@ import sqlite3
 import stat
 import subprocess
 from typing import Iterable, Mapping, Sequence
+import unicodedata
 
 from .authority_production_schema import (
     AUTHORITY_PRODUCTION_SCHEMA_VERSION,
@@ -30,6 +31,7 @@ from .canonical import canonical_bytes, canonical_sha256
 from .phase9_run_generation import (
     OFFICIAL_INPUT_FILE_EVIDENCE_SCHEMA,
     OFFICIAL_INPUT_MANIFEST_EVIDENCE_SCHEMA,
+    PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS,
     OfficialInputFileEvidenceV1,
     OfficialInputManifestEvidenceV1,
     Phase9RunGenerationSafetyError,
@@ -38,10 +40,12 @@ from .phase9_run_generation import (
 
 
 PHASE9_ENTRY_STATE_SCHEMA = "phase9-entry-state-receipt-v1"
-PHASE9_ENTRY_GATE_SCHEMA = "phase9-entry-gate-result-v1"
-PHASE9_P0_RECEIPT_SCHEMA = "phase9-candidate-p0-receipt-v1"
+PHASE9_ENTRY_GATE_SCHEMA = "phase9-entry-gate-result-v2"
+PHASE9_P0_RECEIPT_SCHEMA = "phase9-candidate-p0-receipt-v2"
+PHASE9_P0_COMMAND_RECORD_SCHEMA = "phase9-p0-command-record-v1"
+PHASE9_P0_EVIDENCE_ROOT_SCHEMA = "phase9-p0-evidence-root-v1"
 PHASE9_OPERATOR_AUTHORIZATION_SCHEMA = (
-    "phase9-operator-authorization-receipt-v1"
+    "phase9-operator-authorization-receipt-v2"
 )
 PHASE9_OFFICIAL_INPUT_MANIFEST_SCHEMA = (
     "authority-phase9-official-input-manifest-evidence-v1"
@@ -75,6 +79,9 @@ _ACTIVE_PROJECT_STATUS = frozenset({"running", "retrying"})
 _ACTIVE_SOLVER_STATUS = frozenset(
     {"submitting", "submitted", "running", "SUBMITTING", "SUBMITTED", "RUNNING"}
 )
+_P0_MAX_FILE_BYTES = 64 * 1024 * 1024
+_P0_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+_P0_MAX_MEMBERS = 4096
 
 
 class Phase9EntryError(RuntimeError):
@@ -220,6 +227,7 @@ def validate_p0_receipt(
     *,
     requirement: str,
     candidate: CandidateIdentity,
+    evidence_files: Mapping[str, bytes],
 ) -> str:
     if requirement not in P0_REQUIREMENTS:
         raise Phase9EntryError(f"unknown P0 requirement: {requirement}")
@@ -246,8 +254,12 @@ def validate_p0_receipt(
         raise Phase9EntryError(f"{requirement} is not an exact PASS receipt")
     if candidate_identity_from_dict(item["candidate"]) != candidate:
         raise Phase9EntryError(f"{requirement} is bound to another candidate")
-    _sha(item["test_result_sha256"], f"{requirement}.test_result_sha256")
-    _sha(item["command_record_sha256"], f"{requirement}.command_record_sha256")
+    test_result_sha = _sha(
+        item["test_result_sha256"], f"{requirement}.test_result_sha256"
+    )
+    command_record_sha = _sha(
+        item["command_record_sha256"], f"{requirement}.command_record_sha256"
+    )
     if item["command_exit_code"] != 0:
         raise Phase9EntryError(f"{requirement} command did not exit zero")
     evidence = item["evidence"]
@@ -290,6 +302,62 @@ def validate_p0_receipt(
         raise Phase9EntryError(f"{requirement} capability facts must be booleans")
     if any(capabilities.values()):
         raise Phase9EntryError(f"{requirement} receipt records a forbidden side effect")
+
+    test_result_path = f"test_results/{requirement}.log"
+    command_record_path = f"command_records/{requirement}.json"
+    test_result_raw = evidence_files.get(test_result_path)
+    command_record_raw = evidence_files.get(command_record_path)
+    if test_result_raw is None or hashlib.sha256(test_result_raw).hexdigest() != test_result_sha:
+        raise Phase9EntryError(f"{requirement} raw test result bytes/hash differ")
+    if (
+        command_record_raw is None
+        or hashlib.sha256(command_record_raw).hexdigest() != command_record_sha
+    ):
+        raise Phase9EntryError(f"{requirement} command record bytes/hash differ")
+    try:
+        command_record = json.loads(command_record_raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise Phase9EntryError(f"{requirement} command record is not strict UTF-8 JSON") from exc
+    if type(command_record) is not dict or command_record_raw != canonical_bytes(command_record):
+        raise Phase9EntryError(f"{requirement} command record is not canonical JSON")
+    record = _exact_mapping(
+        command_record,
+        f"{requirement}.command_record",
+        {
+            "schema",
+            "requirement",
+            "candidate",
+            "command_argv",
+            "exit_code",
+            "test_result_path",
+            "test_result_sha256",
+            "evidence",
+            "evidence_sha256",
+            "capabilities",
+        },
+    )
+    argv = record["command_argv"]
+    if (
+        record["schema"] != PHASE9_P0_COMMAND_RECORD_SCHEMA
+        or record["requirement"] != requirement
+        or candidate_identity_from_dict(record["candidate"]) != candidate
+        or type(argv) is not list
+        or not argv
+        or any(type(argument) is not str or not argument for argument in argv)
+        or record["exit_code"] != item["command_exit_code"]
+        or record["test_result_path"] != test_result_path
+        or record["test_result_sha256"] != test_result_sha
+        or record["evidence"] != evidence
+        or record["evidence_sha256"] != evidence_sha
+        or record["capabilities"] != capabilities
+    ):
+        raise Phase9EntryError(f"{requirement} command record binding differs")
+    for index, member in enumerate(evidence):
+        raw = evidence_files.get(member["path"])
+        if raw is None or hashlib.sha256(raw).hexdigest() != member["sha256"]:
+            raise Phase9EntryError(
+                f"{requirement} evidence bytes/hash differ at index {index}"
+            )
     body = dict(item)
     claimed = _sha(body.pop("receipt_sha256"), f"{requirement}.receipt_sha256")
     if canonical_sha256(body) != claimed:
@@ -304,6 +372,8 @@ def validate_operator_authorization(
     project_id: str,
     workflow_id: str,
     run_generation: str,
+    trusted_now: int,
+    p0_evidence_root_sha256: str,
 ) -> str:
     item = _exact_mapping(
         value,
@@ -317,9 +387,11 @@ def validate_operator_authorization(
             "authorized_operation",
             "authorization_mechanism",
             "authorization_evidence_sha256",
+            "p0_evidence_root_sha256",
             "operator_account",
             "operator_uid",
             "authorized",
+            "issued_at",
             "expires_at",
             "receipt_sha256",
         },
@@ -351,7 +423,24 @@ def validate_operator_authorization(
     if uid != os.geteuid() or account != actual_account:
         raise Phase9EntryError("authorization is not being evaluated by its controlled OS account")
     _sha(item["authorization_evidence_sha256"], "authorization evidence")
-    _integer(item["expires_at"], "operator_authorization.expires_at", minimum=1)
+    if (
+        _sha(
+            item["p0_evidence_root_sha256"],
+            "operator_authorization.p0_evidence_root_sha256",
+        )
+        != p0_evidence_root_sha256
+    ):
+        raise Phase9EntryError("operator authorization P0 evidence root differs")
+    issued = _integer(
+        item["issued_at"], "operator_authorization.issued_at", minimum=1
+    )
+    expires = _integer(
+        item["expires_at"], "operator_authorization.expires_at", minimum=1
+    )
+    if expires < issued or not issued <= trusted_now <= expires:
+        raise Phase9EntryError(
+            "operator authorization is not valid at trusted current time"
+        )
     body = dict(item)
     claimed = _sha(body.pop("receipt_sha256"), "operator authorization receipt")
     if canonical_sha256(body) != claimed:
@@ -360,7 +449,11 @@ def validate_operator_authorization(
 
 
 def validate_p0_receipt_set(
-    receipts: Mapping[str, object], *, candidate: CandidateIdentity
+    receipts: Mapping[str, object],
+    *,
+    candidate: CandidateIdentity,
+    evidence_root: str | Path,
+    evidence_root_sha256: str,
 ) -> dict[str, str]:
     if type(receipts) is not dict:
         raise Phase9EntryError("P0 receipts must be a plain object")
@@ -368,8 +461,46 @@ def validate_p0_receipt_set(
         raise Phase9EntryError(
             "P0 receipt set must contain exactly all nine required receipts"
         )
+    files, actual_root_sha256 = _strict_p0_evidence_tree(evidence_root)
+    expected_root_sha256 = _sha(evidence_root_sha256, "p0_evidence_root_sha256")
+    if actual_root_sha256 != expected_root_sha256:
+        raise Phase9EntryError("P0 evidence root inventory/hash differs")
+    expected_paths: set[str] = {
+        path
+        for name in P0_REQUIREMENTS
+        for path in (
+            f"command_records/{name}.json",
+            f"test_results/{name}.log",
+        )
+    }
+    evidence_owners: dict[str, str] = {}
+    for name in P0_REQUIREMENTS:
+        receipt = _exact_mapping(
+            receipts[name], f"p0_receipts.{name}", {"schema", "requirement", "candidate", "status", "test_result_sha256", "command_record_sha256", "command_exit_code", "evidence", "evidence_sha256", "capabilities", "receipt_sha256"}
+        )
+        evidence = receipt["evidence"]
+        if type(evidence) is not list:
+            raise Phase9EntryError(f"{name} evidence must be a list")
+        for index, raw_evidence in enumerate(evidence):
+            member = _exact_mapping(
+                raw_evidence, f"{name}.evidence[{index}]", {"path", "sha256"}
+            )
+            path = _safe_relative_path(
+                member["path"], f"{name}.evidence[{index}].path"
+            )
+            owner = evidence_owners.setdefault(path, name)
+            if owner != name or path in expected_paths:
+                raise Phase9EntryError("P0 evidence paths overlap reserved or other receipt paths")
+            expected_paths.add(path)
+    if set(files) != expected_paths:
+        raise Phase9EntryError("P0 evidence root file inventory differs from receipts")
     return {
-        name: validate_p0_receipt(receipts[name], requirement=name, candidate=candidate)
+        name: validate_p0_receipt(
+            receipts[name],
+            requirement=name,
+            candidate=candidate,
+            evidence_files=files,
+        )
         for name in P0_REQUIREMENTS
     }
 
@@ -386,6 +517,134 @@ def _safe_relative_path(value: object, path: str) -> str:
     ):
         raise Phase9EntryError(f"{path} is not a safe canonical relative path")
     return text
+
+
+def _strict_p0_evidence_tree(
+    root_value: str | Path,
+) -> tuple[dict[str, bytes], str]:
+    root = Path(root_value)
+    try:
+        root_before = root.lstat()
+    except OSError as exc:
+        raise Phase9EntryError("P0 evidence root is unavailable") from exc
+    if stat.S_ISLNK(root_before.st_mode) or not stat.S_ISDIR(root_before.st_mode):
+        raise Phase9EntryError("P0 evidence root must be a non-symlink directory")
+    root = root.resolve(strict=True)
+    files: dict[str, bytes] = {}
+    directories: list[str] = []
+    collision_keys: set[str] = set()
+    directory_identities: dict[str, tuple[int, int, int, int]] = {}
+    total_bytes = 0
+
+    def walk_error(error: OSError) -> None:
+        raise Phase9EntryError("P0 evidence tree cannot be enumerated") from error
+
+    for directory, directory_names, file_names in os.walk(
+        root, followlinks=False, onerror=walk_error
+    ):
+        current = Path(directory)
+        for name in sorted(directory_names, key=lambda value: value.encode("utf-8")):
+            path = current / name
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                raise Phase9EntryError(
+                    "P0 evidence tree contains a symlink or special directory"
+                )
+            relative = _safe_relative_path(
+                path.relative_to(root).as_posix(), "P0 evidence directory path"
+            )
+            collision_key = unicodedata.normalize("NFC", relative).casefold()
+            if collision_key in collision_keys:
+                raise Phase9EntryError(
+                    "P0 evidence paths collide by Unicode normalization or case"
+                )
+            collision_keys.add(collision_key)
+            directories.append(relative)
+            directory_identities[relative] = (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_mode,
+                metadata.st_mtime_ns,
+            )
+        for name in sorted(file_names, key=lambda value: value.encode("utf-8")):
+            path = current / name
+            metadata = path.lstat()
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+            ):
+                raise Phase9EntryError(
+                    "P0 evidence tree contains a symlink, hardlink, or special file"
+                )
+            relative = _safe_relative_path(
+                path.relative_to(root).as_posix(), "P0 evidence file path"
+            )
+            collision_key = unicodedata.normalize("NFC", relative).casefold()
+            if collision_key in collision_keys:
+                raise Phase9EntryError(
+                    "P0 evidence paths collide by Unicode normalization or case"
+                )
+            collision_keys.add(collision_key)
+            raw = _regular_file_bytes(
+                path, maximum_bytes=_P0_MAX_FILE_BYTES, label=f"P0 evidence {relative}"
+            )
+            total_bytes += len(raw)
+            if len(files) + len(directories) >= _P0_MAX_MEMBERS:
+                raise Phase9EntryError("P0 evidence tree has too many members")
+            if total_bytes > _P0_MAX_TOTAL_BYTES:
+                raise Phase9EntryError("P0 evidence tree is too large")
+            files[relative] = raw
+
+    expected_directories: set[str] = set()
+    for relative in files:
+        parent = PurePosixPath(relative).parent
+        while parent != PurePosixPath("."):
+            expected_directories.add(parent.as_posix())
+            parent = parent.parent
+    if set(directories) != expected_directories:
+        raise Phase9EntryError("P0 evidence root contains an unexpected empty directory")
+    for relative, identity in directory_identities.items():
+        metadata = root.joinpath(*PurePosixPath(relative).parts).lstat()
+        if identity != (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_mtime_ns,
+        ):
+            raise Phase9EntryError("P0 evidence directory changed while being verified")
+    root_after = root.lstat()
+    if (
+        root_before.st_dev,
+        root_before.st_ino,
+        root_before.st_mode,
+        root_before.st_mtime_ns,
+    ) != (
+        root_after.st_dev,
+        root_after.st_ino,
+        root_after.st_mode,
+        root_after.st_mtime_ns,
+    ):
+        raise Phase9EntryError("P0 evidence root changed while being verified")
+    inventory = {
+        "schema": PHASE9_P0_EVIDENCE_ROOT_SCHEMA,
+        "directories": sorted(directories, key=lambda value: value.encode("utf-8")),
+        "files": [
+            {
+                "path": path,
+                "byte_length": len(files[path]),
+                "raw_bytes_sha256": hashlib.sha256(files[path]).hexdigest(),
+            }
+            for path in sorted(files, key=lambda value: value.encode("utf-8"))
+        ],
+    }
+    return files, canonical_sha256(inventory)
+
+
+def p0_evidence_root_sha256(root: str | Path) -> str:
+    """Return the strict, complete inventory digest for a P0 evidence root."""
+
+    return _strict_p0_evidence_tree(root)[1]
 
 
 def _git_object_id(kind: str, raw: bytes) -> bytes:
@@ -1221,11 +1480,14 @@ def verify_phase9_entry_gate(
     state: Phase9EntryState,
     source_verification: Mapping[str, object],
     p0_receipts: Mapping[str, object],
+    p0_evidence_root: str | Path,
+    p0_evidence_root_sha256: str,
     operator_authorization: object,
     official_input_manifest: object,
     official_input_root: str | Path,
     execution_context: object,
     evaluated_at: int,
+    trusted_now: int,
 ) -> dict[str, object]:
     """Verify the complete candidate-bound gate and return READY or BLOCKED.
 
@@ -1233,11 +1495,21 @@ def verify_phase9_entry_gate(
     never authorization to start Phase9-A or any production side effect.
     """
 
-    now = _integer(evaluated_at, "evaluated_at")
+    requested_evaluated_at = _integer(evaluated_at, "evaluated_at")
+    now = _integer(trusted_now, "trusted_now")
     blockers: list[dict[str, str]] = []
 
     def blocked(code: str, detail: str) -> None:
         blockers.append({"code": code, "detail": detail})
+
+    if (
+        abs(requested_evaluated_at - now)
+        > PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS
+    ):
+        blocked(
+            "REQUEST_TIME_INVALID",
+            "request evaluated_at exceeds the trusted clock skew",
+        )
 
     if type(source_verification) is not dict:
         blocked("SOURCE_VERIFICATION_MISSING", "candidate source verification is missing")
@@ -1253,12 +1525,26 @@ def verify_phase9_entry_gate(
             blocked("SOURCE_VERIFICATION_INVALID", str(exc))
             source_sha256 = None
     try:
-        p0_hashes = validate_p0_receipt_set(
-            p0_receipts, candidate=state.candidate
+        claimed_p0_root_sha = _sha(
+            p0_evidence_root_sha256, "p0_evidence_root_sha256"
         )
+        p0_hashes = validate_p0_receipt_set(
+            p0_receipts,
+            candidate=state.candidate,
+            evidence_root=p0_evidence_root,
+            evidence_root_sha256=claimed_p0_root_sha,
+        )
+        verified_p0_root_sha = claimed_p0_root_sha
     except Phase9EntryError as exc:
         blocked("P0_RECEIPTS_INVALID", str(exc))
         p0_hashes = {}
+        verified_p0_root_sha = None
+        claimed_p0_root_sha = (
+            p0_evidence_root_sha256
+            if type(p0_evidence_root_sha256) is str
+            and _SHA256.fullmatch(p0_evidence_root_sha256) is not None
+            else "0" * 64
+        )
     try:
         authorization_sha = validate_operator_authorization(
             operator_authorization,
@@ -1266,9 +1552,9 @@ def verify_phase9_entry_gate(
             project_id=state.project_id,
             workflow_id=state.workflow_id,
             run_generation=state.run_generation,
+            trusted_now=now,
+            p0_evidence_root_sha256=claimed_p0_root_sha,
         )
-        if type(operator_authorization) is not dict or operator_authorization["expires_at"] < now:
-            raise Phase9EntryError("operator authorization has expired")
     except (Phase9EntryError, KeyError) as exc:
         blocked("OPERATOR_AUTHORIZATION_INVALID", str(exc))
         authorization_sha = None
@@ -1345,6 +1631,8 @@ def verify_phase9_entry_gate(
         "schema": PHASE9_ENTRY_GATE_SCHEMA,
         "status": "READY" if not blockers else "BLOCKED",
         "evaluated_at": now,
+        "request_evaluated_at": requested_evaluated_at,
+        "clock_skew_seconds": requested_evaluated_at - now,
         "candidate": state.candidate.as_dict(),
         "project_id": state.project_id,
         "workflow_id": state.workflow_id,
@@ -1356,6 +1644,7 @@ def verify_phase9_entry_gate(
         "official_input_manifest_sha256": manifest_sha,
         "official_input_raw_bytes_set_sha256": raw_set_sha,
         "execution_context_receipt_sha256": context_sha,
+        "p0_evidence_root_sha256": verified_p0_root_sha,
         "p0_receipt_sha256s": p0_hashes,
         "blockers": blockers,
         "authorization_scope": {
@@ -1376,14 +1665,18 @@ def blocked_phase9_entry_result(
     *,
     candidate: CandidateIdentity,
     evaluated_at: int,
+    trusted_now: int | None = None,
     error: BaseException,
     source_verification_sha256: str | None = None,
+    p0_evidence_root_sha256: str | None = None,
     p0_receipt_sha256s: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Produce a truthful candidate-bound BLOCKED result for collector failure."""
 
     if source_verification_sha256 is not None:
         _sha(source_verification_sha256, "source_verification_sha256")
+    if p0_evidence_root_sha256 is not None:
+        _sha(p0_evidence_root_sha256, "p0_evidence_root_sha256")
     p0_hashes = {} if p0_receipt_sha256s is None else dict(p0_receipt_sha256s)
     if p0_hashes and (
         set(p0_hashes) != set(P0_REQUIREMENTS)
@@ -1391,10 +1684,18 @@ def blocked_phase9_entry_result(
     ):
         raise Phase9EntryError("blocked result P0 receipt hashes differ")
 
+    requested_evaluated_at = _integer(evaluated_at, "evaluated_at")
+    now = (
+        requested_evaluated_at
+        if trusted_now is None
+        else _integer(trusted_now, "trusted_now")
+    )
     body: dict[str, object] = {
         "schema": PHASE9_ENTRY_GATE_SCHEMA,
         "status": "BLOCKED",
-        "evaluated_at": _integer(evaluated_at, "evaluated_at"),
+        "evaluated_at": now,
+        "request_evaluated_at": requested_evaluated_at,
+        "clock_skew_seconds": requested_evaluated_at - now,
         "candidate": candidate.as_dict(),
         "project_id": None,
         "workflow_id": None,
@@ -1406,6 +1707,7 @@ def blocked_phase9_entry_result(
         "official_input_manifest_sha256": None,
         "official_input_raw_bytes_set_sha256": None,
         "execution_context_receipt_sha256": None,
+        "p0_evidence_root_sha256": p0_evidence_root_sha256,
         "p0_receipt_sha256s": p0_hashes,
         "blockers": [
             {

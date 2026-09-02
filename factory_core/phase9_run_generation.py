@@ -19,6 +19,7 @@ import re
 import sqlite3
 import stat
 import subprocess
+import time
 from typing import Callable, Mapping
 import unicodedata
 
@@ -61,6 +62,7 @@ ROTATE = "ROTATE"
 DELIVERY_DISABLED = "DISABLED"
 V1_ONLY = "V1_ONLY"
 LEGACY_UNKNOWN = "legacy_unknown"
+PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS = 300
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,191}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -465,6 +467,8 @@ def validate_execution_context(
 def validate_operator_authorization(
     value: OperatorAuthorizationEvidenceV1,
     request: RunGenerationRequestV1,
+    *,
+    trusted_now: int,
 ) -> OperatorAuthorizationEvidenceV1:
     _exact(value, OperatorAuthorizationEvidenceV1, "operator_authorization")
     if value.schema_version != OPERATOR_AUTHORIZATION_EVIDENCE_SCHEMA:
@@ -505,9 +509,9 @@ def validate_operator_authorization(
     )
     issued = _nonnegative(value.issued_at, "operator_authorization.issued_at")
     expires = _nonnegative(value.expires_at, "operator_authorization.expires_at")
-    if expires < issued or not issued <= request.occurred_at <= expires:
+    if expires < issued or not issued <= trusted_now <= expires:
         raise Phase9RunGenerationSafetyError(
-            "operator authorization is not valid at request occurrence"
+            "operator authorization is not valid at trusted current time"
         )
     if (
         value.operation_kind != request.operation_kind
@@ -523,7 +527,12 @@ def validate_operator_authorization(
 
 def validate_run_generation_request(
     value: RunGenerationRequestV1,
+    *,
+    trusted_now: int | None = None,
 ) -> RunGenerationRequestV1:
+    now = int(time.time()) if trusted_now is None else _nonnegative(
+        trusted_now, "trusted_now"
+    )
     _exact(value, RunGenerationRequestV1, "request")
     if value.schema_version != RUN_GENERATION_REQUEST_SCHEMA:
         raise Phase9RunGenerationSafetyError("run-generation request schema is unsupported")
@@ -581,11 +590,19 @@ def validate_run_generation_request(
     validate_official_inputs(value.official_inputs)
     validate_execution_context(value.execution_context)
     _nonnegative(value.occurred_at, "request.occurred_at")
+    if abs(value.occurred_at - now) > PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS:
+        raise Phase9RunGenerationSafetyError(
+            "request occurrence metadata exceeds trusted clock skew"
+        )
     if value.execution_context.captured_at > value.occurred_at:
         raise Phase9RunGenerationSafetyError(
             "execution context was captured after request occurrence"
         )
-    validate_operator_authorization(value.operator_authorization, value)
+    validate_operator_authorization(
+        value.operator_authorization,
+        value,
+        trusted_now=now,
+    )
     return value
 
 
@@ -602,7 +619,9 @@ def _exact_mapping(
     return value
 
 
-def run_generation_request_from_dict(value: object) -> RunGenerationRequestV1:
+def run_generation_request_from_dict(
+    value: object, *, trusted_now: int | None = None
+) -> RunGenerationRequestV1:
     """Decode one strict JSON-domain request into the typed creation API."""
 
     item = _exact_mapping(
@@ -690,7 +709,7 @@ def run_generation_request_from_dict(value: object) -> RunGenerationRequestV1:
         operator_authorization=OperatorAuthorizationEvidenceV1(**authorization),
         occurred_at=item["occurred_at"],
     )
-    return validate_run_generation_request(decoded)
+    return validate_run_generation_request(decoded, trusted_now=trusted_now)
 
 
 def read_current_git_source_identity(repository: str | Path) -> GitSourceIdentityV1:
@@ -957,6 +976,7 @@ class Phase9RunGenerationService:
         official_input_root: str | Path,
         execution_context_receipt_path: str | Path,
         fault_hook: Callable[[str], None] | None = None,
+        clock: Callable[[], int] | None = None,
     ) -> None:
         self.path = authority_database_path(database)
         self.expected_source_fence_sha256 = _sha(
@@ -969,11 +989,17 @@ class Phase9RunGenerationService:
         )
         if fault_hook is not None and not callable(fault_hook):
             raise Phase9RunGenerationSafetyError("fault_hook must be callable")
+        if clock is not None and not callable(clock):
+            raise Phase9RunGenerationSafetyError("clock must be callable")
         self._fault_hook = fault_hook
+        self._clock = (lambda: int(time.time())) if clock is None else clock
 
     def _fault(self, checkpoint: str) -> None:
         if self._fault_hook is not None:
             self._fault_hook(checkpoint)
+
+    def _trusted_now(self) -> int:
+        return _nonnegative(self._clock(), "trusted_now")
 
     def _verify_database(self, connection: sqlite3.Connection) -> None:
         verify_production_installation(connection, require_ready=True)
@@ -1169,7 +1195,9 @@ class Phase9RunGenerationService:
     def create_or_rotate(
         self, request: RunGenerationRequestV1
     ) -> RunGenerationCreationResult:
-        value = validate_run_generation_request(request)
+        value = validate_run_generation_request(
+            request, trusted_now=self._trusted_now()
+        )
         official_snapshot = verify_official_input_snapshot(
             self.official_input_root, value.official_inputs
         )
@@ -1382,6 +1410,9 @@ class Phase9RunGenerationService:
                     "execution context receipt changed during run-generation transaction"
                 )
             self._control_fence(connection)
+            validate_run_generation_request(
+                value, trusted_now=self._trusted_now()
+            )
             self._fault("before_commit")
             connection.commit()
             return _result(
