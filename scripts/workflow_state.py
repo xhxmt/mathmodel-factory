@@ -222,10 +222,12 @@ def zip_file_ok(path: Path) -> bool:
         return False
 
 
-def delivery_artifacts_ready(root: Path, base: str) -> bool:
+def delivery_artifacts_ready(root: Path, base: str, *, project: Path) -> bool:
     from factory_core.delivery.release import current_release_artifacts
 
-    current = current_release_artifacts(root / "papers", base)
+    current = current_release_artifacts(
+        root / "papers", base, project=project
+    )
     if current is not None:
         papers_pdf, submission_zip = current
         return (
@@ -233,9 +235,7 @@ def delivery_artifacts_ready(root: Path, base: str) -> bool:
             and papers_pdf.stat().st_size > 0
             and zip_file_ok(submission_zip)
         )
-    papers_pdf = root / "papers" / f"{base}_paper.pdf"
-    submission_zip = root / "papers" / f"{base}_submission.zip"
-    return papers_pdf.is_file() and papers_pdf.stat().st_size > 0 and zip_file_ok(submission_zip)
+    return False
 
 
 def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:
@@ -243,7 +243,9 @@ def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:
 
     resolved_base = base or project.name
     return (
-        resolve_current_release(root / "papers", resolved_base) is not None
+        resolve_current_release(
+            root / "papers", resolved_base, project=project
+        ) is not None
         and gate2_delivery_allowed(project, root)
         and step8_5_passed(project)
         and final_audit_is_current(project, root)
@@ -264,7 +266,9 @@ def collect_state(project: Path, root: Path, base: str | None = None) -> dict[st
         "final_audit": final_audit_record(project),
         "final_audit_current": final_audit_is_current(project, root),
         "step8_5": collect_step8_5_state(project),
-        "delivery_artifacts_ready": delivery_artifacts_ready(root, resolved_base),
+        "delivery_artifacts_ready": delivery_artifacts_ready(
+            root, resolved_base, project=project
+        ),
         "final_submission_judge_current": final_judge_is_current(project, resolved_base),
         "step16_ready": step16_ready(project, root, resolved_base),
     }

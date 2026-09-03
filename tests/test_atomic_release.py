@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -13,6 +14,15 @@ from factory_core.delivery.release import ReleasePublisher, resolve_current_rele
 from factory_core.contest import ContestPolicy
 from factory_core.storage import SQLiteStateStore
 from scripts.publish_release import publish_current_audit
+from tests.phase9_delivery_test_support import nonformal_delivery_fence
+
+
+@pytest.fixture(autouse=True)
+def _nonformal_delivery_mechanics(monkeypatch):
+    monkeypatch.setattr(
+        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
+        nonformal_delivery_fence,
+    )
 
 
 def _write_approved_audit(project: Path, snapshot_id: str) -> None:
@@ -119,7 +129,9 @@ def test_atomic_release_flips_one_verified_current_pointer(tmp_path: Path) -> No
         package_builder=_package(project, "demo"),
     )
 
-    current = resolve_current_release(tmp_path / "papers", "demo")
+    current = resolve_current_release(
+        tmp_path / "papers", "demo", project=project
+    )
     assert current is not None
     assert current.release_id == snapshot_id
     assert current.paper.read_bytes() == project.joinpath("demo_paper.pdf").read_bytes()
@@ -147,7 +159,9 @@ def test_release_contains_verified_human_approval_receipt(tmp_path: Path) -> Non
     ).read_bytes()
     manifest = json.loads(release.manifest.read_text(encoding="utf-8"))
     assert manifest["evidence_artifacts"][key] == f"{key}.json"
-    assert resolve_current_release(tmp_path / "papers", "demo") is not None
+    assert resolve_current_release(
+        tmp_path / "papers", "demo", project=project
+    ) is not None
 
 
 def test_content_freeze_receipt_tampered_during_packaging_blocks_release(
@@ -198,7 +212,9 @@ def test_failed_release_keeps_previous_current_release(tmp_path: Path) -> None:
             package_builder=lambda _output: False,
         )
 
-    current = resolve_current_release(tmp_path / "papers", "demo")
+    current = resolve_current_release(
+        tmp_path / "papers", "demo", project=project
+    )
     assert current is not None
     assert current.release_id == first_id
     assert not (tmp_path / "papers/releases/demo" / second_id).exists()
@@ -269,7 +285,9 @@ def test_no_judge_ablation_cannot_replace_current_release(tmp_path: Path) -> Non
             package_builder=_package(project, "demo"),
         )
 
-    current = resolve_current_release(tmp_path / "papers", "demo")
+    current = resolve_current_release(
+        tmp_path / "papers", "demo", project=project
+    )
     assert current is not None
     assert current.release_id == first_id
     assert not (tmp_path / "papers/releases/demo" / ablation_id).exists()
@@ -290,7 +308,7 @@ def test_release_recovery_is_idempotent_and_repairs_legacy_aliases(
     (tmp_path / "papers/demo_paper.pdf").unlink()
     (tmp_path / "papers/demo_submission.zip").unlink()
 
-    recovered = publisher.recover("demo")
+    recovered = publisher.recover("demo", project=project)
     second = publisher.publish(
         project,
         snapshot_id,
@@ -307,7 +325,9 @@ def test_release_recovery_is_idempotent_and_repairs_legacy_aliases(
     assert (tmp_path / "papers/demo_submission.zip").is_file()
 
 
-def test_publish_current_audit_uses_the_approved_snapshot(tmp_path: Path) -> None:
+def test_publish_current_audit_uses_the_approved_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
     snapshot_id = "e" * 64
     project = _project(tmp_path, "demo", snapshot_id)
     shutil.copytree(
@@ -319,10 +339,30 @@ def test_publish_current_audit_uses_the_approved_snapshot(tmp_path: Path) -> Non
         tmp_path / "factory_core",
     )
 
+    def build_test_fixture_package(argv, **_kwargs):
+        from factory_core.submission_bundle import submission_bundle_manifest
+
+        project_arg = Path(argv[2])
+        base_arg = str(argv[3])
+        output_arg = Path(argv[4])
+        manifest = submission_bundle_manifest(project_arg, base_arg)
+        with zipfile.ZipFile(output_arg, "w") as archive:
+            for item in manifest["members"]:
+                archive.write(
+                    project_arg / item["source_path"], item["archive_path"]
+                )
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(
+        "scripts.publish_release.subprocess.run", build_test_fixture_package
+    )
+
     release = publish_current_audit(project, tmp_path)
 
     assert release.release_id == snapshot_id
-    assert resolve_current_release(tmp_path / "papers", "demo") is not None
+    assert resolve_current_release(
+        tmp_path / "papers", "demo", project=project
+    ) is not None
 
 
 def test_publish_current_audit_rejects_nonfinal_or_unapproved_record(
@@ -369,7 +409,9 @@ def test_alias_sync_failure_does_not_switch_the_current_pointer(
             package_builder=_package(project, "demo"),
         )
 
-    current = resolve_current_release(tmp_path / "papers", "demo")
+    current = resolve_current_release(
+        tmp_path / "papers", "demo", project=project
+    )
     assert current is not None
     assert current.release_id == first_id
 
@@ -405,6 +447,8 @@ def test_deadline_expiry_before_pointer_switch_leaves_current_release_unchanged(
             deadline_check=deadline_check,
         )
 
-    current = resolve_current_release(tmp_path / "papers", "demo")
+    current = resolve_current_release(
+        tmp_path / "papers", "demo", project=project
+    )
     assert current is not None
     assert current.release_id == first_id

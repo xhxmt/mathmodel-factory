@@ -780,14 +780,18 @@ def test_fresh_active_cli_imports_no_production_authority_modules_and_has_only_t
             "authority_production_schema.py", "authority_operator_workflow.py",
         }
     ]
-    # Explicitly invoked, reviewed source-assembly and entry/run-generation
+    # Explicitly invoked, reviewed source-assembly and Phase9 Authority
     # boundaries may consume the narrow production/read verifiers.  They remain
-    # absent from the default CLI import graph checked above.
+    # absent from the default CLI import graph checked above, and this exact set
+    # prevents a new eager production dependency from being added silently.
     expected_callers = {
         "factory_core/phase6_source_assembler.py": {"authority_read_repository"},
         "factory_core/phase78_current.py": {"authority_read_repository"},
         "factory_core/phase9_entry.py": {"authority_production_schema"},
+        "factory_core/phase9_delivery_fence.py": {"authority_production_schema"},
         "factory_core/phase9_forensic_replay.py": {"authority_production_schema"},
+        "factory_core/phase9_p0_evidence.py": {"authority_production_schema"},
+        "factory_core/phase9_replay_evidence.py": {"authority_production_schema"},
         "factory_core/phase9_run_generation.py": {"authority_production_schema"},
     }
     matches = {}

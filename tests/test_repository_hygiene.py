@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import stat
 import subprocess
@@ -122,6 +123,36 @@ def tracked_web_markdown(root: Path = ROOT) -> list[Path]:
         source_paths = [
             value.decode("utf-8") for value in result.stdout.split(b"\0") if value
         ]
+    elif (
+        root.resolve() == ROOT.resolve()
+        and os.environ.get("PHASE9_TEST_SOURCE_REPOSITORY") is not None
+    ):
+        configured = Path(os.environ["PHASE9_TEST_SOURCE_REPOSITORY"])
+        assert configured.is_absolute()
+        configured = configured.resolve(strict=True)
+        candidate_top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=configured,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        )
+        assert Path(candidate_top.stdout.strip()).resolve() == configured
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=configured,
+            check=True,
+            stdout=subprocess.PIPE,
+        )
+        source_paths = [
+            value.decode("utf-8") for value in result.stdout.split(b"\0") if value
+        ]
+        for relative in source_paths:
+            if relative.startswith("web/") and relative.endswith(".md"):
+                expected = subprocess.check_output(
+                    ["git", "show", f"HEAD:{relative}"], cwd=configured
+                )
+                assert (root / relative).read_bytes() == expected
     else:
         source_paths = _candidate_source_paths(root)
 

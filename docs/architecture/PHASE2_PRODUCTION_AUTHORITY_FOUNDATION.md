@@ -52,6 +52,16 @@ still fail closed.
 | `A2_0014_DATABASE_IDENTITY_AND_BACKUP_LINEAGE` | `1cdf905f5712eb04445eed9da73ac8a48cf3fb3c6115a02c4a6ccb1c54b99a75` |
 | `A2_0015_PHASE9_RUN_GENERATION` | `69f50ea0989018d6dc7db8743fdf7f2875152f292933054bb21b5760fcd42b15` |
 | `A2_0016_PHASE9_FORENSIC_REPLAY` | `6fa6c71a5f76388eab41a6d9e301cbce1fdce7ee041b71c9f72824eee1cb7e37` |
+| `A2_0017_PHASE9_AUDIT_HARDENING` | `c886700e817098e04c325d414a0b0ed7f267a84ea60a05a0f0501e95f86fcc4d` |
+| `A2_0018_PHASE9_P0_RUNNER_ATTESTATION` | `eca9538c259285853547bf451a8fbf56ca8580d3963ff9b2537f979e162d5121` |
+| `A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION` | `355c9419f56aa6266b3676f741e0e37a63856e820fa054e9bc217027f23646db` |
+
+This table records the implemented append-only migration contract, not live
+installation evidence. A2_0016 through A2_0019 are `NOT APPLIED` in production at
+this checkpoint. Formal Phase9-A/Run4 is `NOT RUN`, Phase 9 is incomplete,
+Phase10-B is `NOT STARTED`, and production remains `BLOCKED`. Applying any
+migration suffix requires the separate verified-backup, durable-journal and operator
+authorization gates described below.
 
 The suffix is resumable by the same explicit owner token. Every step checks:
 
@@ -63,10 +73,18 @@ The suffix is resumable by the same explicit owner token. Every step checks:
 6. the persisted immutable database identity and initial pre-Authority backup
    lineage introduced by A2_0014;
 7. the Phase9 run-generation lineage, receipt, idempotency, and current-pointer
-   tables introduced by the additive A2_0015 suffix; and
+   tables introduced by the additive A2_0015 suffix;
 8. the Phase9-A replay/event/terminal-receipt/idempotency/current graph added
-   by A2_0016; and
-9. the same durable migration owner inside `BEGIN IMMEDIATE`.
+   by A2_0016;
+9. the A2_0017 source-inventory, one-use authorization, typed replay-evidence,
+   entry-gate-consumption, mode/contract/delivery and predecessor-terminal
+   guards;
+10. the A2_0018 Authority-issued, one-use P0 runner authorization,
+   consumption and immutable successful execution-attestation graph;
+11. the A2_0019 Authority-issued replay/runtime observation authorizations,
+   trusted runner-event attestation and typed runtime/component/acceptance
+   provenance; and
+12. the same durable migration owner inside `BEGIN IMMEDIATE`.
 
 Future schema versions, missing facts, owner changes, SQLite busy locks,
 source-row drift, DDL drift, or interrupted prefixes fail closed. No generation,
@@ -74,34 +92,60 @@ owner, revision, writer, or delivery fact is inferred from PID, time, mtime,
 file adjacency, or nearby unrelated database rows.
 
 A2_0015 adds only a default-off Phase9 run-generation creation/rotation
-boundary. The service binds a live Git commit/tree/single-parent identity,
+boundary. A2_0017 hardens that existing graph without changing the published
+A2_0010-A2_0016 statement bytes. A2_0018 likewise appends without changing
+A2_0010-A2_0017 statement bytes, and A2_0019 appends without changing
+A2_0010-A2_0018 statement bytes. The service binds a live Git
+commit/tree/single-parent identity and the complete tracked-source byte
+inventory,
 source-authorized contract pins, typed official-input byte-hash evidence,
 typed execution-context and operator-authorization evidence, and exact
 project/workflow/revision/project/run/runtime/scheduler coordinates in one
 `BEGIN IMMEDIATE` transaction. It requires `V1_ONLY` with both writer and
 consumer disabled. It neither starts Phase9-A nor enables delivery, providers,
 outbox dispatch, release, deployment, migration, or cutover.
-The service reads every manifest-listed official-input file itself through a
-no-follow, non-hardlinked regular-file descriptor, rejects extra paths, and
-repeats the exact byte/hash inventory before commit. It likewise reads an
-explicit canonical execution-context receipt before and immediately before
-commit. Initial `project_generation` is content-derived rather than a caller
-label. Creation authorization currently supports only a controlled OS account
-whose UID and account name match the executing process; the API does not claim
-unimplemented detached-signature verification.
+The service reads every manifest-listed official-input file through a stable
+directory-descriptor tree, never follows links, rejects hard links and special
+files, and fails closed on any traversal error, path collision, extra path,
+member or ancestor replacement. It repeats the exact byte/hash inventory before
+commit. It likewise rereads the complete tracked source inventory and an
+explicit canonical execution-context receipt immediately before commit.
+Initial `project_generation` is content-derived rather than a caller label.
+Each authorization covers the complete canonical operation target, including
+the idempotency key and predecessor/target coordinates, has a recomputed
+statement hash and trusted-time window, and is consumed once. Only an exact
+idempotent replay may return its recorded result. Rotation additionally
+requires the current predecessor's immutable Phase9 terminal receipt and a CAS
+over the current revision. Creation authorization currently supports only a
+controlled OS account whose UID and account name match the executing process;
+the API does not claim unimplemented detached-signature verification.
 
-A2_0016 adds the default-off Phase9-A evidence-finalization state machine. It
+A2_0016 adds the default-off Phase9-A evidence-finalization state machine;
+A2_0017 makes its typed receipt set and one-use live-gate authorization durable.
+A2_0018 makes formal P0 evidence depend on a consumed Authority nonce and a
+DB-backed execution attestation; file-only/self-rehashed evidence cannot become
+entry `READY`. A2_0019 makes formal replay evidence depend on consumed Authority
+authorizations, persisted trusted runner events and immutable typed runtime/
+component/acceptance provenance; caller-authored summaries are not Authority
+completion facts. It
 does not run a worker or provider. After a separately produced entry `READY`
 result and controlled-account start authorization, the narrow service verifies
-the exact packet, three new role generations (or the typed no-judge ablation),
-raw/protocol/grounding/effective verdict layers, revision-atomic snapshot,
-process/outbox safety receipts, all minimum acceptance cases, and the delivery
-fence. One `BEGIN IMMEDIATE` transaction appends the replay and six-event hash
-chain, terminal receipt and idempotency row, then inserts or CAS-rotates the
-guarded current pointer. Exact replay returns the recorded receipt; conflicts
-and injected failures roll back every A2_0016 row. The query-only collector
-reconstructs and verifies the complete current graph without creating WAL/SHM
-state. Neither migration installation nor API availability is production
+the exact packet bytes; typed role-process, role-provider and process-scope
+receipts; three new role generations (or the typed no-judge ablation);
+raw/protocol/grounding/effective verdict layers; one revision-atomic snapshot;
+and all 17 typed acceptance-case receipts with their command, raw-log and test-
+result bytes. It inventories the entire evidence root and rejects missing,
+extra, duplicate, aliased or cross-coordinate evidence. The service reacquires
+the shared live entry state at start and immediately before commit, binds the
+entry Authority revision/state receipt, and atomically consumes the short-lived
+start authorization. One `BEGIN IMMEDIATE` transaction appends the replay and
+six-event hash chain, typed receipts, terminal receipt and idempotency row, then
+inserts or CAS-rotates the guarded current pointer. Exact replay returns the
+recorded receipt; conflicts and injected failures roll back every Phase9 row.
+The query-only collector typed-decodes and semantically reconstructs the
+request, generation, event sequence, terminal and current pointer instead of
+accepting a merely hash-consistent SQL graph. It does not create WAL/SHM state.
+Neither migration installation nor API availability is production
 authorization.
 
 ## Backup and restore boundary

@@ -1210,7 +1210,9 @@ class FactoryService:
     def _write_delivery_manifest(self, project: Path) -> None:
         from .delivery.release import resolve_current_release
 
-        release = resolve_current_release(self.root / "papers", project.name)
+        release = resolve_current_release(
+            self.root / "papers", project.name, project=project
+        )
         if release is None:
             return
         from scripts.delivery_contract import write_delivery_manifest

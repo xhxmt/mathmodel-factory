@@ -1,5 +1,45 @@
 # Changelog
 
+- Phase9 trusted-evidence hardening: implement the additive
+  `A2_0017_PHASE9_AUDIT_HARDENING` (SHA-256
+  `c886700e817098e04c325d414a0b0ed7f267a84ea60a05a0f0501e95f86fcc4d`)
+  without changing A2_0010-A2_0016 statement bytes, then append
+  `A2_0018_PHASE9_P0_RUNNER_ATTESTATION` (SHA-256
+  `eca9538c259285853547bf451a8fbf56ca8580d3963ff9b2537f979e162d5121`)
+  without changing A2_0010-A2_0017 statement bytes, followed by the additive
+  `A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION` without changing
+  A2_0010-A2_0018 statement bytes. The formal P0 contract is
+  a typed domain produced by a fixed allowlisted local runner and bound to actual
+  candidate source bytes, command, cwd/interpreter, sanitized environment,
+  complete parseable raw log and strict evidence-root inventory; fixture,
+  arbitrary PASS, missing-test, partial, replaced or cross-coordinate evidence
+  cannot sign entry `READY`. Entry, run generation and replay use trusted UTC
+  time, full tracked-source inventories and the same strict no-follow official-
+  input tree validator.
+
+- Phase9 atomic and semantic hardening: run mode/modeling contract/capability
+  are fixed to `FORENSIC_REPLAY`/`LEGACY_NOT_APPLICABLE`/`DISABLED` in Python
+  and SQLite; a run-generation authorization covers the complete canonical
+  operation, is hash-recomputed and consumed once; rotation requires the exact
+  current predecessor terminal and revision CAS. Replay now consumes a
+  short-lived one-use entry authorization, reruns the shared live gate at start
+  and precommit, and persists exact typed role/process/provider/outbox and all
+  17 hyphenated acceptance-case receipts before terminal/pointer update. The
+  read-only collector reconstructs typed event semantics and rejects a hash-
+  consistent but semantically wrong SQL graph.
+
+- Phase9 delivery and evidence closure: release, final acceptance and final
+  submission independently verify current Authority generation/terminal before
+  any side effect and always reject Phase9 forensic, technical, ablation,
+  disabled, stale, cached or override decisions. Audit command records bind the
+  executed byte inventory and sanitized environment; summary/builder policy
+  requires complete raw logs for all seven source/fresh suite pairs and retains
+  every failed attempt. A valid generated package must carry those immutable
+  records and remains a candidate until a separate auditor recomputes them;
+  repository prose is not an independent verdict. Production remains `BLOCKED`;
+  A2_0016 through A2_0019 are not applied in production; formal Phase9-A/Run4 has
+  not run; Phase 9 is incomplete; Phase10-B has not started.
+
 - Phase9-A default-off control plane: append A2_0016 without changing the
   published A2_0010-A2_0015 statement bytes. Add a candidate/run/entry/evidence
   bound forensic finalizer with one-transaction replay/event/terminal receipt,
@@ -10,9 +50,12 @@
   revision-atomic snapshots, outbox/process safety, all minimum acceptance
   cases, and the delivery-disabled terminal. The explicit CLI and environment
   configuration are disabled by default and cannot enable provider/network,
-  outbox, delivery, release, deployment, migration, or cutover. Offline tests
-  and fault injection are complete; production remains honestly `BLOCKED`
-  without real Authority/input/context/authorization/evidence and Pro review.
+  outbox, delivery, release, deployment, migration, or cutover. Local regression
+  tests exercise the contract and fault boundaries; any freeze claim also
+  requires immutable source/fresh candidate evidence and independent audit.
+  Production remains
+  honestly `BLOCKED` without real Authority/input/context/authorization/evidence
+  and Pro review.
 
 - Phase1–8 durable continuous-chain closure: add the packaged
   `Phase6TrustedSourceAssembler`, an Authority revision-atomic compound reader,

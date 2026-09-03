@@ -18,9 +18,25 @@ from factory_core.delivery.release import ReleasePublisher
 APPROVED_STATUSES = {"PASS", "OVERRIDDEN"}
 
 
-def publish_current_audit(project: Path, root: Path):
+def publish_current_audit(
+    project: Path,
+    root: Path,
+    *,
+    workflow_id: str | None = None,
+    run_generation: str | None = None,
+):
     project = project.resolve()
     root = root.resolve()
+    from factory_core.phase9_delivery_fence import require_phase9_delivery_authority
+
+    # The CLI performs its own Authority check before trusting any project-local
+    # audit file or launching the package subprocess.  ReleasePublisher repeats
+    # the check at its mutation boundary.
+    delivery_fence = require_phase9_delivery_authority(
+        project,
+        workflow_id=workflow_id,
+        run_generation=run_generation,
+    )
     latest = project / ".factory" / "audits" / "latest.json"
     try:
         audit = json.loads(latest.read_text(encoding="utf-8"))
@@ -47,6 +63,10 @@ def publish_current_audit(project: Path, root: Path):
                 str(project),
                 project.name,
                 str(output),
+                "--workflow-id",
+                delivery_fence.workflow_id,
+                "--run-generation",
+                delivery_fence.run_generation,
             ],
             cwd=root,
             check=False,
@@ -58,6 +78,8 @@ def publish_current_audit(project: Path, root: Path):
         snapshot_id,
         status=status,
         package_builder=build_package,
+        workflow_id=delivery_fence.workflow_id,
+        run_generation=delivery_fence.run_generation,
     )
 
 
@@ -65,10 +87,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project")
     parser.add_argument("--root", required=True)
+    parser.add_argument("--workflow-id", required=True)
+    parser.add_argument("--run-generation", required=True)
     args = parser.parse_args()
 
     try:
-        release = publish_current_audit(Path(args.project), Path(args.root))
+        release = publish_current_audit(
+            Path(args.project),
+            Path(args.root),
+            workflow_id=args.workflow_id,
+            run_generation=args.run_generation,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

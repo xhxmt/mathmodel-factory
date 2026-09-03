@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from factory_core.adapters.infrastructure.commands import CommandResult
 from factory_core.audit import AuditStatus, FinalAuditService
 from factory_core.cli import build_parser
@@ -13,6 +15,15 @@ from factory_core.governance.overrides import SQLiteOverrideProvider
 from factory_core.contest import ContestPolicy
 from factory_core.storage import SQLiteStateStore
 from web.backend.auth_store import AuthStore
+from tests.phase9_delivery_test_support import nonformal_delivery_fence
+
+
+@pytest.fixture(autouse=True)
+def _nonformal_delivery_mechanics(monkeypatch):
+    monkeypatch.setattr(
+        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
+        nonformal_delivery_fence,
+    )
 
 
 class FakeValidator:

@@ -675,7 +675,15 @@ class Unused:
     pass
 
 
-def test_delivery_returns_events_without_writing_workflow_state_when_input_changes(tmp_path):
+def test_delivery_returns_events_without_writing_workflow_state_when_input_changes(
+    tmp_path, monkeypatch
+):
+    from tests.phase9_delivery_test_support import nonformal_delivery_fence
+
+    monkeypatch.setattr(
+        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
+        nonformal_delivery_fence,
+    )
     project = tmp_path / "demo"
     project.mkdir()
     (project / "demo_paper.tex").write_text(

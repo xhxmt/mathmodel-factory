@@ -20,6 +20,10 @@ from factory_core.phase9_forensic_replay import (
     preflight_phase9_forensic_replay,
     read_phase9_forensic_replay_request,
 )
+from factory_core.phase9_replay_evidence import (
+    Phase9ReplayEvidenceProducerError,
+    produce_formal_phase9_replay_evidence,
+)
 
 
 def _emit(value: object) -> None:
@@ -52,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     execute = sub.add_parser("execute", help="atomically finalize one authorized replay")
     execute.add_argument("--request", type=Path, required=True)
     execute.add_argument("--confirm", action="store_true")
+    produce = sub.add_parser(
+        "produce",
+        help="run the fixed sandboxed probes and issue Authority-backed evidence",
+    )
+    produce.add_argument("--request", type=Path, required=True)
+    produce.add_argument("--confirm", action="store_true")
     collect = sub.add_parser("collect", help="read current replay state query-only")
     collect.add_argument("--database", type=Path, required=True)
     collect.add_argument("--expected-source-fence", required=True)
@@ -84,6 +94,45 @@ def main(argv: list[str] | None = None) -> int:
             return _disabled()
         request = read_phase9_forensic_replay_request(args.request)
         assert settings.evidence_root is not None
+        if args.command == "produce":
+            if not args.confirm:
+                _emit(
+                    {
+                        "schema": "authority-phase9-forensic-command-v1",
+                        "status": "BLOCKED",
+                        "confirmed": False,
+                        "blockers": [
+                            {
+                                "code": "OPERATOR_CONFIRMATION_REQUIRED",
+                                "detail": (
+                                    "formal replay evidence production requires --confirm"
+                                ),
+                            }
+                        ],
+                    }
+                )
+                return 2
+            assert settings.authority_database is not None
+            assert settings.authority_source_fence_sha256 is not None
+            assert settings.source_repository is not None
+            assert settings.official_input_root is not None
+            assert settings.execution_context_receipt_path is not None
+            produced = produce_formal_phase9_replay_evidence(
+                database=settings.authority_database,
+                expected_source_fence_sha256=(
+                    settings.authority_source_fence_sha256
+                ),
+                source_repository=settings.source_repository,
+                evidence_root=settings.evidence_root,
+                official_input_root=settings.official_input_root,
+                execution_context_receipt_path=(
+                    settings.execution_context_receipt_path
+                ),
+                python_executable=sys.executable,
+                request=request,
+            )
+            _emit(produced.as_dict())
+            return 0
         if not args.confirm:
             result = preflight_phase9_forensic_replay(
                 request, evidence_root=settings.evidence_root
@@ -100,15 +149,26 @@ def main(argv: list[str] | None = None) -> int:
         assert settings.authority_database is not None
         assert settings.authority_source_fence_sha256 is not None
         assert settings.source_repository is not None
+        assert settings.official_input_root is not None
+        assert settings.execution_context_receipt_path is not None
         result = Phase9ForensicReplayService(
             settings.authority_database,
             expected_source_fence_sha256=settings.authority_source_fence_sha256,
             source_repository=settings.source_repository,
             evidence_root=settings.evidence_root,
+            official_input_root=settings.official_input_root,
+            execution_context_receipt_path=(
+                settings.execution_context_receipt_path
+            ),
         ).execute(request)
         _emit(result.as_dict())
         return 0
-    except (Phase9ForensicReplayError, OSError, ValueError) as exc:
+    except (
+        Phase9ForensicReplayError,
+        Phase9ReplayEvidenceProducerError,
+        OSError,
+        ValueError,
+    ) as exc:
         print(f"phase9_forensic_replay: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 

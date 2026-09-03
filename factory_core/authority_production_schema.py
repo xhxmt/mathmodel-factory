@@ -33,7 +33,7 @@ from .canonical import canonical_bytes, canonical_sha256
 from .domain import SCHEMA_VERSION
 
 
-AUTHORITY_PRODUCTION_SCHEMA_VERSION = 4
+AUTHORITY_PRODUCTION_SCHEMA_VERSION = 7
 AUTHORITY_PRODUCTION_SOURCE_SCHEMA = "authority-production-source-v1"
 PRODUCTION_MIGRATION_RUNNING = "RUNNING"
 PRODUCTION_MIGRATION_INTERRUPTED = "INTERRUPTED"
@@ -917,6 +917,1551 @@ PRODUCTION_MIGRATIONS = (
             """,
         ),
     ),
+    _ProductionMigration(
+        "A2_0017_PHASE9_AUDIT_HARDENING",
+        (
+            """
+            CREATE TABLE authority_production_a2_0017_empty_guard (
+                marker INTEGER NOT NULL CHECK (marker = 1)
+            )
+            """,
+            """
+            INSERT INTO authority_production_a2_0017_empty_guard(marker)
+            SELECT 0
+            WHERE EXISTS (
+                SELECT 1 FROM authority_production_run_generations
+                UNION ALL
+                SELECT 1 FROM authority_production_run_generation_current
+                UNION ALL
+                SELECT 1 FROM authority_production_run_generation_creation_receipts
+                UNION ALL
+                SELECT 1 FROM authority_production_run_generation_idempotency
+                UNION ALL
+                SELECT 1 FROM authority_production_run_generation_successions
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_replays
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_replay_events
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_terminal_receipts
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_replay_idempotency
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_replay_current
+            )
+            """,
+            """
+            DROP TABLE authority_production_a2_0017_empty_guard
+            """,
+            """
+            CREATE TABLE authority_production_run_generation_source_inventories (
+                inventory_sha256 TEXT PRIMARY KEY,
+                schema_version TEXT NOT NULL CHECK (
+                    schema_version =
+                        'authority-phase9-git-tracked-source-inventory-v1'
+                ),
+                source_commit TEXT NOT NULL,
+                source_tree TEXT NOT NULL,
+                source_parent TEXT NOT NULL,
+                path_count INTEGER NOT NULL CHECK (path_count > 0),
+                total_bytes INTEGER NOT NULL CHECK (total_bytes >= 0),
+                inventory_json TEXT NOT NULL,
+                recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0)
+            )
+            """,
+            """
+            ALTER TABLE authority_production_run_generations
+            ADD COLUMN source_inventory_sha256 TEXT
+                REFERENCES authority_production_run_generation_source_inventories(
+                    inventory_sha256
+                )
+            """,
+            """
+            ALTER TABLE authority_production_run_generations
+            ADD COLUMN authorization_id TEXT
+            """,
+            """
+            ALTER TABLE authority_production_run_generations
+            ADD COLUMN authorization_target_sha256 TEXT
+            """,
+            """
+            ALTER TABLE authority_production_run_generations
+            ADD COLUMN predecessor_terminal_receipt_sha256 TEXT
+                REFERENCES authority_production_phase9_terminal_receipts(receipt_sha256)
+            """,
+            """
+            ALTER TABLE authority_production_run_generation_successions
+            ADD COLUMN predecessor_terminal_receipt_sha256 TEXT
+                REFERENCES authority_production_phase9_terminal_receipts(receipt_sha256)
+            """,
+            """
+            CREATE TABLE authority_production_run_generation_authorization_consumptions (
+                authorization_id TEXT PRIMARY KEY,
+                authorization_receipt_sha256 TEXT NOT NULL UNIQUE,
+                authorization_target_sha256 TEXT NOT NULL UNIQUE,
+                request_sha256 TEXT NOT NULL UNIQUE,
+                run_generation TEXT NOT NULL UNIQUE,
+                workflow_id TEXT NOT NULL,
+                consumed_at INTEGER NOT NULL CHECK (consumed_at >= 0),
+                receipt_json TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_evidence_receipts (
+                replay_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                receipt_kind TEXT NOT NULL CHECK (
+                    receipt_kind IN (
+                        'ROLE_PROCESS', 'ROLE_PROVIDER', 'PROCESS_SCOPE',
+                        'ACCEPTANCE_CASE'
+                    )
+                ),
+                logical_id TEXT NOT NULL,
+                logical_path TEXT NOT NULL,
+                byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+                raw_bytes_sha256 TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL UNIQUE,
+                occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+                PRIMARY KEY(replay_id, receipt_kind, logical_id),
+                UNIQUE(replay_id, logical_path),
+                UNIQUE(raw_bytes_sha256),
+                FOREIGN KEY(replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_gate_consumptions (
+                gate_result_sha256 TEXT PRIMARY KEY,
+                entry_state_receipt_sha256 TEXT NOT NULL,
+                start_authorization_id TEXT NOT NULL UNIQUE,
+                start_authorization_receipt_sha256 TEXT NOT NULL UNIQUE,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL UNIQUE,
+                replay_id TEXT NOT NULL UNIQUE,
+                request_sha256 TEXT NOT NULL UNIQUE,
+                consumed_at INTEGER NOT NULL CHECK (consumed_at >= 0),
+                receipt_json TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id)
+            )
+            """,
+            *_immutable_statements(
+                "authority_production_run_generation_source_inventories",
+                (("inventory_sha256",),),
+            ),
+            *_immutable_statements(
+                "authority_production_run_generation_authorization_consumptions",
+                (
+                    ("authorization_id",),
+                    ("authorization_receipt_sha256",),
+                    ("authorization_target_sha256",),
+                    ("request_sha256",),
+                    ("run_generation",),
+                    ("receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_evidence_receipts",
+                (
+                    ("replay_id", "receipt_kind", "logical_id"),
+                    ("replay_id", "logical_path"),
+                    ("raw_bytes_sha256",),
+                    ("receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_gate_consumptions",
+                (
+                    ("gate_result_sha256",),
+                    ("start_authorization_id",),
+                    ("start_authorization_receipt_sha256",),
+                    ("run_generation",),
+                    ("replay_id",),
+                    ("request_sha256",),
+                    ("receipt_sha256",),
+                ),
+            ),
+            """
+            CREATE TRIGGER authority_production_run_generations_a2_0017_insert_guard
+            BEFORE INSERT ON authority_production_run_generations
+            WHEN NEW.run_mode IS NOT 'FORENSIC_REPLAY'
+              OR NEW.modeling_consultation_contract IS NOT 'LEGACY_NOT_APPLICABLE'
+              OR NEW.delivery_capability IS NOT 'DISABLED'
+              OR NEW.source_inventory_sha256 IS NULL
+              OR NEW.authorization_id IS NULL
+              OR NEW.authorization_target_sha256 IS NULL
+              OR (NEW.operation_kind='CREATE'
+                  AND NEW.predecessor_terminal_receipt_sha256 IS NOT NULL)
+              OR (NEW.operation_kind='ROTATE'
+                  AND (
+                      NEW.predecessor_terminal_receipt_sha256 IS NULL
+                      OR NOT EXISTS (
+                          SELECT 1
+                          FROM authority_production_phase9_replay_current c
+                          JOIN authority_production_phase9_terminal_receipts t
+                            ON t.replay_id=c.replay_id
+                           AND t.workflow_id=c.workflow_id
+                           AND t.run_generation=c.run_generation
+                           AND t.receipt_sha256=c.terminal_receipt_sha256
+                          WHERE c.workflow_id=NEW.workflow_id
+                            AND c.run_generation=NEW.predecessor_run_generation
+                            AND c.terminal_receipt_sha256=
+                                NEW.predecessor_terminal_receipt_sha256
+                      )
+                  ))
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_run_generation_source_inventories i
+                  WHERE i.inventory_sha256=NEW.source_inventory_sha256
+                    AND i.source_commit=NEW.source_commit
+                    AND i.source_tree=NEW.source_tree
+                    AND i.source_parent=NEW.source_parent
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation lacks hardened audit binding');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_run_generation_successions_a2_0017_guard
+            BEFORE INSERT ON authority_production_run_generation_successions
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_run_generations g
+                WHERE g.run_generation=NEW.run_generation
+                  AND g.workflow_id=NEW.workflow_id
+                  AND g.predecessor_run_generation IS NEW.predecessor_run_generation
+                  AND g.predecessor_creation_receipt_sha256 IS
+                      NEW.predecessor_creation_receipt_sha256
+                  AND g.predecessor_terminal_receipt_sha256 IS
+                      NEW.predecessor_terminal_receipt_sha256
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation succession binding differs');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_run_generation_authorization_consumption_guard
+            BEFORE INSERT ON authority_production_run_generation_authorization_consumptions
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_run_generations g
+                WHERE g.run_generation=NEW.run_generation
+                  AND g.workflow_id=NEW.workflow_id
+                  AND g.request_sha256=NEW.request_sha256
+                  AND g.authorization_id=NEW.authorization_id
+                  AND g.authorization_target_sha256=
+                      NEW.authorization_target_sha256
+                  AND g.operator_authorization_receipt_sha256=
+                      NEW.authorization_receipt_sha256
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation authorization consumption differs');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_run_generation_creation_receipts_a2_0017_guard
+            BEFORE INSERT ON authority_production_run_generation_creation_receipts
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_run_generations g
+                JOIN authority_production_run_generation_authorization_consumptions a
+                  ON a.run_generation=g.run_generation
+                 AND a.workflow_id=g.workflow_id
+                 AND a.request_sha256=g.request_sha256
+                 AND a.authorization_id=g.authorization_id
+                 AND a.authorization_target_sha256=g.authorization_target_sha256
+                 AND a.authorization_receipt_sha256=
+                     g.operator_authorization_receipt_sha256
+                WHERE g.run_generation=NEW.run_generation
+                  AND g.workflow_id=NEW.workflow_id
+                  AND g.operation_kind=NEW.operation_kind
+                  AND g.request_sha256=NEW.request_sha256
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation receipt lacks consumed authorization');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_run_generation_current_a2_0017_insert_guard
+            BEFORE INSERT ON authority_production_run_generation_current
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_run_generations g
+                JOIN authority_production_run_generation_authorization_consumptions a
+                  ON a.run_generation=g.run_generation
+                 AND a.request_sha256=g.request_sha256
+                WHERE g.run_generation=NEW.run_generation
+                  AND g.workflow_id=NEW.workflow_id
+                  AND g.source_inventory_sha256 IS NOT NULL
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation current lacks hardened graph');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_run_generation_current_a2_0017_update_guard
+            BEFORE UPDATE ON authority_production_run_generation_current
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_run_generations g
+                JOIN authority_production_run_generation_authorization_consumptions a
+                  ON a.run_generation=g.run_generation
+                 AND a.request_sha256=g.request_sha256
+                WHERE g.run_generation=NEW.run_generation
+                  AND g.workflow_id=OLD.workflow_id
+                  AND g.source_inventory_sha256 IS NOT NULL
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'run-generation current lacks hardened graph');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_terminal_a2_0017_gate_guard
+            BEFORE INSERT ON authority_production_phase9_terminal_receipts
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_phase9_gate_consumptions c
+                JOIN authority_production_phase9_replays p
+                  ON p.replay_id=c.replay_id
+                 AND p.workflow_id=c.workflow_id
+                 AND p.run_generation=c.run_generation
+                 AND p.request_sha256=c.request_sha256
+                 AND p.entry_gate_result_sha256=c.gate_result_sha256
+                WHERE c.replay_id=NEW.replay_id
+                  AND c.workflow_id=NEW.workflow_id
+                  AND c.run_generation=NEW.run_generation
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM authority_production_phase9_evidence_receipts e
+                      WHERE e.replay_id=NEW.replay_id
+                        AND (
+                            e.workflow_id!=NEW.workflow_id
+                            OR e.run_generation!=NEW.run_generation
+                        )
+                  )
+                  AND (
+                      SELECT COUNT(*)
+                      FROM authority_production_phase9_evidence_receipts e
+                      WHERE e.replay_id=NEW.replay_id
+                        AND e.workflow_id=NEW.workflow_id
+                        AND e.run_generation=NEW.run_generation
+                        AND e.receipt_kind='PROCESS_SCOPE'
+                  )=3
+                  AND (
+                      SELECT COUNT(*)
+                      FROM authority_production_phase9_evidence_receipts e
+                      WHERE e.replay_id=NEW.replay_id
+                        AND e.workflow_id=NEW.workflow_id
+                        AND e.run_generation=NEW.run_generation
+                        AND e.receipt_kind='ACCEPTANCE_CASE'
+                  )=17
+                  AND (
+                      (
+                          p.replay_mode='TECHNICAL'
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                                AND e.workflow_id=NEW.workflow_id
+                                AND e.run_generation=NEW.run_generation
+                                AND e.receipt_kind='ROLE_PROCESS'
+                          )=3
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                                AND e.workflow_id=NEW.workflow_id
+                                AND e.run_generation=NEW.run_generation
+                                AND e.receipt_kind='ROLE_PROVIDER'
+                          )=3
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                          )=26
+                      )
+                      OR (
+                          p.replay_mode='ABLATE_NO_JUDGE'
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                                AND e.receipt_kind IN (
+                                    'ROLE_PROCESS', 'ROLE_PROVIDER'
+                                )
+                          )=0
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                          )=20
+                      )
+                  )
+            )
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'phase9 terminal lacks consumed gate or exact evidence inventory'
+                );
+            END
+            """,
+            """
+            UPDATE authority_production_schema_state
+            SET production_schema_version=5
+            WHERE singleton=1
+            """,
+        ),
+    ),
+    _ProductionMigration(
+        "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
+        (
+            """
+            CREATE TABLE authority_production_phase9_p0_runner_authorizations (
+                authorization_id TEXT PRIMARY KEY,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                project_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                source_commit TEXT NOT NULL,
+                source_tree TEXT NOT NULL,
+                source_parent TEXT NOT NULL,
+                source_inventory_sha256 TEXT NOT NULL,
+                live_binding_sha256 TEXT NOT NULL,
+                spec_sha256 TEXT NOT NULL,
+                operator_uid INTEGER NOT NULL CHECK (operator_uid >= 0),
+                operator_account TEXT NOT NULL,
+                issued_at INTEGER NOT NULL CHECK (issued_at >= 0),
+                expires_at INTEGER NOT NULL CHECK (expires_at > issued_at),
+                intended_evidence_root TEXT NOT NULL,
+                python_identity_sha256 TEXT NOT NULL,
+                authorization_json TEXT NOT NULL,
+                authorization_receipt_sha256 TEXT NOT NULL UNIQUE,
+                UNIQUE(workflow_id, run_generation, authorization_id),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_p0_runner_consumptions (
+                authorization_id TEXT PRIMARY KEY,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                invocation_id TEXT NOT NULL UNIQUE,
+                consumed_at INTEGER NOT NULL CHECK (consumed_at >= 0),
+                consumption_json TEXT NOT NULL,
+                consumption_receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(authorization_id)
+                    REFERENCES authority_production_phase9_p0_runner_authorizations(
+                        authorization_id
+                    )
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_p0_runner_attestations (
+                authorization_id TEXT PRIMARY KEY,
+                authorization_receipt_sha256 TEXT NOT NULL,
+                consumption_receipt_sha256 TEXT NOT NULL,
+                authority_runner_evidence_sha256 TEXT NOT NULL,
+                invocation_id TEXT NOT NULL UNIQUE,
+                project_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL UNIQUE,
+                source_inventory_sha256 TEXT NOT NULL,
+                live_binding_sha256 TEXT NOT NULL,
+                spec_sha256 TEXT NOT NULL,
+                evidence_root_sha256 TEXT NOT NULL UNIQUE,
+                command_record_sha256 TEXT NOT NULL,
+                raw_log_byte_length INTEGER NOT NULL CHECK (raw_log_byte_length > 0),
+                raw_log_sha256 TEXT NOT NULL,
+                junit_byte_length INTEGER NOT NULL CHECK (junit_byte_length > 0),
+                junit_sha256 TEXT NOT NULL,
+                outcome_sha256 TEXT NOT NULL,
+                receipt_set_sha256 TEXT NOT NULL,
+                started_at INTEGER NOT NULL CHECK (started_at >= 0),
+                finished_at INTEGER NOT NULL CHECK (finished_at >= started_at),
+                attested_at INTEGER NOT NULL CHECK (attested_at >= finished_at),
+                exit_code INTEGER NOT NULL CHECK (exit_code = 0),
+                attestation_json TEXT NOT NULL,
+                attestation_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(authorization_id)
+                    REFERENCES authority_production_phase9_p0_runner_consumptions(
+                        authorization_id
+                    ),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            *_immutable_statements(
+                "authority_production_phase9_p0_runner_authorizations",
+                (
+                    ("authorization_id",),
+                    ("nonce_sha256",),
+                    ("authorization_receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_p0_runner_consumptions",
+                (
+                    ("authorization_id",),
+                    ("nonce_sha256",),
+                    ("invocation_id",),
+                    ("consumption_receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_p0_runner_attestations",
+                (
+                    ("authorization_id",),
+                    ("invocation_id",),
+                    ("workflow_id", "run_generation"),
+                    ("evidence_root_sha256",),
+                    ("attestation_sha256",),
+                ),
+            ),
+            """
+            CREATE TRIGGER authority_production_phase9_p0_runner_authorization_guard
+            BEFORE INSERT ON authority_production_phase9_p0_runner_authorizations
+            WHEN phase9_p0_write_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_run_generations g
+                  JOIN authority_production_run_generation_current c
+                    ON c.workflow_id=g.workflow_id
+                   AND c.run_generation=g.run_generation
+                  WHERE g.project_id=NEW.project_id
+                    AND g.workflow_id=NEW.workflow_id
+                    AND g.run_generation=NEW.run_generation
+                    AND g.source_commit=NEW.source_commit
+                    AND g.source_tree=NEW.source_tree
+                    AND g.source_parent=NEW.source_parent
+                    AND g.source_inventory_sha256=NEW.source_inventory_sha256
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_p0_runner_attestations a
+                  WHERE a.workflow_id=NEW.workflow_id
+                    AND a.run_generation=NEW.run_generation
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'P0 runner authorization is not trusted/current');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_p0_runner_consumption_guard
+            BEFORE INSERT ON authority_production_phase9_p0_runner_consumptions
+            WHEN phase9_p0_write_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_p0_runner_authorizations a
+                  WHERE a.authorization_id=NEW.authorization_id
+                    AND a.nonce_sha256=NEW.nonce_sha256
+                    AND NEW.consumed_at>=a.issued_at
+                    AND NEW.consumed_at<=a.expires_at
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'P0 runner authorization cannot be consumed');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_p0_runner_attestation_guard
+            BEFORE INSERT ON authority_production_phase9_p0_runner_attestations
+            WHEN phase9_p0_write_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_p0_runner_authorizations a
+                  JOIN authority_production_phase9_p0_runner_consumptions c
+                    ON c.authorization_id=a.authorization_id
+                   AND c.nonce_sha256=a.nonce_sha256
+                  WHERE a.authorization_id=NEW.authorization_id
+                    AND c.invocation_id=NEW.invocation_id
+                    AND a.authorization_receipt_sha256=
+                        NEW.authorization_receipt_sha256
+                    AND c.consumption_receipt_sha256=
+                        NEW.consumption_receipt_sha256
+                    AND a.project_id=NEW.project_id
+                    AND a.workflow_id=NEW.workflow_id
+                    AND a.run_generation=NEW.run_generation
+                    AND a.source_inventory_sha256=NEW.source_inventory_sha256
+                    AND a.live_binding_sha256=NEW.live_binding_sha256
+                    AND a.spec_sha256=NEW.spec_sha256
+                    AND NEW.attested_at<=a.expires_at
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'P0 runner attestation lacks live authorization');
+            END
+            """,
+            """
+            UPDATE authority_production_schema_state
+            SET production_schema_version=6
+            WHERE singleton=1
+            """,
+        ),
+    ),
+    _ProductionMigration(
+        "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
+        (
+            """
+            CREATE TABLE authority_production_a2_0019_empty_guard (
+                marker INTEGER NOT NULL CHECK (marker = 1)
+            )
+            """,
+            """
+            INSERT INTO authority_production_a2_0019_empty_guard(marker)
+            SELECT 0
+            WHERE EXISTS (
+                SELECT 1 FROM authority_production_phase9_replays
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_replay_events
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_terminal_receipts
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_replay_idempotency
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_replay_current
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_evidence_receipts
+                UNION ALL
+                SELECT 1 FROM authority_production_phase9_gate_consumptions
+            )
+            """,
+            """
+            DROP TABLE authority_production_a2_0019_empty_guard
+            """,
+            """
+            DROP TRIGGER authority_production_phase9_terminal_a2_0017_gate_guard
+            """,
+            """
+            DROP TABLE authority_production_phase9_evidence_receipts
+            """,
+            """
+            CREATE TABLE authority_production_phase9_evidence_receipts (
+                replay_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                receipt_kind TEXT NOT NULL CHECK (
+                    receipt_kind IN (
+                        'ROLE_PROCESS', 'ROLE_PROVIDER', 'PROCESS_SCOPE',
+                        'ACCEPTANCE_CASE', 'PACKET', 'OUTBOX', 'SNAPSHOT',
+                        'VERDICT'
+                    )
+                ),
+                logical_id TEXT NOT NULL,
+                logical_path TEXT NOT NULL,
+                byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+                raw_bytes_sha256 TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL UNIQUE,
+                occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+                PRIMARY KEY(replay_id, receipt_kind, logical_id),
+                UNIQUE(replay_id, logical_path),
+                UNIQUE(raw_bytes_sha256),
+                FOREIGN KEY(replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            *_immutable_statements(
+                "authority_production_phase9_evidence_receipts",
+                (
+                    ("replay_id", "receipt_kind", "logical_id"),
+                    ("replay_id", "logical_path"),
+                    ("raw_bytes_sha256",),
+                    ("receipt_sha256",),
+                ),
+            ),
+            """
+            CREATE TRIGGER authority_production_phase9_terminal_a2_0017_gate_guard
+            BEFORE INSERT ON authority_production_phase9_terminal_receipts
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_phase9_gate_consumptions c
+                JOIN authority_production_phase9_replays p
+                  ON p.replay_id=c.replay_id
+                 AND p.workflow_id=c.workflow_id
+                 AND p.run_generation=c.run_generation
+                 AND p.request_sha256=c.request_sha256
+                 AND p.entry_gate_result_sha256=c.gate_result_sha256
+                WHERE c.replay_id=NEW.replay_id
+                  AND c.workflow_id=NEW.workflow_id
+                  AND c.run_generation=NEW.run_generation
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM authority_production_phase9_evidence_receipts e
+                      WHERE e.replay_id=NEW.replay_id
+                        AND (
+                            e.workflow_id!=NEW.workflow_id
+                            OR e.run_generation!=NEW.run_generation
+                        )
+                  )
+                  AND (
+                      SELECT COUNT(*)
+                      FROM authority_production_phase9_evidence_receipts e
+                      WHERE e.replay_id=NEW.replay_id
+                        AND e.workflow_id=NEW.workflow_id
+                        AND e.run_generation=NEW.run_generation
+                        AND e.receipt_kind='PROCESS_SCOPE'
+                  )=3
+                  AND (
+                      SELECT COUNT(*)
+                      FROM authority_production_phase9_evidence_receipts e
+                      WHERE e.replay_id=NEW.replay_id
+                        AND e.workflow_id=NEW.workflow_id
+                        AND e.run_generation=NEW.run_generation
+                        AND e.receipt_kind='ACCEPTANCE_CASE'
+                  )=17
+                  AND (
+                      SELECT COUNT(*)
+                      FROM authority_production_phase9_evidence_receipts e
+                      WHERE e.replay_id=NEW.replay_id
+                        AND e.workflow_id=NEW.workflow_id
+                        AND e.run_generation=NEW.run_generation
+                        AND e.receipt_kind IN (
+                            'PACKET', 'OUTBOX', 'SNAPSHOT', 'VERDICT'
+                        )
+                  )=4
+                  AND (
+                      (
+                          p.replay_mode='TECHNICAL'
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                                AND e.workflow_id=NEW.workflow_id
+                                AND e.run_generation=NEW.run_generation
+                                AND e.receipt_kind='ROLE_PROCESS'
+                          )=3
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                                AND e.workflow_id=NEW.workflow_id
+                                AND e.run_generation=NEW.run_generation
+                                AND e.receipt_kind='ROLE_PROVIDER'
+                          )=3
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                          )=30
+                      )
+                      OR (
+                          p.replay_mode='ABLATE_NO_JUDGE'
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                                AND e.receipt_kind IN (
+                                    'ROLE_PROCESS', 'ROLE_PROVIDER'
+                                )
+                          )=0
+                          AND (
+                              SELECT COUNT(*)
+                              FROM authority_production_phase9_evidence_receipts e
+                              WHERE e.replay_id=NEW.replay_id
+                          )=24
+                      )
+                  )
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 terminal lacks exact typed evidence');
+            END
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_runtime_authorizations (
+                authorization_id TEXT PRIMARY KEY,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                project_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                source_commit TEXT NOT NULL,
+                source_tree TEXT NOT NULL,
+                source_parent TEXT NOT NULL,
+                source_inventory_sha256 TEXT NOT NULL,
+                replay_coordinate_sha256 TEXT NOT NULL,
+                receipt_kind TEXT NOT NULL CHECK (
+                    receipt_kind IN (
+                        'ROLE_PROCESS', 'ROLE_PROVIDER', 'PROCESS_SCOPE'
+                    )
+                ),
+                logical_id TEXT NOT NULL,
+                logical_path TEXT NOT NULL,
+                invocation_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                process_scope_id TEXT NOT NULL,
+                packet_sha256 TEXT,
+                dependency_fingerprint_sha256 TEXT NOT NULL,
+                input_sha256 TEXT NOT NULL,
+                operator_uid INTEGER NOT NULL CHECK (operator_uid >= 0),
+                operator_account TEXT NOT NULL,
+                issued_at INTEGER NOT NULL CHECK (issued_at >= 0),
+                expires_at INTEGER NOT NULL CHECK (expires_at > issued_at),
+                authorization_json TEXT NOT NULL,
+                authorization_receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_runtime_completions (
+                completion_sha256 TEXT PRIMARY KEY,
+                authorization_id TEXT NOT NULL UNIQUE,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                authorization_receipt_sha256 TEXT NOT NULL UNIQUE,
+                execution_domain TEXT NOT NULL CHECK (
+                    execution_domain='FORMAL_PHASE9_A'
+                ),
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                receipt_kind TEXT NOT NULL CHECK (
+                    receipt_kind IN (
+                        'ROLE_PROCESS', 'ROLE_PROVIDER', 'PROCESS_SCOPE'
+                    )
+                ),
+                logical_id TEXT NOT NULL,
+                invocation_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                process_scope_id TEXT NOT NULL,
+                packet_sha256 TEXT,
+                dependency_fingerprint_sha256 TEXT NOT NULL,
+                input_sha256 TEXT NOT NULL,
+                output_sha256 TEXT NOT NULL,
+                logical_path TEXT NOT NULL,
+                byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+                raw_bytes_sha256 TEXT NOT NULL UNIQUE,
+                receipt_sha256 TEXT NOT NULL UNIQUE,
+                authority_source_sha256 TEXT NOT NULL,
+                completed_at INTEGER NOT NULL CHECK (completed_at >= 0),
+                completion_json TEXT NOT NULL,
+                UNIQUE(run_generation, receipt_kind, logical_id),
+                FOREIGN KEY(authorization_id)
+                    REFERENCES authority_production_phase9_replay_runtime_authorizations(
+                        authorization_id
+                    ),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(invocation_id)
+                    REFERENCES authority_invocations(invocation_id),
+                FOREIGN KEY(attempt_id) REFERENCES authority_attempts(attempt_id),
+                FOREIGN KEY(process_scope_id)
+                    REFERENCES authority_process_scopes(process_scope_id)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_runtime_records (
+                record_sha256 TEXT PRIMARY KEY,
+                execution_domain TEXT NOT NULL CHECK (
+                    execution_domain IN ('FORMAL_PHASE9_A', 'TEST_FIXTURE')
+                ),
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                receipt_kind TEXT NOT NULL CHECK (
+                    receipt_kind IN (
+                        'ROLE_PROCESS', 'ROLE_PROVIDER', 'PROCESS_SCOPE'
+                    )
+                ),
+                logical_id TEXT NOT NULL,
+                invocation_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                process_scope_id TEXT NOT NULL,
+                packet_sha256 TEXT,
+                dependency_fingerprint_sha256 TEXT NOT NULL,
+                input_sha256 TEXT NOT NULL,
+                output_sha256 TEXT NOT NULL,
+                logical_path TEXT NOT NULL,
+                byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+                raw_bytes_sha256 TEXT NOT NULL UNIQUE,
+                receipt_sha256 TEXT NOT NULL UNIQUE,
+                authority_source_sha256 TEXT NOT NULL,
+                runtime_completion_sha256 TEXT NOT NULL UNIQUE,
+                record_json TEXT NOT NULL,
+                recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0),
+                UNIQUE(run_generation, receipt_kind, logical_id),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation),
+                FOREIGN KEY(invocation_id)
+                    REFERENCES authority_invocations(invocation_id),
+                FOREIGN KEY(attempt_id) REFERENCES authority_attempts(attempt_id),
+                FOREIGN KEY(process_scope_id)
+                    REFERENCES authority_process_scopes(process_scope_id),
+                FOREIGN KEY(runtime_completion_sha256)
+                    REFERENCES authority_production_phase9_replay_runtime_completions(
+                        completion_sha256
+                    )
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_evidence_authorizations (
+                authorization_id TEXT PRIMARY KEY,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                project_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                replay_mode TEXT NOT NULL CHECK (
+                    replay_mode IN ('TECHNICAL', 'ABLATE_NO_JUDGE')
+                ),
+                source_commit TEXT NOT NULL,
+                source_tree TEXT NOT NULL,
+                source_parent TEXT NOT NULL,
+                source_inventory_sha256 TEXT NOT NULL,
+                entry_gate_result_sha256 TEXT NOT NULL,
+                entry_state_receipt_sha256 TEXT NOT NULL,
+                replay_coordinate_sha256 TEXT NOT NULL,
+                intended_evidence_root TEXT NOT NULL,
+                acceptance_spec_sha256 TEXT NOT NULL,
+                operator_uid INTEGER NOT NULL CHECK (operator_uid >= 0),
+                operator_account TEXT NOT NULL,
+                issued_at INTEGER NOT NULL CHECK (issued_at >= 0),
+                expires_at INTEGER NOT NULL CHECK (expires_at > issued_at),
+                authorization_json TEXT NOT NULL,
+                authorization_receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_evidence_consumptions (
+                authorization_id TEXT PRIMARY KEY,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                invocation_id TEXT NOT NULL UNIQUE,
+                consumed_at INTEGER NOT NULL CHECK (consumed_at >= 0),
+                consumption_json TEXT NOT NULL,
+                consumption_receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(authorization_id)
+                    REFERENCES authority_production_phase9_replay_evidence_authorizations(
+                        authorization_id
+                    )
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_evidence_attestations (
+                attestation_sha256 TEXT PRIMARY KEY,
+                authorization_id TEXT NOT NULL UNIQUE,
+                authorization_receipt_sha256 TEXT NOT NULL UNIQUE,
+                consumption_receipt_sha256 TEXT NOT NULL UNIQUE,
+                invocation_id TEXT NOT NULL UNIQUE,
+                execution_domain TEXT NOT NULL CHECK (
+                    execution_domain IN ('FORMAL_PHASE9_A', 'TEST_FIXTURE')
+                ),
+                project_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL UNIQUE,
+                replay_mode TEXT NOT NULL CHECK (
+                    replay_mode IN ('TECHNICAL', 'ABLATE_NO_JUDGE')
+                ),
+                replay_coordinate_sha256 TEXT NOT NULL UNIQUE,
+                source_inventory_sha256 TEXT NOT NULL,
+                entry_gate_result_sha256 TEXT NOT NULL UNIQUE,
+                entry_state_receipt_sha256 TEXT NOT NULL,
+                evidence_payload_set_sha256 TEXT NOT NULL UNIQUE,
+                typed_receipt_set_sha256 TEXT NOT NULL UNIQUE,
+                runtime_record_set_sha256 TEXT NOT NULL,
+                packet_sha256 TEXT NOT NULL,
+                roles_sha256 TEXT NOT NULL,
+                verdict_sha256 TEXT NOT NULL,
+                snapshot_sha256 TEXT NOT NULL,
+                runtime_safety_sha256 TEXT NOT NULL,
+                acceptance_sha256 TEXT NOT NULL,
+                acceptance_spec_sha256 TEXT NOT NULL,
+                acceptance_command_json TEXT NOT NULL,
+                acceptance_command_sha256 TEXT NOT NULL,
+                acceptance_event_log BLOB NOT NULL,
+                acceptance_event_log_sha256 TEXT NOT NULL,
+                acceptance_event_nonce TEXT NOT NULL,
+                acceptance_raw_log BLOB NOT NULL,
+                acceptance_raw_log_sha256 TEXT NOT NULL,
+                acceptance_junit_xml BLOB NOT NULL,
+                acceptance_junit_sha256 TEXT NOT NULL,
+                acceptance_outcome_json TEXT NOT NULL,
+                acceptance_outcome_sha256 TEXT NOT NULL,
+                started_at INTEGER NOT NULL CHECK (started_at >= 0),
+                finished_at INTEGER NOT NULL CHECK (finished_at >= started_at),
+                attested_at INTEGER NOT NULL CHECK (attested_at >= finished_at),
+                attestation_json TEXT NOT NULL,
+                FOREIGN KEY(authorization_id)
+                    REFERENCES authority_production_phase9_replay_evidence_consumptions(
+                        authorization_id
+                    ),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_replay_evidence_attestation_items (
+                attestation_sha256 TEXT NOT NULL,
+                receipt_kind TEXT NOT NULL CHECK (
+                    receipt_kind IN (
+                        'ROLE_PROCESS', 'ROLE_PROVIDER', 'PROCESS_SCOPE',
+                        'ACCEPTANCE_CASE', 'PACKET', 'OUTBOX', 'SNAPSHOT',
+                        'VERDICT'
+                    )
+                ),
+                logical_id TEXT NOT NULL,
+                logical_path TEXT NOT NULL,
+                byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+                raw_bytes_sha256 TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL,
+                source_kind TEXT NOT NULL CHECK (
+                    source_kind IN (
+                        'RUNTIME_RECORD', 'ACCEPTANCE_RUNNER',
+                        'EVIDENCE_PRODUCER'
+                    )
+                ),
+                source_record_sha256 TEXT NOT NULL,
+                invocation_id TEXT,
+                attempt_id TEXT,
+                process_scope_id TEXT,
+                packet_sha256 TEXT,
+                dependency_fingerprint_sha256 TEXT NOT NULL,
+                input_sha256 TEXT NOT NULL,
+                output_sha256 TEXT NOT NULL,
+                item_json TEXT NOT NULL,
+                item_sha256 TEXT NOT NULL UNIQUE,
+                PRIMARY KEY(attestation_sha256, receipt_kind, logical_id),
+                UNIQUE(attestation_sha256, logical_path),
+                UNIQUE(attestation_sha256, raw_bytes_sha256),
+                FOREIGN KEY(attestation_sha256)
+                    REFERENCES authority_production_phase9_replay_evidence_attestations(
+                        attestation_sha256
+                    ) DEFERRABLE INITIALLY DEFERRED
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_start_authorizations (
+                authorization_id TEXT PRIMARY KEY,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                authorization_target_sha256 TEXT NOT NULL,
+                evidence_attestation_sha256 TEXT NOT NULL,
+                evidence_payload_set_sha256 TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                source_commit TEXT NOT NULL,
+                source_tree TEXT NOT NULL,
+                source_parent TEXT NOT NULL,
+                source_inventory_sha256 TEXT NOT NULL,
+                entry_gate_result_sha256 TEXT NOT NULL,
+                entry_state_receipt_sha256 TEXT NOT NULL,
+                start_authorization_byte_length INTEGER NOT NULL CHECK (
+                    start_authorization_byte_length > 0
+                ),
+                start_authorization_raw_bytes_sha256 TEXT NOT NULL UNIQUE,
+                final_evidence_set_sha256 TEXT NOT NULL UNIQUE,
+                operator_uid INTEGER NOT NULL CHECK (operator_uid >= 0),
+                operator_account TEXT NOT NULL,
+                issued_at INTEGER NOT NULL CHECK (issued_at >= 0),
+                expires_at INTEGER NOT NULL CHECK (expires_at > issued_at),
+                authorization_json TEXT NOT NULL,
+                authorization_receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(evidence_attestation_sha256)
+                    REFERENCES authority_production_phase9_replay_evidence_attestations(
+                        attestation_sha256
+                    ),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_start_authorization_consumptions (
+                authorization_id TEXT PRIMARY KEY,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                request_sha256 TEXT NOT NULL UNIQUE,
+                replay_id TEXT NOT NULL UNIQUE,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL UNIQUE,
+                consumed_at INTEGER NOT NULL CHECK (consumed_at >= 0),
+                consumption_json TEXT NOT NULL,
+                consumption_receipt_sha256 TEXT NOT NULL UNIQUE,
+                FOREIGN KEY(authorization_id)
+                    REFERENCES authority_production_phase9_start_authorizations(
+                        authorization_id
+                    ),
+                FOREIGN KEY(replay_id)
+                    REFERENCES authority_production_phase9_replays(replay_id),
+                FOREIGN KEY(workflow_id) REFERENCES authority_workflows(workflow_id),
+                FOREIGN KEY(run_generation)
+                    REFERENCES authority_production_run_generations(run_generation)
+            )
+            """,
+            *_immutable_statements(
+                "authority_production_phase9_replay_runtime_authorizations",
+                (
+                    ("authorization_id",), ("nonce_sha256",),
+                    ("authorization_receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_replay_runtime_completions",
+                (
+                    ("completion_sha256",), ("authorization_id",),
+                    ("nonce_sha256",), ("authorization_receipt_sha256",),
+                    ("run_generation", "receipt_kind", "logical_id"),
+                    ("raw_bytes_sha256",), ("receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_replay_runtime_records",
+                (
+                    ("record_sha256",),
+                    ("run_generation", "receipt_kind", "logical_id"),
+                    ("raw_bytes_sha256",),
+                    ("receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_replay_evidence_authorizations",
+                (
+                    ("authorization_id",), ("nonce_sha256",),
+                    ("authorization_receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_replay_evidence_consumptions",
+                (
+                    ("authorization_id",), ("nonce_sha256",),
+                    ("invocation_id",), ("consumption_receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_replay_evidence_attestations",
+                (
+                    ("attestation_sha256",), ("authorization_id",),
+                    ("run_generation",), ("entry_gate_result_sha256",),
+                    ("evidence_payload_set_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_replay_evidence_attestation_items",
+                (
+                    ("attestation_sha256", "receipt_kind", "logical_id"),
+                    ("attestation_sha256", "logical_path"),
+                    ("item_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_start_authorizations",
+                (
+                    ("authorization_id",), ("nonce_sha256",),
+                    ("authorization_receipt_sha256",),
+                ),
+            ),
+            *_immutable_statements(
+                "authority_production_phase9_start_authorization_consumptions",
+                (
+                    ("authorization_id",), ("nonce_sha256",),
+                    ("request_sha256",), ("replay_id",),
+                    ("run_generation",), ("consumption_receipt_sha256",),
+                ),
+            ),
+            """
+            CREATE TRIGGER authority_production_phase9_runtime_authorization_guard
+            BEFORE INSERT ON authority_production_phase9_replay_runtime_authorizations
+            WHEN phase9_replay_runtime_completion_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_run_generations g
+                  JOIN authority_production_run_generation_current c
+                    ON c.workflow_id=g.workflow_id
+                   AND c.run_generation=g.run_generation
+                  WHERE g.project_id=NEW.project_id
+                    AND g.workflow_id=NEW.workflow_id
+                    AND g.run_generation=NEW.run_generation
+                    AND g.source_commit=NEW.source_commit
+                    AND g.source_tree=NEW.source_tree
+                    AND g.source_parent=NEW.source_parent
+                    AND g.source_inventory_sha256=NEW.source_inventory_sha256
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 runtime authorization is not trusted/current');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_runtime_completion_guard
+            BEFORE INSERT ON authority_production_phase9_replay_runtime_completions
+            WHEN phase9_replay_runtime_completion_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_replay_runtime_authorizations a
+                  JOIN authority_invocations i
+                    ON i.invocation_id=NEW.invocation_id
+                  JOIN authority_attempts t
+                    ON t.attempt_id=NEW.attempt_id
+                   AND t.invocation_id=i.invocation_id
+                  JOIN authority_process_scopes s
+                    ON s.process_scope_id=NEW.process_scope_id
+                   AND s.attempt_id=t.attempt_id
+                  WHERE a.authorization_id=NEW.authorization_id
+                    AND a.nonce_sha256=NEW.nonce_sha256
+                    AND a.authorization_receipt_sha256=
+                        NEW.authorization_receipt_sha256
+                    AND a.workflow_id=NEW.workflow_id
+                    AND a.run_generation=NEW.run_generation
+                    AND a.receipt_kind=NEW.receipt_kind
+                    AND a.logical_id=NEW.logical_id
+                    AND a.logical_path=NEW.logical_path
+                    AND a.invocation_id=NEW.invocation_id
+                    AND a.attempt_id=NEW.attempt_id
+                    AND a.process_scope_id=NEW.process_scope_id
+                    AND a.packet_sha256 IS NEW.packet_sha256
+                    AND a.dependency_fingerprint_sha256=
+                        NEW.dependency_fingerprint_sha256
+                    AND a.input_sha256=NEW.input_sha256
+                    AND NEW.completed_at>=a.issued_at
+                    AND NEW.completed_at<=a.expires_at
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 runtime completion lacks one-use authority');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_runtime_record_guard
+            BEFORE INSERT ON authority_production_phase9_replay_runtime_records
+            WHEN phase9_replay_evidence_write_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_replay_runtime_completions c
+                  JOIN authority_invocations i
+                    ON i.invocation_id=c.invocation_id
+                  JOIN authority_attempts a ON a.invocation_id=i.invocation_id
+                  JOIN authority_process_scopes s ON s.attempt_id=a.attempt_id
+                  JOIN authority_commands cmd ON cmd.command_id=i.command_id
+                  JOIN authority_production_run_generations g
+                    ON g.workflow_id=i.workflow_id
+                  WHERE c.completion_sha256=NEW.runtime_completion_sha256
+                    AND c.execution_domain='FORMAL_PHASE9_A'
+                    AND c.workflow_id=NEW.workflow_id
+                    AND c.run_generation=NEW.run_generation
+                    AND c.receipt_kind=NEW.receipt_kind
+                    AND c.logical_id=NEW.logical_id
+                    AND c.invocation_id=NEW.invocation_id
+                    AND c.attempt_id=NEW.attempt_id
+                    AND c.process_scope_id=NEW.process_scope_id
+                    AND c.packet_sha256 IS NEW.packet_sha256
+                    AND c.dependency_fingerprint_sha256=
+                        NEW.dependency_fingerprint_sha256
+                    AND c.input_sha256=NEW.input_sha256
+                    AND c.output_sha256=NEW.output_sha256
+                    AND c.logical_path=NEW.logical_path
+                    AND c.byte_length=NEW.byte_length
+                    AND c.raw_bytes_sha256=NEW.raw_bytes_sha256
+                    AND c.receipt_sha256=NEW.receipt_sha256
+                    AND c.authority_source_sha256=NEW.authority_source_sha256
+                    AND i.invocation_id=NEW.invocation_id
+                    AND a.attempt_id=NEW.attempt_id
+                    AND s.process_scope_id=NEW.process_scope_id
+                    AND i.workflow_id=NEW.workflow_id
+                    AND g.run_generation=NEW.run_generation
+                    AND cmd.workflow_id=NEW.workflow_id
+                    AND cmd.project_id=g.project_id
+                    AND cmd.command_type='PHASE9_A_RUNTIME_COMPLETION'
+                    AND cmd.envelope_schema=
+                        'authority-phase9-runtime-completion-v1'
+                    AND i.invocation_kind='PHASE9_A_RUNTIME_COMPLETION'
+                    AND i.scope_schema=
+                        'authority-phase9-runtime-completion-v1'
+                    AND a.scope_schema=
+                        'authority-phase9-runtime-completion-v1'
+                    AND s.process_kind='PHASE9_A_RUNTIME_COMPLETION'
+                    AND s.scope_schema=
+                        'authority-phase9-runtime-completion-v1'
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 runtime record lacks trusted scope');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_evidence_authorization_guard
+            BEFORE INSERT ON authority_production_phase9_replay_evidence_authorizations
+            WHEN phase9_replay_evidence_write_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_run_generations g
+                  JOIN authority_production_run_generation_current c
+                    ON c.workflow_id=g.workflow_id
+                   AND c.run_generation=g.run_generation
+                  WHERE g.project_id=NEW.project_id
+                    AND g.workflow_id=NEW.workflow_id
+                    AND g.run_generation=NEW.run_generation
+                    AND g.source_commit=NEW.source_commit
+                    AND g.source_tree=NEW.source_tree
+                    AND g.source_parent=NEW.source_parent
+                    AND g.source_inventory_sha256=NEW.source_inventory_sha256
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 evidence authorization is not trusted/current');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_evidence_consumption_guard
+            BEFORE INSERT ON authority_production_phase9_replay_evidence_consumptions
+            WHEN phase9_replay_evidence_write_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_replay_evidence_authorizations a
+                  WHERE a.authorization_id=NEW.authorization_id
+                    AND a.nonce_sha256=NEW.nonce_sha256
+                    AND NEW.consumed_at>=a.issued_at
+                    AND NEW.consumed_at<=a.expires_at
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 evidence authorization cannot be consumed');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_evidence_item_guard
+            BEFORE INSERT ON authority_production_phase9_replay_evidence_attestation_items
+            WHEN phase9_replay_evidence_write_capability() != 1
+              OR (
+                  NEW.source_kind='RUNTIME_RECORD'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM authority_production_phase9_replay_runtime_records r
+                      WHERE r.record_sha256=NEW.source_record_sha256
+                        AND r.execution_domain='FORMAL_PHASE9_A'
+                        AND r.receipt_kind=NEW.receipt_kind
+                        AND r.logical_id=NEW.logical_id
+                        AND r.logical_path=NEW.logical_path
+                        AND r.byte_length=NEW.byte_length
+                        AND r.raw_bytes_sha256=NEW.raw_bytes_sha256
+                        AND r.receipt_sha256=NEW.receipt_sha256
+                        AND r.invocation_id=NEW.invocation_id
+                        AND r.attempt_id=NEW.attempt_id
+                        AND r.process_scope_id=NEW.process_scope_id
+                        AND r.packet_sha256 IS NEW.packet_sha256
+                        AND r.dependency_fingerprint_sha256=
+                            NEW.dependency_fingerprint_sha256
+                        AND r.input_sha256=NEW.input_sha256
+                        AND r.output_sha256=NEW.output_sha256
+                  )
+              )
+              OR (
+                  NEW.source_kind='ACCEPTANCE_RUNNER'
+                  AND (
+                      NEW.receipt_kind!='ACCEPTANCE_CASE'
+                      OR NEW.invocation_id IS NOT NULL
+                      OR NEW.attempt_id IS NOT NULL
+                      OR NEW.process_scope_id IS NOT NULL
+                      OR NEW.packet_sha256 IS NOT NULL
+                  )
+              )
+              OR (
+                  NEW.source_kind='EVIDENCE_PRODUCER'
+                  AND (
+                      NEW.receipt_kind NOT IN (
+                          'PACKET', 'OUTBOX', 'SNAPSHOT', 'VERDICT'
+                      )
+                      OR NEW.invocation_id IS NOT NULL
+                      OR NEW.attempt_id IS NOT NULL
+                      OR NEW.process_scope_id IS NOT NULL
+                      OR NEW.packet_sha256 IS NOT NULL
+                      OR NOT EXISTS (
+                          SELECT 1
+                          FROM authority_production_phase9_replay_evidence_consumptions c
+                          WHERE c.consumption_receipt_sha256=
+                              NEW.source_record_sha256
+                      )
+                  )
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 evidence item lacks trusted source');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_evidence_attestation_guard
+            BEFORE INSERT ON authority_production_phase9_replay_evidence_attestations
+            WHEN phase9_replay_evidence_write_capability() != 1
+              OR NEW.execution_domain!='FORMAL_PHASE9_A'
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_replay_evidence_authorizations a
+                  JOIN authority_production_phase9_replay_evidence_consumptions c
+                    ON c.authorization_id=a.authorization_id
+                   AND c.nonce_sha256=a.nonce_sha256
+                  WHERE a.authorization_id=NEW.authorization_id
+                    AND a.authorization_receipt_sha256=
+                        NEW.authorization_receipt_sha256
+                    AND c.consumption_receipt_sha256=
+                        NEW.consumption_receipt_sha256
+                    AND c.invocation_id=NEW.invocation_id
+                    AND a.project_id=NEW.project_id
+                    AND a.workflow_id=NEW.workflow_id
+                    AND a.run_generation=NEW.run_generation
+                    AND a.replay_mode=NEW.replay_mode
+                    AND a.replay_coordinate_sha256=
+                        NEW.replay_coordinate_sha256
+                    AND a.source_inventory_sha256=
+                        NEW.source_inventory_sha256
+                    AND a.entry_gate_result_sha256=
+                        NEW.entry_gate_result_sha256
+                    AND a.entry_state_receipt_sha256=
+                        NEW.entry_state_receipt_sha256
+                    AND a.acceptance_spec_sha256=
+                        NEW.acceptance_spec_sha256
+                    AND NEW.attested_at<=a.expires_at
+              )
+              OR (
+                  SELECT COUNT(*)
+                  FROM authority_production_phase9_replay_evidence_attestation_items i
+                  WHERE i.attestation_sha256=NEW.attestation_sha256
+                    AND i.receipt_kind='PROCESS_SCOPE'
+              )!=3
+              OR (
+                  SELECT COUNT(*)
+                  FROM authority_production_phase9_replay_evidence_attestation_items i
+                  WHERE i.attestation_sha256=NEW.attestation_sha256
+                    AND i.receipt_kind='ACCEPTANCE_CASE'
+              )!=17
+              OR (
+                  NEW.replay_mode='TECHNICAL'
+                  AND (
+                      SELECT COUNT(*)
+                      FROM authority_production_phase9_replay_evidence_attestation_items i
+                      WHERE i.attestation_sha256=NEW.attestation_sha256
+                        AND i.receipt_kind IN ('ROLE_PROCESS', 'ROLE_PROVIDER')
+                  )!=6
+              )
+              OR (
+                  NEW.replay_mode='ABLATE_NO_JUDGE'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM authority_production_phase9_replay_evidence_attestation_items i
+                      WHERE i.attestation_sha256=NEW.attestation_sha256
+                        AND i.receipt_kind IN ('ROLE_PROCESS', 'ROLE_PROVIDER')
+                  )
+              )
+              OR (
+                  SELECT COUNT(*)
+                  FROM authority_production_phase9_replay_evidence_attestation_items i
+                  WHERE i.attestation_sha256=NEW.attestation_sha256
+                    AND i.receipt_kind IN ('PACKET','OUTBOX','SNAPSHOT','VERDICT')
+              )!=4
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 evidence attestation lacks exact trusted inventory');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_start_authorization_guard
+            BEFORE INSERT ON authority_production_phase9_start_authorizations
+            WHEN phase9_replay_evidence_write_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_replay_evidence_attestations a
+                  WHERE a.attestation_sha256=NEW.evidence_attestation_sha256
+                    AND a.execution_domain='FORMAL_PHASE9_A'
+                    AND a.project_id=NEW.project_id
+                    AND a.workflow_id=NEW.workflow_id
+                    AND a.run_generation=NEW.run_generation
+                    AND a.source_inventory_sha256=NEW.source_inventory_sha256
+                    AND a.entry_gate_result_sha256=NEW.entry_gate_result_sha256
+                    AND a.entry_state_receipt_sha256=
+                        NEW.entry_state_receipt_sha256
+                    AND a.evidence_payload_set_sha256=
+                        NEW.evidence_payload_set_sha256
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 start authorization lacks formal attestation');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_start_consumption_guard
+            BEFORE INSERT ON authority_production_phase9_start_authorization_consumptions
+            WHEN phase9_replay_start_write_capability() != 1
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM authority_production_phase9_start_authorizations a
+                  JOIN authority_production_phase9_replays p
+                    ON p.replay_id=NEW.replay_id
+                   AND p.workflow_id=NEW.workflow_id
+                   AND p.run_generation=NEW.run_generation
+                   AND p.request_sha256=NEW.request_sha256
+                  WHERE a.authorization_id=NEW.authorization_id
+                    AND a.nonce_sha256=NEW.nonce_sha256
+                    AND a.workflow_id=NEW.workflow_id
+                    AND a.run_generation=NEW.run_generation
+                    AND NEW.consumed_at>=a.issued_at
+                    AND NEW.consumed_at<=a.expires_at
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 start authorization cannot be consumed');
+            END
+            """,
+            """
+            CREATE TRIGGER authority_production_phase9_terminal_a2_0019_attestation_guard
+            BEFORE INSERT ON authority_production_phase9_terminal_receipts
+            WHEN NOT EXISTS (
+                SELECT 1
+                FROM authority_production_phase9_replays p
+                JOIN authority_production_phase9_start_authorization_consumptions c
+                  ON c.replay_id=p.replay_id
+                 AND c.workflow_id=p.workflow_id
+                 AND c.run_generation=p.run_generation
+                 AND c.request_sha256=p.request_sha256
+                JOIN authority_production_phase9_start_authorizations s
+                  ON s.authorization_id=c.authorization_id
+                JOIN authority_production_phase9_replay_evidence_attestations a
+                  ON a.attestation_sha256=s.evidence_attestation_sha256
+                WHERE p.replay_id=NEW.replay_id
+                  AND p.workflow_id=NEW.workflow_id
+                  AND p.run_generation=NEW.run_generation
+                  AND a.execution_domain='FORMAL_PHASE9_A'
+                  AND p.entry_gate_result_sha256=s.entry_gate_result_sha256
+                  AND p.evidence_set_sha256=s.final_evidence_set_sha256
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM authority_production_phase9_replay_evidence_attestation_items i
+                      LEFT JOIN authority_production_phase9_evidence_receipts e
+                        ON e.replay_id=p.replay_id
+                       AND e.receipt_kind=i.receipt_kind
+                       AND e.logical_id=i.logical_id
+                       AND e.logical_path=i.logical_path
+                       AND e.byte_length=i.byte_length
+                       AND e.raw_bytes_sha256=i.raw_bytes_sha256
+                       AND e.receipt_sha256=i.receipt_sha256
+                      WHERE i.attestation_sha256=a.attestation_sha256
+                        AND e.replay_id IS NULL
+                  )
+                  AND (
+                      SELECT COUNT(*)
+                      FROM authority_production_phase9_replay_evidence_attestation_items i
+                      WHERE i.attestation_sha256=a.attestation_sha256
+                  )=(
+                      SELECT COUNT(*)
+                      FROM authority_production_phase9_evidence_receipts e
+                      WHERE e.replay_id=p.replay_id
+                  )
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 terminal lacks Authority replay attestation');
+            END
+            """,
+            """
+            UPDATE authority_production_schema_state
+            SET production_schema_version=7
+            WHERE singleton=1
+            """,
+        ),
+    ),
 )
 
 PRODUCTION_MIGRATION_IDS = tuple(item.migration_id for item in PRODUCTION_MIGRATIONS)
@@ -1710,7 +3255,7 @@ class AuthorityProductionMigrationRunner:
                 ).fetchone()
                 if (
                     row is not None
-                    and row["production_schema_version"] in {1, 2, 3, 4}
+                    and row["production_schema_version"] in {1, 2, 3, 4, 5, 6, 7}
                     and row["lock_owner"] == owner
                 ):
                     connection.execute(
@@ -1764,7 +3309,7 @@ class AuthorityProductionMigrationRunner:
                 if state["production_schema_version"] > AUTHORITY_PRODUCTION_SCHEMA_VERSION:
                     raise AuthorityProductionFutureSchema("future production schema")
                 if (
-                    state["production_schema_version"] not in {1, 2, 3, 4}
+                    state["production_schema_version"] not in {1, 2, 3, 4, 5, 6, 7}
                     or state["source_schema_version"] != SCHEMA_VERSION
                     or state["source_schema_identity_sha256"] != schema_identity
                     or state["source_fence_sha256"] != source_fence

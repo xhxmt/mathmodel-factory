@@ -317,6 +317,11 @@ def main(argv: list[str] | None = None) -> int:
         except FactoryCoreError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
+    # Keep the ordinary import-only CLI surface free of production Authority
+    # modules.  The concrete error type is needed only while executing a CLI
+    # command, and phase78/compat retain their established lazy boundaries.
+    from .phase9_delivery_fence import Phase9DeliveryFenceError
+
     args = build_parser().parse_args(arguments)
     project_value = getattr(args, "project_dir", None)
     project = Path(project_value).resolve() if project_value is not None else None
@@ -582,7 +587,13 @@ def main(argv: list[str] | None = None) -> int:
         write_compatibility_projections(project, state)
         print(_state_json(project))
         return 0
-    except (FactoryCoreError, MigrationConflict, json.JSONDecodeError, OSError) as exc:
+    except (
+        FactoryCoreError,
+        MigrationConflict,
+        Phase9DeliveryFenceError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

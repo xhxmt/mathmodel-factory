@@ -84,10 +84,6 @@ def classify_evaluation(ev: evaluate_modeling_project.Evaluation, project: Path 
             return "GATE2_OVERRIDE_DELIVERED"
         return "CURRENT_PASS"
 
-    delivered_checks = ("papers_pdf", "submission_zip")
-    if all(checks.get(name) and checks[name].ok for name in delivered_checks):
-        return "LEGACY_DELIVERED"
-
     return "INVALID_OR_INCOMPLETE"
 
 
@@ -138,14 +134,15 @@ def build_delivery_manifest(
     )
     from factory_core.delivery.release import resolve_current_release
 
-    release = resolve_current_release(root / "papers", base)
+    release = resolve_current_release(root / "papers", base, project=project)
+    unavailable_release = root / "papers" / base / "invalid-current-release"
     papers_pdf = (
-        release.paper if release is not None else root / "papers" / f"{base}_paper.pdf"
+        release.paper if release is not None else unavailable_release / "paper.pdf"
     )
     submission_zip = (
         release.submission_zip
         if release is not None
-        else root / "papers" / f"{base}_submission.zip"
+        else unavailable_release / "submission.zip"
     )
 
     return {

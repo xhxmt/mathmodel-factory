@@ -10,6 +10,7 @@ import sys
 
 import pytest
 
+from factory_core.phase9_forensic_replay import PHASE9_ACCEPTANCE_CASES
 from scripts import phase9_prep_manifest as prep
 
 
@@ -219,7 +220,22 @@ def test_checked_in_templates_keep_pending_fixed_contract_and_receipt_slots() ->
     )
     assert evidence["entry_gate"]["state_inventory_receipt_sha256"] is None
     assert evidence["terminal"]["state_inventory_receipt_sha256"] is None
-    assert "AC_DEL_002" in evidence["acceptance_cases"]
+    assert evidence["formal_authority_provenance_contract"] == {
+        "migration_suffix": "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
+        "migration_state": "NOT_APPLIED",
+        "replay_evidence_authorization_state": "NOT_ISSUED",
+        "replay_evidence_consumption_state": "NOT_CONSUMED",
+        "runtime_observation_authorization_state": "NOT_ISSUED",
+        "runtime_observation_consumption_state": "NOT_CONSUMED",
+        "trusted_acceptance_event_state": "NOT_COLLECTED",
+        "runtime_receipt_state": "NOT_COLLECTED",
+        "component_receipt_state": "NOT_COLLECTED",
+        "acceptance_receipt_state": "NOT_COLLECTED",
+        "caller_authored_summary_is_authority_evidence": False,
+        "prepopulated_sql_graph_is_authority_evidence": False,
+    }
+    assert tuple(evidence["acceptance_cases"]) == PHASE9_ACCEPTANCE_CASES
+    assert all("_" not in case_id for case_id in evidence["acceptance_cases"])
     for record in evidence["acceptance_cases"].values():
         assert record == {
             "status": "NOT_RUN",

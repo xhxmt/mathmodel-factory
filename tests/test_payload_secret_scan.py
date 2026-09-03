@@ -1150,6 +1150,24 @@ def _assert_gcp_runtime_fd_source_identity(
         assert value == head_value
         return
 
+    configured_raw = os.environ.get("PHASE9_TEST_SOURCE_REPOSITORY")
+    if root.resolve() == ROOT.resolve() and configured_raw is not None:
+        configured = Path(configured_raw)
+        assert configured.is_absolute()
+        configured = configured.resolve(strict=True)
+        candidate_top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=configured,
+            stdout=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        assert Path(candidate_top.stdout.strip()).resolve() == configured
+        assert value == subprocess.check_output(
+            ["git", "show", f"HEAD:{relative}"], cwd=configured
+        )
+        return
+
     manifest_path = root / "MANIFEST.json"
     checksums_path = root / "checksums" / "SHA256SUMS"
     manifest_bytes = manifest_path.read_bytes()

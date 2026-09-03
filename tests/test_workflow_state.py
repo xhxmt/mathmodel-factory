@@ -3,6 +3,18 @@ from datetime import UTC, datetime
 import json
 import zipfile
 
+import pytest
+
+from tests.phase9_delivery_test_support import nonformal_delivery_fence
+
+
+@pytest.fixture(autouse=True)
+def _nonformal_delivery_mechanics(monkeypatch):
+    monkeypatch.setattr(
+        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
+        nonformal_delivery_fence,
+    )
+
 
 def write_file(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +196,7 @@ def test_delivery_artifacts_and_step16_ready(tmp_path, monkeypatch):
         "scripts.judgment_receipt.verify_receipt",
         lambda *_args, **_kwargs: (True, []),
     )
-    assert delivery_artifacts_ready(root, "demo") is True
+    assert delivery_artifacts_ready(root, "demo", project=project) is True
     assert step16_ready(project, root, "demo") is True
 
     write_file(project / "demo_paper.tex", "\\begin{document}\nchanged after judging\n\\end{document}\n")
@@ -259,6 +271,8 @@ def test_no_judge_ablation_blocks_step16_even_with_delivery_override(tmp_path):
     assert gate2_delivery_allowed(project) is False
     assert final_audit_is_current(project) is False
     assert step16_ready(project, root, "demo") is False
-    current = resolve_current_release(root / "papers", "demo")
+    current = resolve_current_release(
+        root / "papers", "demo", project=project
+    )
     assert current is not None
     assert current.release_id == snapshot_id

@@ -15,6 +15,7 @@ from factory_core.submission_bundle import (
     verify_zip_against_manifest,
 )
 from scripts.submission_fingerprint import submission_fingerprint_payload
+from tests.phase9_delivery_test_support import nonformal_delivery_fence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -164,9 +165,73 @@ def test_submission_package_rejects_owned_directory_symlink(tmp_path):
         submission_bundle_manifest(tmp_path, "demo")
 
 
-def test_zip_members_exactly_match_bundle_manifest(tmp_path):
+def test_zip_members_exactly_match_bundle_manifest(tmp_path, monkeypatch):
     _complete_bundle_project(tmp_path)
     output = tmp_path.parent / "submission.zip"
+    module = load_module()
+    monkeypatch.setattr(
+        module,
+        "require_phase9_delivery_authority",
+        nonformal_delivery_fence,
+    )
+    manifest = module.package_submission(
+        tmp_path,
+        "demo",
+        output,
+        workflow_id="test-fixture:workflow",
+        run_generation="test-fixture:generation",
+    )
+
+    on_disk = json.loads(
+        (tmp_path / ".factory/finalization/submission_bundle_manifest.json")
+        .read_text(encoding="utf-8")
+    )
+    assert on_disk == manifest
+    verify_zip_against_manifest(output, on_disk)
+    with zipfile.ZipFile(output) as archive:
+        assert set(archive.namelist()) == {
+            item["archive_path"] for item in on_disk["members"]
+        }
+
+
+def test_release_zip_is_reproducible_for_identical_manifest(tmp_path, monkeypatch):
+    _complete_bundle_project(tmp_path)
+    first = tmp_path.parent / "first.zip"
+    second = tmp_path.parent / "second.zip"
+    module = load_module()
+    monkeypatch.setattr(
+        module,
+        "require_phase9_delivery_authority",
+        nonformal_delivery_fence,
+    )
+
+    module.package_submission(
+        tmp_path,
+        "demo",
+        first,
+        workflow_id="test-fixture:workflow",
+        run_generation="test-fixture:generation",
+    )
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            path.touch()
+    module.package_submission(
+        tmp_path,
+        "demo",
+        second,
+        workflow_id="test-fixture:workflow",
+        run_generation="test-fixture:generation",
+    )
+
+    assert hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(
+        second.read_bytes()
+    ).digest()
+
+
+def test_standalone_submission_requires_explicit_authority_coordinate(tmp_path):
+    _complete_bundle_project(tmp_path)
+    output = tmp_path.parent / "missing-coordinate.zip"
+
     result = subprocess.run(
         [
             sys.executable,
@@ -180,45 +245,41 @@ def test_zip_members_exactly_match_bundle_manifest(tmp_path):
         text=True,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    manifest = json.loads(
-        (tmp_path / ".factory/finalization/submission_bundle_manifest.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    verify_zip_against_manifest(output, manifest)
-    with zipfile.ZipFile(output) as archive:
-        assert set(archive.namelist()) == {
-            item["archive_path"] for item in manifest["members"]
-        }
+    assert result.returncode != 0
+    assert not output.exists()
+    assert not (
+        tmp_path / ".factory/finalization/submission_bundle_manifest.json"
+    ).exists()
 
 
-def test_release_zip_is_reproducible_for_identical_manifest(tmp_path):
+def test_standalone_submission_missing_authority_has_zero_side_effects(tmp_path):
     _complete_bundle_project(tmp_path)
-    first = tmp_path.parent / "first.zip"
-    second = tmp_path.parent / "second.zip"
-    command = [
-        sys.executable,
-        str(REPO_ROOT / "scripts/package_submission.py"),
-        str(tmp_path),
-        "demo",
-    ]
+    output = tmp_path.parent / "never-created" / "disabled.zip"
 
-    first_result = subprocess.run(
-        [*command, str(first)], cwd=REPO_ROOT, capture_output=True, text=True
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/package_submission.py"),
+            str(tmp_path),
+            "demo",
+            str(output),
+            "--workflow-id",
+            "wf-phase9",
+            "--run-generation",
+            "generation-phase9",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
     )
-    assert first_result.returncode == 0, first_result.stdout + first_result.stderr
-    for path in tmp_path.rglob("*"):
-        if path.is_file():
-            path.touch()
-    second_result = subprocess.run(
-        [*command, str(second)], cwd=REPO_ROOT, capture_output=True, text=True
-    )
-    assert second_result.returncode == 0, second_result.stdout + second_result.stderr
 
-    assert hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(
-        second.read_bytes()
-    ).digest()
+    assert result.returncode == 1
+    assert "Authority" in result.stderr or "database" in result.stderr
+    assert not output.exists()
+    assert not output.parent.exists()
+    assert not (
+        tmp_path / ".factory/finalization/submission_bundle_manifest.json"
+    ).exists()
 
 
 def _write_solver_submission_receipt_for_coverage(

@@ -626,9 +626,9 @@ def _uploaded_problem_path(settings: Settings, value: str) -> Path:
 def _find_paper(settings: Settings, project: Path, base_name: str) -> Path | None:
     from factory_core.paper_sources import discover_paper_pdfs
 
-    packaged = settings.papers_dir / f"{base_name}_paper.pdf"
-    if packaged.is_file():
-        return packaged
+    # The legacy papers alias is not authoritative and may name an older
+    # generation.  Authenticated users may preview current project bytes, but
+    # release downloads only come from ``resolve_current_release``.
     papers = discover_paper_pdfs(project, base_name)
     return papers[0] if papers else None
 
@@ -1197,7 +1197,9 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
     ):
         require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
-        release = resolve_current_release(settings.papers_dir, base_name)
+        release = resolve_current_release(
+            settings.papers_dir, base_name, project=project
+        )
         paper = release.paper if release is not None else _find_paper(settings, project, base_name)
         if not paper:
             raise HTTPException(status_code=404, detail="Paper PDF not found")
@@ -1209,8 +1211,10 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
         require_project_access(settings, current_user, base_name)
-        _resolve_project(settings, base_name)
-        release = resolve_current_release(settings.papers_dir, base_name)
+        project = _resolve_project(settings, base_name)
+        release = resolve_current_release(
+            settings.papers_dir, base_name, project=project
+        )
         if release is None:
             raise HTTPException(status_code=404, detail="Verified submission package not found")
         return FileResponse(

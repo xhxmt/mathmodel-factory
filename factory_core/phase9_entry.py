@@ -8,7 +8,7 @@ missing or unverifiable fact into a named blocker.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
@@ -28,22 +28,50 @@ from .authority_production_schema import (
     verify_production_installation,
 )
 from .canonical import canonical_bytes, canonical_sha256
+from .phase9_p0_evidence import (
+    PHASE9_P0_COMMAND_RECORD_SCHEMA,
+    PHASE9_P0_AUTHORITY_RUNNER_EVIDENCE_SCHEMA,
+    PHASE9_P0_EVIDENCE_ROOT_SCHEMA,
+    PHASE9_P0_EXECUTION_CONTEXT_BINDING_SCHEMA,
+    PHASE9_P0_FORMAL_DOMAIN,
+    PHASE9_P0_PRODUCER_SOURCE_PATH,
+    PHASE9_P0_PRODUCER_TYPE,
+    PHASE9_P0_PRODUCER_VERSION,
+    PHASE9_P0_TRUSTED_REPORTER_SOURCE_PATH,
+    PHASE9_P0_RECEIPT_SCHEMA,
+    PHASE9_P0_RUNNER_ATTESTATION_SCHEMA,
+    PHASE9_P0_RUNNER_AUTHORIZATION_SCHEMA,
+    PHASE9_P0_RUNNER_AUTHORIZATION_TTL_SECONDS,
+    P0_REQUIREMENTS,
+    TRUSTED_PYTEST_EVENT_SCHEMA,
+    Phase9P0EvidenceError,
+    formal_p0_paths,
+    phase9_p0_spec_sha256,
+    validate_formal_phase9_p0_evidence,
+)
 from .phase9_run_generation import (
+    GIT_TRACKED_SOURCE_ENTRY_SCHEMA,
+    GIT_TRACKED_SOURCE_INVENTORY_SCHEMA,
     OFFICIAL_INPUT_FILE_EVIDENCE_SCHEMA,
     OFFICIAL_INPUT_MANIFEST_EVIDENCE_SCHEMA,
+    OPERATOR_AUTHORIZATION_EVIDENCE_SCHEMA,
     PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS,
+    RUN_GENERATION_AUTHORIZATION_CONSUMPTION_SCHEMA,
+    RUN_GENERATION_RECEIPT_SCHEMA,
+    GitTrackedSourceEntryV1,
+    GitTrackedSourceInventoryV1,
     OfficialInputFileEvidenceV1,
     OfficialInputManifestEvidenceV1,
     Phase9RunGenerationSafetyError,
+    _StableDirectoryTree,
+    read_current_git_source_snapshot,
+    run_generation_request_from_dict,
     verify_official_input_snapshot,
 )
 
 
-PHASE9_ENTRY_STATE_SCHEMA = "phase9-entry-state-receipt-v1"
-PHASE9_ENTRY_GATE_SCHEMA = "phase9-entry-gate-result-v2"
-PHASE9_P0_RECEIPT_SCHEMA = "phase9-candidate-p0-receipt-v2"
-PHASE9_P0_COMMAND_RECORD_SCHEMA = "phase9-p0-command-record-v1"
-PHASE9_P0_EVIDENCE_ROOT_SCHEMA = "phase9-p0-evidence-root-v1"
+PHASE9_ENTRY_STATE_SCHEMA = "phase9-entry-state-receipt-v2"
+PHASE9_ENTRY_GATE_SCHEMA = "phase9-entry-gate-result-v3"
 PHASE9_OPERATOR_AUTHORIZATION_SCHEMA = (
     "phase9-operator-authorization-receipt-v2"
 )
@@ -57,24 +85,19 @@ PHASE9_EXECUTION_CONTEXT_SCHEMA = (
     "authority-phase9-execution-context-evidence-v1"
 )
 
-P0_REQUIREMENTS = (
-    "AR_007_DELIVERY_BYPASS",
-    "HUMAN_DECISION_SINGLE_WRITER",
-    "PACKET_ZERO_DISPATCH_EFFECTIVE_VERDICT",
-    "COMMAND_READ_SET_CAS",
-    "WORKER_OUTBOX_PROCESS_TREE_RECEIPTS",
-    "OWNER_CHECKPOINT_REATTEST",
-    "REVISION_ATOMIC_SNAPSHOT",
-    "RUN_MODE_GENERATION_DELIVERY_PINS",
-    "OFFICIAL_INPUT_EXECUTION_CONTEXT",
-)
-
 _GIT_SHA = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,191}\Z")
-_PENDING_OUTBOX = frozenset(
-    {"PENDING", "CLAIMED", "RETRY_WAIT", "RECONCILIATION_REQUIRED"}
-)
+_P0_RUNNER_CAPABILITIES = {
+    "network_access": False,
+    "provider_call": False,
+    "outbox_dispatch": False,
+    "delivery": False,
+    "release": False,
+    "migration": False,
+    "deployment": False,
+    "cutover": False,
+}
 _ACTIVE_PROJECT_STATUS = frozenset({"running", "retrying"})
 _ACTIVE_SOLVER_STATUS = frozenset(
     {"submitting", "submitted", "running", "SUBMITTING", "SUBMITTED", "RUNNING"}
@@ -136,6 +159,17 @@ def _exact_mapping(
     return value
 
 
+def _validate_p0_runner_capabilities(value: object, path: str) -> None:
+    item = _exact_mapping(value, path, set(_P0_RUNNER_CAPABILITIES))
+    if any(
+        type(item[name]) is not bool or item[name] is not expected
+        for name, expected in _P0_RUNNER_CAPABILITIES.items()
+    ):
+        raise Phase9EntryError(
+            f"{path} must contain the exact boolean capability fence"
+        )
+
+
 def _canonical_json(value: object, path: str) -> bytes:
     try:
         raw = canonical_bytes(value)
@@ -194,16 +228,27 @@ def _regular_file_bytes(path: Path, *, maximum_bytes: int, label: str) -> bytes:
             opened = os.fstat(stream.fileno())
             raw = stream.read(maximum_bytes + 1)
             after = os.fstat(stream.fileno())
+        final = path.lstat()
     except OSError as exc:
         raise Phase9EntryError(f"{label} cannot be read safely: {path}") from exc
+    identity = lambda value: (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_uid,
+        value.st_gid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
     if (
         len(raw) > maximum_bytes
         or not stat.S_ISREG(opened.st_mode)
         or opened.st_nlink != 1
-        or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
-        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        or identity(before) != identity(opened)
+        or identity(opened) != identity(after)
+        or identity(after) != identity(final)
     ):
         raise Phase9EntryError(f"{label} changed while being read")
     return raw
@@ -229,140 +274,10 @@ def validate_p0_receipt(
     candidate: CandidateIdentity,
     evidence_files: Mapping[str, bytes],
 ) -> str:
-    if requirement not in P0_REQUIREMENTS:
-        raise Phase9EntryError(f"unknown P0 requirement: {requirement}")
-    item = _exact_mapping(
-        value,
-        f"p0_receipts.{requirement}",
-        {
-            "schema",
-            "requirement",
-            "candidate",
-            "status",
-            "test_result_sha256",
-            "command_record_sha256",
-            "command_exit_code",
-            "evidence",
-            "evidence_sha256",
-            "capabilities",
-            "receipt_sha256",
-        },
+    del value, requirement, candidate, evidence_files
+    raise Phase9EntryError(
+        "one P0 receipt cannot be validated outside its complete formal evidence set"
     )
-    if item["schema"] != PHASE9_P0_RECEIPT_SCHEMA:
-        raise Phase9EntryError(f"{requirement} receipt schema differs")
-    if item["requirement"] != requirement or item["status"] != "PASS":
-        raise Phase9EntryError(f"{requirement} is not an exact PASS receipt")
-    if candidate_identity_from_dict(item["candidate"]) != candidate:
-        raise Phase9EntryError(f"{requirement} is bound to another candidate")
-    test_result_sha = _sha(
-        item["test_result_sha256"], f"{requirement}.test_result_sha256"
-    )
-    command_record_sha = _sha(
-        item["command_record_sha256"], f"{requirement}.command_record_sha256"
-    )
-    if item["command_exit_code"] != 0:
-        raise Phase9EntryError(f"{requirement} command did not exit zero")
-    evidence = item["evidence"]
-    if type(evidence) is not list or not evidence:
-        raise Phase9EntryError(f"{requirement} evidence must be a non-empty list")
-    previous = ""
-    for index, raw_evidence in enumerate(evidence):
-        member = _exact_mapping(
-            raw_evidence,
-            f"{requirement}.evidence[{index}]",
-            {"path", "sha256"},
-        )
-        member_path = _safe_relative_path(
-            member["path"], f"{requirement}.evidence[{index}].path"
-        )
-        if previous and member_path <= previous:
-            raise Phase9EntryError(
-                f"{requirement} evidence paths must be unique bytewise sorted"
-            )
-        previous = member_path
-        _sha(member["sha256"], f"{requirement}.evidence[{index}].sha256")
-    evidence_sha = _sha(item["evidence_sha256"], f"{requirement}.evidence_sha256")
-    if canonical_sha256(evidence) != evidence_sha:
-        raise Phase9EntryError(f"{requirement} evidence set hash differs")
-    capabilities = _exact_mapping(
-        item["capabilities"],
-        f"{requirement}.capabilities",
-        {
-            "network_access",
-            "provider_call",
-            "outbox_dispatch",
-            "delivery",
-            "release",
-            "migration",
-            "deployment",
-            "cutover",
-        },
-    )
-    if any(type(value) is not bool for value in capabilities.values()):
-        raise Phase9EntryError(f"{requirement} capability facts must be booleans")
-    if any(capabilities.values()):
-        raise Phase9EntryError(f"{requirement} receipt records a forbidden side effect")
-
-    test_result_path = f"test_results/{requirement}.log"
-    command_record_path = f"command_records/{requirement}.json"
-    test_result_raw = evidence_files.get(test_result_path)
-    command_record_raw = evidence_files.get(command_record_path)
-    if test_result_raw is None or hashlib.sha256(test_result_raw).hexdigest() != test_result_sha:
-        raise Phase9EntryError(f"{requirement} raw test result bytes/hash differ")
-    if (
-        command_record_raw is None
-        or hashlib.sha256(command_record_raw).hexdigest() != command_record_sha
-    ):
-        raise Phase9EntryError(f"{requirement} command record bytes/hash differ")
-    try:
-        command_record = json.loads(command_record_raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise Phase9EntryError(f"{requirement} command record is not strict UTF-8 JSON") from exc
-    if type(command_record) is not dict or command_record_raw != canonical_bytes(command_record):
-        raise Phase9EntryError(f"{requirement} command record is not canonical JSON")
-    record = _exact_mapping(
-        command_record,
-        f"{requirement}.command_record",
-        {
-            "schema",
-            "requirement",
-            "candidate",
-            "command_argv",
-            "exit_code",
-            "test_result_path",
-            "test_result_sha256",
-            "evidence",
-            "evidence_sha256",
-            "capabilities",
-        },
-    )
-    argv = record["command_argv"]
-    if (
-        record["schema"] != PHASE9_P0_COMMAND_RECORD_SCHEMA
-        or record["requirement"] != requirement
-        or candidate_identity_from_dict(record["candidate"]) != candidate
-        or type(argv) is not list
-        or not argv
-        or any(type(argument) is not str or not argument for argument in argv)
-        or record["exit_code"] != item["command_exit_code"]
-        or record["test_result_path"] != test_result_path
-        or record["test_result_sha256"] != test_result_sha
-        or record["evidence"] != evidence
-        or record["evidence_sha256"] != evidence_sha
-        or record["capabilities"] != capabilities
-    ):
-        raise Phase9EntryError(f"{requirement} command record binding differs")
-    for index, member in enumerate(evidence):
-        raw = evidence_files.get(member["path"])
-        if raw is None or hashlib.sha256(raw).hexdigest() != member["sha256"]:
-            raise Phase9EntryError(
-                f"{requirement} evidence bytes/hash differ at index {index}"
-            )
-    body = dict(item)
-    claimed = _sha(body.pop("receipt_sha256"), f"{requirement}.receipt_sha256")
-    if canonical_sha256(body) != claimed:
-        raise Phase9EntryError(f"{requirement} receipt hash differs")
-    return claimed
 
 
 def validate_operator_authorization(
@@ -448,13 +363,17 @@ def validate_operator_authorization(
     return claimed
 
 
-def validate_p0_receipt_set(
+def _validate_p0_receipt_set_details(
     receipts: Mapping[str, object],
     *,
     candidate: CandidateIdentity,
+    project_id: str,
+    workflow_id: str,
+    run_generation: str,
+    source_inventory_sha256: str,
     evidence_root: str | Path,
     evidence_root_sha256: str,
-) -> dict[str, str]:
+) -> object:
     if type(receipts) is not dict:
         raise Phase9EntryError("P0 receipts must be a plain object")
     if set(receipts) != set(P0_REQUIREMENTS):
@@ -465,44 +384,48 @@ def validate_p0_receipt_set(
     expected_root_sha256 = _sha(evidence_root_sha256, "p0_evidence_root_sha256")
     if actual_root_sha256 != expected_root_sha256:
         raise Phase9EntryError("P0 evidence root inventory/hash differs")
-    expected_paths: set[str] = {
-        path
-        for name in P0_REQUIREMENTS
-        for path in (
-            f"command_records/{name}.json",
-            f"test_results/{name}.log",
+    if set(files) != set(formal_p0_paths()):
+        raise Phase9EntryError("P0 evidence root is not the fixed formal inventory")
+    try:
+        return validate_formal_phase9_p0_evidence(
+            receipts=receipts,
+            files=files,
+            candidate=candidate.as_dict(),
+            coordinate={
+                "project_id": project_id,
+                "workflow_id": workflow_id,
+                "run_generation": run_generation,
+            },
+            source_inventory_sha256=source_inventory_sha256,
         )
-    }
-    evidence_owners: dict[str, str] = {}
-    for name in P0_REQUIREMENTS:
-        receipt = _exact_mapping(
-            receipts[name], f"p0_receipts.{name}", {"schema", "requirement", "candidate", "status", "test_result_sha256", "command_record_sha256", "command_exit_code", "evidence", "evidence_sha256", "capabilities", "receipt_sha256"}
-        )
-        evidence = receipt["evidence"]
-        if type(evidence) is not list:
-            raise Phase9EntryError(f"{name} evidence must be a list")
-        for index, raw_evidence in enumerate(evidence):
-            member = _exact_mapping(
-                raw_evidence, f"{name}.evidence[{index}]", {"path", "sha256"}
-            )
-            path = _safe_relative_path(
-                member["path"], f"{name}.evidence[{index}].path"
-            )
-            owner = evidence_owners.setdefault(path, name)
-            if owner != name or path in expected_paths:
-                raise Phase9EntryError("P0 evidence paths overlap reserved or other receipt paths")
-            expected_paths.add(path)
-    if set(files) != expected_paths:
-        raise Phase9EntryError("P0 evidence root file inventory differs from receipts")
-    return {
-        name: validate_p0_receipt(
-            receipts[name],
-            requirement=name,
-            candidate=candidate,
-            evidence_files=files,
-        )
-        for name in P0_REQUIREMENTS
-    }
+    except Phase9P0EvidenceError as exc:
+        raise Phase9EntryError(str(exc)) from exc
+
+
+def validate_p0_receipt_set(
+    receipts: Mapping[str, object],
+    *,
+    candidate: CandidateIdentity,
+    project_id: str,
+    workflow_id: str,
+    run_generation: str,
+    source_inventory_sha256: str,
+    evidence_root: str | Path,
+    evidence_root_sha256: str,
+) -> dict[str, str]:
+    """Validate external bytes only; READY also requires a DB attestation."""
+
+    result = _validate_p0_receipt_set_details(
+        receipts,
+        candidate=candidate,
+        project_id=project_id,
+        workflow_id=workflow_id,
+        run_generation=run_generation,
+        source_inventory_sha256=source_inventory_sha256,
+        evidence_root=evidence_root,
+        evidence_root_sha256=evidence_root_sha256,
+    )
+    return dict(result.receipt_sha256s)
 
 
 def _safe_relative_path(value: object, path: str) -> str:
@@ -513,6 +436,7 @@ def _safe_relative_path(value: object, path: str) -> str:
         or text != pure.as_posix()
         or "\\" in text
         or any(part in {"", ".", ".."} for part in pure.parts)
+        or any(part.endswith((" ", ".")) for part in pure.parts)
         or any(ord(character) < 32 for character in text)
     ):
         raise Phase9EntryError(f"{path} is not a safe canonical relative path")
@@ -522,79 +446,54 @@ def _safe_relative_path(value: object, path: str) -> str:
 def _strict_p0_evidence_tree(
     root_value: str | Path,
 ) -> tuple[dict[str, bytes], str]:
-    root = Path(root_value)
-    try:
-        root_before = root.lstat()
-    except OSError as exc:
-        raise Phase9EntryError("P0 evidence root is unavailable") from exc
-    if stat.S_ISLNK(root_before.st_mode) or not stat.S_ISDIR(root_before.st_mode):
-        raise Phase9EntryError("P0 evidence root must be a non-symlink directory")
-    root = root.resolve(strict=True)
     files: dict[str, bytes] = {}
     directories: list[str] = []
     collision_keys: set[str] = set()
-    directory_identities: dict[str, tuple[int, int, int, int]] = {}
     total_bytes = 0
-
-    def walk_error(error: OSError) -> None:
-        raise Phase9EntryError("P0 evidence tree cannot be enumerated") from error
-
-    for directory, directory_names, file_names in os.walk(
-        root, followlinks=False, onerror=walk_error
-    ):
-        current = Path(directory)
-        for name in sorted(directory_names, key=lambda value: value.encode("utf-8")):
-            path = current / name
-            metadata = path.lstat()
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-                raise Phase9EntryError(
-                    "P0 evidence tree contains a symlink or special directory"
-                )
-            relative = _safe_relative_path(
-                path.relative_to(root).as_posix(), "P0 evidence directory path"
-            )
-            collision_key = unicodedata.normalize("NFC", relative).casefold()
-            if collision_key in collision_keys:
-                raise Phase9EntryError(
-                    "P0 evidence paths collide by Unicode normalization or case"
-                )
-            collision_keys.add(collision_key)
-            directories.append(relative)
-            directory_identities[relative] = (
-                metadata.st_dev,
-                metadata.st_ino,
-                metadata.st_mode,
-                metadata.st_mtime_ns,
-            )
-        for name in sorted(file_names, key=lambda value: value.encode("utf-8")):
-            path = current / name
-            metadata = path.lstat()
-            if (
-                stat.S_ISLNK(metadata.st_mode)
-                or not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_nlink != 1
-            ):
-                raise Phase9EntryError(
-                    "P0 evidence tree contains a symlink, hardlink, or special file"
-                )
-            relative = _safe_relative_path(
-                path.relative_to(root).as_posix(), "P0 evidence file path"
-            )
-            collision_key = unicodedata.normalize("NFC", relative).casefold()
-            if collision_key in collision_keys:
-                raise Phase9EntryError(
-                    "P0 evidence paths collide by Unicode normalization or case"
-                )
-            collision_keys.add(collision_key)
-            raw = _regular_file_bytes(
-                path, maximum_bytes=_P0_MAX_FILE_BYTES, label=f"P0 evidence {relative}"
-            )
-            total_bytes += len(raw)
-            if len(files) + len(directories) >= _P0_MAX_MEMBERS:
-                raise Phase9EntryError("P0 evidence tree has too many members")
-            if total_bytes > _P0_MAX_TOTAL_BYTES:
-                raise Phase9EntryError("P0 evidence tree is too large")
-            files[relative] = raw
+    try:
+        with _StableDirectoryTree(
+            root_value, label="P0 evidence root"
+        ) as tree:
+            pending: list[tuple[str, ...]] = [()]
+            while pending:
+                parts = pending.pop()
+                for name in tree.list_directory(parts):
+                    relative = _safe_relative_path(
+                        PurePosixPath(*parts, name).as_posix(),
+                        "P0 evidence member path",
+                    )
+                    collision_key = unicodedata.normalize("NFC", relative).casefold()
+                    if collision_key in collision_keys:
+                        raise Phase9EntryError(
+                            "P0 evidence paths collide by Unicode normalization or case"
+                        )
+                    collision_keys.add(collision_key)
+                    metadata = tree.member_stat(parts, name)
+                    if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(
+                        metadata.st_mode
+                    ):
+                        directories.append(relative)
+                        tree.directory((*parts, name))
+                        pending.append((*parts, name))
+                    elif stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(
+                        metadata.st_mode
+                    ) and metadata.st_nlink == 1:
+                        raw, _opened = tree.read_regular_file(
+                            parts, name, maximum_bytes=_P0_MAX_FILE_BYTES
+                        )
+                        total_bytes += len(raw)
+                        files[relative] = raw
+                    else:
+                        raise Phase9EntryError(
+                            "P0 evidence tree contains a symlink, hardlink, or special file"
+                        )
+                    if len(files) + len(directories) >= _P0_MAX_MEMBERS:
+                        raise Phase9EntryError("P0 evidence tree has too many members")
+                    if total_bytes > _P0_MAX_TOTAL_BYTES:
+                        raise Phase9EntryError("P0 evidence tree is too large")
+            tree.verify_unchanged()
+    except Phase9RunGenerationSafetyError as exc:
+        raise Phase9EntryError(str(exc)) from exc
 
     expected_directories: set[str] = set()
     for relative in files:
@@ -604,28 +503,6 @@ def _strict_p0_evidence_tree(
             parent = parent.parent
     if set(directories) != expected_directories:
         raise Phase9EntryError("P0 evidence root contains an unexpected empty directory")
-    for relative, identity in directory_identities.items():
-        metadata = root.joinpath(*PurePosixPath(relative).parts).lstat()
-        if identity != (
-            metadata.st_dev,
-            metadata.st_ino,
-            metadata.st_mode,
-            metadata.st_mtime_ns,
-        ):
-            raise Phase9EntryError("P0 evidence directory changed while being verified")
-    root_after = root.lstat()
-    if (
-        root_before.st_dev,
-        root_before.st_ino,
-        root_before.st_mode,
-        root_before.st_mtime_ns,
-    ) != (
-        root_after.st_dev,
-        root_after.st_ino,
-        root_after.st_mode,
-        root_after.st_mtime_ns,
-    ):
-        raise Phase9EntryError("P0 evidence root changed while being verified")
     inventory = {
         "schema": PHASE9_P0_EVIDENCE_ROOT_SCHEMA,
         "directories": sorted(directories, key=lambda value: value.encode("utf-8")),
@@ -840,6 +717,7 @@ def _verify_fresh_inventory(
         raise Phase9EntryError("candidate inventory header differs")
     paths: list[str] = []
     inventory_rows: list[dict[str, object]] = []
+    tracked_entries: list[GitTrackedSourceEntryV1] = []
     tree: dict[str, object] = {}
     total_bytes = 0
     for index, line in enumerate(lines[1:], start=2):
@@ -885,7 +763,19 @@ def _verify_fresh_inventory(
         if parts[-1] in current:
             raise Phase9EntryError("candidate inventory path collides")
         mode = "100755" if fields[2] == "0755" else "100644"
-        current[parts[-1]] = (mode, _git_object_id("blob", file_raw))
+        object_id = _git_object_id("blob", file_raw)
+        current[parts[-1]] = (mode, object_id)
+        tracked_entries.append(
+            GitTrackedSourceEntryV1(
+                GIT_TRACKED_SOURCE_ENTRY_SCHEMA,
+                relative,
+                mode,
+                "blob",
+                object_id.hex(),
+                size,
+                digest,
+            )
+        )
     if not paths:
         raise Phase9EntryError("candidate inventory is empty")
     candidate_metadata = {"MANIFEST.json", "checksums/SHA256SUMS"}
@@ -926,6 +816,15 @@ def _verify_fresh_inventory(
         "mode": "FRESH_INVENTORY",
         "candidate": candidate.as_dict(),
         "inventory_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_inventory_sha256": GitTrackedSourceInventoryV1(
+            GIT_TRACKED_SOURCE_INVENTORY_SCHEMA,
+            candidate.commit,
+            candidate.tree,
+            candidate.parent,
+            tuple(tracked_entries),
+            len(tracked_entries),
+            total_bytes,
+        ).inventory_sha256,
         "path_count": len(paths),
         "total_bytes": total_bytes,
         "verified_tree": candidate.tree,
@@ -981,10 +880,21 @@ def verify_candidate_source(
         ).stdout
         if dirty:
             raise Phase9EntryError("candidate Git source is not an exact clean checkout")
+        try:
+            snapshot = read_current_git_source_snapshot(root)
+        except Phase9RunGenerationSafetyError as exc:
+            raise Phase9EntryError(str(exc)) from exc
+        if (
+            snapshot.source.source_commit != candidate.commit
+            or snapshot.source.source_tree != candidate.tree
+            or snapshot.source.source_parent != candidate.parent
+        ):
+            raise Phase9EntryError("live Git source snapshot differs from candidate")
         return {
             "mode": "GIT",
             "candidate": candidate.as_dict(),
             "verified_tree": candidate.tree,
+            "source_inventory_sha256": snapshot.source_inventory_sha256,
             "worktree_clean": True,
         }
     if inventory is None:
@@ -1087,6 +997,7 @@ def validate_execution_context(
 @dataclass(frozen=True)
 class Phase9EntryState:
     candidate: CandidateIdentity
+    source_inventory_sha256: str
     project_id: str
     workflow_id: str
     project_revision: int
@@ -1114,8 +1025,9 @@ class Phase9EntryState:
     unresolved_migration_count: int
     old_generation_post_boundary_event_count: int
     old_generation_read_only_guards_verified: bool
+    p0_runner_attestation: dict[str, object] | None = None
 
-    def body(self) -> dict[str, object]:
+    def runner_live_body(self) -> dict[str, object]:
         return {
             "schema": PHASE9_ENTRY_STATE_SCHEMA,
             "candidate": self.candidate.as_dict(),
@@ -1130,6 +1042,7 @@ class Phase9EntryState:
                 "contract_pin_set_sha256": self.contract_pin_set_sha256,
             },
             "generation": {
+                "source_inventory_sha256": self.source_inventory_sha256,
                 "run_mode": self.run_mode,
                 "modeling_consultation_contract": self.modeling_consultation_contract,
                 "delivery_capability": self.delivery_capability,
@@ -1183,6 +1096,15 @@ class Phase9EntryState:
             },
         }
 
+    @property
+    def runner_live_binding_sha256(self) -> str:
+        return canonical_sha256(self.runner_live_body())
+
+    def body(self) -> dict[str, object]:
+        body = self.runner_live_body()
+        body["p0_runner_attestation"] = self.p0_runner_attestation
+        return body
+
     def as_dict(self) -> dict[str, object]:
         body = self.body()
         body["state_receipt_sha256"] = canonical_sha256(body)
@@ -1191,6 +1113,471 @@ class Phase9EntryState:
     @property
     def state_receipt_sha256(self) -> str:
         return canonical_sha256(self.body())
+
+
+def _p0_runner_attestation(
+    connection: sqlite3.Connection, state: Phase9EntryState
+) -> dict[str, object] | None:
+    row = connection.execute(
+        "SELECT * FROM authority_production_phase9_p0_runner_attestations "
+        "WHERE workflow_id=? AND run_generation=?",
+        (state.workflow_id, state.run_generation),
+    ).fetchone()
+    if row is None:
+        return None
+    authorization = connection.execute(
+        "SELECT * FROM authority_production_phase9_p0_runner_authorizations "
+        "WHERE authorization_id=?",
+        (row["authorization_id"],),
+    ).fetchone()
+    consumption = connection.execute(
+        "SELECT * FROM authority_production_phase9_p0_runner_consumptions "
+        "WHERE authorization_id=?",
+        (row["authorization_id"],),
+    ).fetchone()
+    if authorization is None or consumption is None:
+        raise Phase9EntryError("P0 runner attestation provenance is incomplete")
+    try:
+        value = json.loads(str(row["attestation_json"]))
+        authorization_value = json.loads(str(authorization["authorization_json"]))
+        consumption_value = json.loads(str(consumption["consumption_json"]))
+    except json.JSONDecodeError as exc:
+        raise Phase9EntryError("P0 runner attestation provenance JSON is malformed") from exc
+    authorization_item = _exact_mapping(
+        authorization_value,
+        "P0 runner authorization",
+        {
+            "schema", "evidence_domain", "authorization_id", "nonce_sha256",
+            "candidate", "coordinate", "source_inventory_sha256",
+            "live_binding_sha256", "spec_sha256", "producer", "operator_uid",
+            "operator_account", "issued_at", "expires_at",
+            "intended_evidence_root", "python_identity_sha256",
+            "execution_context_binding", "capabilities",
+            "authorization_receipt_sha256",
+        },
+    )
+    consumption_item = _exact_mapping(
+        consumption_value,
+        "P0 runner consumption",
+        {
+            "schema", "evidence_domain", "authorization_id",
+            "authorization_receipt_sha256", "nonce", "nonce_sha256",
+            "invocation_id", "candidate", "coordinate",
+            "source_inventory_sha256", "live_binding_sha256", "spec_sha256",
+            "producer", "operator_uid", "operator_account", "issued_at",
+            "expires_at", "consumed_at", "intended_evidence_root",
+            "python_identity_sha256", "execution_context_binding",
+            "capabilities", "evidence_sha256",
+        },
+    )
+    item = _exact_mapping(
+        value,
+        "P0 runner attestation",
+        {
+            "schema",
+            "evidence_domain",
+            "authorization_id",
+            "authorization_receipt_sha256",
+            "consumption_receipt_sha256",
+            "authority_runner_evidence_sha256",
+            "invocation_id",
+            "candidate",
+            "coordinate",
+            "source_inventory_sha256",
+            "live_binding_sha256",
+            "spec_sha256",
+            "execution_context_binding",
+            "operator_uid",
+            "operator_account",
+            "issued_at",
+            "expires_at",
+            "consumed_at",
+            "started_at",
+            "finished_at",
+            "attested_at",
+            "exit_code",
+            "evidence_root_sha256",
+            "command_record_sha256",
+            "raw_log_byte_length",
+            "raw_log_sha256",
+            "junit_byte_length",
+            "junit_sha256",
+            "outcome_sha256",
+            "receipt_sha256s",
+            "receipt_set_sha256",
+            "capabilities",
+            "attestation_sha256",
+        },
+    )
+    body = dict(item)
+    claimed = _sha(body.pop("attestation_sha256"), "P0 runner attestation")
+    receipt_hashes = _exact_mapping(
+        item["receipt_sha256s"],
+        "P0 runner attestation receipt set",
+        set(P0_REQUIREMENTS),
+    )
+    if any(
+        _sha(value, f"P0 runner attestation receipt {name}") != value
+        for name, value in receipt_hashes.items()
+    ):
+        raise Phase9EntryError("P0 runner attestation receipt set differs")
+    coordinate = _exact_mapping(
+        item["coordinate"],
+        "P0 runner attestation coordinate",
+        {"project_id", "workflow_id", "run_generation"},
+    )
+    candidate_value = _exact_mapping(
+        item["candidate"],
+        "P0 runner attestation candidate",
+        {"commit", "tree", "parent"},
+    )
+    expected_coordinate = {
+        "project_id": state.project_id,
+        "workflow_id": state.workflow_id,
+        "run_generation": state.run_generation,
+    }
+    for name in (
+        "nonce_sha256", "source_inventory_sha256", "live_binding_sha256",
+        "spec_sha256", "python_identity_sha256", "authorization_receipt_sha256",
+    ):
+        _sha(authorization_item[name], f"P0 runner authorization {name}")
+    for name in (
+        "authorization_receipt_sha256", "nonce_sha256",
+        "source_inventory_sha256", "live_binding_sha256", "spec_sha256",
+        "python_identity_sha256", "evidence_sha256",
+    ):
+        _sha(consumption_item[name], f"P0 runner consumption {name}")
+    for name in ("operator_uid", "issued_at", "expires_at"):
+        _integer(authorization_item[name], f"P0 runner authorization {name}")
+    for name in ("operator_uid", "issued_at", "expires_at", "consumed_at"):
+        _integer(consumption_item[name], f"P0 runner consumption {name}")
+    for value, path in (
+        (authorization_item["authorization_id"], "authorization authorization_id"),
+        (authorization_item["operator_account"], "authorization operator_account"),
+        (authorization_item["intended_evidence_root"], "authorization evidence root"),
+        (consumption_item["nonce"], "consumption nonce"),
+        (consumption_item["invocation_id"], "consumption invocation_id"),
+    ):
+        _plain_text(value, f"P0 runner {path}")
+    producer = _exact_mapping(
+        authorization_item["producer"],
+        "P0 runner producer",
+        {
+            "producer_type", "producer_version", "source_path",
+            "source_blob_sha256", "sandbox_path", "sandbox_sha256",
+            "trusted_reporter_source_path", "trusted_reporter_blob_sha256",
+            "trusted_reporter_schema", "loaded_source_root",
+            "loaded_source_inventory_sha256",
+        },
+    )
+    _sha(producer["source_blob_sha256"], "P0 runner producer source blob")
+    _sha(producer["sandbox_sha256"], "P0 runner producer sandbox")
+    _sha(
+        producer["trusted_reporter_blob_sha256"],
+        "P0 runner trusted reporter source blob",
+    )
+    _plain_text(producer["loaded_source_root"], "P0 runner loaded source root")
+    _sha(
+        producer["loaded_source_inventory_sha256"],
+        "P0 runner loaded source inventory",
+    )
+    execution_binding = _exact_mapping(
+        authorization_item["execution_context_binding"],
+        "P0 runner execution context binding",
+        {
+            "schema", "execution_context", "execution_context_receipt_sha256",
+            "runtime_environment", "dependency_lock_sha256", "launcher",
+            "binding_sha256",
+        },
+    )
+    execution_context = _exact_mapping(
+        execution_binding["execution_context"],
+        "P0 runner generation execution context",
+        {
+            "schema_version", "context_id", "runtime_environment_sha256",
+            "dependency_lock_sha256", "launcher_argv_sha256", "captured_at",
+        },
+    )
+    binding_body = dict(execution_binding)
+    binding_claimed = _sha(
+        binding_body.pop("binding_sha256"),
+        "P0 runner execution context binding",
+    )
+    runtime_descriptor = _exact_mapping(
+        execution_binding["runtime_environment"],
+        "P0 runner runtime environment descriptor",
+        {
+            "schema", "python_runtime_sha256", "dependency_lock_sha256",
+            "sandbox_sha256", "trusted_reporter_blob_sha256",
+            "trusted_reporter_schema", "interpreter_flags",
+            "environment_policy", "descriptor_sha256",
+        },
+    )
+    launcher_descriptor = _exact_mapping(
+        execution_binding["launcher"],
+        "P0 runner launcher descriptor",
+        {
+            "schema", "producer_source_blob_sha256",
+            "loaded_source_inventory_sha256",
+            "trusted_reporter_blob_sha256", "sandbox_sha256",
+            "interpreter_flags", "pytest_flags", "dynamic_arguments",
+            "test_nodes", "sandbox_mount_policy", "descriptor_sha256",
+        },
+    )
+    runtime_body = dict(runtime_descriptor)
+    runtime_claimed = _sha(
+        runtime_body.pop("descriptor_sha256"),
+        "P0 runner runtime environment descriptor",
+    )
+    launcher_body = dict(launcher_descriptor)
+    launcher_claimed = _sha(
+        launcher_body.pop("descriptor_sha256"),
+        "P0 runner launcher descriptor",
+    )
+    if (
+        execution_binding["schema"]
+        != PHASE9_P0_EXECUTION_CONTEXT_BINDING_SCHEMA
+        or canonical_sha256(execution_context)
+        != state.execution_context_receipt_sha256
+        or execution_binding["execution_context_receipt_sha256"]
+        != state.execution_context_receipt_sha256
+        or execution_binding["dependency_lock_sha256"]
+        != execution_context["dependency_lock_sha256"]
+        or runtime_descriptor["python_runtime_sha256"]
+        != authorization_item["python_identity_sha256"]
+        or runtime_descriptor["dependency_lock_sha256"]
+        != execution_context["dependency_lock_sha256"]
+        or runtime_descriptor["sandbox_sha256"] != producer["sandbox_sha256"]
+        or runtime_descriptor["trusted_reporter_blob_sha256"]
+        != producer["trusted_reporter_blob_sha256"]
+        or launcher_descriptor["producer_source_blob_sha256"]
+        != producer["source_blob_sha256"]
+        or launcher_descriptor["loaded_source_inventory_sha256"]
+        != producer["loaded_source_inventory_sha256"]
+        or launcher_descriptor["trusted_reporter_blob_sha256"]
+        != producer["trusted_reporter_blob_sha256"]
+        or launcher_descriptor["sandbox_sha256"] != producer["sandbox_sha256"]
+        or execution_context["runtime_environment_sha256"]
+        != runtime_descriptor["descriptor_sha256"]
+        or execution_context["launcher_argv_sha256"]
+        != launcher_descriptor["descriptor_sha256"]
+        or canonical_sha256(runtime_body) != runtime_claimed
+        or canonical_sha256(launcher_body) != launcher_claimed
+        or canonical_sha256(binding_body) != binding_claimed
+    ):
+        raise Phase9EntryError("P0 runner execution context binding differs")
+    _validate_p0_runner_capabilities(
+        authorization_item["capabilities"], "P0 runner authorization capabilities"
+    )
+    _validate_p0_runner_capabilities(
+        consumption_item["capabilities"], "P0 runner consumption capabilities"
+    )
+    _validate_p0_runner_capabilities(
+        item["capabilities"], "P0 runner attestation capabilities"
+    )
+    for hash_field in (
+        "authorization_receipt_sha256",
+        "consumption_receipt_sha256",
+        "authority_runner_evidence_sha256",
+        "source_inventory_sha256",
+        "live_binding_sha256",
+        "spec_sha256",
+        "evidence_root_sha256",
+        "command_record_sha256",
+        "raw_log_sha256",
+        "junit_sha256",
+        "outcome_sha256",
+        "receipt_set_sha256",
+    ):
+        _sha(item[hash_field], f"P0 runner attestation {hash_field}")
+    if (
+        item["schema"] != PHASE9_P0_RUNNER_ATTESTATION_SCHEMA
+        or item["evidence_domain"] != PHASE9_P0_FORMAL_DOMAIN
+        or candidate_value != state.candidate.as_dict()
+        or coordinate != expected_coordinate
+        or item["source_inventory_sha256"] != state.source_inventory_sha256
+        or item["live_binding_sha256"] != state.runner_live_binding_sha256
+        or item["spec_sha256"] != phase9_p0_spec_sha256()
+        or item["execution_context_binding"] != execution_binding
+        or item["receipt_set_sha256"] != canonical_sha256(receipt_hashes)
+        or item["capabilities"] != _P0_RUNNER_CAPABILITIES
+        or item["exit_code"] != 0
+        or canonical_sha256(body) != claimed
+        or row["attestation_sha256"] != claimed
+        or canonical_bytes(item).decode("utf-8") != row["attestation_json"]
+        or row["authorization_id"] != item["authorization_id"]
+        or row["authorization_receipt_sha256"]
+        != item["authorization_receipt_sha256"]
+        or row["consumption_receipt_sha256"]
+        != item["consumption_receipt_sha256"]
+        or row["authority_runner_evidence_sha256"]
+        != item["authority_runner_evidence_sha256"]
+        or item["authority_runner_evidence_sha256"]
+        != hashlib.sha256(canonical_bytes(consumption_item)).hexdigest()
+        or item["authorization_id"] != authorization_item["authorization_id"]
+        or item["authorization_receipt_sha256"]
+        != authorization_item["authorization_receipt_sha256"]
+        or item["consumption_receipt_sha256"]
+        != consumption_item["evidence_sha256"]
+        or item["invocation_id"] != consumption_item["invocation_id"]
+        or item["operator_uid"] != authorization_item["operator_uid"]
+        or item["operator_account"] != authorization_item["operator_account"]
+        or item["issued_at"] != authorization_item["issued_at"]
+        or item["expires_at"] != authorization_item["expires_at"]
+        or item["consumed_at"] != consumption_item["consumed_at"]
+        or row["invocation_id"] != item["invocation_id"]
+        or row["project_id"] != state.project_id
+        or row["workflow_id"] != state.workflow_id
+        or row["run_generation"] != state.run_generation
+        or row["source_inventory_sha256"] != state.source_inventory_sha256
+        or row["live_binding_sha256"] != state.runner_live_binding_sha256
+        or row["spec_sha256"] != item["spec_sha256"]
+        or row["evidence_root_sha256"] != item["evidence_root_sha256"]
+        or row["command_record_sha256"] != item["command_record_sha256"]
+        or row["raw_log_byte_length"] != item["raw_log_byte_length"]
+        or row["raw_log_sha256"] != item["raw_log_sha256"]
+        or row["junit_byte_length"] != item["junit_byte_length"]
+        or row["junit_sha256"] != item["junit_sha256"]
+        or row["outcome_sha256"] != item["outcome_sha256"]
+        or row["receipt_set_sha256"] != item["receipt_set_sha256"]
+        or row["started_at"] != item["started_at"]
+        or row["finished_at"] != item["finished_at"]
+        or row["attested_at"] != item["attested_at"]
+        or row["exit_code"] != item["exit_code"]
+        or authorization["authorization_receipt_sha256"]
+        != item["authorization_receipt_sha256"]
+        or consumption["consumption_receipt_sha256"]
+        != item["consumption_receipt_sha256"]
+        or type(authorization_value) is not dict
+        or type(consumption_value) is not dict
+        or canonical_bytes(authorization_value).decode("utf-8")
+        != authorization["authorization_json"]
+        or canonical_bytes(consumption_value).decode("utf-8")
+        != consumption["consumption_json"]
+        or authorization_item["schema"]
+        != PHASE9_P0_RUNNER_AUTHORIZATION_SCHEMA
+        or authorization_item["evidence_domain"] != PHASE9_P0_FORMAL_DOMAIN
+        or authorization_item["authorization_id"] != row["authorization_id"]
+        or authorization_item["candidate"] != state.candidate.as_dict()
+        or authorization_item["coordinate"] != expected_coordinate
+        or authorization_item["source_inventory_sha256"]
+        != state.source_inventory_sha256
+        or authorization_item["live_binding_sha256"]
+        != state.runner_live_binding_sha256
+        or authorization_item["spec_sha256"] != phase9_p0_spec_sha256()
+        or authorization_item["capabilities"] != _P0_RUNNER_CAPABILITIES
+        or producer["producer_type"] != PHASE9_P0_PRODUCER_TYPE
+        or producer["producer_version"] != PHASE9_P0_PRODUCER_VERSION
+        or producer["source_path"] != PHASE9_P0_PRODUCER_SOURCE_PATH
+        or producer["sandbox_path"] != "/usr/bin/bwrap"
+        or producer["trusted_reporter_source_path"]
+        != PHASE9_P0_TRUSTED_REPORTER_SOURCE_PATH
+        or producer["trusted_reporter_schema"] != TRUSTED_PYTEST_EVENT_SCHEMA
+        or authorization["authorization_id"]
+        != authorization_item["authorization_id"]
+        or authorization["nonce_sha256"] != authorization_item["nonce_sha256"]
+        or authorization["project_id"] != state.project_id
+        or authorization["workflow_id"] != state.workflow_id
+        or authorization["run_generation"] != state.run_generation
+        or authorization["source_commit"] != state.candidate.commit
+        or authorization["source_tree"] != state.candidate.tree
+        or authorization["source_parent"] != state.candidate.parent
+        or authorization["source_inventory_sha256"]
+        != state.source_inventory_sha256
+        or authorization["live_binding_sha256"]
+        != state.runner_live_binding_sha256
+        or authorization["spec_sha256"] != phase9_p0_spec_sha256()
+        or authorization["operator_uid"] != authorization_item["operator_uid"]
+        or authorization["operator_account"]
+        != authorization_item["operator_account"]
+        or authorization["issued_at"] != authorization_item["issued_at"]
+        or authorization["expires_at"] != authorization_item["expires_at"]
+        or authorization["intended_evidence_root"]
+        != authorization_item["intended_evidence_root"]
+        or authorization["python_identity_sha256"]
+        != authorization_item["python_identity_sha256"]
+        or consumption_item["schema"]
+        != PHASE9_P0_AUTHORITY_RUNNER_EVIDENCE_SCHEMA
+        or consumption_item["evidence_domain"] != PHASE9_P0_FORMAL_DOMAIN
+        or consumption_item["authorization_id"] != row["authorization_id"]
+        or consumption_item["authorization_receipt_sha256"]
+        != authorization_item["authorization_receipt_sha256"]
+        or consumption_item["nonce_sha256"] != authorization_item["nonce_sha256"]
+        or hashlib.sha256(
+            str(consumption_item["nonce"]).encode("utf-8")
+        ).hexdigest()
+        != consumption_item["nonce_sha256"]
+        or consumption_item["invocation_id"] != row["invocation_id"]
+        or consumption_item["candidate"] != state.candidate.as_dict()
+        or consumption_item["coordinate"] != expected_coordinate
+        or consumption_item["source_inventory_sha256"]
+        != state.source_inventory_sha256
+        or consumption_item["live_binding_sha256"]
+        != state.runner_live_binding_sha256
+        or consumption_item["spec_sha256"] != phase9_p0_spec_sha256()
+        or consumption_item["producer"] != authorization_item["producer"]
+        or consumption_item["execution_context_binding"] != execution_binding
+        or consumption_item["operator_uid"] != authorization_item["operator_uid"]
+        or consumption_item["operator_account"]
+        != authorization_item["operator_account"]
+        or consumption_item["issued_at"] != authorization_item["issued_at"]
+        or consumption_item["expires_at"] != authorization_item["expires_at"]
+        or consumption_item["intended_evidence_root"]
+        != authorization_item["intended_evidence_root"]
+        or consumption_item["python_identity_sha256"]
+        != authorization_item["python_identity_sha256"]
+        or consumption_item["capabilities"] != _P0_RUNNER_CAPABILITIES
+        or consumption["authorization_id"] != row["authorization_id"]
+        or consumption["nonce_sha256"] != consumption_item["nonce_sha256"]
+        or consumption["invocation_id"] != consumption_item["invocation_id"]
+        or consumption["consumed_at"] != consumption_item["consumed_at"]
+        or authorization_item["expires_at"]
+        - authorization_item["issued_at"]
+        > PHASE9_P0_RUNNER_AUTHORIZATION_TTL_SECONDS
+        or not (
+            authorization_item["issued_at"]
+            <= consumption_item["consumed_at"]
+            <= authorization_item["expires_at"]
+        )
+    ):
+        raise Phase9EntryError("P0 runner attestation provenance differs")
+    authorization_body = dict(authorization_value)
+    authorization_claimed = authorization_body.pop(
+        "authorization_receipt_sha256", None
+    )
+    consumption_body = dict(consumption_value)
+    consumption_claimed = consumption_body.pop("evidence_sha256", None)
+    if (
+        authorization_claimed != authorization["authorization_receipt_sha256"]
+        or canonical_sha256(authorization_body) != authorization_claimed
+        or consumption_claimed != consumption["consumption_receipt_sha256"]
+        or canonical_sha256(consumption_body) != consumption_claimed
+    ):
+        raise Phase9EntryError("P0 runner authorization/consumption hashes differ")
+    for name in (
+        "operator_uid",
+        "issued_at",
+        "expires_at",
+        "consumed_at",
+        "started_at",
+        "finished_at",
+        "attested_at",
+        "raw_log_byte_length",
+        "junit_byte_length",
+    ):
+        _integer(item[name], f"P0 runner attestation {name}")
+    if _integer(item["exit_code"], "P0 runner attestation exit_code") != 0:
+        raise Phase9EntryError("P0 runner attestation exit code differs")
+    if not (
+        item["issued_at"]
+        <= item["consumed_at"]
+        <= item["started_at"]
+        <= item["finished_at"]
+        <= item["attested_at"]
+        <= item["expires_at"]
+    ):
+        raise Phase9EntryError("P0 runner attestation time bounds differ")
+    return dict(item)
 
 
 def _parse_creation_receipt(
@@ -1222,14 +1609,82 @@ def _parse_creation_receipt(
             "official_input_raw_bytes_set_sha256",
             "execution_context_receipt_sha256",
             "operator_authorization_receipt_sha256",
+            "operator_authorization_consumption_sha256",
+            "authorization_target_sha256",
+            "source_inventory_sha256",
             "occurred_at",
         },
     )
-    if body["schema"] != "authority-phase9-run-generation-creation-receipt-v1":
+    if body["schema"] != RUN_GENERATION_RECEIPT_SCHEMA:
         raise Phase9EntryError("run-generation creation receipt schema differs")
     request = body["request"]
     if type(request) is not dict or canonical_sha256(request) != row["request_sha256"]:
         raise Phase9EntryError("run-generation request bytes/hash differ")
+    try:
+        decoded_request = run_generation_request_from_dict(
+            request,
+            trusted_now=_integer(body["occurred_at"], "creation receipt occurred_at"),
+        )
+    except Phase9RunGenerationSafetyError as exc:
+        raise Phase9EntryError(
+            f"run-generation request is not valid typed evidence: {exc}"
+        ) from exc
+    if decoded_request.as_dict() != request:
+        raise Phase9EntryError("run-generation request typed round-trip differs")
+    request_inventory_sha256 = _sha(
+        request.get("source_inventory_sha256"),
+        "run-generation request source inventory",
+    )
+    if body["source_inventory_sha256"] != request_inventory_sha256:
+        raise Phase9EntryError("run-generation receipt source inventory differs")
+    _sha(
+        body["operator_authorization_consumption_sha256"],
+        "operator authorization consumption",
+    )
+    authorization_target_sha256 = _sha(
+        body["authorization_target_sha256"], "authorization target"
+    )
+    target_request = dict(request)
+    authorization = target_request.pop("operator_authorization", None)
+    if type(authorization) is not dict:
+        raise Phase9EntryError("run-generation operator authorization is malformed")
+    target_sha256 = decoded_request.authorization_target_sha256
+    if target_sha256 != authorization_target_sha256:
+        raise Phase9EntryError("run-generation authorization target differs")
+    if authorization.get("schema_version") != OPERATOR_AUTHORIZATION_EVIDENCE_SCHEMA:
+        raise Phase9EntryError("run-generation operator authorization schema differs")
+    authorization_receipt_sha256 = canonical_sha256(authorization)
+    if (
+        authorization.get("authorized_request_sha256") != target_sha256
+        or body["operator_authorization_receipt_sha256"]
+        != authorization_receipt_sha256
+    ):
+        raise Phase9EntryError("run-generation operator authorization binding differs")
+    statement = dict(authorization)
+    claimed_statement_sha256 = statement.pop(
+        "authorization_statement_sha256", None
+    )
+    if claimed_statement_sha256 != canonical_sha256(
+        {
+            "schema": "authority-phase9-operator-authorization-statement-v2",
+            "authorization": statement,
+        }
+    ):
+        raise Phase9EntryError("run-generation authorization statement differs")
+    expected_consumption_sha256 = canonical_sha256(
+        {
+            "schema": RUN_GENERATION_AUTHORIZATION_CONSUMPTION_SCHEMA,
+            "authorization_id": authorization.get("authorization_id"),
+            "authorization_receipt_sha256": authorization_receipt_sha256,
+            "authorization_target_sha256": target_sha256,
+            "request_sha256": row["request_sha256"],
+            "run_generation": body["run_generation"],
+            "workflow_id": body["workflow_id"],
+            "consumed_at": body["occurred_at"],
+        }
+    )
+    if body["operator_authorization_consumption_sha256"] != expected_consumption_sha256:
+        raise Phase9EntryError("run-generation authorization consumption differs")
     source = request.get("source")
     if type(source) is not dict or source != {
         "schema_version": "authority-phase9-git-source-identity-v1",
@@ -1253,6 +1708,10 @@ def _parse_creation_receipt(
         "operator_authorization_receipt_sha256": generation[
             "operator_authorization_receipt_sha256"
         ],
+        "authorization_target_sha256": generation[
+            "authorization_target_sha256"
+        ],
+        "source_inventory_sha256": generation["source_inventory_sha256"],
         "occurred_at": generation["created_at"],
     }
     for name, expected_value in expected.items():
@@ -1272,12 +1731,16 @@ def _parse_creation_receipt(
         "predecessor_creation_receipt_sha256": generation[
             "predecessor_creation_receipt_sha256"
         ],
+        "predecessor_terminal_receipt_sha256": generation[
+            "predecessor_terminal_receipt_sha256"
+        ],
         "operation_kind": generation["operation_kind"],
         "run_mode": generation["run_mode"],
         "modeling_consultation_contract": generation[
             "modeling_consultation_contract"
         ],
         "delivery_capability": generation["delivery_capability"],
+        "source_inventory_sha256": generation["source_inventory_sha256"],
     }
     for name, expected_value in request_pairs.items():
         if request.get(name) != expected_value:
@@ -1307,19 +1770,31 @@ def _outbox_counts(
     start_revision: int,
     run_generation: str,
 ) -> tuple[int, int]:
+    current_pending = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM authority_outbox o
+            JOIN authority_production_outbox_delivery_state ds
+              ON ds.message_id=o.message_id
+            WHERE o.workflow_id=?
+              AND ds.status IN (
+                  'PENDING', 'CLAIMED', 'RETRY_WAIT',
+                  'RECONCILIATION_REQUIRED'
+              )
+            """,
+            (workflow_id,),
+        ).fetchone()[0]
+    )
     rows = connection.execute(
         """
-        SELECT e.envelope_json AS event_json, ds.status AS delivery_status
+        SELECT e.envelope_json AS event_json
         FROM authority_events e
-        LEFT JOIN authority_outbox o ON o.event_id=e.event_id
-        LEFT JOIN authority_production_outbox_delivery_state ds
-          ON ds.message_id=o.message_id
         WHERE e.workflow_id=? AND e.revision>?
         ORDER BY e.revision, e.event_id
         """,
         (workflow_id, start_revision),
     ).fetchall()
-    current_pending = 0
     old_generation = 0
     for row in rows:
         try:
@@ -1330,105 +1805,168 @@ def _outbox_counts(
             raise Phase9EntryError("Authority event generation binding is malformed")
         if event["run_generation"] != run_generation:
             old_generation += 1
-        elif row["delivery_status"] in _PENDING_OUTBOX:
-            current_pending += 1
     return current_pending, old_generation
 
 
-def collect_phase9_entry_state(
-    database: str | Path,
+def collect_phase9_entry_state_in_transaction(
+    connection: sqlite3.Connection,
     *,
+    expected_source_fence_sha256: str,
     workflow_id: str,
     candidate: CandidateIdentity,
 ) -> Phase9EntryState:
-    """Collect one revision-atomic entry state without upgrading the database."""
+    """Collect one entry state inside the caller's already-open transaction.
 
+    This helper deliberately does not change PRAGMAs and does not begin, commit,
+    roll back, or close the supplied connection.  Callers that need the entry
+    state and another Phase9 pre-commit check to share one SQLite snapshot must
+    own that transaction themselves.
+    """
+
+    if not isinstance(connection, sqlite3.Connection):
+        raise Phase9EntryError("connection must be an open SQLite connection")
     workflow_key = _plain_text(workflow_id, "workflow_id", identifier=True)
-    connection = connect_authority_ro(database)
+    expected_source_fence = _sha(
+        expected_source_fence_sha256, "expected_source_fence_sha256"
+    )
+    production = verify_production_installation(connection, require_ready=True)
+    if production["source_fence_sha256"] != expected_source_fence:
+        raise Phase9EntryError("production source fence differs from expected snapshot")
+    workflow = connection.execute(
+        "SELECT * FROM authority_workflows WHERE workflow_id=?", (workflow_key,)
+    ).fetchone()
+    pointer = connection.execute(
+        "SELECT * FROM authority_production_run_generation_current WHERE workflow_id=?",
+        (workflow_key,),
+    ).fetchone()
+    if workflow is None or pointer is None:
+        raise Phase9EntryError("current workflow/run-generation is missing")
+    generation = connection.execute(
+        "SELECT * FROM authority_production_run_generations WHERE run_generation=?",
+        (pointer["run_generation"],),
+    ).fetchone()
+    receipt = connection.execute(
+        "SELECT * FROM authority_production_run_generation_creation_receipts "
+        "WHERE run_generation=?",
+        (pointer["run_generation"],),
+    ).fetchone()
+    if generation is None or receipt is None:
+        raise Phase9EntryError("current run-generation companion rows are missing")
+    if (
+        pointer["creation_receipt_sha256"] != receipt["receipt_sha256"]
+        or generation["workflow_id"] != workflow_key
+        or generation["project_id"] != workflow["project_id"]
+        or generation["project_revision"] != workflow["current_revision"]
+        or generation["project_generation"] != workflow["project_generation"]
+        or generation["run_generation"] != workflow["run_generation"]
+        or generation["runtime_generation"] != workflow["runtime_generation"]
+        or generation["scheduler_generation"] != workflow["scheduler_generation"]
+        or generation["contract_pin_set_sha256"]
+        != workflow["contract_pin_set_sha256"]
+        or workflow["current_revision_availability"] != "RECORDED"
+        or workflow["contract_pin_availability"] != "RECORDED"
+    ):
+        raise Phase9EntryError("current run-generation/workflow coordinate differs")
+    for name in (
+        "project_generation",
+        "run_generation",
+        "runtime_generation",
+        "scheduler_generation",
+    ):
+        if generation[name] == "legacy_unknown":
+            raise Phase9EntryError(f"current {name} is legacy_unknown")
+    if (
+        generation["source_commit"] != candidate.commit
+        or generation["source_tree"] != candidate.tree
+        or generation["source_parent"] != candidate.parent
+    ):
+        raise Phase9EntryError("current run-generation belongs to another candidate")
+    creation_body = _parse_creation_receipt(
+        receipt, generation=generation, candidate=candidate
+    )
+    inventory_row = connection.execute(
+        "SELECT * FROM authority_production_run_generation_source_inventories "
+        "WHERE inventory_sha256=?",
+        (generation["source_inventory_sha256"],),
+    ).fetchone()
+    consumption_row = connection.execute(
+        "SELECT * FROM authority_production_run_generation_authorization_consumptions "
+        "WHERE run_generation=? AND request_sha256=?",
+        (generation["run_generation"], generation["request_sha256"]),
+    ).fetchone()
+    if inventory_row is None or consumption_row is None:
+        raise Phase9EntryError("run-generation provenance companion row is missing")
     try:
-        connection.execute("PRAGMA query_only=ON")
-        connection.execute("BEGIN")
-        production = verify_production_installation(connection, require_ready=True)
-        workflow = connection.execute(
-            "SELECT * FROM authority_workflows WHERE workflow_id=?", (workflow_key,)
-        ).fetchone()
-        pointer = connection.execute(
-            "SELECT * FROM authority_production_run_generation_current WHERE workflow_id=?",
-            (workflow_key,),
-        ).fetchone()
-        if workflow is None or pointer is None:
-            raise Phase9EntryError("current workflow/run-generation is missing")
-        generation = connection.execute(
-            "SELECT * FROM authority_production_run_generations WHERE run_generation=?",
-            (pointer["run_generation"],),
-        ).fetchone()
-        receipt = connection.execute(
-            "SELECT * FROM authority_production_run_generation_creation_receipts "
-            "WHERE run_generation=?",
-            (pointer["run_generation"],),
-        ).fetchone()
-        if generation is None or receipt is None:
-            raise Phase9EntryError("current run-generation companion rows are missing")
-        if (
-            pointer["creation_receipt_sha256"] != receipt["receipt_sha256"]
-            or generation["workflow_id"] != workflow_key
-            or generation["project_id"] != workflow["project_id"]
-            or generation["project_revision"] != workflow["current_revision"]
-            or generation["project_generation"] != workflow["project_generation"]
-            or generation["run_generation"] != workflow["run_generation"]
-            or generation["runtime_generation"] != workflow["runtime_generation"]
-            or generation["scheduler_generation"] != workflow["scheduler_generation"]
-            or generation["contract_pin_set_sha256"]
-            != workflow["contract_pin_set_sha256"]
-            or workflow["current_revision_availability"] != "RECORDED"
-            or workflow["contract_pin_availability"] != "RECORDED"
-        ):
-            raise Phase9EntryError("current run-generation/workflow coordinate differs")
-        for name in (
-            "project_generation",
-            "run_generation",
-            "runtime_generation",
-            "scheduler_generation",
-        ):
-            if generation[name] == "legacy_unknown":
-                raise Phase9EntryError(f"current {name} is legacy_unknown")
-        if (
-            generation["source_commit"] != candidate.commit
-            or generation["source_tree"] != candidate.tree
-            or generation["source_parent"] != candidate.parent
-        ):
-            raise Phase9EntryError("current run-generation belongs to another candidate")
-        _parse_creation_receipt(receipt, generation=generation, candidate=candidate)
-        writer = connection.execute(
-            "SELECT switch_mode, writer_enabled FROM "
-            "authority_production_writer_state WHERE singleton=1"
-        ).fetchone()
-        consumer = connection.execute(
-            "SELECT consumer_enabled FROM authority_production_consumer_state WHERE singleton=1"
-        ).fetchone()
-        if writer is None or consumer is None:
-            raise Phase9EntryError("delivery control state is missing")
-        current_pending, old_generation = _outbox_counts(
-            connection,
-            workflow_id=workflow_key,
-            start_revision=int(generation["project_revision"]),
-            run_generation=str(generation["run_generation"]),
+        inventory_value = json.loads(str(inventory_row["inventory_json"]))
+        consumption_value = json.loads(str(consumption_row["receipt_json"]))
+    except json.JSONDecodeError as exc:
+        raise Phase9EntryError("run-generation provenance JSON is malformed") from exc
+    inventory_sha256 = _sha(
+        generation["source_inventory_sha256"], "source inventory"
+    )
+    if (
+        type(inventory_value) is not dict
+        or canonical_bytes(inventory_value).decode("utf-8")
+        != inventory_row["inventory_json"]
+        or canonical_sha256(inventory_value) != inventory_sha256
+        or inventory_row["schema_version"] != GIT_TRACKED_SOURCE_INVENTORY_SCHEMA
+        or inventory_value.get("schema_version")
+        != GIT_TRACKED_SOURCE_INVENTORY_SCHEMA
+        or inventory_row["source_commit"] != candidate.commit
+        or inventory_row["source_tree"] != candidate.tree
+        or inventory_row["source_parent"] != candidate.parent
+        or inventory_value.get("source_commit") != candidate.commit
+        or inventory_value.get("source_tree") != candidate.tree
+        or inventory_value.get("source_parent") != candidate.parent
+        or inventory_value.get("path_count") != inventory_row["path_count"]
+        or inventory_value.get("total_bytes") != inventory_row["total_bytes"]
+    ):
+        raise Phase9EntryError("run-generation source inventory provenance differs")
+    consumption_sha256 = creation_body[
+        "operator_authorization_consumption_sha256"
+    ]
+    if (
+        type(consumption_value) is not dict
+        or canonical_bytes(consumption_value).decode("utf-8")
+        != consumption_row["receipt_json"]
+        or canonical_sha256(consumption_value) != consumption_sha256
+        or consumption_row["receipt_sha256"] != consumption_sha256
+        or consumption_row["authorization_target_sha256"]
+        != generation["authorization_target_sha256"]
+        or consumption_row["request_sha256"] != generation["request_sha256"]
+        or consumption_row["workflow_id"] != generation["workflow_id"]
+        or consumption_value.get("run_generation") != generation["run_generation"]
+    ):
+        raise Phase9EntryError(
+            "run-generation authorization consumption provenance differs"
         )
-        active = _active_process_count(connection)
-        migration_count = int(
-            connection.execute(
-                "SELECT COUNT(*) FROM authority_production_migrations"
-            ).fetchone()[0]
-        )
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+    writer = connection.execute(
+        "SELECT switch_mode, writer_enabled FROM "
+        "authority_production_writer_state WHERE singleton=1"
+    ).fetchone()
+    consumer = connection.execute(
+        "SELECT consumer_enabled FROM authority_production_consumer_state WHERE singleton=1"
+    ).fetchone()
+    if writer is None or consumer is None:
+        raise Phase9EntryError("delivery control state is missing")
+    current_pending, old_generation = _outbox_counts(
+        connection,
+        workflow_id=workflow_key,
+        start_revision=int(generation["project_revision"]),
+        run_generation=str(generation["run_generation"]),
+    )
+    active = _active_process_count(connection)
+    migration_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM authority_production_migrations"
+        ).fetchone()[0]
+    )
     guards_verified = migration_count == len(PRODUCTION_MIGRATIONS)
-    return Phase9EntryState(
+    state = Phase9EntryState(
         candidate=candidate,
+        source_inventory_sha256=_sha(
+            generation["source_inventory_sha256"], "source inventory"
+        ),
         project_id=str(generation["project_id"]),
         workflow_id=workflow_key,
         project_revision=int(generation["project_revision"]),
@@ -1473,6 +2011,44 @@ def collect_phase9_entry_state(
         old_generation_post_boundary_event_count=old_generation,
         old_generation_read_only_guards_verified=guards_verified,
     )
+    return replace(state, p0_runner_attestation=_p0_runner_attestation(connection, state))
+
+
+def collect_phase9_entry_state(
+    database: str | Path,
+    *,
+    workflow_id: str,
+    candidate: CandidateIdentity,
+    expected_source_fence_sha256: str | None = None,
+) -> Phase9EntryState:
+    """Collect one revision-atomic entry state without upgrading the database."""
+
+    connection = connect_authority_ro(database)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        expected = expected_source_fence_sha256
+        if expected is None:
+            source = connection.execute(
+                "SELECT source_fence_sha256 FROM authority_production_schema_state "
+                "WHERE singleton=1"
+            ).fetchone()
+            if source is None:
+                raise Phase9EntryError("production source fence is missing")
+            expected = _sha(source["source_fence_sha256"], "production source fence")
+        result = collect_phase9_entry_state_in_transaction(
+            connection,
+            expected_source_fence_sha256=expected,
+            workflow_id=workflow_id,
+            candidate=candidate,
+        )
+        connection.commit()
+        return result
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def verify_phase9_entry_gate(
@@ -1520,6 +2096,13 @@ def verify_phase9_entry_gate(
                 raise Phase9EntryError("candidate source verification identity differs")
             if source_verification.get("verified_tree") != state.candidate.tree:
                 raise Phase9EntryError("candidate source verification tree differs")
+            if (
+                source_verification.get("source_inventory_sha256")
+                != state.source_inventory_sha256
+            ):
+                raise Phase9EntryError(
+                    "candidate source verification inventory differs"
+                )
             source_sha256 = canonical_sha256(source_verification)
         except Phase9EntryError as exc:
             blocked("SOURCE_VERIFICATION_INVALID", str(exc))
@@ -1528,12 +2111,72 @@ def verify_phase9_entry_gate(
         claimed_p0_root_sha = _sha(
             p0_evidence_root_sha256, "p0_evidence_root_sha256"
         )
-        p0_hashes = validate_p0_receipt_set(
+        p0_validation = _validate_p0_receipt_set_details(
             p0_receipts,
             candidate=state.candidate,
+            project_id=state.project_id,
+            workflow_id=state.workflow_id,
+            run_generation=state.run_generation,
+            source_inventory_sha256=state.source_inventory_sha256,
             evidence_root=p0_evidence_root,
             evidence_root_sha256=claimed_p0_root_sha,
         )
+        attestation = state.p0_runner_attestation
+        authority_runner = p0_validation.authority_runner
+        if attestation is None:
+            raise Phase9EntryError(
+                "P0 evidence has no Authority-backed runner attestation"
+            )
+        expected_attestation_bindings = {
+            "authorization_id": authority_runner["authorization_id"],
+            "authorization_receipt_sha256": authority_runner[
+                "authorization_receipt_sha256"
+            ],
+            "consumption_receipt_sha256": (
+                p0_validation.consumption_receipt_sha256
+            ),
+            "authority_runner_evidence_sha256": (
+                p0_validation.authority_runner_evidence_sha256
+            ),
+            "invocation_id": authority_runner["invocation_id"],
+            "candidate": state.candidate.as_dict(),
+            "coordinate": {
+                "project_id": state.project_id,
+                "workflow_id": state.workflow_id,
+                "run_generation": state.run_generation,
+            },
+            "source_inventory_sha256": state.source_inventory_sha256,
+            "live_binding_sha256": state.runner_live_binding_sha256,
+            "spec_sha256": phase9_p0_spec_sha256(),
+            "operator_uid": authority_runner["operator_uid"],
+            "operator_account": authority_runner["operator_account"],
+            "issued_at": authority_runner["issued_at"],
+            "expires_at": authority_runner["expires_at"],
+            "consumed_at": authority_runner["consumed_at"],
+            "started_at": p0_validation.started_at,
+            "finished_at": p0_validation.finished_at,
+            "exit_code": 0,
+            "evidence_root_sha256": claimed_p0_root_sha,
+            "command_record_sha256": p0_validation.command_record_sha256,
+            "raw_log_byte_length": p0_validation.raw_log_byte_length,
+            "raw_log_sha256": p0_validation.raw_log_sha256,
+            "junit_byte_length": p0_validation.junit_byte_length,
+            "junit_sha256": p0_validation.junit_sha256,
+            "outcome_sha256": p0_validation.outcome_sha256,
+            "receipt_sha256s": p0_validation.receipt_sha256s,
+            "receipt_set_sha256": p0_validation.receipt_set_sha256,
+            "capabilities": _P0_RUNNER_CAPABILITIES,
+        }
+        if any(
+            attestation.get(name) != value
+            for name, value in expected_attestation_bindings.items()
+        ) or authority_runner["intended_evidence_root"] != str(
+            Path(os.path.abspath(os.fspath(p0_evidence_root)))
+        ):
+            raise Phase9EntryError(
+                "P0 external closure differs from its Authority runner attestation"
+            )
+        p0_hashes = dict(p0_validation.receipt_sha256s)
         verified_p0_root_sha = claimed_p0_root_sha
     except Phase9EntryError as exc:
         blocked("P0_RECEIPTS_INVALID", str(exc))
@@ -1602,6 +2245,16 @@ def verify_phase9_entry_gate(
             "V1_ONLY with writer and consumer disabled is required",
         ),
         (
+            state.run_mode == "FORENSIC_REPLAY",
+            "RUN_MODE_INVALID",
+            "Phase9 run mode must be FORENSIC_REPLAY",
+        ),
+        (
+            state.modeling_consultation_contract == "LEGACY_NOT_APPLICABLE",
+            "MODELING_CONTRACT_INVALID",
+            "Phase9 modeling consultation contract must be LEGACY_NOT_APPLICABLE",
+        ),
+        (
             state.delivery_capability == "DISABLED",
             "DELIVERY_CAPABILITY_ENABLED",
             "run generation delivery capability must be DISABLED",
@@ -1637,6 +2290,7 @@ def verify_phase9_entry_gate(
         "project_id": state.project_id,
         "workflow_id": state.workflow_id,
         "run_generation": state.run_generation,
+        "source_inventory_sha256": state.source_inventory_sha256,
         "state_receipt_sha256": state.state_receipt_sha256,
         "source_verification_sha256": source_sha256,
         "creation_receipt_sha256": state.creation_receipt_sha256,
@@ -1700,6 +2354,7 @@ def blocked_phase9_entry_result(
         "project_id": None,
         "workflow_id": None,
         "run_generation": None,
+        "source_inventory_sha256": None,
         "state_receipt_sha256": None,
         "source_verification_sha256": source_verification_sha256,
         "creation_receipt_sha256": None,

@@ -4,7 +4,18 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from test_evaluate_modeling_project_step8_5 import make_complete_project, write_file
+from tests.phase9_delivery_test_support import nonformal_delivery_fence
+
+
+@pytest.fixture(autouse=True)
+def _nonformal_delivery_mechanics(monkeypatch):
+    monkeypatch.setattr(
+        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
+        nonformal_delivery_fence,
+    )
 
 
 def make_valid_zip(path: Path) -> None:
@@ -220,7 +231,9 @@ def test_delivery_manifest_does_not_mark_gate2_override_as_current_pass(tmp_path
     assert manifest["evaluation"]["gate2_delivery_override"] is True
 
 
-def test_current_artifacts_without_snapshot_audit_are_legacy(tmp_path, monkeypatch):
+def test_current_artifacts_without_snapshot_audit_are_not_deliverable(
+    tmp_path, monkeypatch
+):
     project = tmp_path / "complete" / "pre_split"
     make_complete_project(project)
     make_current_contract_project(project)
@@ -250,10 +263,10 @@ def test_current_artifacts_without_snapshot_audit_are_legacy(tmp_path, monkeypat
 
     checks = {check.name: check for check in ev.checks}
     assert checks["final_audit_current"].ok is False
-    assert delivery_contract.classify_evaluation(ev, project) == "LEGACY_DELIVERED"
+    assert delivery_contract.classify_evaluation(ev, project) == "INVALID_OR_INCOMPLETE"
 
 
-def test_audit_complete_projects_classifies_current_legacy_and_invalid(tmp_path, monkeypatch):
+def test_audit_complete_projects_rejects_legacy_and_invalid(tmp_path, monkeypatch):
     current = tmp_path / "complete" / "current"
     legacy = tmp_path / "complete" / "legacy"
     invalid = tmp_path / "complete" / "invalid"
@@ -283,7 +296,7 @@ def test_audit_complete_projects_classifies_current_legacy_and_invalid(tmp_path,
     statuses = {entry["base"]: entry["status"] for entry in result["projects"]}
 
     assert statuses["current"] == "CURRENT_PASS"
-    assert statuses["legacy"] == "LEGACY_DELIVERED"
+    assert statuses["legacy"] == "INVALID_OR_INCOMPLETE"
     assert statuses["invalid"] == "INVALID_OR_INCOMPLETE"
     assert (current / "delivery_manifest.json").is_file()
     assert (legacy / "delivery_manifest.json").is_file()
@@ -291,6 +304,6 @@ def test_audit_complete_projects_classifies_current_legacy_and_invalid(tmp_path,
     assert result["summary"] == {
         "CURRENT_PASS": 1,
         "GATE2_OVERRIDE_DELIVERED": 0,
-        "LEGACY_DELIVERED": 1,
-        "INVALID_OR_INCOMPLETE": 1,
+        "LEGACY_DELIVERED": 0,
+        "INVALID_OR_INCOMPLETE": 2,
     }

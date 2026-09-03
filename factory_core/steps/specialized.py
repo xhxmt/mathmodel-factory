@@ -1236,6 +1236,17 @@ class DeliveryStep:
     def execute(self, context) -> ExecutionResult:
         project = context.project_dir
         base = project.name
+        try:
+            from ..phase9_delivery_fence import require_phase9_delivery_authority
+
+            delivery_fence = require_phase9_delivery_authority(project)
+        except (OSError, ValueError) as exc:
+            return ExecutionResult.failed(
+                "PERMANENT_PHASE9_DELIVERY_DISABLED",
+                returncode=2,
+                delivery_error=str(exc),
+                delivery_allowed=False,
+            )
         cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
         if cleanup.is_file():
             self.runner.python(
@@ -1334,7 +1345,15 @@ class DeliveryStep:
                 self.factory_root,
                 project,
                 "scripts/package_submission.py",
-                [project, base, output],
+                [
+                    project,
+                    base,
+                    output,
+                    "--workflow-id",
+                    delivery_fence.workflow_id,
+                    "--run-generation",
+                    delivery_fence.run_generation,
+                ],
                 label="package_submission",
                 timeout_seconds=600,
             )
@@ -1347,6 +1366,8 @@ class DeliveryStep:
                 status=outcome.record.status.value,
                 package_builder=build_package,
                 deadline_check=finalization_guard,
+                workflow_id=delivery_fence.workflow_id,
+                run_generation=delivery_fence.run_generation,
             )
         except ContestDeadlineExceeded:
             raise

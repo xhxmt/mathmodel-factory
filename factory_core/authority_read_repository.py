@@ -666,6 +666,27 @@ class AuthorityReadRepository:
         request = receipt.get("request") if type(receipt) is dict else None
         if type(request) is not dict:
             raise AuthorityReadError("run-generation receipt request is unavailable")
+        request_keys = {
+            "schema_version", "idempotency_key", "operation_kind",
+            "project_id", "workflow_id", "project_revision",
+            "project_generation", "runtime_generation",
+            "scheduler_generation", "predecessor_run_generation",
+            "predecessor_creation_receipt_sha256",
+            "predecessor_terminal_receipt_sha256", "run_mode",
+            "modeling_consultation_contract", "delivery_capability", "source",
+            "source_inventory_sha256", "contract_pins", "official_inputs",
+            "execution_context", "operator_authorization", "occurred_at",
+        }
+        receipt_keys = {
+            "schema", "run_generation", "workflow_id", "operation_kind",
+            "request_sha256", "request", "official_input_manifest_sha256",
+            "official_input_raw_bytes_set_sha256",
+            "execution_context_receipt_sha256",
+            "operator_authorization_receipt_sha256",
+            "operator_authorization_consumption_sha256",
+            "authorization_target_sha256", "source_inventory_sha256",
+            "occurred_at",
+        }
         comparisons = {
             "workflow_id": coordinate.workflow_id,
             "project_id": coordinate.project_id,
@@ -677,13 +698,79 @@ class AuthorityReadRepository:
             "predecessor_creation_receipt_sha256": row[
                 "predecessor_creation_receipt_sha256"
             ],
+            "predecessor_terminal_receipt_sha256": row[
+                "predecessor_terminal_receipt_sha256"
+            ],
             "operation_kind": row["operation_kind"],
             "run_mode": row["run_mode"],
+            "modeling_consultation_contract": row[
+                "modeling_consultation_contract"
+            ],
             "delivery_capability": "DISABLED",
         }
         source = request.get("source")
+        official_inputs = request.get("official_inputs")
+        official_files = (
+            official_inputs.get("files")
+            if type(official_inputs) is dict
+            else None
+        )
+        execution_context = request.get("execution_context")
+        authorization = request.get("operator_authorization")
+        request_without_authorization = dict(request)
+        request_without_authorization.pop("operator_authorization", None)
+        authorization_target = {
+            "schema": "authority-phase9-run-generation-authorization-target-v2",
+            "derived_run_generation": row["run_generation"],
+            "intent": {
+                "schema": "authority-phase9-run-generation-intent-v1",
+                "request": request_without_authorization,
+            },
+        }
+        authorization_target_sha256 = canonical_sha256(authorization_target)
+        authorization_receipt_sha256 = (
+            canonical_sha256(authorization)
+            if type(authorization) is dict
+            else None
+        )
+        authorization_consumption = {
+            "schema": "authority-phase9-run-generation-authorization-consumption-v1",
+            "authorization_id": (
+                authorization.get("authorization_id")
+                if type(authorization) is dict
+                else None
+            ),
+            "authorization_receipt_sha256": authorization_receipt_sha256,
+            "authorization_target_sha256": authorization_target_sha256,
+            "request_sha256": row["request_sha256"],
+            "run_generation": row["run_generation"],
+            "workflow_id": coordinate.workflow_id,
+            "consumed_at": request.get("occurred_at"),
+        }
+        raw_bytes_set = (
+            {
+                "schema": "authority-phase9-official-input-raw-bytes-set-v1",
+                "files": [
+                    {
+                        "logical_path": item.get("logical_path"),
+                        "byte_length": item.get("byte_length"),
+                        "raw_bytes_sha256": item.get("raw_bytes_sha256"),
+                    }
+                    for item in official_files
+                ],
+            }
+            if type(official_files) is list
+            and all(type(item) is dict for item in official_files)
+            else None
+        )
         if (
-            row["run_generation"] != coordinate.run_generation
+            set(request) != request_keys
+            or set(receipt) != receipt_keys
+            or request.get("schema_version")
+            != "authority-phase9-run-generation-request-v2"
+            or receipt.get("schema")
+            != "authority-phase9-run-generation-creation-receipt-v2"
+            or row["run_generation"] != coordinate.run_generation
             or row["project_id"] != coordinate.project_id
             or row["project_generation"] != coordinate.project_generation
             or row["runtime_generation"] != coordinate.runtime_generation
@@ -693,13 +780,55 @@ class AuthorityReadRepository:
             or canonical_sha256(request.get("contract_pins"))
             != row["contract_pin_set_sha256"]
             or row["delivery_capability"] != "DISABLED"
+            or row["run_mode"] != "FORENSIC_REPLAY"
+            or row["modeling_consultation_contract"]
+            != "LEGACY_NOT_APPLICABLE"
             or any(request.get(name) != expected for name, expected in comparisons.items())
             or type(source) is not dict
             or source.get("source_commit") != row["source_commit"]
             or source.get("source_tree") != row["source_tree"]
             or source.get("source_parent") != row["source_parent"]
+            or request.get("source_inventory_sha256")
+            != row["source_inventory_sha256"]
+            or type(official_inputs) is not dict
+            or set(official_inputs) != {"schema_version", "input_generation", "files"}
+            or official_inputs.get("schema_version")
+            != "authority-phase9-official-input-manifest-evidence-v1"
+            or type(official_files) is not list
+            or not official_files
+            or any(
+                type(item) is not dict
+                or set(item)
+                != {"schema_version", "logical_path", "byte_length", "raw_bytes_sha256"}
+                or item.get("schema_version")
+                != "authority-phase9-official-input-file-evidence-v1"
+                for item in official_files
+            )
+            or canonical_sha256(official_inputs)
+            != row["official_input_manifest_sha256"]
+            or raw_bytes_set is None
+            or canonical_sha256(raw_bytes_set)
+            != row["official_input_raw_bytes_set_sha256"]
+            or type(execution_context) is not dict
+            or canonical_sha256(execution_context)
+            != row["execution_context_receipt_sha256"]
+            or type(authorization) is not dict
+            or authorization.get("schema_version")
+            != "authority-phase9-operator-authorization-evidence-v2"
+            or authorization.get("authorization_id") != row["authorization_id"]
+            or authorization.get("authorized") is not True
+            or authorization.get("operation_kind") != row["operation_kind"]
+            or authorization.get("project_id") != coordinate.project_id
+            or authorization.get("workflow_id") != coordinate.workflow_id
+            or authorization.get("source_commit") != row["source_commit"]
+            or authorization.get("authorized_request_sha256")
+            != authorization_target_sha256
+            or authorization_receipt_sha256
+            != row["operator_authorization_receipt_sha256"]
+            or authorization_target_sha256 != row["authorization_target_sha256"]
             or receipt.get("run_generation") != row["run_generation"]
             or receipt.get("workflow_id") != coordinate.workflow_id
+            or receipt.get("operation_kind") != row["operation_kind"]
             or receipt.get("request_sha256") != row["request_sha256"]
             or receipt.get("official_input_manifest_sha256")
             != row["official_input_manifest_sha256"]
@@ -709,6 +838,13 @@ class AuthorityReadRepository:
             != row["execution_context_receipt_sha256"]
             or receipt.get("operator_authorization_receipt_sha256")
             != row["operator_authorization_receipt_sha256"]
+            or receipt.get("operator_authorization_consumption_sha256")
+            != canonical_sha256(authorization_consumption)
+            or receipt.get("authorization_target_sha256")
+            != row["authorization_target_sha256"]
+            or receipt.get("source_inventory_sha256")
+            != row["source_inventory_sha256"]
+            or receipt.get("occurred_at") != request.get("occurred_at")
             or canonical_sha256(request) != row["request_sha256"]
             or succession
             != {
@@ -718,6 +854,9 @@ class AuthorityReadRepository:
                 "predecessor_run_generation": row["predecessor_run_generation"],
                 "predecessor_creation_receipt_sha256": row[
                     "predecessor_creation_receipt_sha256"
+                ],
+                "predecessor_terminal_receipt_sha256": row[
+                    "predecessor_terminal_receipt_sha256"
                 ],
                 "request_sha256": row["request_sha256"],
             }
@@ -730,7 +869,8 @@ class AuthorityReadRepository:
             "official_input_raw_bytes_set_sha256",
             "execution_context_receipt_sha256",
             "operator_authorization_receipt_sha256", "request_sha256",
-            "creation_receipt_sha256",
+            "creation_receipt_sha256", "source_inventory_sha256",
+            "authorization_target_sha256",
         ):
             _sha(row[field], field)
         for field in ("source_commit", "source_tree", "source_parent"):

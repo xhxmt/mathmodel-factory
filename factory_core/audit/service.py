@@ -84,8 +84,20 @@ class FinalAuditService:
         *,
         compile_pdf: bool = True,
         reuse_pass: bool = True,
+        workflow_id: str | None = None,
+        run_generation: str | None = None,
     ) -> AuditOutcome:
         project = context.project_dir.resolve()
+        # This is intentionally the first operation after path normalization:
+        # no lock, audit directory, cached PASS, compiler, judge, override, or
+        # final-submission artifact may be touched before live Authority agrees.
+        from ..phase9_delivery_fence import require_phase9_delivery_authority
+
+        delivery_fence = require_phase9_delivery_authority(
+            project,
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
         lock_path = project / ".factory" / "audits" / ".lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="ascii") as lock:
@@ -98,6 +110,7 @@ class FinalAuditService:
                     context,
                     compile_pdf=compile_pdf,
                     reuse_pass=reuse_pass,
+                    delivery_fence=delivery_fence,
                 )
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -108,6 +121,7 @@ class FinalAuditService:
         *,
         compile_pdf: bool,
         reuse_pass: bool,
+        delivery_fence,
     ) -> AuditOutcome:
         project = context.project_dir.resolve()
         base = project.name
@@ -181,7 +195,9 @@ class FinalAuditService:
                 return None
             continued = self._judge_failure_override(project, prepared)
             if continued is not None:
-                return self._finish_judge_result(project, context, continued)
+                return self._finish_judge_result(
+                    project, context, continued, delivery_fence=delivery_fence
+                )
             return self._failure(
                 project,
                 decision="INDETERMINATE_REVIEW",
@@ -311,6 +327,7 @@ class FinalAuditService:
                     gate2_override_id=delivery_override.override_id,
                 ),
                 snapshot=snapshot,
+                delivery_fence=delivery_fence,
             )
 
         execute_prepared = getattr(self.judge, "execute_prepared", None)
@@ -324,6 +341,7 @@ class FinalAuditService:
             context,
             judge_result,
             snapshot=snapshot,
+            delivery_fence=delivery_fence,
         )
 
     def run_project(
@@ -332,6 +350,8 @@ class FinalAuditService:
         *,
         compile_pdf: bool = True,
         reuse_pass: bool = True,
+        workflow_id: str | None = None,
+        run_generation: str | None = None,
     ) -> AuditOutcome:
         context = StepContext(
             project.resolve(),
@@ -341,7 +361,13 @@ class FinalAuditService:
             contract_for(16).timeout_seconds,
             0,
         )
-        return self.run(context, compile_pdf=compile_pdf, reuse_pass=reuse_pass)
+        return self.run(
+            context,
+            compile_pdf=compile_pdf,
+            reuse_pass=reuse_pass,
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
 
     def _finish_judge_result(
         self,
@@ -350,6 +376,7 @@ class FinalAuditService:
         judge_result: ExecutionResult,
         *,
         snapshot: AuditSnapshot | None = None,
+        delivery_fence,
     ) -> AuditOutcome:
         snapshot = snapshot or self._snapshot(project)
         override_record = self._delivery_override(project, snapshot.snapshot_id)
@@ -535,6 +562,31 @@ class FinalAuditService:
             )
             return AuditOutcome(execution, record, snapshot)
 
+        # A final judgment is not itself authority to create acceptance or
+        # final-submission artifacts.  Re-read the current Phase 9 fence before
+        # either path is touched; the receipt builder repeats this check.
+        try:
+            from ..phase9_delivery_fence import require_phase9_delivery_authority
+
+            current_fence = require_phase9_delivery_authority(
+                project,
+                workflow_id=delivery_fence.workflow_id,
+                run_generation=delivery_fence.run_generation,
+            )
+            if current_fence != delivery_fence:
+                raise ValueError("Phase9 delivery Authority changed during final audit")
+        except (OSError, ValueError) as exc:
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision=decision,
+                status=AuditStatus.INDETERMINATE,
+                error_class="PERMANENT_PHASE9_DELIVERY_DISABLED",
+                returncode=2,
+                judge_completed=judge_completed,
+                evidence={"delivery_fence_error": str(exc)},
+            )
+
         (project / "judge_outputs").mkdir(parents=True, exist_ok=True)
         (project / "judge_outputs/final_submission.sha256").write_text(
             snapshot.snapshot_id + "\n", encoding="ascii"
@@ -565,6 +617,8 @@ class FinalAuditService:
                 snapshot,
                 status=status.value,
                 override_receipt=override_receipt,
+                workflow_id=delivery_fence.workflow_id,
+                run_generation=delivery_fence.run_generation,
             )
         except (OSError, ValueError) as exc:
             return self._failure(

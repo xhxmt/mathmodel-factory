@@ -439,14 +439,15 @@ def evaluate(project: Path, root: Path) -> Evaluation:
     paper_pdf = project_pdfs[0] if project_pdfs else project / f"{base}_paper.pdf"
     from factory_core.delivery.release import resolve_current_release
 
-    release = resolve_current_release(root / "papers", base)
+    release = resolve_current_release(root / "papers", base, project=project)
+    unavailable_release = root / "papers" / base / "invalid-current-release"
     papers_pdf = (
-        release.paper if release is not None else root / "papers" / f"{base}_paper.pdf"
+        release.paper if release is not None else unavailable_release / "paper.pdf"
     )
     submission_zip = (
         release.submission_zip
         if release is not None
-        else root / "papers" / f"{base}_submission.zip"
+        else unavailable_release / "submission.zip"
     )
     ev.add(
         "paper_tex",

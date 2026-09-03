@@ -8,7 +8,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
@@ -18,8 +18,8 @@ from ..audit.domain import AuditSnapshot
 from ..audit.persistence import atomic_write_json
 
 
-RELEASE_MANIFEST_SCHEMA = "paper-factory-release-v1"
-RELEASE_POINTER_SCHEMA = "paper-factory-release-pointer-v1"
+RELEASE_MANIFEST_SCHEMA = "paper-factory-release-v2"
+RELEASE_POINTER_SCHEMA = "paper-factory-release-pointer-v2"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CORE_RELEASE_ARTIFACTS = {
     "paper": "paper.pdf",
@@ -90,6 +90,37 @@ def _expected_release_artifacts(manifest: dict[str, object]) -> dict[str, str]:
     return expected
 
 
+def _manifest_delivery_fence(
+    manifest: dict[str, object], base: str
+) -> dict[str, object] | None:
+    fence = manifest.get("phase9_delivery_fence")
+    expected = {
+        "project_id",
+        "workflow_id",
+        "run_generation",
+        "replay_id",
+        "replay_mode",
+        "terminal_receipt_sha256",
+        "run_mode",
+        "modeling_consultation_contract",
+        "delivery_capability",
+    }
+    if not isinstance(fence, dict) or set(fence) != expected:
+        return None
+    text_fields = expected - {"terminal_receipt_sha256"}
+    if (
+        fence.get("project_id") != base
+        or any(
+            not isinstance(fence.get(name), str) or not str(fence[name]).strip()
+            for name in text_fields
+        )
+        or SHA256_RE.fullmatch(str(fence.get("terminal_receipt_sha256") or ""))
+        is None
+    ):
+        return None
+    return dict(fence)
+
+
 @dataclass(frozen=True)
 class ReleaseResult:
     release_id: str
@@ -101,8 +132,22 @@ class ReleaseResult:
     reused: bool = False
 
 
-def resolve_current_release(papers_root: Path, base: str) -> ReleaseResult | None:
+def resolve_current_release(
+    papers_root: Path, base: str, *, project: Path
+) -> ReleaseResult | None:
+    """Resolve a release only while its exact Authority coordinate is current.
+
+    The immutable manifest is necessary evidence, but it is never authority by
+    itself.  A stale PASS on disk therefore becomes invisible as soon as the
+    current generation, terminal, mode, or delivery capability changes.
+    """
+
+    from ..phase9_delivery_fence import require_phase9_delivery_authority
+
     papers_root = papers_root.resolve()
+    project = project.resolve()
+    if project.name != base:
+        return None
     pointer_path = papers_root / base / "current.json"
     try:
         pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
@@ -129,6 +174,16 @@ def resolve_current_release(papers_root: Path, base: str) -> ReleaseResult | Non
             or declared != _canonical_hash(unsigned)
             or pointer.get("manifest_sha256") != _sha256(manifest_path)
         ):
+            return None
+        recorded_fence = _manifest_delivery_fence(manifest, base)
+        if recorded_fence is None:
+            return None
+        live_fence = require_phase9_delivery_authority(
+            project,
+            workflow_id=str(recorded_fence["workflow_id"]),
+            run_generation=str(recorded_fence["run_generation"]),
+        )
+        if asdict(live_fence) != recorded_fence:
             return None
         expected = _expected_release_artifacts(manifest)
         artifacts = manifest.get("artifacts")
@@ -169,9 +224,9 @@ def resolve_current_release(papers_root: Path, base: str) -> ReleaseResult | Non
 
 
 def current_release_artifacts(
-    papers_root: Path, base: str
+    papers_root: Path, base: str, *, project: Path
 ) -> tuple[Path, Path] | None:
-    release = resolve_current_release(papers_root, base)
+    release = resolve_current_release(papers_root, base, project=project)
     return (release.paper, release.submission_zip) if release is not None else None
 
 
@@ -189,18 +244,42 @@ class ReleasePublisher:
         status: str,
         package_builder: Callable[[Path], bool],
         deadline_check: Callable[[], None] | None = None,
+        workflow_id: str | None = None,
+        run_generation: str | None = None,
     ) -> ReleaseResult:
-        check = deadline_check or (lambda: None)
-        check()
+        from ..phase9_delivery_fence import require_phase9_delivery_authority
+
         project = project.resolve()
+        initial_fence = require_phase9_delivery_authority(
+            project,
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
+        expected_fence = asdict(initial_fence)
+
+        def verify_fence() -> None:
+            current = require_phase9_delivery_authority(
+                project,
+                workflow_id=initial_fence.workflow_id,
+                run_generation=initial_fence.run_generation,
+            )
+            if current != initial_fence:
+                raise ValueError("Phase9 delivery Authority changed during release")
+
+        check = deadline_check or (lambda: None)
+        verify_fence()
+        check()
         base = project.name
         if not SHA256_RE.fullmatch(snapshot_id):
             raise ValueError("release id must be the final-audit SHA-256")
         project_pdf = project / f"{base}_paper.pdf"
         if not project_pdf.is_file() or project_pdf.stat().st_size == 0:
             raise ValueError("final project PDF is missing")
-        sources = self._validate_sources(project, snapshot_id, status)
+        sources = self._validate_sources(
+            project, snapshot_id, status, expected_fence=expected_fence
+        )
 
+        verify_fence()
         control_dir = self.papers_root / base
         releases_dir = self.papers_root / "releases" / base
         control_dir.mkdir(parents=True, exist_ok=True)
@@ -208,9 +287,17 @@ class ReleasePublisher:
         lock_path = control_dir / ".publish.lock"
         with lock_path.open("a+", encoding="ascii") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            verify_fence()
             check()
             existing = self._existing_release(base, snapshot_id)
             if existing is not None:
+                existing_manifest = json.loads(
+                    existing.manifest.read_text(encoding="utf-8")
+                )
+                if _manifest_delivery_fence(existing_manifest, base) != expected_fence:
+                    raise ValueError(
+                        "immutable release belongs to a different Authority coordinate"
+                    )
                 existing_status = json.loads(
                     existing.manifest.read_text(encoding="utf-8")
                 ).get("status")
@@ -219,13 +306,22 @@ class ReleasePublisher:
                         "immutable release exists with a different audit status"
                     )
                 self._assert_sources_match_release(
-                    project, snapshot_id, status, existing
+                    project,
+                    snapshot_id,
+                    status,
+                    existing,
+                    expected_fence=expected_fence,
                 )
+                verify_fence()
                 check()
                 self._sync_legacy_aliases(base, existing)
                 check()
                 self._assert_sources_match_release(
-                    project, snapshot_id, status, existing
+                    project,
+                    snapshot_id,
+                    status,
+                    existing,
+                    expected_fence=expected_fence,
                 )
                 self._write_pointer(base, existing)
                 return existing
@@ -239,7 +335,12 @@ class ReleasePublisher:
                     raise RuntimeError("submission packaging failed")
                 check()
                 self._validate_zip(staging / "submission.zip", project_pdf, base)
-                sources = self._validate_sources(project, snapshot_id, status)
+                sources = self._validate_sources(
+                    project,
+                    snapshot_id,
+                    status,
+                    expected_fence=expected_fence,
+                )
                 if _sha256(staging / "paper.pdf") != _sha256(project_pdf):
                     raise ValueError("audited PDF changed during release construction")
                 for name, source in sources.items():
@@ -261,6 +362,7 @@ class ReleasePublisher:
                     "release_id": snapshot_id,
                     "snapshot_id": snapshot_id,
                     "status": status,
+                    "phase9_delivery_fence": asdict(initial_fence),
                     "artifacts": artifacts,
                     "evidence_artifacts": {
                         name: f"{name}.json"
@@ -280,20 +382,38 @@ class ReleasePublisher:
                         _fsync_file(child)
                 _fsync_dir(staging)
 
+                verify_fence()
                 release_dir = releases_dir / snapshot_id
                 os.replace(staging, release_dir)
                 _fsync_dir(releases_dir)
                 result = self._result(base, snapshot_id, reused=False)
                 if result is None:
                     raise RuntimeError("committed release failed integrity verification")
-                check()
-                self._assert_sources_match_release(
-                    project, snapshot_id, status, result
+                committed_manifest = json.loads(
+                    result.manifest.read_text(encoding="utf-8")
                 )
-                self._sync_legacy_aliases(base, result)
+                if _manifest_delivery_fence(committed_manifest, base) != expected_fence:
+                    raise RuntimeError(
+                        "committed release Authority coordinate differs"
+                    )
                 check()
                 self._assert_sources_match_release(
-                    project, snapshot_id, status, result
+                    project,
+                    snapshot_id,
+                    status,
+                    result,
+                    expected_fence=expected_fence,
+                )
+                verify_fence()
+                self._sync_legacy_aliases(base, result)
+                verify_fence()
+                check()
+                self._assert_sources_match_release(
+                    project,
+                    snapshot_id,
+                    status,
+                    result,
+                    expected_fence=expected_fence,
                 )
                 self._write_pointer(base, result)
                 return result
@@ -301,9 +421,32 @@ class ReleasePublisher:
                 if staging.exists():
                     shutil.rmtree(staging)
 
-    def recover(self, base: str) -> ReleaseResult | None:
-        current = resolve_current_release(self.papers_root, base)
+    def recover(
+        self,
+        base: str,
+        *,
+        project: Path,
+        workflow_id: str | None = None,
+        run_generation: str | None = None,
+    ) -> ReleaseResult | None:
+        from ..phase9_delivery_fence import require_phase9_delivery_authority
+
+        fence = require_phase9_delivery_authority(
+            project,
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
+        if fence.project_id != base or Path(project).resolve().name != base:
+            raise ValueError("release recovery project/Authority binding differs")
+        current = resolve_current_release(
+            self.papers_root, base, project=Path(project)
+        )
         if current is not None:
+            require_phase9_delivery_authority(
+                project,
+                workflow_id=fence.workflow_id,
+                run_generation=fence.run_generation,
+            )
             self._sync_legacy_aliases(base, current)
         return current
 
@@ -324,6 +467,7 @@ class ReleasePublisher:
                 or value.get("base") != base
                 or value.get("release_id") != release_id
                 or declared != _canonical_hash(unsigned)
+                or _manifest_delivery_fence(value, base) is None
             ):
                 return None
             expected = _expected_release_artifacts(value)
@@ -390,7 +534,11 @@ class ReleasePublisher:
 
     @staticmethod
     def _validate_sources(
-        project: Path, snapshot_id: str, status: str
+        project: Path,
+        snapshot_id: str,
+        status: str,
+        *,
+        expected_fence: dict[str, object] | None = None,
     ) -> dict[str, Path]:
         sources = {
             "final_audit_receipt": project
@@ -447,6 +595,13 @@ class ReleasePublisher:
             )
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"final acceptance receipt cannot be read: {exc}") from exc
+        if (
+            expected_fence is not None
+            and acceptance_value.get("phase9_delivery_fence") != expected_fence
+        ):
+            raise ValueError(
+                "final acceptance receipt belongs to a different Authority coordinate"
+            )
         approval_records = acceptance_value.get("approval_receipts") or []
         if not isinstance(approval_records, list):
             raise ValueError("final acceptance approval receipt list is invalid")
@@ -529,10 +684,17 @@ class ReleasePublisher:
         snapshot_id: str,
         status: str,
         release: ReleaseResult,
+        *,
+        expected_fence: dict[str, object] | None = None,
     ) -> None:
         """Recheck approvals immediately before the atomic pointer switch."""
 
-        current = cls._validate_sources(project, snapshot_id, status)
+        current = cls._validate_sources(
+            project,
+            snapshot_id,
+            status,
+            expected_fence=expected_fence,
+        )
         for name, source in current.items():
             copied = release.release_dir / f"{name}.json"
             if not copied.is_file() or _sha256(copied) != _sha256(source):

@@ -53,6 +53,11 @@ FROZEN_A2_0010_0013 = (
     "721a36e275de130172a06faf82d5b298d7418bf0f7561177ea580e79b7d7caf2",
     "be46c339e1e564aa40aa205fbb249e907281c8cf0b5e31a7833d90cd0e0f8c25",
 )
+FROZEN_A2_0014_0016 = (
+    "1cdf905f5712eb04445eed9da73ac8a48cf3fb3c6115a02c4a6ccb1c54b99a75",
+    "69f50ea0989018d6dc7db8743fdf7f2875152f292933054bb21b5760fcd42b15",
+    "6fa6c71a5f76388eab41a6d9e301cbce1fdce7ee041b71c9f72824eee1cb7e37",
+)
 
 
 def _migration_statement_bytes_sha256(migrations) -> str:
@@ -79,28 +84,32 @@ def test_published_shadow_migration_checksums_are_unchanged_and_suffix_is_append
         "A2_0014_DATABASE_IDENTITY_AND_BACKUP_LINEAGE",
         "A2_0015_PHASE9_RUN_GENERATION",
         "A2_0016_PHASE9_FORENSIC_REPLAY",
+        "A2_0017_PHASE9_AUDIT_HARDENING",
+        "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
+        "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
     )
     assert PRODUCTION_MIGRATION_CHECKSUMS[:4] == FROZEN_A2_0010_0013
-    assert PRODUCTION_MIGRATION_CHECKSUMS[4] == (
-        "1cdf905f5712eb04445eed9da73ac8a48cf3fb3c6115a02c4a6ccb1c54b99a75"
+    assert PRODUCTION_MIGRATION_CHECKSUMS[4:7] == FROZEN_A2_0014_0016
+    assert PRODUCTION_MIGRATION_CHECKSUMS[7] == (
+        "c886700e817098e04c325d414a0b0ed7f267a84ea60a05a0f0501e95f86fcc4d"
     )
-    assert PRODUCTION_MIGRATION_CHECKSUMS[5] == (
-        "69f50ea0989018d6dc7db8743fdf7f2875152f292933054bb21b5760fcd42b15"
+    assert PRODUCTION_MIGRATION_CHECKSUMS[8] == (
+        "eca9538c259285853547bf451a8fbf56ca8580d3963ff9b2537f979e162d5121"
     )
-    assert PRODUCTION_MIGRATION_CHECKSUMS[6] == (
-        "6fa6c71a5f76388eab41a6d9e301cbce1fdce7ee041b71c9f72824eee1cb7e37"
+    assert PRODUCTION_MIGRATION_CHECKSUMS[9] == (
+        "355c9419f56aa6266b3676f741e0e37a63856e820fa054e9bc217027f23646db"
     )
-    assert len(PRODUCTION_MIGRATION_CHECKSUMS) == len(set(PRODUCTION_MIGRATION_CHECKSUMS)) == 7
+    assert len(PRODUCTION_MIGRATION_CHECKSUMS) == len(set(PRODUCTION_MIGRATION_CHECKSUMS)) == 10
 
 
-def test_a2_0001_through_a2_0014_statement_bytes_are_frozen():
+def test_a2_0001_through_a2_0016_statement_bytes_are_frozen():
     assert _migration_statement_bytes_sha256(MIGRATIONS) == (
         "a1ee0dd9aa3735754c7f1a1dec98a60b3563ad45e9319191152e22455ec9d3d7"
     )
     assert _migration_statement_bytes_sha256(PRODUCTION_MIGRATIONS[:5]) == (
         "9a8b6abd62912b4d231d96a7c5ad4ce648278ae9262c658d90e94ea025447470"
     )
-    assert _migration_statement_bytes_sha256(PRODUCTION_MIGRATIONS) == (
+    assert _migration_statement_bytes_sha256(PRODUCTION_MIGRATIONS[:7]) == (
         "cc9cd3b778ce62eb38f374d5488677b4ece0f7112bdd0f1d6101923632ce4e31"
     )
 
@@ -155,7 +164,37 @@ def test_real_schema_v9_preflight_and_foundation_are_default_v1_only(tmp_path):
     assert tuple(row[1] for row in history) == PRODUCTION_MIGRATION_CHECKSUMS
 
 
-def test_ready_a2_0014_installation_upgrades_additively_to_a2_0015_and_a2_0016(
+def test_a2_0018_rejects_direct_sql_without_trusted_runner_capability(tmp_path):
+    fixture = install_foundation(tmp_path)
+    connection = sqlite3.connect(fixture.database)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="phase9_p0_write_capability"):
+            connection.execute(
+                """
+                INSERT INTO authority_production_phase9_p0_runner_authorizations(
+                    authorization_id, nonce_sha256, project_id, workflow_id,
+                    run_generation, source_commit, source_tree, source_parent,
+                    source_inventory_sha256, live_binding_sha256, spec_sha256,
+                    operator_uid, operator_account, issued_at, expires_at,
+                    intended_evidence_root, python_identity_sha256,
+                    authorization_json, authorization_receipt_sha256
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "direct-sql", "1" * 64, "demo", "legacy_current",
+                    "untrusted-run", "a" * 40, "b" * 40, "c" * 40,
+                    "2" * 64, "3" * 64, "4" * 64, 0, "operator", 1, 2,
+                    str(tmp_path / "evidence"), "5" * 64, "{}", "6" * 64,
+                ),
+            )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM authority_production_phase9_p0_runner_authorizations"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_ready_a2_0014_installation_upgrades_additively_through_a2_0018(
     tmp_path, monkeypatch
 ):
     migrations = production_schema.PRODUCTION_MIGRATIONS
@@ -174,7 +213,7 @@ def test_ready_a2_0014_installation_upgrades_additively_to_a2_0015_and_a2_0016(
     monkeypatch.setattr(
         production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums
     )
-    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 4)
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 7)
     report = AuthorityProductionMigrationRunner(
         fixture.database,
         database_id="a2-0014-upgrade-db",
@@ -186,6 +225,9 @@ def test_ready_a2_0014_installation_upgrades_additively_to_a2_0015_and_a2_0016(
     assert report.applied_now == (
         "A2_0015_PHASE9_RUN_GENERATION",
         "A2_0016_PHASE9_FORENSIC_REPLAY",
+        "A2_0017_PHASE9_AUDIT_HARDENING",
+        "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
+        "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
     )
     connection = sqlite3.connect(fixture.database)
     connection.row_factory = sqlite3.Row
@@ -200,17 +242,19 @@ def test_ready_a2_0014_installation_upgrades_additively_to_a2_0015_and_a2_0016(
         }
     finally:
         connection.close()
-    assert state["production_schema_version"] == 4
+    assert state["production_schema_version"] == 7
     assert names == {
         "authority_production_run_generations",
         "authority_production_run_generation_current",
         "authority_production_run_generation_creation_receipts",
         "authority_production_run_generation_idempotency",
         "authority_production_run_generation_successions",
+        "authority_production_run_generation_source_inventories",
+        "authority_production_run_generation_authorization_consumptions",
     }
 
 
-def test_ready_a2_0015_installation_upgrades_additively_to_a2_0016(
+def test_ready_a2_0015_installation_upgrades_additively_through_a2_0018(
     tmp_path, monkeypatch
 ):
     migrations = production_schema.PRODUCTION_MIGRATIONS
@@ -229,7 +273,7 @@ def test_ready_a2_0015_installation_upgrades_additively_to_a2_0016(
     monkeypatch.setattr(
         production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums
     )
-    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 4)
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 7)
     report = AuthorityProductionMigrationRunner(
         fixture.database,
         database_id="a2-0015-upgrade-db",
@@ -238,7 +282,12 @@ def test_ready_a2_0015_installation_upgrades_additively_to_a2_0016(
         pre_authority_backup=fixture.backup_path,
     ).run("a2-0016-upgrade-owner")
 
-    assert report.applied_now == ("A2_0016_PHASE9_FORENSIC_REPLAY",)
+    assert report.applied_now == (
+        "A2_0016_PHASE9_FORENSIC_REPLAY",
+        "A2_0017_PHASE9_AUDIT_HARDENING",
+        "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
+        "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
+    )
     connection = sqlite3.connect(fixture.database)
     connection.row_factory = sqlite3.Row
     try:
@@ -252,14 +301,134 @@ def test_ready_a2_0015_installation_upgrades_additively_to_a2_0016(
         }
     finally:
         connection.close()
-    assert state["production_schema_version"] == 4
+    assert state["production_schema_version"] == 7
     assert names == {
         "authority_production_phase9_replays",
         "authority_production_phase9_replay_events",
         "authority_production_phase9_terminal_receipts",
         "authority_production_phase9_replay_idempotency",
         "authority_production_phase9_replay_current",
+        "authority_production_phase9_evidence_receipts",
+        "authority_production_phase9_gate_consumptions",
+        "authority_production_phase9_p0_runner_authorizations",
+        "authority_production_phase9_p0_runner_consumptions",
+        "authority_production_phase9_p0_runner_attestations",
+        "authority_production_phase9_replay_runtime_authorizations",
+        "authority_production_phase9_replay_runtime_completions",
+        "authority_production_phase9_replay_runtime_records",
+        "authority_production_phase9_replay_evidence_authorizations",
+        "authority_production_phase9_replay_evidence_consumptions",
+        "authority_production_phase9_replay_evidence_attestations",
+        "authority_production_phase9_replay_evidence_attestation_items",
+        "authority_production_phase9_start_authorizations",
+        "authority_production_phase9_start_authorization_consumptions",
     }
+
+
+def test_ready_a2_0016_installation_upgrades_additively_through_a2_0018(
+    tmp_path, monkeypatch
+):
+    migrations = production_schema.PRODUCTION_MIGRATIONS
+    migration_ids = production_schema.PRODUCTION_MIGRATION_IDS
+    migration_checksums = production_schema.PRODUCTION_MIGRATION_CHECKSUMS
+    monkeypatch.setattr(production_schema, "PRODUCTION_MIGRATIONS", migrations[:7])
+    monkeypatch.setattr(production_schema, "PRODUCTION_MIGRATION_IDS", migration_ids[:7])
+    monkeypatch.setattr(
+        production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums[:7]
+    )
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 4)
+    fixture = install_foundation(tmp_path, name="a2-0016-upgrade")
+
+    monkeypatch.setattr(production_schema, "PRODUCTION_MIGRATIONS", migrations)
+    monkeypatch.setattr(production_schema, "PRODUCTION_MIGRATION_IDS", migration_ids)
+    monkeypatch.setattr(
+        production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums
+    )
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 7)
+    report = AuthorityProductionMigrationRunner(
+        fixture.database,
+        database_id="a2-0016-upgrade-db",
+        expected_source_fence_sha256=fixture.preflight.source_fence_sha256,
+        identity_binding=initial_database_identity_binding(fixture.backup),
+        pre_authority_backup=fixture.backup_path,
+    ).run("a2-0017-upgrade-owner")
+
+    assert report.applied_now == (
+        "A2_0017_PHASE9_AUDIT_HARDENING",
+        "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
+        "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
+    )
+    connection = sqlite3.connect(fixture.database)
+    try:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(authority_production_run_generations)"
+            )
+        }
+        state = connection.execute(
+            "SELECT production_schema_version, state "
+            "FROM authority_production_schema_state WHERE singleton=1"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert {
+        "source_inventory_sha256",
+        "authorization_id",
+        "authorization_target_sha256",
+        "predecessor_terminal_receipt_sha256",
+    } <= columns
+    assert state == (7, "READY")
+
+
+def test_a2_0017_refuses_to_grandfather_pre_hardening_phase9_rows(
+    tmp_path, monkeypatch
+):
+    migrations = production_schema.PRODUCTION_MIGRATIONS
+    migration_ids = production_schema.PRODUCTION_MIGRATION_IDS
+    migration_checksums = production_schema.PRODUCTION_MIGRATION_CHECKSUMS
+    monkeypatch.setattr(production_schema, "PRODUCTION_MIGRATIONS", migrations[:7])
+    monkeypatch.setattr(production_schema, "PRODUCTION_MIGRATION_IDS", migration_ids[:7])
+    monkeypatch.setattr(
+        production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums[:7]
+    )
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 4)
+    fixture = install_foundation(tmp_path, name="a2-0016-nonempty")
+    connection = sqlite3.connect(fixture.database)
+    try:
+        connection.execute(
+            "INSERT INTO authority_production_run_generation_idempotency "
+            "VALUES ('legacy_current', 'old-key', ?, ?, ?)",
+            ("1" * 64, "old-run", "2" * 64),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    monkeypatch.setattr(production_schema, "PRODUCTION_MIGRATIONS", migrations)
+    monkeypatch.setattr(production_schema, "PRODUCTION_MIGRATION_IDS", migration_ids)
+    monkeypatch.setattr(
+        production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums
+    )
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 7)
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        AuthorityProductionMigrationRunner(
+            fixture.database,
+            database_id="a2-0016-nonempty-db",
+            expected_source_fence_sha256=fixture.preflight.source_fence_sha256,
+            identity_binding=initial_database_identity_binding(fixture.backup),
+            pre_authority_backup=fixture.backup_path,
+        ).run("a2-0017-refuse-owner")
+
+    connection = sqlite3.connect(fixture.database)
+    try:
+        state = connection.execute(
+            "SELECT production_schema_version, state, last_completed_migration "
+            "FROM authority_production_schema_state WHERE singleton=1"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert state == (4, "INTERRUPTED", "A2_0016_PHASE9_FORENSIC_REPLAY")
 
 
 def test_production_migration_interruption_is_durable_and_same_owner_resumes(tmp_path):
@@ -366,7 +535,7 @@ def test_future_production_schema_fails_closed(tmp_path):
     connection = sqlite3.connect(fixture.database)
     connection.execute(
         "UPDATE authority_production_schema_state "
-        "SET production_schema_version=5, state='RUNNING', "
+        "SET production_schema_version=8, state='RUNNING', "
         "lock_owner='future-owner', details_json='{\"future\":true}'"
     )
     connection.commit()
@@ -387,7 +556,7 @@ def test_future_production_schema_fails_closed(tmp_path):
         assert connection.execute(
             "SELECT production_schema_version, state, lock_owner, failure_code, details_json "
             "FROM authority_production_schema_state"
-        ).fetchone() == (5, "RUNNING", "future-owner", None, '{"future":true}')
+        ).fetchone() == (8, "RUNNING", "future-owner", None, '{"future":true}')
     finally:
         connection.close()
 

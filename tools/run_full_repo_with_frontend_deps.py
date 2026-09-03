@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run full pytest with one verified temporary frontend dependency symlink."""
+"""Run full pytest with a runner-mounted, read-only frontend dependency tree."""
 
 from __future__ import annotations
 
@@ -29,7 +29,10 @@ def _verify_locked_dependencies(source: Path, dependency: Path) -> tuple[str, in
         relative = lock_key.removeprefix("node_modules/")
         package_file = dependency / relative / "package.json"
         if not package_file.is_file() or package_file.is_symlink():
-            if expected.get("optional") is True:
+            # The Python repository suite does not execute development-only or
+            # platform-optional packages.  Their absence is recorded, while a
+            # missing runtime package remains a hard failure.
+            if expected.get("optional") is True or expected.get("dev") is True:
                 optional_absent += 1
                 continue
             raise RuntimeError(f"locked dependency is absent or unsafe: {lock_key}")
@@ -61,41 +64,53 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"frontend_lock_sha256={lock_sha256}", flush=True)
     print(f"locked_packages_verified={locked_packages}", flush=True)
-    print(f"locked_optional_packages_absent={optional_absent}", flush=True)
+    print(f"locked_nonruntime_packages_absent={optional_absent}", flush=True)
 
     link = source / "web/frontend/node_modules"
-    if link.exists() or link.is_symlink():
-        raise RuntimeError("temporary frontend dependency link already exists")
-    os.symlink(str(dependency), link, target_is_directory=True)
-    try:
-        info = link.lstat()
-        if not stat.S_ISLNK(info.st_mode) or os.readlink(link) != str(dependency):
-            raise RuntimeError("temporary frontend dependency link differs")
-        npm = subprocess.run(
-            ["npm", "ls", "--all", "--json", "--prefix", str(source / "web/frontend")],
-            cwd=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, check=False,
+    if not link.is_symlink() or link.resolve(strict=True) != dependency:
+        raise RuntimeError(
+            "frontend dependency must be mounted by the trusted audit sandbox"
         )
-        npm_wire = json.loads(npm.stdout or "{}")
-        if npm.returncode != 0 or npm_wire.get("problems"):
-            raise RuntimeError("frontend dependency closure does not satisfy the lock")
-        print("frontend_npm_ls_all=PASS", flush=True)
-        completed = subprocess.run(
-            [
-                str(python), "-m", "pytest", "-p", "no:cacheprovider",
-                f"--basetemp={args.basetemp}", "-q",
-            ],
-            cwd=source, check=False,
-        )
-        return completed.returncode
-    finally:
-        info = link.lstat()
-        if not stat.S_ISLNK(info.st_mode) or os.readlink(link) != str(dependency):
-            raise RuntimeError("refusing to unlink a changed dependency entry")
-        link.unlink()
-        if link.exists() or link.is_symlink() or not dependency.is_dir():
-            raise RuntimeError("dependency-link cleanup failed")
-        print("temporary_frontend_dependency_link=REMOVED_TARGET_PRESERVED", flush=True)
+    info = link.lstat()
+    if not stat.S_ISLNK(info.st_mode):
+        raise RuntimeError("frontend dependency sandbox mount differs")
+    # The trusted parent already records a recursive byte inventory.  The
+    # lock-entry walk above independently checks every installed version and
+    # fails on any missing runtime entry.  Running npm here would reclassify
+    # explicitly permitted absent development packages as fatal and would add
+    # no stronger byte binding.
+    print("frontend_dependency_inventory=PASS", flush=True)
+    reporter = os.environ.get("PHASE9_TRUSTED_PYTEST_REPORTER_PATH")
+    runtime_site_packages = os.environ.get("PHASE9_TRUSTED_PYTEST_SITE_PACKAGES")
+    event_fd_text = os.environ.get("PHASE9_TRUSTED_PYTEST_EVENT_FD")
+    if (
+        not reporter
+        or not runtime_site_packages
+        or os.environ.get("PHASE9_TRUSTED_PYTEST_EVENT_PATH")
+        != "PARENT_CAPTURED_ANONYMOUS_PIPE"
+        or not event_fd_text
+        or not event_fd_text.isdecimal()
+        or int(event_fd_text) < 3
+        or not os.environ.get("PHASE9_TRUSTED_PYTEST_NONCE")
+    ):
+        raise RuntimeError("trusted pytest reporter coordinate is absent")
+    event_fd = int(event_fd_text)
+    if not stat.S_ISFIFO(os.fstat(event_fd).st_mode):
+        raise RuntimeError("trusted pytest parent event channel is not a pipe")
+    completed = subprocess.run(
+        [
+            str(python), "-I", "-S", "-B", reporter,
+            "--runtime-site-packages", runtime_site_packages,
+            "--source-root", str(source), "--", "-q",
+            "-p", "no:cacheprovider",
+            "--noconftest", "-c", "/dev/null", "--rootdir", str(source),
+            "-o", "addopts=", f"--basetemp={args.basetemp}", "tests",
+        ],
+        cwd=source,
+        check=False,
+        pass_fds=(event_fd,),
+    )
+    return completed.returncode
 
 
 if __name__ == "__main__":

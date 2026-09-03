@@ -25,6 +25,8 @@ class Phase9Settings:
     authority_source_fence_sha256: str | None = None
     source_repository: Path | None = None
     evidence_root: Path | None = None
+    official_input_root: Path | None = None
+    execution_context_receipt_path: Path | None = None
 
 
 def _boolean(value: object) -> bool:
@@ -76,4 +78,8 @@ def load_phase9_settings(
         authority_source_fence_sha256=fence,
         source_repository=_absolute(values, "PHASE9_SOURCE_REPOSITORY"),
         evidence_root=_absolute(values, "PHASE9_EVIDENCE_ROOT"),
+        official_input_root=_absolute(values, "PHASE9_OFFICIAL_INPUT_ROOT"),
+        execution_context_receipt_path=_absolute(
+            values, "PHASE9_EXECUTION_CONTEXT_RECEIPT"
+        ),
     )

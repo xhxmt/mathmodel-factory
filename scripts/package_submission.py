@@ -19,6 +19,7 @@ from factory_core.submission_bundle import (
     submission_bundle_manifest,
     verify_zip_against_manifest,
 )
+from factory_core.phase9_delivery_fence import require_phase9_delivery_authority
 
 
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
@@ -61,29 +62,42 @@ def _write_deterministic_member(
     archive.writestr(info, source.read_bytes())
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("project")
-    parser.add_argument("base")
-    parser.add_argument("output")
-    args = parser.parse_args()
+def package_submission(
+    project: str | Path,
+    base: str,
+    output: str | Path,
+    *,
+    workflow_id: str,
+    run_generation: str,
+) -> dict[str, object]:
+    """Build one submission only after an independent live Authority check.
 
-    project = Path(args.project).resolve()
-    output = Path(args.output).resolve()
+    This producer deliberately performs the fence check itself.  A caller's
+    prior audit, cached decision, or release check is not authority for this
+    filesystem mutation boundary.
+    """
+
+    project = Path(project).resolve()
+    output = Path(output).resolve()
     if not project.is_dir():
-        raise SystemExit(f"Project directory not found: {project}")
-    try:
-        manifest = submission_bundle_manifest(project, args.base)
-    except (OSError, ValueError) as exc:
-        raise SystemExit(str(exc)) from exc
+        raise ValueError(f"Project directory not found: {project}")
+
+    # This must precede manifest construction and every directory/file write.
+    require_phase9_delivery_authority(
+        project,
+        workflow_id=workflow_id,
+        run_generation=run_generation,
+    )
+
+    manifest = submission_bundle_manifest(project, base)
     members = manifest["members"]
     names = {str(item["archive_path"]) for item in members}
-    if f"{args.base}_paper.pdf" not in names:
-        raise SystemExit("Final PDF was not selected for packaging")
+    if f"{base}_paper.pdf" not in names:
+        raise ValueError("Final PDF was not selected for packaging")
     if not any(name.startswith("models/") for name in names):
-        raise SystemExit("No model code selected for packaging")
+        raise ValueError("No model code selected for packaging")
     if not any(name.startswith("results/") for name in names):
-        raise SystemExit("No results selected for packaging")
+        raise ValueError("No results selected for packaging")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
@@ -108,6 +122,29 @@ def main() -> int:
     print(
         f"Wrote {output} ({len(members)} files, manifest {manifest['manifest_sha256']})"
     )
+    return manifest
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("project")
+    parser.add_argument("base")
+    parser.add_argument("output")
+    parser.add_argument("--workflow-id", required=True)
+    parser.add_argument("--run-generation", required=True)
+    args = parser.parse_args()
+
+    try:
+        package_submission(
+            args.project,
+            args.base,
+            args.output,
+            workflow_id=args.workflow_id,
+            run_generation=args.run_generation,
+        )
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
