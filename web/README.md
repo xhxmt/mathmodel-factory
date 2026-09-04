@@ -219,6 +219,20 @@ Vite 会在构建时把 `virtual:optional-workspace-snapshot` 精确映射到 in
 无条件 import 后再靠运行时 `v-if` 隐藏，否则默认构建的 manifest/module graph
 和浏览器资源门禁会失败。
 
+Phase 9 的正式 `full_repository` 证据会在 source 与 fresh 环境中按同一顺序运行
+全仓 Python pytest、独立 frontend production build、以及这里记录的
+`npm run test:phase6`。它要求显式的只读 `node_modules` 与 Chromium runtime，
+通过 `PHASE6_CHROMIUM_EXECUTABLE` 绑定浏览器，并由已记录和哈希的 Node 直接
+执行解析后的 npm CLI（而不是只做 Node 版本探测）；独立 production build 的
+Vite config loader 固定为 `--configLoader runner`，从而绕开默认会尝试在只读
+`node_modules` 下物化 `.vite-temp` 的 bundled-config 路径；`outDir` 放在本次
+调用的可写 basetemp 中。runner 会把
+`package.json` 中精确的
+`vite build` 和两文件 `test:phase6` 脚本绑定到源码 inventory，并对 build 的
+非空 `index.html`、`assets/` 文件及其 SHA-256 清单做前后复核。缺少依赖/浏览器、
+空 build、浏览器 skip 或任一阶段非零都使整个 suite 失败；source/fresh 的 build
+清单、浏览器测试节点和结果也必须逐项一致，不能只靠相同通过计数取得证据 PASS。
+
 Phase 6 的完整身份、持久化、grant 生命周期和安全边界见
 [`../docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md`](../docs/architecture/PHASE6_PROJECT_SNAPSHOT_UI_SHADOW.md)。
 

@@ -24,6 +24,8 @@ from tools.run_audit_command import (
     COMMAND_SCHEMA,
     DEPENDENCY_INVENTORY_SCHEMA,
     INVENTORY_SCHEMA,
+    PREFLIGHT_FAILURE_EXIT_CODE,
+    PREFLIGHT_FAILURE_SCHEMA,
     SANDBOX_SCHEMA,
     _dependency_tree_inventory,
     executed_source_inventory,
@@ -33,10 +35,17 @@ from tools.trusted_pytest_reporter import (
     TRUSTED_PYTEST_EVENT_SCHEMA,
     validate_trusted_pytest_events,
 )
+from tools.phase9_composite_evidence import validate_composite_events
+from tools.run_full_repo_with_frontend_deps import (
+    COMPOSITE_EVENT_SCHEMA,
+    COMPOSITE_EVENT_TRANSPORT,
+    COMPOSITE_STAGE_IDS,
+    composite_stage_contract,
+)
 
 
-SUMMARY_SCHEMA = "paper-factory-phase9-final-test-summary-v5"
-SUITE_CONTRACT_SCHEMA = "paper-factory-phase9-test-suite-contract-v1"
+SUMMARY_SCHEMA = "paper-factory-phase9-final-test-summary-v8"
+SUITE_CONTRACT_SCHEMA = "paper-factory-phase9-test-suite-contract-v3"
 OUTCOMES = (
     "collected",
     "passed",
@@ -57,7 +66,28 @@ RECORD_KEYS = {
     "python_executable", "environment", "started_at",
     "completed_at", "duration_milliseconds", "exit_code", "runner_exit_code",
     "outcome_parser",
-    "outcomes", "trusted_pytest", "raw_log", "record_sha256",
+    "outcomes", "trusted_pytest", "composite_suite", "raw_log", "record_sha256",
+}
+PREFLIGHT_RECORD_KEYS = {
+    "schema", "id", "suite", "kind", "execution_environment", "attempt_kind",
+    "producer", "candidate", "source_inventory", "source_stable",
+    "source_postcheck", "source_identity_repository", "requested_command_argv",
+    "command_executable", "cwd", "audit_root", "python_executable",
+    "started_at", "completed_at", "duration_milliseconds", "process_started",
+    "exit_code", "runner_exit_code", "failure_stage", "error_type", "raw_log",
+    "record_sha256",
+}
+PREFLIGHT_FAILURE_STAGES = {
+    "SUITE_KIND",
+    "COMMAND_EXECUTABLE",
+    "COMMAND_SHAPE",
+    "DEPENDENCY_INVENTORY",
+    "TRUSTED_REPORTER_PREPARATION",
+    "TEST_SOURCE_PREPARATION",
+    "EVENT_PIPE_PREPARATION",
+    "ENVIRONMENT_PREPARATION",
+    "COMMAND_PREPARATION",
+    "SANDBOX_PREPARATION",
 }
 
 # This policy is deliberately independent of the candidate-supplied JSON file.
@@ -65,6 +95,7 @@ RECORD_KEYS = {
 PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
     "phase9_focused": {
         "kind": "pytest",
+        "required_stages": [],
         "required_targets": [
             "tests/test_phase9_entry_gate.py",
             "tests/test_phase9_run_generation.py",
@@ -88,6 +119,7 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
     },
     "entry_ar007": {
         "kind": "pytest",
+        "required_stages": [],
         "required_targets": [
             "tests/test_phase9_entry_gate.py",
             "tests/test_phase9_p0_evidence.py",
@@ -101,6 +133,7 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
     },
     "a2_migration": {
         "kind": "pytest",
+        "required_stages": [],
         "required_targets": [
             "tests/test_authority_production_migration.py",
             "tests/test_authority_operations.py",
@@ -109,6 +142,7 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
     },
     "phase1_8_continuous": {
         "kind": "pytest",
+        "required_stages": [],
         "required_targets": [
             "tests/test_phase1_8_durable_continuous_chain.py",
             "tests/test_m01_runtime_parity.py",
@@ -117,6 +151,7 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
     },
     "phase7_8_regression": {
         "kind": "pytest",
+        "required_stages": [],
         "required_targets": [
             "tests/test_phase78_enabled_e2e.py",
             "tests/test_phase78_bootstrap_contract.py",
@@ -126,6 +161,7 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
     },
     "release_workflow": {
         "kind": "pytest",
+        "required_stages": [],
         "required_targets": [
             "tests/test_phase9_delivery_fence.py",
             "tests/test_atomic_release.py",
@@ -138,8 +174,10 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
         "requirements": ["P9-AR007", "P9-DELIVERY-FENCE"],
     },
     "full_repository": {
-        "kind": "pytest",
+        "kind": "composite",
         "required_targets": ["tools/run_full_repo_with_frontend_deps.py"],
+        "required_stages": list(COMPOSITE_STAGE_IDS),
+        "composite_stages": composite_stage_contract(),
         "requirements": ["P9-EVIDENCE-CLOSURE", "REPOSITORY-REGRESSION"],
     },
 }
@@ -381,7 +419,7 @@ def _runtime_candidate_identity(repository: Path) -> dict[str, str]:
 
 def _verify_environment(
     value: object, *, recorded_audit_root: Path, cwd: Path, record_name: str,
-    runtime_validation: bool,
+    runtime_validation: bool, composite: bool,
 ) -> None:
     if type(value) is not dict or set(value) != {
         "policy", "inherited", "variables", "removed_host_variable_names",
@@ -394,14 +432,23 @@ def _verify_environment(
     ):
         raise RuntimeError(f"command environment is not sanitized: {record_name}")
     variables = value.get("variables")
-    if type(variables) is not dict or set(variables) != {
+    expected_variables = {
         "PATH", "HOME", "XDG_CACHE_HOME", "TMPDIR", "LC_ALL", "PYTHONHASHSEED",
         "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE",
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "PHASE9_TRUSTED_PYTEST_REPORTER_PATH",
         "PHASE9_TRUSTED_PYTEST_SITE_PACKAGES",
         "PHASE9_TEST_SOURCE_REPOSITORY", "PHASE9_TRUSTED_PYTEST_EVENT_PATH",
         "PHASE9_TRUSTED_PYTEST_EVENT_FD", "PHASE9_TRUSTED_PYTEST_NONCE",
-    }:
+    }
+    if composite:
+        expected_variables.update(
+            {
+                "PHASE9_TRUSTED_COMPOSITE_EVENT_PATH",
+                "PHASE9_TRUSTED_COMPOSITE_EVENT_FD",
+                "PHASE9_TRUSTED_COMPOSITE_NONCE",
+            }
+        )
+    if type(variables) is not dict or set(variables) != expected_variables:
         raise RuntimeError(f"command environment allowlist differs: {record_name}")
     fixed = {
         "PATH": "/usr/bin:/bin",
@@ -451,6 +498,22 @@ def _verify_environment(
     nonce = variables.get("PHASE9_TRUSTED_PYTEST_NONCE")
     if type(nonce) is not str or re.fullmatch(r"[0-9a-f]{32}", nonce) is None:
         raise RuntimeError(f"trusted event nonce differs: {record_name}")
+    if composite:
+        if variables.get("PHASE9_TRUSTED_COMPOSITE_EVENT_PATH") != (
+            "PARENT_CAPTURED_ANONYMOUS_PIPE"
+        ):
+            raise RuntimeError(f"trusted composite transport differs: {record_name}")
+        composite_fd = variables.get("PHASE9_TRUSTED_COMPOSITE_EVENT_FD")
+        composite_nonce = variables.get("PHASE9_TRUSTED_COMPOSITE_NONCE")
+        if (
+            type(composite_fd) is not str
+            or not composite_fd.isdecimal()
+            or int(composite_fd) < 3
+            or composite_fd == event_fd
+            or type(composite_nonce) is not str
+            or re.fullmatch(r"[0-9a-f]{32}", composite_nonce) is None
+        ):
+            raise RuntimeError(f"trusted composite coordinate differs: {record_name}")
     for name in ("HOME", "XDG_CACHE_HOME", "TMPDIR"):
         path = _lexical_absolute(
             variables.get(name), f"command {name}: {record_name}"
@@ -477,7 +540,10 @@ def _verify_runner_and_command(
     audit_root: Path,
     recorded_audit_root: Path,
     runtime_validation: bool,
-) -> tuple[tuple[str, ...], Path | None]:
+) -> tuple[
+    tuple[str, ...], Path | None, Path | None, Path | None,
+    Path | None, Path | None, Path,
+]:
     producer = value.get("producer")
     if type(producer) is not dict or set(producer) != {
         "type", "version", "path", "bytes", "sha256"
@@ -566,21 +632,46 @@ def _verify_runner_and_command(
         expected_prefix = [argv[0], "-I", "-S", *requested_prefix[1:]]
         if argv[: len(expected_prefix)] != expected_prefix:
             raise RuntimeError(f"isolated full-suite command prefix differs: {record_name}")
-        if len(argv) != len(expected_prefix) + 5:
+        if len(argv) != len(expected_prefix) + 13:
             raise RuntimeError(f"full-suite command shape differs: {record_name}")
         dependency = Path(argv[len(expected_prefix)])
         suffix = argv[len(expected_prefix) + 1 :]
         if (
             not dependency.is_absolute()
             or (runtime_validation and not dependency.resolve(strict=True).is_dir())
-            or suffix[:2] != ["--python", argv[0]]
-            or suffix[2] != "--basetemp"
+            or len(suffix) != 12
+            or suffix[0] != "--browser-root"
+            or suffix[2] != "--browser-executable"
+            or suffix[4] != "--node"
+            or suffix[6] != "--npm"
+            or suffix[8:10] != ["--python", argv[0]]
+            or suffix[10] != "--basetemp"
         ):
             raise RuntimeError(f"full-suite command binding differs: {record_name}")
+        browser_root = _lexical_absolute(
+            suffix[1], f"full-suite browser root: {record_name}"
+        )
+        browser_executable = _lexical_absolute(
+            suffix[3], f"full-suite browser executable: {record_name}"
+        )
+        node = _lexical_absolute(suffix[5], f"full-suite node: {record_name}")
+        npm = _lexical_absolute(suffix[7], f"full-suite npm: {record_name}")
+        if runtime_validation:
+            try:
+                browser_root.resolve(strict=True)
+                browser_executable.resolve(strict=True).relative_to(
+                    browser_root.resolve(strict=True)
+                )
+                node.resolve(strict=True)
+                npm.resolve(strict=True)
+            except (OSError, ValueError) as exc:
+                raise RuntimeError(
+                    f"full-suite runtime is unavailable: {record_name}"
+                ) from exc
         if requested != [*requested_prefix, *argv[len(expected_prefix):]]:
             raise RuntimeError(f"full-suite requested/actual command differs: {record_name}")
         basetemp = _lexical_absolute(
-            suffix[3], f"full-suite basetemp: {record_name}"
+            suffix[11], f"full-suite basetemp: {record_name}"
         )
         _lexically_within(
             recorded_audit_root, basetemp,
@@ -628,78 +719,40 @@ def _verify_runner_and_command(
             raise RuntimeError(f"isolated pytest command shape differs: {record_name}")
         normalized = tuple(actual_targets)
         dependency_path = None
-    return normalized, dependency_path
+        browser_root = browser_executable = node = npm = None
+    return (
+        normalized, dependency_path, browser_root, browser_executable,
+        node, npm, basetemp,
+    )
 
 
-def _verify_dependency_inventory(
-    value: object,
-    *,
-    dependency: Path | None,
-    cwd: Path,
-    source_inventory: dict[str, object],
-    record_name: str,
-    runtime_validation: bool,
+def _verify_external_component(
+    value: object, *, kind: str, root: Path, record_name: str,
 ) -> None:
     keys = {
-        "schema", "kind", "root", "path_count", "regular_file_count",
-        "symlink_count", "total_file_bytes", "lockfile_sha256", "tree_sha256",
-        "files", "inventory_sha256",
+        "kind", "root", "path_count", "regular_file_count", "symlink_count",
+        "total_file_bytes", "tree_sha256", "files",
     }
+    if kind == "PLAYWRIGHT_BROWSER_RUNTIME":
+        keys.add("executable")
     if type(value) is not dict or set(value) != keys:
-        raise RuntimeError(f"dependency inventory shape differs: {record_name}")
-    if value.get("schema") != DEPENDENCY_INVENTORY_SCHEMA:
-        raise RuntimeError(f"dependency inventory schema differs: {record_name}")
-    if dependency is None:
-        expected = {
-            "schema": DEPENDENCY_INVENTORY_SCHEMA,
-            "kind": "NONE",
-            "root": None,
-            "path_count": 0,
-            "regular_file_count": 0,
-            "symlink_count": 0,
-            "total_file_bytes": 0,
-            "lockfile_sha256": None,
-            "tree_sha256": canonical_sha256([]),
-            "files": [],
-        }
-        expected["inventory_sha256"] = canonical_sha256(expected)
-        if value != expected:
-            raise RuntimeError(f"unexpected dependency inventory: {record_name}")
-        return
-    root = _lexical_absolute(value.get("root"), f"dependency root: {record_name}")
-    if root != dependency:
-        raise RuntimeError(f"dependency root binding differs: {record_name}")
-    if value.get("kind") != "FRONTEND_NODE_MODULES":
-        raise RuntimeError(f"dependency inventory kind differs: {record_name}")
-    unsigned = dict(value)
-    inventory_digest = unsigned.pop("inventory_sha256")
-    if inventory_digest != canonical_sha256(unsigned):
-        raise RuntimeError(f"dependency inventory self-hash differs: {record_name}")
-    for key in (
-        "path_count", "regular_file_count", "symlink_count", "total_file_bytes"
-    ):
+        raise RuntimeError(f"dependency component shape differs: {record_name}")
+    if value.get("kind") != kind or value.get("root") != str(root):
+        raise RuntimeError(f"dependency component identity differs: {record_name}")
+    for key in ("path_count", "regular_file_count", "symlink_count", "total_file_bytes"):
         if type(value.get(key)) is not int or int(value[key]) < 0:
-            raise RuntimeError(f"dependency inventory count differs: {record_name}")
+            raise RuntimeError(f"dependency component count differs: {record_name}")
     if (
         int(value["path_count"]) <= 0
         or int(value["regular_file_count"]) <= 0
         or int(value["total_file_bytes"]) <= 0
-        or int(value["path_count"])
-        < int(value["regular_file_count"]) + int(value["symlink_count"])
-        or type(value.get("lockfile_sha256")) is not str
-        or _HEX64.fullmatch(str(value["lockfile_sha256"])) is None
         or type(value.get("tree_sha256")) is not str
         or _HEX64.fullmatch(str(value["tree_sha256"])) is None
     ):
-        raise RuntimeError(f"dependency inventory identity differs: {record_name}")
-    locked_source = _tracked_file(
-        source_inventory, "web/frontend/package-lock.json"
-    )
-    if value.get("lockfile_sha256") != locked_source.get("sha256"):
-        raise RuntimeError(f"dependency lock/source bytes differ: {record_name}")
+        raise RuntimeError(f"dependency component content differs: {record_name}")
     files = value.get("files")
     if type(files) is not list or len(files) != value["path_count"]:
-        raise RuntimeError(f"dependency inventory file list differs: {record_name}")
+        raise RuntimeError(f"dependency component file list differs: {record_name}")
     paths: list[str] = []
     collisions: set[str] = set()
     regular_count = 0
@@ -707,15 +760,15 @@ def _verify_dependency_inventory(
     byte_total = 0
     for item in files:
         if type(item) is not dict:
-            raise RuntimeError(f"dependency inventory row differs: {record_name}")
+            raise RuntimeError(f"dependency component row differs: {record_name}")
         relative = _safe_relative(item.get("path"), "dependency inventory")
         collision = unicodedata.normalize("NFC", relative).casefold()
         if collision in collisions:
-            raise RuntimeError(f"dependency inventory path collision: {record_name}")
+            raise RuntimeError(f"dependency component path collision: {record_name}")
         collisions.add(collision)
         paths.append(relative)
-        kind = item.get("type")
-        if kind == "file":
+        item_kind = item.get("type")
+        if item_kind == "file":
             if set(item) != {"path", "type", "mode", "bytes", "sha256"}:
                 raise RuntimeError(f"dependency file row differs: {record_name}")
             if (
@@ -727,13 +780,13 @@ def _verify_dependency_inventory(
                 raise RuntimeError(f"dependency file identity differs: {record_name}")
             regular_count += 1
             byte_total += int(item["bytes"])
-        elif kind == "symlink":
+        elif item_kind == "symlink":
             if set(item) != {"path", "type", "mode", "target"} or type(
                 item.get("target")
             ) is not str:
                 raise RuntimeError(f"dependency symlink row differs: {record_name}")
             symlink_count += 1
-        elif kind == "directory":
+        elif item_kind == "directory":
             if set(item) != {"path", "type", "mode"}:
                 raise RuntimeError(f"dependency directory row differs: {record_name}")
         else:
@@ -750,10 +803,96 @@ def _verify_dependency_inventory(
         or byte_total != value["total_file_bytes"]
         or value["tree_sha256"] != canonical_sha256(files)
     ):
-        raise RuntimeError(f"dependency inventory closure differs: {record_name}")
+        raise RuntimeError(f"dependency component closure differs: {record_name}")
+    if kind == "PLAYWRIGHT_BROWSER_RUNTIME":
+        executable = value.get("executable")
+        if type(executable) is not dict or set(executable) != {
+            "relative_path", "bytes", "sha256"
+        }:
+            raise RuntimeError(f"browser executable descriptor differs: {record_name}")
+        matches = [
+            item for item in files
+            if item.get("type") == "file"
+            and item.get("path") == executable.get("relative_path")
+        ]
+        if len(matches) != 1 or any(
+            executable.get(field) != matches[0].get(field)
+            for field in ("bytes", "sha256")
+        ):
+            raise RuntimeError(f"browser executable inventory differs: {record_name}")
+
+
+def _verify_dependency_inventory(
+    value: object,
+    *,
+    dependency: Path | None,
+    browser_root: Path | None,
+    browser_executable: Path | None,
+    cwd: Path,
+    source_inventory: dict[str, object],
+    record_name: str,
+    runtime_validation: bool,
+) -> None:
+    keys = {
+        "schema", "kind", "lockfile_sha256", "node_modules",
+        "browser_runtime", "path_count", "inventory_sha256",
+    }
+    if type(value) is not dict or set(value) != keys:
+        raise RuntimeError(f"dependency inventory shape differs: {record_name}")
+    if value.get("schema") != DEPENDENCY_INVENTORY_SCHEMA:
+        raise RuntimeError(f"dependency inventory schema differs: {record_name}")
+    unsigned = dict(value)
+    inventory_digest = unsigned.pop("inventory_sha256")
+    if inventory_digest != canonical_sha256(unsigned):
+        raise RuntimeError(f"dependency inventory self-hash differs: {record_name}")
+    if dependency is None:
+        expected = {
+            "schema": DEPENDENCY_INVENTORY_SCHEMA,
+            "kind": "NONE",
+            "lockfile_sha256": None,
+            "node_modules": None,
+            "browser_runtime": None,
+            "path_count": 0,
+        }
+        expected["inventory_sha256"] = canonical_sha256(expected)
+        if value != expected or browser_root is not None or browser_executable is not None:
+            raise RuntimeError(f"unexpected dependency inventory: {record_name}")
+        return
+    if browser_root is None or browser_executable is None:
+        raise RuntimeError(f"browser dependency coordinate is absent: {record_name}")
+    if value.get("kind") != "FULL_REPOSITORY_DEPENDENCIES":
+        raise RuntimeError(f"dependency inventory kind differs: {record_name}")
+    locked_source = _tracked_file(source_inventory, "web/frontend/package-lock.json")
+    if value.get("lockfile_sha256") != locked_source.get("sha256"):
+        raise RuntimeError(f"dependency lock/source bytes differ: {record_name}")
+    node = value.get("node_modules")
+    browser = value.get("browser_runtime")
+    _verify_external_component(
+        node, kind="FRONTEND_NODE_MODULES", root=dependency,
+        record_name=record_name,
+    )
+    _verify_external_component(
+        browser, kind="PLAYWRIGHT_BROWSER_RUNTIME", root=browser_root,
+        record_name=record_name,
+    )
+    if value.get("path_count") != int(node["path_count"]) + int(browser["path_count"]):
+        raise RuntimeError(f"dependency inventory aggregate differs: {record_name}")
+    executable_relative = (
+        browser_executable.resolve(strict=True).relative_to(
+            browser_root.resolve(strict=True)
+        ).as_posix()
+        if runtime_validation
+        else browser_executable.relative_to(browser_root).as_posix()
+    )
+    if browser["executable"].get("relative_path") != executable_relative:
+        raise RuntimeError(f"browser executable binding differs: {record_name}")
     if runtime_validation:
         try:
-            observed = _dependency_tree_inventory(root.resolve(strict=True), cwd)
+            observed = _dependency_tree_inventory(
+                dependency.resolve(strict=True), cwd,
+                browser_root=browser_root.resolve(strict=True),
+                browser_executable=browser_executable.resolve(strict=True),
+            )
         except (OSError, RuntimeError, ValueError) as exc:
             raise RuntimeError(
                 f"dependency inventory cannot be reproduced: {record_name}"
@@ -770,6 +909,7 @@ def _verify_execution_sandbox(
     cwd: Path,
     audit_root: Path,
     dependency: Path | None,
+    browser_root: Path | None,
     identifier: str,
     record_name: str,
     runtime_validation: bool,
@@ -778,8 +918,9 @@ def _verify_execution_sandbox(
         "schema", "policy", "binary", "source_mount", "audit_mount",
         "writable_mounts", "source_runtime_overlay", "source_runtime_mounts",
         "python_environment_mount", "masked_host_project", "dependency_mount",
-        "git_object_mount", "system_tmp_mount", "frontend_overlay",
-        "network_namespace", "event_transport",
+        "browser_runtime_mount", "git_object_mount", "system_tmp_mount",
+        "frontend_overlay", "network_namespace", "event_transport",
+        "composite_event_transport",
         "launcher_argv", "sandbox_sha256",
     }
     if type(value) is not dict or set(value) != keys:
@@ -807,7 +948,11 @@ def _verify_execution_sandbox(
     ):
         raise RuntimeError(f"execution sandbox policy differs: {record_name}")
     environment_root = Path(command[0]).parent.parent
-    host_project = environment_root.parent.resolve()
+    host_project = (
+        environment_root.parent.resolve(strict=True)
+        if runtime_validation
+        else environment_root.parent
+    )
     if (
         value.get("python_environment_mount")
         != {"path": str(environment_root), "access": "READ_ONLY"}
@@ -871,6 +1016,13 @@ def _verify_execution_sandbox(
         or value.get("frontend_overlay") != overlay
     ):
         raise RuntimeError(f"execution sandbox dependency isolation differs: {record_name}")
+    expected_browser_mount = (
+        None
+        if browser_root is None
+        else {"path": str(browser_root), "access": "READ_ONLY"}
+    )
+    if value.get("browser_runtime_mount") != expected_browser_mount:
+        raise RuntimeError(f"execution sandbox browser isolation differs: {record_name}")
     event_fd = variables.get("PHASE9_TRUSTED_PYTEST_EVENT_FD")
     expected_event_transport = {
         "kind": "PARENT_CAPTURED_ANONYMOUS_PIPE",
@@ -879,6 +1031,22 @@ def _verify_execution_sandbox(
     }
     if value.get("event_transport") != expected_event_transport:
         raise RuntimeError(f"execution sandbox event transport differs: {record_name}")
+    composite_fd = variables.get("PHASE9_TRUSTED_COMPOSITE_EVENT_FD")
+    expected_composite_transport = (
+        None
+        if dependency is None
+        else {
+            "kind": "PARENT_CAPTURED_ANONYMOUS_PIPE",
+            "write_fd": (
+                int(str(composite_fd)) if str(composite_fd).isdecimal() else -1
+            ),
+            "tested_process_access": "WRITE_ONLY_APPEND_STREAM",
+        }
+    )
+    if value.get("composite_event_transport") != expected_composite_transport:
+        raise RuntimeError(
+            f"execution sandbox composite transport differs: {record_name}"
+        )
     if dependency is None:
         basetemp_argument = next(
             (
@@ -981,6 +1149,10 @@ def _verify_execution_sandbox(
                 "--ro-overlay", str(frontend),
             ]
         )
+    if browser_root is not None:
+        expected.extend(
+            ["--ro-bind", str(browser_root), str(browser_root)]
+        )
     expected.extend(["--chdir", str(cwd), "--clearenv"])
     for name, item in sorted(variables.items()):
         expected.extend(["--setenv", str(name), str(item)])
@@ -1021,23 +1193,44 @@ def _suite_contract(
         raise RuntimeError("suite contract is empty")
     result: dict[str, dict[str, object]] = {}
     for item in suites:
-        if type(item) is not dict or set(item) != {
+        if type(item) is not dict:
+            raise RuntimeError("suite contract entry differs")
+        expected_keys = {
             "id",
             "kind",
             "requirements",
             "description",
             "required_targets",
-        }:
+            "required_stages",
+        }
+        if item.get("kind") == "composite":
+            expected_keys.add("composite_stages")
+        if set(item) != expected_keys:
             raise RuntimeError("suite contract entry differs")
         identifier = item["id"]
         if type(identifier) is not str or identifier in result:
             raise RuntimeError("suite contract ID is invalid or duplicated")
-        if item["kind"] not in {"pytest", "bootstrap"}:
+        if item["kind"] not in {"pytest", "composite"}:
             raise RuntimeError(f"suite contract kind is invalid: {identifier}")
         if type(item["requirements"]) is not list or not item["requirements"]:
             raise RuntimeError(f"suite requirements are empty: {identifier}")
         if type(item["required_targets"]) is not list or not item["required_targets"]:
             raise RuntimeError(f"suite targets are empty: {identifier}")
+        if (
+            type(item["required_stages"]) is not list
+            or any(type(stage) is not str for stage in item["required_stages"])
+            or len(item["required_stages"]) != len(set(item["required_stages"]))
+            or (
+                item["kind"] == "composite"
+                and item["required_stages"] != list(COMPOSITE_STAGE_IDS)
+            )
+            or (
+                item["kind"] == "composite"
+                and item.get("composite_stages") != composite_stage_contract()
+            )
+            or (item["kind"] == "pytest" and item["required_stages"])
+        ):
+            raise RuntimeError(f"suite stage contract differs: {identifier}")
         result[identifier] = item
     if set(result) != set(expected_specs):
         raise RuntimeError("suite contract cannot shrink or expand the required suite set")
@@ -1062,6 +1255,7 @@ def _verify_trusted_pytest(
     raw_log: bytes,
     runtime_validation: bool,
     record_name: str,
+    reconcile_terminal: bool = True,
 ) -> dict[str, object] | None:
     keys = {
         "schema", "module", "source_path", "source_bytes", "source_sha256",
@@ -1147,10 +1341,396 @@ def _verify_trusted_pytest(
         or value.get("validation_error") is not None
         or value.get("outcomes") != counts
         or value.get("node_outcomes") != result["node_outcomes"]
-        or parse_outcomes(raw_log, "pytest") != counts
+        or (reconcile_terminal and parse_outcomes(raw_log, "pytest") != counts)
     ):
         raise RuntimeError(f"trusted pytest/terminal reconciliation differs: {record_name}")
     return result
+
+
+def _verify_composite_suite(
+    value: object,
+    *,
+    record: dict[str, object],
+    suite: dict[str, object],
+    audit_root: Path,
+    cwd: Path,
+    raw_log: bytes,
+    source_inventory: dict[str, object],
+    dependency_inventory: dict[str, object],
+    dependency: Path | None,
+    browser_root: Path | None,
+    browser_executable: Path | None,
+    node: Path | None,
+    npm: Path | None,
+    basetemp: Path,
+    runtime_validation: bool,
+    record_name: str,
+) -> dict[str, object] | None:
+    is_full = record.get("suite") == "full_repository"
+    if not is_full:
+        if value is not None:
+            raise RuntimeError(f"unexpected composite evidence: {record_name}")
+        return None
+    keys = {
+        "schema", "nonce", "event_transport", "validation", "validation_error",
+        "stage_results", "browser_test_summary", "browser_node_outcomes",
+        "browser_complete_pass", "build_output",
+        "contract_sha256", "event_artifact",
+    }
+    if type(value) is not dict or set(value) != keys:
+        raise RuntimeError(f"composite descriptor differs: {record_name}")
+    variables = record["environment"]["variables"]
+    if (
+        value.get("schema") != COMPOSITE_EVENT_SCHEMA
+        or value.get("event_transport") != COMPOSITE_EVENT_TRANSPORT
+        or value.get("nonce") != variables.get("PHASE9_TRUSTED_COMPOSITE_NONCE")
+    ):
+        raise RuntimeError(f"composite descriptor identity differs: {record_name}")
+    event_path, event_raw = _artifact(
+        audit_root, value.get("event_artifact"), "trusted composite events"
+    )
+    identifier = str(record["id"])
+    if event_path.relative_to(audit_root).as_posix() != (
+        f"evidence/composite_events/{identifier}.jsonl"
+    ):
+        raise RuntimeError(f"composite event path differs: {record_name}")
+    if any(
+        item is None
+        for item in (
+            dependency, browser_root, browser_executable, node, npm,
+        )
+    ):
+        raise RuntimeError(f"composite runtime coordinates are absent: {record_name}")
+    try:
+        result = validate_composite_events(
+            event_raw,
+            raw_log=raw_log,
+            nonce=str(value["nonce"]),
+            source=cwd,
+            dependency=dependency,
+            browser_root=browser_root,
+            browser_executable=browser_executable,
+            python=Path(str(record["requested_command_argv"][0])),
+            node=node,
+            npm=npm,
+            basetemp=basetemp,
+            environment=variables,
+            dependency_inventory=dependency_inventory,
+            source_inventory=source_inventory,
+            expected_stage_contract=suite["composite_stages"],
+            runtime_validation=runtime_validation,
+        )
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        if (
+            value.get("validation") != "NONPASS"
+            or value.get("validation_error") != type(exc).__name__
+            or any(
+                value.get(field) is not None
+                for field in (
+                    "stage_results", "browser_test_summary",
+                    "browser_node_outcomes", "browser_complete_pass",
+                    "build_output", "contract_sha256",
+                )
+            )
+            or record.get("attempt_kind") != "failed"
+        ):
+            raise RuntimeError(
+                f"composite validation failure binding differs: {record_name}"
+            ) from exc
+        return None
+    if (
+        value.get("validation") != "PASS"
+        or value.get("validation_error") is not None
+        or value.get("stage_results") != result["stage_results"]
+        or value.get("browser_test_summary") != result["browser_test_summary"]
+        or value.get("browser_node_outcomes") != result["browser_node_outcomes"]
+        or value.get("browser_complete_pass") != result["browser_complete_pass"]
+        or value.get("build_output") != result["build_output"]
+        or value.get("contract_sha256") != result["contract_sha256"]
+    ):
+        raise RuntimeError(f"composite stage reconciliation differs: {record_name}")
+    return result
+
+
+def _verified_preflight_record(
+    value: dict[str, object],
+    raw_record: bytes,
+    path: Path,
+    audit_root: Path,
+    suites: dict[str, dict[str, object]],
+    *,
+    runtime_validation: bool,
+) -> dict[str, object]:
+    """Verify a process-not-started failure without inventing execution facts."""
+
+    if set(value) != PREFLIGHT_RECORD_KEYS:
+        raise RuntimeError(f"preflight record schema differs: {path.name}")
+    unsigned = dict(value)
+    declared = unsigned.pop("record_sha256", None)
+    if declared != canonical_sha256(unsigned):
+        raise RuntimeError(f"preflight record self-hash differs: {path.name}")
+    suite = value.get("suite")
+    environment = value.get("execution_environment")
+    if suite not in suites or environment not in {"source", "fresh"}:
+        raise RuntimeError(f"preflight suite/environment differs: {path.name}")
+    failure_stage = value.get("failure_stage")
+    expected_kind = suites[str(suite)]["kind"]
+    kind_matches_stage = (
+        value.get("kind") != expected_kind
+        if failure_stage == "SUITE_KIND"
+        else value.get("kind") == expected_kind
+    )
+    if (
+        not kind_matches_stage
+        or value.get("attempt_kind") != "preflight_failed"
+        or value.get("process_started") is not False
+        or value.get("exit_code") is not None
+        or value.get("runner_exit_code") != PREFLIGHT_FAILURE_EXIT_CODE
+    ):
+        raise RuntimeError(f"preflight result classification differs: {path.name}")
+    identifier = value.get("id")
+    if (
+        type(identifier) is not str
+        or _SAFE_IDENTIFIER.fullmatch(identifier) is None
+        or not identifier.startswith(f"{environment}_{suite}_")
+        or path.relative_to(audit_root).as_posix()
+        != f"command_records/{identifier}.json"
+    ):
+        raise RuntimeError(f"preflight path/id binding differs: {path.name}")
+    error_type = value.get("error_type")
+    if (
+        failure_stage not in PREFLIGHT_FAILURE_STAGES
+        or type(error_type) is not str
+        or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", error_type) is None
+    ):
+        raise RuntimeError(f"preflight failure classification differs: {path.name}")
+    if value.get("source_postcheck") not in {"MATCH", "DIFFERS", "ERROR"} or type(
+        value.get("source_stable")
+    ) is not bool:
+        raise RuntimeError(f"preflight source postcheck differs: {path.name}")
+    if value.get("source_stable") is True and value.get("source_postcheck") != "MATCH":
+        raise RuntimeError(f"preflight source stability differs: {path.name}")
+    if value.get("source_stable") is False and value.get("source_postcheck") == "MATCH":
+        raise RuntimeError(f"preflight source stability differs: {path.name}")
+    started = _parse_utc(value.get("started_at"), "preflight started_at")
+    completed = _parse_utc(value.get("completed_at"), "preflight completed_at")
+    if (
+        completed < started
+        or type(value.get("duration_milliseconds")) is not int
+        or value["duration_milliseconds"] < 0
+    ):
+        raise RuntimeError(f"preflight timing differs: {path.name}")
+
+    cwd = _lexical_absolute(value.get("cwd"), f"preflight cwd: {path.name}")
+    recorded_audit_root = _lexical_absolute(
+        value.get("audit_root"), f"preflight audit root: {path.name}"
+    )
+    source_repository = _lexical_absolute(
+        value.get("source_identity_repository"),
+        f"preflight source identity repository: {path.name}",
+    )
+    log_path, raw_log = _artifact(audit_root, value.get("raw_log"), "raw log")
+    inventory_path, raw_inventory = _artifact(
+        audit_root, value.get("source_inventory"), "source inventory"
+    )
+    if log_path.relative_to(audit_root).as_posix() != f"test_logs/{identifier}.log":
+        raise RuntimeError(f"preflight raw log path/id differs: {path.name}")
+    if inventory_path.relative_to(audit_root).as_posix() != (
+        f"evidence/source_inventories/{identifier}.json"
+    ):
+        raise RuntimeError(f"preflight inventory path/id differs: {path.name}")
+    inventory, _ = _read_canonical(inventory_path, "source inventory")
+    _verify_inventory(inventory, path.name)
+    inventory_unsigned = dict(inventory)
+    inventory_sha = inventory_unsigned.pop("inventory_sha256", None)
+    descriptor = value.get("source_inventory")
+    if (
+        type(descriptor) is not dict
+        or set(descriptor) != {
+            "path", "bytes", "sha256", "inventory_sha256", "path_count"
+        }
+        or inventory_sha != canonical_sha256(inventory_unsigned)
+        or descriptor.get("inventory_sha256") != inventory_sha
+        or descriptor.get("path_count") != inventory.get("path_count")
+        or inventory.get("candidate") != value.get("candidate")
+        or raw_inventory != canonical_bytes(inventory) + b"\n"
+    ):
+        raise RuntimeError(f"preflight inventory binding differs: {path.name}")
+
+    producer = value.get("producer")
+    tracked_runner = _tracked_file(inventory, "tools/run_audit_command.py")
+    if (
+        type(producer) is not dict
+        or set(producer) != {"type", "version", "path", "bytes", "sha256"}
+        or producer.get("type") != "PAPER_FACTORY_AUDIT_RUNNER"
+        or producer.get("version") != COMMAND_SCHEMA
+        or producer.get("path") != "tools/run_audit_command.py"
+        or producer.get("bytes") != tracked_runner.get("bytes")
+        or producer.get("sha256") != tracked_runner.get("sha256")
+    ):
+        raise RuntimeError(f"preflight producer binding differs: {path.name}")
+
+    requested = value.get("requested_command_argv")
+    if type(requested) is not list or not requested or any(
+        type(item) is not str for item in requested
+    ):
+        raise RuntimeError(f"preflight requested argv differs: {path.name}")
+    if suite == "full_repository":
+        if (
+            len(requested) != 19
+            or requested[1:4]
+            != ["-B", "tools/run_full_repo_with_frontend_deps.py", "--source-root"]
+            or requested[4] != str(cwd)
+            or requested[5] != "--dependency-target"
+            or requested[7] != "--browser-root"
+            or requested[9] != "--browser-executable"
+            or requested[11] != "--node"
+            or requested[13] != "--npm"
+            or requested[15:18] != ["--python", requested[0], "--basetemp"]
+        ):
+            raise RuntimeError(f"preflight full-suite argv differs: {path.name}")
+        for index, label in (
+            (6, "dependency root"),
+            (8, "browser root"),
+            (10, "browser executable"),
+            (12, "Node executable"),
+            (14, "npm executable"),
+            (18, "basetemp"),
+        ):
+            _lexical_absolute(requested[index], f"preflight {label}: {path.name}")
+        try:
+            Path(requested[10]).relative_to(Path(requested[8]))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"preflight browser coordinate differs: {path.name}"
+            ) from exc
+        expected_basetemp = (
+            recorded_audit_root / "runtime" / f"{identifier}-pytest" / "basetemp"
+        )
+        if Path(requested[18]) != expected_basetemp:
+            raise RuntimeError(f"preflight basetemp differs: {path.name}")
+    else:
+        prefix = [requested[0], "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+        if (
+            requested[: len(prefix)] != prefix
+            or len(requested) <= len(prefix) + 1
+            or not requested[len(prefix)].startswith("--basetemp=")
+            or not set(suites[str(suite)]["required_targets"]).issubset(
+                requested[len(prefix) + 1 :]
+            )
+        ):
+            raise RuntimeError(f"preflight pytest argv differs: {path.name}")
+        basetemp = _lexical_absolute(
+            requested[len(prefix)].split("=", 1)[1],
+            f"preflight basetemp: {path.name}",
+        )
+        if basetemp != (
+            recorded_audit_root / "runtime" / f"{identifier}-pytest" / "basetemp"
+        ):
+            raise RuntimeError(f"preflight basetemp differs: {path.name}")
+
+    executable = value.get("command_executable")
+    python_executable = value.get("python_executable")
+    if failure_stage in {"COMMAND_EXECUTABLE", "SUITE_KIND"}:
+        if executable is not None or python_executable is not None:
+            raise RuntimeError(f"failed executable unexpectedly bound: {path.name}")
+    else:
+        if (
+            type(executable) is not dict
+            or set(executable) != {"path", "resolved_path", "bytes", "sha256"}
+            or python_executable != executable
+            or executable.get("path") != requested[0]
+            or type(executable.get("bytes")) is not int
+            or executable["bytes"] <= 0
+            or type(executable.get("sha256")) is not str
+            or _HEX64.fullmatch(str(executable["sha256"])) is None
+        ):
+            raise RuntimeError(f"preflight executable binding differs: {path.name}")
+        resolved_executable = _lexical_absolute(
+            executable.get("resolved_path"),
+            f"preflight resolved executable: {path.name}",
+        )
+        if runtime_validation:
+            launcher = _lexical_absolute(
+                executable.get("path"), f"preflight executable: {path.name}"
+            )
+            trusted_launcher = Path(os.path.abspath(sys.executable))
+            try:
+                executable_raw = _stable_regular_bytes(
+                    resolved_executable, "preflight executable"
+                )
+            except OSError as exc:
+                raise RuntimeError(
+                    f"preflight executable is unavailable: {path.name}"
+                ) from exc
+            if (
+                launcher != trusted_launcher
+                or launcher.resolve(strict=True) != resolved_executable
+                or len(executable_raw) != executable["bytes"]
+                or hashlib.sha256(executable_raw).hexdigest()
+                != executable["sha256"]
+            ):
+                raise RuntimeError(f"preflight executable bytes differ: {path.name}")
+
+    failure_event = {
+        "schema": PREFLIGHT_FAILURE_SCHEMA,
+        "event": "preflight_failure",
+        "failure_stage": failure_stage,
+        "error_type": error_type,
+        "process_started": False,
+        "runner_exit_code": PREFLIGHT_FAILURE_EXIT_CODE,
+    }
+    if raw_log != canonical_bytes(failure_event) + b"\n":
+        raise RuntimeError(f"preflight raw log differs: {path.name}")
+
+    if runtime_validation:
+        try:
+            live_repository = source_repository.resolve(strict=True)
+            live_cwd = cwd.resolve(strict=True)
+            runtime_identity = _runtime_candidate_identity(live_repository)
+            observed_inventory, observed_raw = executed_source_inventory(
+                live_repository,
+                live_cwd,
+                execution_environment=str(environment),
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            raise RuntimeError(f"preflight runtime source is unavailable: {path.name}") from exc
+        if (
+            runtime_identity != inventory.get("candidate")
+            or observed_inventory != inventory
+            or observed_raw != raw_inventory
+        ):
+            raise RuntimeError(f"preflight runtime source differs: {path.name}")
+
+    return {
+        "id": identifier,
+        "suite": suite,
+        "environment": environment,
+        "attempt_kind": "preflight_failed",
+        "candidate": value["candidate"],
+        "source_inventory_sha256": inventory_sha,
+        "source_inventory": descriptor,
+        "dependency_inventory": None,
+        "dependency_inventory_sha256": None,
+        "command_record_path": path.relative_to(audit_root).as_posix(),
+        "command_record_bytes": len(raw_record),
+        "command_record_sha256": hashlib.sha256(raw_record).hexdigest(),
+        "command_argv": requested,
+        "cwd": value["cwd"],
+        "audit_root": value["audit_root"],
+        "python_executable": python_executable,
+        "exit_code": None,
+        "runner_exit_code": PREFLIGHT_FAILURE_EXIT_CODE,
+        "outcomes": None,
+        "node_outcomes": None,
+        "composite_suite": None,
+        "composite_contract_sha256": None,
+        "trusted_pytest": None,
+        "process_started": False,
+        "failure_stage": failure_stage,
+        "error_type": error_type,
+        "raw_log": value["raw_log"],
+    }
 
 
 def _verified_record(
@@ -1161,6 +1741,15 @@ def _verified_record(
     runtime_validation: bool,
 ) -> dict[str, object]:
     value, raw_record = _read_canonical(path, "command record")
+    if value.get("schema") == PREFLIGHT_FAILURE_SCHEMA:
+        return _verified_preflight_record(
+            value,
+            raw_record,
+            path,
+            audit_root,
+            suites,
+            runtime_validation=runtime_validation,
+        )
     if value.get("schema") != COMMAND_SCHEMA or set(value) != RECORD_KEYS:
         raise RuntimeError(f"command record schema differs: {path.name}")
     unsigned = dict(value)
@@ -1208,6 +1797,7 @@ def _verified_record(
         value.get("environment"), recorded_audit_root=recorded_audit_root,
         cwd=cwd_path, record_name=path.name,
         runtime_validation=runtime_validation,
+        composite=suite == "full_repository",
     )
     started = _parse_utc(value.get("started_at"), "command started_at")
     completed = _parse_utc(value.get("completed_at"), "command completed_at")
@@ -1277,7 +1867,15 @@ def _verified_record(
             raise RuntimeError(f"runtime source bytes differ: {path.name}")
 
     kind = str(suites[str(suite)]["kind"])
-    normalized_argv, dependency = _verify_runner_and_command(
+    (
+        normalized_argv,
+        dependency,
+        browser_root,
+        browser_executable,
+        node,
+        npm,
+        basetemp,
+    ) = _verify_runner_and_command(
         value, inventory, suites[str(suite)], path.name, audit_root,
         recorded_audit_root, runtime_validation
     )
@@ -1308,7 +1906,8 @@ def _verified_record(
     ):
         raise RuntimeError(f"dependency inventory binding differs: {path.name}")
     _verify_dependency_inventory(
-        dependency_body, dependency=dependency, cwd=cwd_path,
+        dependency_body, dependency=dependency, browser_root=browser_root,
+        browser_executable=browser_executable, cwd=cwd_path,
         source_inventory=inventory,
         record_name=path.name, runtime_validation=runtime_validation,
     )
@@ -1316,6 +1915,7 @@ def _verified_record(
         value.get("execution_sandbox"), command=list(value["command_argv"]),
         environment=value["environment"], cwd=cwd_path,
         audit_root=recorded_audit_root, dependency=dependency,
+        browser_root=browser_root,
         identifier=str(identifier), record_name=path.name,
         runtime_validation=runtime_validation,
     )
@@ -1327,6 +1927,27 @@ def _verified_record(
             f"command does not execute required suite targets: {path.name}: "
             f"{sorted(missing_targets)}"
         )
+    composite_result = _verify_composite_suite(
+        value.get("composite_suite"),
+        record=value,
+        suite=suites[str(suite)],
+        audit_root=audit_root,
+        cwd=cwd_path,
+        raw_log=raw_log,
+        source_inventory=inventory,
+        dependency_inventory=dependency_body,
+        dependency=dependency,
+        browser_root=browser_root,
+        browser_executable=browser_executable,
+        node=node,
+        npm=npm,
+        basetemp=basetemp,
+        runtime_validation=runtime_validation,
+        record_name=path.name,
+    )
+    pytest_log = (
+        raw_log if composite_result is None else composite_result["python_log"]
+    )
     trusted_result = _verify_trusted_pytest(
         value.get("trusted_pytest"),
         record=value,
@@ -1335,9 +1956,10 @@ def _verified_record(
         audit_root=audit_root,
         recorded_audit_root=recorded_audit_root,
         cwd=cwd_path,
-        raw_log=raw_log,
+        raw_log=pytest_log,
         runtime_validation=runtime_validation,
         record_name=path.name,
+        reconcile_terminal=(suite != "full_repository" or composite_result is not None),
     )
     trusted_counts = (
         None if trusted_result is None else trusted_result["counts"]
@@ -1345,8 +1967,8 @@ def _verified_record(
     trusted_node_outcomes = (
         None if trusted_result is None else trusted_result["node_outcomes"]
     )
-    outcomes = parse_outcomes(raw_log, kind)
-    if value.get("outcome_parser") != "paper-factory-pytest-summary-and-trusted-events-v4":
+    outcomes = parse_outcomes(pytest_log, "pytest")
+    if value.get("outcome_parser") != "paper-factory-composite-and-trusted-events-v5":
         raise RuntimeError(f"outcome parser identity differs: {path.name}")
     if value.get("outcomes") != outcomes:
         raise RuntimeError(f"raw-log outcomes differ from record: {path.name}")
@@ -1366,6 +1988,14 @@ def _verified_record(
         or outcomes["passed"] != outcomes["collected"]
         or any(outcomes[name] for name in ("failed", "errors", "skipped", "xfailed", "xpassed"))
         or trusted_counts != outcomes
+        or (
+            suite == "full_repository"
+            and (
+                composite_result is None
+                or composite_result["overall_exit_code"] != 0
+                or composite_result["browser_complete_pass"] is not True
+            )
+        )
     ):
         raise RuntimeError(f"final record is not a complete PASS: {path.name}")
     if value["attempt_kind"] == "failed" and (
@@ -1379,7 +2009,15 @@ def _verified_record(
             outcomes[name]
             for name in ("failed", "errors", "skipped", "xfailed", "xpassed")
         )
-        and trusted_counts == outcomes
+            and trusted_counts == outcomes
+            and (
+                suite != "full_repository"
+                or (
+                    composite_result is not None
+                    and composite_result["overall_exit_code"] == 0
+                    and composite_result["browser_complete_pass"] is True
+                )
+            )
     ):
         raise RuntimeError(f"failed-attempt record is actually a PASS: {path.name}")
 
@@ -1404,6 +2042,10 @@ def _verified_record(
         "runner_exit_code": value["runner_exit_code"],
         "outcomes": outcomes,
         "node_outcomes": trusted_node_outcomes,
+        "composite_suite": value["composite_suite"],
+        "composite_contract_sha256": (
+            None if composite_result is None else composite_result["contract_sha256"]
+        ),
         "trusted_pytest": value["trusted_pytest"],
         "raw_log": value["raw_log"],
     }
@@ -1430,6 +2072,10 @@ def _direct_regular_files(root: Path, label: str) -> list[Path]:
     return sorted(result)
 
 
+def _optional_direct_regular_files(root: Path, label: str) -> list[Path]:
+    return [] if not root.exists() else _direct_regular_files(root, label)
+
+
 def _verify_reverse_artifact_closure(
     audit_root: Path, records: list[dict[str, object]]
 ) -> None:
@@ -1438,11 +2084,19 @@ def _verify_reverse_artifact_closure(
         str(item["source_inventory"]["path"]) for item in records
     ]
     dependency_references = [
-        str(item["dependency_inventory"]["path"]) for item in records
+        str(item["dependency_inventory"]["path"])
+        for item in records
+        if item["dependency_inventory"] is not None
     ]
     event_references = [
         str(item["trusted_pytest"]["event_artifact"]["path"])
         for item in records
+        if item["trusted_pytest"] is not None
+    ]
+    composite_references = [
+        str(item["composite_suite"]["event_artifact"]["path"])
+        for item in records
+        if item["composite_suite"] is not None
     ]
     if len(log_references) != len(set(log_references)):
         raise RuntimeError("multiple command records alias one raw log")
@@ -1452,6 +2106,8 @@ def _verify_reverse_artifact_closure(
         raise RuntimeError("multiple command records alias one dependency inventory")
     if len(event_references) != len(set(event_references)):
         raise RuntimeError("multiple command records alias one trusted event stream")
+    if len(composite_references) != len(set(composite_references)):
+        raise RuntimeError("multiple command records alias one composite event stream")
     actual_logs = {
         path.relative_to(audit_root).as_posix()
         for path in _direct_regular_files(audit_root / "test_logs", "test logs")
@@ -1464,17 +2120,28 @@ def _verify_reverse_artifact_closure(
     }
     actual_dependencies = {
         path.relative_to(audit_root).as_posix()
-        for path in _direct_regular_files(
+        for path in _optional_direct_regular_files(
             audit_root / "evidence/dependency_inventories",
             "dependency inventories",
         )
     }
     actual_events = {
         path.relative_to(audit_root).as_posix()
-        for path in _direct_regular_files(
+        for path in _optional_direct_regular_files(
             audit_root / "evidence/pytest_events", "trusted pytest events"
         )
     }
+    composite_root = audit_root / "evidence/composite_events"
+    actual_composite = (
+        set()
+        if not composite_root.exists()
+        else {
+            path.relative_to(audit_root).as_posix()
+            for path in _direct_regular_files(
+                composite_root, "trusted composite events"
+            )
+        }
+    )
     if actual_logs != set(log_references):
         raise RuntimeError("raw log reverse closure differs from command records")
     if actual_inventories != set(inventory_references):
@@ -1485,6 +2152,8 @@ def _verify_reverse_artifact_closure(
         )
     if actual_events != set(event_references):
         raise RuntimeError("trusted pytest event reverse closure differs")
+    if actual_composite != set(composite_references):
+        raise RuntimeError("trusted composite event reverse closure differs")
 
 
 def _build_summary_for_policy(
@@ -1522,7 +2191,9 @@ def _build_summary_for_policy(
     candidates = {canonical_bytes(item["candidate"]) for item in records}
     inventories = {str(item["source_inventory_sha256"]) for item in records}
     interpreters = {
-        canonical_bytes(item["python_executable"]) for item in records
+        canonical_bytes(item["python_executable"])
+        for item in records
+        if item["python_executable"] is not None
     }
     recorded_roots = {str(item["audit_root"]) for item in records}
     if (
@@ -1535,7 +2206,7 @@ def _build_summary_for_policy(
     _verify_reverse_artifact_closure(audit_root, records)
 
     finals = [item for item in records if item["attempt_kind"] == "final"]
-    attempts = [item for item in records if item["attempt_kind"] == "failed"]
+    attempts = [item for item in records if item["attempt_kind"] != "final"]
     expected = {(suite, env) for suite in suites for env in ("source", "fresh")}
     actual = {(str(item["suite"]), str(item["environment"])) for item in finals}
     if actual != expected or len(finals) != len(expected):
@@ -1557,6 +2228,15 @@ def _build_summary_for_policy(
             source["dependency_inventory_sha256"]
             == fresh["dependency_inventory_sha256"]
         )
+        composite_equal = (
+            source["composite_contract_sha256"]
+            == fresh["composite_contract_sha256"]
+        )
+        browser_node_equal = (
+            source["composite_suite"] is None
+            or source["composite_suite"]["browser_node_outcomes"]
+            == fresh["composite_suite"]["browser_node_outcomes"]
+        )
         pairs.append(
             {
                 "suite": suite,
@@ -1568,6 +2248,8 @@ def _build_summary_for_policy(
                 "exact_outcome_match": equal,
                 "exact_node_outcome_match": node_equal,
                 "exact_dependency_match": dependency_equal,
+                "exact_browser_node_match": browser_node_equal,
+                "exact_composite_stage_match": composite_equal,
             }
         )
     non_pass = {
@@ -1578,6 +2260,8 @@ def _build_summary_for_policy(
         bool(pair["exact_outcome_match"])
         and bool(pair["exact_node_outcome_match"])
         and bool(pair["exact_dependency_match"])
+        and bool(pair["exact_browser_node_match"])
+        and bool(pair["exact_composite_stage_match"])
         for pair in pairs
     )
     body: dict[str, object] = {

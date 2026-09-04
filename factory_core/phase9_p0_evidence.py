@@ -10,6 +10,7 @@ different domain and can never satisfy the Phase9 entry gate.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import timedelta
 import hashlib
 import json
 import os
@@ -43,7 +44,7 @@ from tools.trusted_pytest_reporter import (
 PHASE9_P0_RECEIPT_SCHEMA = "phase9-candidate-p0-receipt-v5"
 PHASE9_P0_COMMAND_RECORD_SCHEMA = "phase9-p0-command-record-v4"
 PHASE9_P0_TEST_OUTCOME_SCHEMA = "phase9-p0-test-outcome-v3"
-PHASE9_P0_SPEC_SCHEMA = "phase9-p0-acceptance-spec-v3"
+PHASE9_P0_SPEC_SCHEMA = "phase9-p0-acceptance-spec-v4"
 PHASE9_P0_SOURCE_ATTESTATION_SCHEMA = "phase9-p0-source-attestation-v1"
 PHASE9_P0_ENVIRONMENT_SCHEMA = "phase9-p0-runner-environment-v3"
 PHASE9_P0_EVIDENCE_ROOT_SCHEMA = "phase9-p0-evidence-root-v4"
@@ -63,6 +64,13 @@ PHASE9_P0_FORMAL_DOMAIN = "FORMAL_CANDIDATE_ACCEPTANCE"
 PHASE9_P0_TEST_FIXTURE_DOMAIN = "TEST_FIXTURE"
 PHASE9_P0_SUITE_ID = "phase9-p0-fixed-acceptance-v1"
 PHASE9_P0_RUNNER_AUTHORIZATION_TTL_SECONDS = 300
+PHASE9_P0_AUTHORIZATION_OVERHEAD_BUDGET_SECONDS = 30
+PHASE9_P0_COMMAND_DURATION_GRACE_SECONDS = 5
+PHASE9_P0_SUITE_TIMEOUT_SECONDS = (
+    PHASE9_P0_RUNNER_AUTHORIZATION_TTL_SECONDS
+    - PHASE9_P0_AUTHORIZATION_OVERHEAD_BUDGET_SECONDS
+    - PHASE9_P0_COMMAND_DURATION_GRACE_SECONDS
+)
 PHASE9_P0_PRODUCER_TYPE = "AUTHORITY_DB_BACKED_BWRAP_PYTEST"
 PHASE9_P0_PRODUCER_VERSION = "1"
 PHASE9_P0_PRODUCER_SOURCE_PATH = "factory_core/phase9_p0_evidence.py"
@@ -129,10 +137,11 @@ _TEST_LINE = re.compile(
     r"^(tests/[^\s]+::[^\s]+)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)(?:\s|$)"
 )
 _COLLECTED_LINE = re.compile(r"(?:^|.*\s)collected ([0-9]+) items?$")
-_SUMMARY_LINE = re.compile(r"^=+\s+(.+?)\s+in [0-9]+(?:\.[0-9]+)?s\s+=+$")
-_SUMMARY_PART = re.compile(
-    r"([0-9]+) (passed|failed|error|errors|skipped|xfailed|xpassed|warning|warnings)"
+_SUMMARY_LINE = re.compile(
+    r"^=+\s+(.+?)\s+in (0|[1-9][0-9]*)\.([0-9]{2})s"
+    r"(?: \(([^()\r\n]+)\))?\s+=+$"
 )
+_PYTEST_DURATION_ROUNDING_NS = 5_000_000
 _CAPABILITIES = {
     "network_access": False,
     "provider_call": False,
@@ -289,6 +298,15 @@ def phase9_p0_acceptance_spec() -> dict[str, object]:
         "schema": PHASE9_P0_SPEC_SCHEMA,
         "evidence_domain": PHASE9_P0_FORMAL_DOMAIN,
         "suite_id": PHASE9_P0_SUITE_ID,
+        "runner_authorization_ttl_seconds": (
+            PHASE9_P0_RUNNER_AUTHORIZATION_TTL_SECONDS
+        ),
+        "authorization_overhead_budget_seconds": (
+            PHASE9_P0_AUTHORIZATION_OVERHEAD_BUDGET_SECONDS
+        ),
+        "suite_timeout_seconds": PHASE9_P0_SUITE_TIMEOUT_SECONDS,
+        "command_duration_grace_seconds": PHASE9_P0_COMMAND_DURATION_GRACE_SECONDS,
+        "pytest_duration_rounding_ns": _PYTEST_DURATION_ROUNDING_NS,
         "runner": "tools/run_phase9_p0_evidence.py",
         "authority_runner_schema": PHASE9_P0_AUTHORITY_RUNNER_EVIDENCE_SCHEMA,
         "authority_attestation_required": True,
@@ -375,7 +393,12 @@ def evidence_root_sha256_from_files(files: Mapping[str, bytes]) -> str:
     return canonical_sha256(inventory)
 
 
-def _pytest_outcomes(raw: bytes, expected_nodes: Sequence[str]) -> dict[str, object]:
+def _pytest_outcomes(
+    raw: bytes,
+    expected_nodes: Sequence[str],
+    *,
+    duration_ns: int | None = None,
+) -> dict[str, object]:
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeError as exc:
@@ -385,7 +408,8 @@ def _pytest_outcomes(raw: bytes, expected_nodes: Sequence[str]) -> dict[str, obj
     if "\x1b" in text:
         raise Phase9P0EvidenceError("raw pytest log contains terminal control bytes")
     collected: int | None = None
-    summary: dict[str, int] | None = None
+    summary_body: str | None = None
+    summary_duration_centiseconds: int | None = None
     summary_line_number: int | None = None
     observed: dict[str, str] = {}
     lines = text.splitlines()
@@ -404,17 +428,50 @@ def _pytest_outcomes(raw: bytes, expected_nodes: Sequence[str]) -> dict[str, obj
             observed[node] = status
         match = _SUMMARY_LINE.fullmatch(line)
         if match:
-            if summary is not None:
+            if summary_body is not None:
                 raise Phase9P0EvidenceError("pytest log has duplicate terminal summaries")
-            counts = {name: 0 for name in _OUTCOME_KEYS if name != "collected"}
-            for count, label in _SUMMARY_PART.findall(match.group(1)):
-                key = "errors" if label in {"error", "errors"} else (
-                    "warnings" if label in {"warning", "warnings"} else label
+            try:
+                elapsed_seconds = int(match.group(2))
+                displayed_centiseconds = (
+                    elapsed_seconds * 100 + int(match.group(3))
                 )
-                counts[key] += int(count)
-            if any(counts.values()):
-                summary = counts
-                summary_line_number = line_number
+            except ValueError as exc:
+                raise Phase9P0EvidenceError(
+                    "pytest terminal summary duration is invalid"
+                ) from exc
+            if displayed_centiseconds > PHASE9_P0_SUITE_TIMEOUT_SECONDS * 100:
+                raise Phase9P0EvidenceError(
+                    "pytest terminal summary exceeds the fixed suite deadline"
+                )
+            human_duration = match.group(4)
+            if human_duration is not None:
+                possible_seconds = {elapsed_seconds}
+                # The two-decimal display may round up across an integer while
+                # timedelta receives int() of the unrounded runtime.
+                if match.group(3) == "00" and elapsed_seconds > 60:
+                    possible_seconds.add(elapsed_seconds - 1)
+                try:
+                    possible_durations = {
+                        str(timedelta(seconds=value)) for value in possible_seconds
+                    }
+                except OverflowError as exc:
+                    raise Phase9P0EvidenceError(
+                        "pytest terminal summary duration suffix is invalid"
+                    ) from exc
+                if (
+                    displayed_centiseconds < 6000
+                    or human_duration not in possible_durations
+                ):
+                    raise Phase9P0EvidenceError(
+                        "pytest terminal summary duration suffix is invalid"
+                    )
+            elif displayed_centiseconds > 6000:
+                raise Phase9P0EvidenceError(
+                    "pytest terminal summary duration suffix is absent"
+                )
+            summary_body = match.group(1)
+            summary_duration_centiseconds = displayed_centiseconds
+            summary_line_number = line_number
     expected = list(expected_nodes)
     if collected != len(expected) or list(observed) != expected:
         raise Phase9P0EvidenceError(
@@ -426,8 +483,27 @@ def _pytest_outcomes(raw: bytes, expected_nodes: Sequence[str]) -> dict[str, obj
         "passed": len(expected), "failed": 0, "errors": 0, "skipped": 0,
         "xfailed": 0, "xpassed": 0, "warnings": 0,
     }
-    if summary != expected_summary:
+    if summary_body != f"{len(expected)} passed":
         raise Phase9P0EvidenceError("pytest terminal summary is absent or non-PASS")
+    if summary_duration_centiseconds is None:
+        raise Phase9P0EvidenceError("pytest terminal summary duration is absent")
+    if duration_ns is not None:
+        duration = _integer(duration_ns, "pytest command duration_ns")
+        grace_ns = PHASE9_P0_COMMAND_DURATION_GRACE_SECONDS * 1_000_000_000
+        maximum = (
+            PHASE9_P0_SUITE_TIMEOUT_SECONDS * 1_000_000_000
+            + grace_ns
+        )
+        displayed_ns = summary_duration_centiseconds * 10_000_000
+        if (
+            duration > maximum
+            or duration + _PYTEST_DURATION_ROUNDING_NS < displayed_ns
+            or duration
+            > displayed_ns + _PYTEST_DURATION_ROUNDING_NS + grace_ns
+        ):
+            raise Phase9P0EvidenceError(
+                "pytest terminal summary duration differs from monotonic command duration"
+            )
     if summary_line_number != max(
         index for index, line in enumerate(lines) if line.strip()
     ):
@@ -1334,13 +1410,14 @@ def _execute_fixed_phase9_p0_suite(
             stderr=subprocess.STDOUT,
         )
         try:
-            stdout, _ = process.communicate(timeout=900)
+            stdout, _ = process.communicate(timeout=PHASE9_P0_SUITE_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired as exc:
             process.kill()
             stdout, _ = process.communicate()
             _write_new(root / "test_results/p0_suite.log", bytes(stdout))
             raise Phase9P0EvidenceError(
-                "fixed Phase9 P0 suite exceeded its 900-second deadline"
+                f"fixed Phase9 P0 suite exceeded its "
+                f"{PHASE9_P0_SUITE_TIMEOUT_SECONDS}-second deadline"
             ) from exc
         finished_monotonic = time.monotonic_ns()
         finished_at = _integer(now(), "clock.finished_at")
@@ -1351,7 +1428,11 @@ def _execute_fixed_phase9_p0_suite(
                 f"fixed Phase9 P0 suite exited {process.returncode}; failure log retained"
             )
         report_raw = report_absolute.read_bytes()
-        outcomes = _pytest_outcomes(log_raw, nodes)
+        outcomes = _pytest_outcomes(
+            log_raw,
+            nodes,
+            duration_ns=finished_monotonic - started_monotonic,
+        )
         try:
             trusted_event_raw = trusted_event_runtime.read_bytes()
             trusted = validate_trusted_pytest_events(
@@ -2100,9 +2181,26 @@ def validate_formal_phase9_p0_evidence(
     )
     started = _integer(command["started_at"], "command_record.started_at")
     finished = _integer(command["finished_at"], "command_record.finished_at")
-    _integer(command["duration_ns"], "command_record.duration_ns")
-    if finished < started:
-        raise Phase9P0EvidenceError("command record timestamps are reversed")
+    command_duration_ns = _integer(
+        command["duration_ns"], "command_record.duration_ns"
+    )
+    if _pytest_outcomes(
+        log_raw, nodes, duration_ns=command_duration_ns
+    ) != observed:
+        raise Phase9P0EvidenceError(
+            "command duration and pytest terminal summary differ"
+        )
+    issued = _integer(authority_runner["issued_at"], "authority_runner.issued_at")
+    consumed = _integer(
+        authority_runner["consumed_at"], "authority_runner.consumed_at"
+    )
+    expires = _integer(
+        authority_runner["expires_at"], "authority_runner.expires_at"
+    )
+    if not issued <= consumed <= started <= finished <= expires:
+        raise Phase9P0EvidenceError(
+            "command record falls outside the runner authorization window"
+        )
     evidence_root = Path(
         _text(
             authority_runner["intended_evidence_root"],

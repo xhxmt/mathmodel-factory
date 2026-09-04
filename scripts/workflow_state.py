@@ -224,6 +224,7 @@ def zip_file_ok(path: Path) -> bool:
 
 def delivery_artifacts_ready(root: Path, base: str, *, project: Path) -> bool:
     from factory_core.delivery.release import current_release_artifacts
+    from factory_core.phase9_delivery_fence import legacy_delivery_projection_allowed
 
     current = current_release_artifacts(
         root / "papers", base, project=project
@@ -235,7 +236,15 @@ def delivery_artifacts_ready(root: Path, base: str, *, project: Path) -> bool:
             and papers_pdf.stat().st_size > 0
             and zip_file_ok(submission_zip)
         )
-    return False
+    if not legacy_delivery_projection_allowed(project):
+        return False
+    papers_pdf = root / "papers" / f"{base}_paper.pdf"
+    submission_zip = root / "papers" / f"{base}_submission.zip"
+    return (
+        papers_pdf.is_file()
+        and papers_pdf.stat().st_size > 0
+        and zip_file_ok(submission_zip)
+    )
 
 
 def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:

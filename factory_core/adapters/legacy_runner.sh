@@ -4339,7 +4339,9 @@ run_step_16() {
     # files after judging changes packet manifests and invalidates the PASS.
     if [[ -x "$FACTORY/scripts/cleanup_project_artifacts.py" ]]; then
         log "   Cleaning rebuildable intermediate data before final judging"
-        if "$FACTORY/scripts/cleanup_project_artifacts.py" "$PROJECT" >> "$PROJECT/logs/runner.log" 2>&1; then
+        if python3 "$FACTORY/scripts/check_phase9_delivery_fence.py" "$PROJECT" \
+                --exec "$FACTORY/scripts/cleanup_project_artifacts.py" "$PROJECT" \
+                >> "$PROJECT/logs/runner.log" 2>&1; then
             log "   Intermediate data cleanup OK"
         else
             log "   WARNING: intermediate data cleanup failed (exit $?)"
@@ -4349,7 +4351,7 @@ run_step_16() {
     fi
 
     log "   Running snapshot-bound Final Audit"
-    if ! python3 -m factory_core.cli audit "$PROJECT" \
+    if ! python3 -m factory_core.cli audit "$PROJECT" --accept-delivery \
         >> "$PROJECT/logs/runner.log" 2>&1; then
         local resume_after=""
         resume_after=$(python3 - "$PROJECT/.factory/audits/latest.json" <<'PY' 2>/dev/null || true

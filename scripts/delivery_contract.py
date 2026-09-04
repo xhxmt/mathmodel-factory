@@ -69,10 +69,16 @@ def audit_record_is_current(
 
 
 def classify_evaluation(ev: evaluate_modeling_project.Evaluation, project: Path | None = None) -> str:
+    from factory_core.phase9_delivery_fence import legacy_delivery_projection_allowed
+
     checks = check_map(ev)
     audit = load_audit_record(project) if project is not None else {}
+    legacy_projection = (
+        project is None or legacy_delivery_projection_allowed(project)
+    )
     if (
-        ev.passed
+        legacy_projection
+        and ev.passed
         and ev.inferred_step == 16
         and project is not None
         and audit_record_is_current(project, audit)
@@ -83,6 +89,12 @@ def classify_evaluation(ev: evaluate_modeling_project.Evaluation, project: Path 
         if audit.get("status") == "OVERRIDDEN":
             return "GATE2_OVERRIDE_DELIVERED"
         return "CURRENT_PASS"
+
+    delivered_checks = ("papers_pdf", "submission_zip")
+    if legacy_projection and all(
+        checks.get(name) and checks[name].ok for name in delivered_checks
+    ):
+        return "LEGACY_DELIVERED"
 
     return "INVALID_OR_INCOMPLETE"
 
@@ -133,16 +145,26 @@ def build_delivery_manifest(
         else project / ".factory" / "audits" / "invalid-snapshot.json"
     )
     from factory_core.delivery.release import resolve_current_release
+    from factory_core.phase9_delivery_fence import legacy_delivery_projection_allowed
 
     release = resolve_current_release(root / "papers", base, project=project)
-    unavailable_release = root / "papers" / base / "invalid-current-release"
+    legacy_projection = legacy_delivery_projection_allowed(project)
+    unavailable_release = (
+        root / "papers"
+        if legacy_projection
+        else root / "papers" / base / "invalid-current-release"
+    )
     papers_pdf = (
-        release.paper if release is not None else unavailable_release / "paper.pdf"
+        release.paper
+        if release is not None
+        else unavailable_release
+        / (f"{base}_paper.pdf" if legacy_projection else "paper.pdf")
     )
     submission_zip = (
         release.submission_zip
         if release is not None
-        else unavailable_release / "submission.zip"
+        else unavailable_release
+        / (f"{base}_submission.zip" if legacy_projection else "submission.zip")
     )
 
     return {
@@ -195,11 +217,38 @@ def build_delivery_manifest(
     }
 
 
-def write_delivery_manifest(project: Path, root: Path, output: Path | None = None) -> dict[str, Any]:
+def write_delivery_manifest(
+    project: Path,
+    root: Path,
+    output: Path | None = None,
+    *,
+    workflow_id: str | None = None,
+    run_generation: str | None = None,
+) -> dict[str, Any]:
+    from factory_core.phase9_delivery_fence import (
+        delivery_side_effect_commit_lease,
+        require_delivery_side_effect_authority,
+    )
+
+    project = project.resolve()
+    require_delivery_side_effect_authority(
+        project,
+        operation="delivery",
+        workflow_id=workflow_id,
+        run_generation=run_generation,
+    )
     ev = evaluate_modeling_project.evaluate(project, root)
     manifest = build_delivery_manifest(project, root, ev)
     target = output or (project / "delivery_manifest.json")
-    target.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from factory_core.audit.persistence import atomic_write_json
+
+    with delivery_side_effect_commit_lease(
+        project,
+        operation="delivery",
+        workflow_id=workflow_id,
+        run_generation=run_generation,
+    ):
+        atomic_write_json(target, manifest)
     return manifest
 
 
@@ -208,6 +257,8 @@ def main() -> int:
     parser.add_argument("project", help="Path to complete/<base> or ongoing/<base> project directory.")
     parser.add_argument("--root", default=None, help="Factory root. Defaults to the repository root.")
     parser.add_argument("--output", default=None, help="Manifest path. Defaults to <project>/delivery_manifest.json.")
+    parser.add_argument("--workflow-id")
+    parser.add_argument("--run-generation")
     args = parser.parse_args()
 
     root = Path(args.root).resolve() if args.root else evaluate_modeling_project.repo_root()
@@ -216,7 +267,13 @@ def main() -> int:
         print(f"Project directory not found: {project}", flush=True)
         return 2
 
-    manifest = write_delivery_manifest(project, root, Path(args.output).resolve() if args.output else None)
+    manifest = write_delivery_manifest(
+        project,
+        root,
+        Path(args.output).resolve() if args.output else None,
+        workflow_id=args.workflow_id,
+        run_generation=args.run_generation,
+    )
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
     return 0 if manifest["status"] in {"CURRENT_PASS", "GATE2_OVERRIDE_DELIVERED"} else 1
 

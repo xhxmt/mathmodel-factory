@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         choices=["model", "results", "paper", "final"],
         default="final",
-        help="Run a stage audit; only the final profile may authorize delivery.",
+        help="Run analysis only; the final profile does not authorize delivery.",
     )
     audit.add_argument(
         "--checkpoint-step",
@@ -238,6 +238,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-reuse",
         action="store_true",
         help="Run a new audit even when the same snapshot already has a valid PASS.",
+    )
+    audit.add_argument(
+        "--accept-delivery",
+        action="store_true",
+        help=(
+            "After analysis, request final acceptance artifacts for a non-Phase9 "
+            "delivery workflow. Phase9 acceptance remains permanently disabled."
+        ),
     )
 
     solver = sub.add_parser("solver")
@@ -439,8 +447,15 @@ def main(argv: list[str] | None = None) -> int:
                     resolved,
                     compile_pdf=not args.no_compile,
                     reuse_pass=not args.no_reuse,
+                    analysis_only=not args.accept_delivery,
                 )
             else:
+                if args.accept_delivery:
+                    print(
+                        "ERROR: --accept-delivery is only valid for the final profile",
+                        file=sys.stderr,
+                    )
+                    return 2
                 if args.no_compile:
                     print(
                         "ERROR: --no-compile is only valid for the final profile",
@@ -470,7 +485,7 @@ def main(argv: list[str] | None = None) -> int:
                     indent=2,
                 )
             )
-            if profile is AuditProfile.FINAL:
+            if profile is AuditProfile.FINAL and args.accept_delivery:
                 return 0 if outcome.record.delivery_allowed else 1
             return 0 if outcome.record.status is AuditStatus.PASS else 1
         if args.command == "solver":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import sqlite3
 import subprocess
 import sys
 import zipfile
@@ -15,7 +16,6 @@ from factory_core.submission_bundle import (
     verify_zip_against_manifest,
 )
 from scripts.submission_fingerprint import submission_fingerprint_payload
-from tests.phase9_delivery_test_support import nonformal_delivery_fence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -165,21 +165,14 @@ def test_submission_package_rejects_owned_directory_symlink(tmp_path):
         submission_bundle_manifest(tmp_path, "demo")
 
 
-def test_zip_members_exactly_match_bundle_manifest(tmp_path, monkeypatch):
+def test_zip_members_exactly_match_bundle_manifest(tmp_path):
     _complete_bundle_project(tmp_path)
     output = tmp_path.parent / "submission.zip"
     module = load_module()
-    monkeypatch.setattr(
-        module,
-        "require_phase9_delivery_authority",
-        nonformal_delivery_fence,
-    )
     manifest = module.package_submission(
         tmp_path,
         "demo",
         output,
-        workflow_id="test-fixture:workflow",
-        run_generation="test-fixture:generation",
     )
 
     on_disk = json.loads(
@@ -194,23 +187,95 @@ def test_zip_members_exactly_match_bundle_manifest(tmp_path, monkeypatch):
         }
 
 
-def test_release_zip_is_reproducible_for_identical_manifest(tmp_path, monkeypatch):
+def test_stage_only_package_writes_zip_without_project_manifest(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _complete_bundle_project(project)
+    output = tmp_path / "private-staging" / "submission.zip"
+    module = load_module()
+
+    manifest = module.package_submission(
+        project,
+        "demo",
+        output,
+        stage_only=True,
+    )
+
+    assert output.is_file()
+    verify_zip_against_manifest(output, manifest)
+    assert not (
+        project / ".factory/finalization/submission_bundle_manifest.json"
+    ).exists()
+
+
+def test_phase9_transition_after_manifest_blocks_zip_commit(
+    tmp_path, monkeypatch
+):
+    project = tmp_path / "demo"
+    project.mkdir()
+    _complete_bundle_project(project)
+    output = tmp_path / "submission.zip"
+    module = load_module()
+    original_manifest = module.submission_bundle_manifest
+    switched = False
+
+    def manifest_then_phase9(project_arg, base_arg):
+        nonlocal switched
+        manifest = original_manifest(project_arg, base_arg)
+        if not switched:
+            switched = True
+            database = project / ".factory" / "state.db"
+            database.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(database)
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE authority_production_run_generations (
+                        project_id TEXT NOT NULL,
+                        workflow_id TEXT NOT NULL,
+                        run_generation TEXT NOT NULL,
+                        run_mode TEXT NOT NULL,
+                        PRIMARY KEY (workflow_id, run_generation)
+                    );
+                    CREATE TABLE authority_production_run_generation_current (
+                        workflow_id TEXT PRIMARY KEY,
+                        run_generation TEXT NOT NULL
+                    );
+                    INSERT INTO authority_production_run_generations VALUES (
+                        'demo', 'workflow:demo', 'run-generation:current',
+                        'FORENSIC_REPLAY'
+                    );
+                    INSERT INTO authority_production_run_generation_current VALUES (
+                        'workflow:demo', 'run-generation:current'
+                    );
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+        return manifest
+
+    monkeypatch.setattr(module, "submission_bundle_manifest", manifest_then_phase9)
+
+    with pytest.raises(ValueError, match="Phase9 submission requires explicit"):
+        module.package_submission(project, "demo", output)
+
+    assert switched is True
+    assert not output.exists()
+    assert not (
+        project / ".factory/finalization/submission_bundle_manifest.json"
+    ).exists()
+
+
+def test_release_zip_is_reproducible_for_identical_manifest(tmp_path):
     _complete_bundle_project(tmp_path)
     first = tmp_path.parent / "first.zip"
     second = tmp_path.parent / "second.zip"
     module = load_module()
-    monkeypatch.setattr(
-        module,
-        "require_phase9_delivery_authority",
-        nonformal_delivery_fence,
-    )
-
     module.package_submission(
         tmp_path,
         "demo",
         first,
-        workflow_id="test-fixture:workflow",
-        run_generation="test-fixture:generation",
     )
     for path in tmp_path.rglob("*"):
         if path.is_file():
@@ -219,8 +284,6 @@ def test_release_zip_is_reproducible_for_identical_manifest(tmp_path, monkeypatc
         tmp_path,
         "demo",
         second,
-        workflow_id="test-fixture:workflow",
-        run_generation="test-fixture:generation",
     )
 
     assert hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(
@@ -228,7 +291,7 @@ def test_release_zip_is_reproducible_for_identical_manifest(tmp_path, monkeypatc
     ).digest()
 
 
-def test_standalone_submission_requires_explicit_authority_coordinate(tmp_path):
+def test_standalone_submission_preserves_non_phase9_cli_contract(tmp_path):
     _complete_bundle_project(tmp_path)
     output = tmp_path.parent / "missing-coordinate.zip"
 
@@ -245,11 +308,11 @@ def test_standalone_submission_requires_explicit_authority_coordinate(tmp_path):
         text=True,
     )
 
-    assert result.returncode != 0
-    assert not output.exists()
-    assert not (
+    assert result.returncode == 0, result.stderr
+    assert output.is_file()
+    assert (
         tmp_path / ".factory/finalization/submission_bundle_manifest.json"
-    ).exists()
+    ).is_file()
 
 
 def test_standalone_submission_missing_authority_has_zero_side_effects(tmp_path):
@@ -274,7 +337,7 @@ def test_standalone_submission_missing_authority_has_zero_side_effects(tmp_path)
     )
 
     assert result.returncode == 1
-    assert "Authority" in result.stderr or "database" in result.stderr
+    assert "Phase9 submission coordinate does not match" in result.stderr
     assert not output.exists()
     assert not output.parent.exists()
     assert not (

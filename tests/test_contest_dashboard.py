@@ -12,15 +12,6 @@ from factory_core.domain import WorkflowStatus
 from factory_core.storage import SQLiteStateStore
 from tests.test_atomic_release import _package, _project
 from web.backend.contest_dashboard import build_contest_dashboard
-from tests.phase9_delivery_test_support import nonformal_delivery_fence
-
-
-@pytest.fixture(autouse=True)
-def _nonformal_delivery_mechanics(monkeypatch):
-    monkeypatch.setattr(
-        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
-        nonformal_delivery_fence,
-    )
 
 
 def _write_json(path, payload):

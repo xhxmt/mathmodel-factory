@@ -27,13 +27,16 @@ def publish_current_audit(
 ):
     project = project.resolve()
     root = root.resolve()
-    from factory_core.phase9_delivery_fence import require_phase9_delivery_authority
+    from factory_core.phase9_delivery_fence import (
+        require_delivery_side_effect_authority,
+    )
 
     # The CLI performs its own Authority check before trusting any project-local
     # audit file or launching the package subprocess.  ReleasePublisher repeats
     # the check at its mutation boundary.
-    delivery_fence = require_phase9_delivery_authority(
+    require_delivery_side_effect_authority(
         project,
+        operation="release",
         workflow_id=workflow_id,
         run_generation=run_generation,
     )
@@ -56,6 +59,16 @@ def publish_current_audit(
         raise ValueError("latest final audit does not authorize delivery")
 
     def build_package(output: Path) -> bool:
+        coordinate_args = (
+            [
+                "--workflow-id",
+                workflow_id,
+                "--run-generation",
+                run_generation,
+            ]
+            if workflow_id is not None and run_generation is not None
+            else []
+        )
         result = subprocess.run(
             [
                 sys.executable,
@@ -63,10 +76,8 @@ def publish_current_audit(
                 str(project),
                 project.name,
                 str(output),
-                "--workflow-id",
-                delivery_fence.workflow_id,
-                "--run-generation",
-                delivery_fence.run_generation,
+                "--stage-only",
+                *coordinate_args,
             ],
             cwd=root,
             check=False,
@@ -78,8 +89,8 @@ def publish_current_audit(
         snapshot_id,
         status=status,
         package_builder=build_package,
-        workflow_id=delivery_fence.workflow_id,
-        run_generation=delivery_fence.run_generation,
+        workflow_id=workflow_id,
+        run_generation=run_generation,
     )
 
 
@@ -87,8 +98,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project")
     parser.add_argument("--root", required=True)
-    parser.add_argument("--workflow-id", required=True)
-    parser.add_argument("--run-generation", required=True)
+    parser.add_argument("--workflow-id")
+    parser.add_argument("--run-generation")
     args = parser.parse_args()
 
     try:

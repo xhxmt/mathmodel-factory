@@ -3,11 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import shutil
 import pwd
 import sqlite3
+import subprocess
+import threading
 
 import pytest
 
@@ -43,7 +46,9 @@ from factory_core.phase9_forensic_replay import (
     RESUME_TARGET,
     TECHNICAL,
     Phase9ForensicReplayConflict,
+    Phase9ForensicReplayError,
     Phase9ForensicReplayRequestV1,
+    Phase9ForensicReplayResult,
     Phase9ForensicReplaySafetyError,
     Phase9ForensicReplayService,
     ReplayEvidenceFileV1,
@@ -1343,6 +1348,14 @@ def _counts(database: Path):
         connection.close()
 
 
+def _database_family_snapshot(database: Path) -> dict[str, bytes]:
+    return {
+        path.name: path.read_bytes()
+        for path in sorted(database.parent.glob(f"{database.name}*"))
+        if path.is_file()
+    }
+
+
 def _reindex_evidence(
     root: Path, request: Phase9ForensicReplayRequestV1
 ) -> Phase9ForensicReplayRequestV1:
@@ -1358,6 +1371,57 @@ def _reindex_evidence(
             )
         )
     return replace(request, evidence_files=tuple(files))
+
+
+def _shorten_start_authorization(
+    foundation,
+    root: Path,
+    request: Phase9ForensicReplayRequestV1,
+    *,
+    expires_at: int,
+) -> Phase9ForensicReplayRequestV1:
+    """Issue the test fixture's same authorization with a shorter valid TTL."""
+
+    path = root / "start_authorization.json"
+    body = json.loads(path.read_text())
+    body["expires_at"] = expires_at
+    body.pop("authorization_receipt_sha256")
+    body["authorization_receipt_sha256"] = canonical_sha256(body)
+    raw = canonical_bytes(body)
+    path.write_bytes(raw)
+    updated = _reindex_evidence(root, request)
+    connection = sqlite3.connect(foundation.database)
+    try:
+        table = "authority_production_phase9_start_authorizations"
+        triggers = connection.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name=?",
+            (table,),
+        ).fetchall()
+        for name, _sql in triggers:
+            connection.execute(f'DROP TRIGGER "{name}"')
+        connection.execute(
+            "UPDATE authority_production_phase9_start_authorizations "
+            "SET expires_at=?, start_authorization_byte_length=?, "
+            "start_authorization_raw_bytes_sha256=?, "
+            "final_evidence_set_sha256=?, authorization_json=?, "
+            "authorization_receipt_sha256=? WHERE authorization_id=?",
+            (
+                expires_at,
+                len(raw),
+                hashlib.sha256(raw).hexdigest(),
+                updated.evidence_set_sha256,
+                raw.decode("utf-8"),
+                body["authorization_receipt_sha256"],
+                body["authorization_id"],
+            ),
+        )
+        for _name, sql in triggers:
+            connection.execute(sql)
+        connection.commit()
+    finally:
+        connection.close()
+    return updated
 
 
 def _refresh_start_authorization(
@@ -1718,7 +1782,8 @@ def test_preflight_atomic_execute_exact_replay_and_read_only_collection(tmp_path
     first = service.execute(request)
     replay = service.execute(request)
     assert first.replayed is False
-    assert replay == replace(first, replayed=True)
+    assert replay == first
+    assert replay.as_dict() == first.as_dict()
     assert first.terminal_reason == "FORENSIC_REPLAY_COMPLETED"
     assert _counts(foundation.database) == {
         "authority_production_phase9_replays": 1,
@@ -1744,11 +1809,80 @@ def test_preflight_atomic_execute_exact_replay_and_read_only_collection(tmp_path
 
 
 def test_same_idempotency_key_with_different_request_conflicts(tmp_path):
-    _foundation, _root, request, service = _fixture(tmp_path)
+    foundation, _root, request, service = _fixture(tmp_path)
     service.execute(request)
+    before_files = _database_family_snapshot(foundation.database)
     changed = replace(request, occurred_at=request.occurred_at + 1)
     with pytest.raises(Phase9ForensicReplayConflict, match="idempotency key"):
         service.execute(changed)
+    assert _database_family_snapshot(foundation.database) == before_files
+
+
+def test_same_key_cannot_be_reused_by_another_workflow_before_live_gates(
+    tmp_path,
+):
+    foundation, _root, request, service = _fixture(tmp_path)
+    service.execute(request)
+    before_files = _database_family_snapshot(foundation.database)
+    changed = replace(request, workflow_id="workflow-global-key-conflict")
+    changed_service = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=tmp_path / "missing-cross-workflow-evidence",
+        official_input_root=tmp_path / "missing-cross-workflow-input",
+        execution_context_receipt_path=(
+            tmp_path / "missing-cross-workflow-context.json"
+        ),
+        clock=lambda: changed.occurred_at + 301,
+    )
+
+    with pytest.raises(
+        Phase9ForensicReplayConflict,
+        match="idempotency key.*workflow|workflow.*idempotency key",
+    ):
+        changed_service.execute(changed)
+
+    assert _database_family_snapshot(foundation.database) == before_files
+    connection = sqlite3.connect(foundation.database)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM authority_production_phase9_replay_idempotency "
+            "WHERE idempotency_key=?",
+            (request.idempotency_key,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM authority_production_phase9_replays "
+            "WHERE workflow_id=?",
+            (changed.workflow_id,),
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_same_key_structurally_invalid_replay_is_explicit_conflict(tmp_path):
+    foundation, _root, request, service = _fixture(tmp_path)
+    service.execute(request)
+    before_files = _database_family_snapshot(foundation.database)
+
+    with pytest.raises(Phase9ForensicReplayConflict, match="idempotency key"):
+        service.execute(replace(request, delivery_capability="ENABLED"))
+
+    assert _database_family_snapshot(foundation.database) == before_files
+
+
+def test_same_key_run_generation_mismatch_conflicts_without_mutation(tmp_path):
+    foundation, _root, request, service = _fixture(tmp_path)
+    service.execute(request)
+    before_bytes = foundation.database.read_bytes()
+    before = _counts(foundation.database)
+    changed = replace(request, run_generation="run-generation:different")
+
+    with pytest.raises(Phase9ForensicReplayConflict, match="idempotency key"):
+        service.execute(changed)
+
+    assert foundation.database.read_bytes() == before_bytes
+    assert _counts(foundation.database) == before
 
 
 def test_start_authorization_uses_trusted_clock_and_exact_gate_result(tmp_path):
@@ -2083,10 +2217,11 @@ def test_shared_external_input_verifiers_run_at_both_boundaries(
         replay_module, "read_verified_execution_source_snapshot", verify_source
     )
     service.execute(request)
-    assert calls == {"official": 3, "context": 3, "source": 3}
+    # Query-only preflight, RW transaction start, preterminal, and precommit.
+    assert calls == {"official": 4, "context": 4, "source": 4}
 
 
-@pytest.mark.parametrize("failed_call", (2, 3), ids=("preterminal", "precommit"))
+@pytest.mark.parametrize("failed_call", (3, 4), ids=("preterminal", "precommit"))
 def test_loaded_execution_source_drift_at_late_boundaries_rolls_back(
     tmp_path,
     monkeypatch,
@@ -2108,12 +2243,14 @@ def test_loaded_execution_source_drift_at_late_boundaries_rolls_back(
     monkeypatch.setattr(
         replay_module, "read_verified_execution_source_snapshot", verify
     )
+    before = _database_family_snapshot(foundation.database)
     with pytest.raises(
         Phase9ForensicReplayConflict,
         match="executing source differs",
     ):
         service.execute(request)
     assert calls == failed_call
+    assert _database_family_snapshot(foundation.database) == before
     assert _counts(foundation.database) == {
         table: 0 for table in PHASE9_TABLES
     }
@@ -2307,6 +2444,63 @@ def test_generation_rotation_cas_switches_phase9_current_pointer(tmp_path):
     assert state["replay_id"] == second.replay_id
     assert state["terminal_receipt_sha256"] == second.receipt_sha256
     assert _counts(foundation.database)["authority_production_phase9_replays"] == 2
+    before_recovery = foundation.database.read_bytes()
+    predecessor_recovery = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=first_root,
+        official_input_root=input_root,
+        execution_context_receipt_path=context,
+        clock=lambda: first_request.occurred_at + 301,
+    ).execute(first_request)
+    assert predecessor_recovery == first
+    assert predecessor_recovery.as_dict() == first.as_dict()
+    assert foundation.database.read_bytes() == before_recovery
+
+    connection = sqlite3.connect(foundation.database)
+    connection.row_factory = sqlite3.Row
+    table = "authority_production_phase9_replays"
+    try:
+        triggers = connection.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name=?",
+            (table,),
+        ).fetchall()
+        for name, _sql in triggers:
+            connection.execute(f'DROP TRIGGER "{name}"')
+        dangling = dict(
+            connection.execute(
+                f"SELECT * FROM {table} WHERE replay_id=?",
+                (second.replay_id,),
+            ).fetchone()
+        )
+        dangling.update(
+            replay_id="phase9-replay:historical-tip-dangling",
+            run_generation="run-generation:historical-tip-dangling",
+            predecessor_replay_id=second.replay_id,
+            predecessor_terminal_receipt_sha256=second.receipt_sha256,
+            request_sha256="d" * 64,
+        )
+        columns = tuple(dangling)
+        connection.execute(
+            f"INSERT INTO {table}({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})",
+            tuple(dangling[name] for name in columns),
+        )
+        for _name, sql in triggers:
+            connection.execute(sql)
+        connection.commit()
+    finally:
+        connection.close()
+    damaged = _database_family_snapshot(foundation.database)
+
+    # The dangling replay may be rejected directly by the replay chain or by
+    # the nested run-generation provenance walk that validates the same chain.
+    with pytest.raises(Phase9ForensicReplayConflict):
+        first_service.execute(first_request)
+
+    assert _database_family_snapshot(foundation.database) == damaged
 
 
 def test_symlinked_evidence_is_blocked_before_database_mutation(tmp_path):
@@ -2988,7 +3182,8 @@ def test_gate_consumption_is_durable_and_exact_replay_does_not_consume_twice(tmp
     foundation, _root, request, service = _fixture(tmp_path)
     first = service.execute(request)
     replayed = service.execute(request)
-    assert replayed == replace(first, replayed=True)
+    assert replayed == first
+    assert replayed.as_dict() == first.as_dict()
     connection = sqlite3.connect(foundation.database)
     connection.row_factory = sqlite3.Row
     try:
@@ -3001,6 +3196,1027 @@ def test_gate_consumption_is_durable_and_exact_replay_does_not_consume_twice(tmp
     assert rows[0]["gate_result_sha256"] == request.entry_gate_result_sha256
     assert rows[0]["request_sha256"] == request.request_sha256
     assert rows[0]["replay_id"] == request.replay_id
+
+
+@pytest.mark.parametrize("closed_gate", ("authorization_expired", "request_stale"))
+def test_exact_replay_survives_closed_new_write_time_gates(tmp_path, closed_gate):
+    """Committed recovery precedes freshness and one-use authorization gates."""
+
+    foundation, root, request, service = _fixture(tmp_path)
+    if closed_gate == "authorization_expired":
+        request = _shorten_start_authorization(
+            foundation,
+            root,
+            request,
+            expires_at=request.occurred_at + 50,
+        )
+    first = service.execute(request)
+    before_bytes = foundation.database.read_bytes()
+    before_counts = _counts(foundation.database)
+    connection = sqlite3.connect(foundation.database)
+    try:
+        stored_receipt_before = connection.execute(
+            "SELECT receipt_json, receipt_sha256 FROM "
+            "authority_production_phase9_terminal_receipts WHERE replay_id=?",
+            (request.replay_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+    before_files = _database_family_snapshot(foundation.database)
+    late = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=root,
+        official_input_root=service.official_input_root,
+        execution_context_receipt_path=service.execution_context_receipt_path,
+        clock=(
+            (lambda: request.occurred_at + 51)
+            if closed_gate == "authorization_expired"
+            else (lambda: request.occurred_at + 301)
+        ),
+    )
+
+    replayed = late.execute(request)
+
+    assert replayed == first
+    assert replayed.as_dict() == first.as_dict()
+    assert foundation.database.read_bytes() == before_bytes
+    assert _database_family_snapshot(foundation.database) == before_files
+    assert _counts(foundation.database) == before_counts
+    connection = sqlite3.connect(foundation.database)
+    try:
+        assert connection.execute(
+            "SELECT receipt_json, receipt_sha256 FROM "
+            "authority_production_phase9_terminal_receipts WHERE replay_id=?",
+            (request.replay_id,),
+        ).fetchone() == stored_receipt_before
+        assert connection.execute(
+            "SELECT COUNT(*) FROM "
+            "authority_production_phase9_start_authorization_consumptions"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM authority_production_phase9_gate_consumptions"
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_exact_replay_uses_stored_operator_identity_not_the_current_os_account(
+    tmp_path,
+    monkeypatch,
+):
+    foundation, _root, request, service = _fixture(tmp_path)
+    first = service.execute(request)
+    before = foundation.database.read_bytes()
+
+    monkeypatch.setattr(replay_module.os, "geteuid", lambda: 999_999)
+    monkeypatch.setattr(
+        replay_module.pwd,
+        "getpwuid",
+        lambda _uid: type("Account", (), {"pw_name": "different-account"})(),
+    )
+
+    assert service.execute(request) == first
+    assert foundation.database.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "closed_gate",
+    ("authorization_expired", "request_stale"),
+)
+def test_confirmed_forensic_cli_recovers_exact_commit_before_live_time_gates(
+    tmp_path,
+    closed_gate,
+):
+    foundation, root, request, service = _fixture(tmp_path)
+    if closed_gate == "authorization_expired":
+        request = _shorten_start_authorization(
+            foundation,
+            root,
+            request,
+            expires_at=request.occurred_at + 50,
+        )
+    first = service.execute(request)
+    before_bytes = foundation.database.read_bytes()
+    before_files = _database_family_snapshot(foundation.database)
+    before_counts = _counts(foundation.database)
+    request_path = tmp_path / f"forensic-{closed_gate}.json"
+    request_path.write_bytes(canonical_bytes(request.as_dict()))
+    trusted_now = request.occurred_at + (
+        51 if closed_gate == "authorization_expired" else 301
+    )
+    clock_hook = tmp_path / f"clock-{closed_gate}"
+    clock_hook.mkdir()
+    (clock_hook / "sitecustomize.py").write_text(
+        "import time\n"
+        f"time.time = lambda: {trusted_now}\n",
+        encoding="utf-8",
+    )
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(clock_hook),
+        "PHASE9_ENABLED": "true",
+        "PHASE9_AUTHORITY_DB_FILE": str(foundation.database),
+        "PHASE9_AUTHORITY_SOURCE_FENCE_SHA256": (
+            foundation.preflight.source_fence_sha256
+        ),
+        "PHASE9_SOURCE_REPOSITORY": str(_source_repository()),
+        "PHASE9_EVIDENCE_ROOT": str(root),
+        "PHASE9_OFFICIAL_INPUT_ROOT": str(service.official_input_root),
+        "PHASE9_EXECUTION_CONTEXT_RECEIPT": str(
+            service.execution_context_receipt_path
+        ),
+    }
+
+    command = [
+        os.sys.executable,
+        "-B",
+        str(_source_repository() / "scripts" / "phase9_forensic_replay.py"),
+        "execute",
+        "--request",
+        str(request_path),
+        "--confirm",
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=_source_repository(),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == first.as_dict()
+    assert foundation.database.read_bytes() == before_bytes
+    assert _database_family_snapshot(foundation.database) == before_files
+    assert _counts(foundation.database) == before_counts
+
+    if closed_gate == "authorization_expired":
+        different = request.as_dict()
+        different["delivery_capability"] = "ENABLED"
+        request_path.write_bytes(canonical_bytes(different))
+        conflict = subprocess.run(
+            command,
+            cwd=_source_repository(),
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert conflict.returncode == 2
+        assert "idempotency key has different request bytes" in conflict.stderr
+        assert foundation.database.read_bytes() == before_bytes
+        assert _database_family_snapshot(foundation.database) == before_files
+        assert _counts(foundation.database) == before_counts
+
+        malformed = request.as_dict()
+        malformed["evidence_files"][0]["raw_bytes_sha256"] = "not-a-sha256"
+        request_path.write_bytes(canonical_bytes(malformed))
+        malformed_conflict = subprocess.run(
+            command,
+            cwd=_source_repository(),
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert malformed_conflict.returncode == 2
+        assert (
+            "idempotency key has different request bytes"
+            in malformed_conflict.stderr
+        )
+        assert foundation.database.read_bytes() == before_bytes
+        assert _database_family_snapshot(foundation.database) == before_files
+        assert _counts(foundation.database) == before_counts
+
+
+@pytest.mark.parametrize(
+    ("offset", "message"),
+    (
+        pytest.param(51, "not valid at trusted current time", id="authorization_expired"),
+        pytest.param(
+            301,
+            "request occurrence metadata exceeds trusted clock skew",
+            id="request_stale",
+        ),
+    ),
+)
+def test_new_replay_still_rejects_closed_time_gates_without_mutation(
+    tmp_path,
+    offset,
+    message,
+):
+    foundation, root, request, service = _fixture(tmp_path)
+    if offset == 51:
+        request = _shorten_start_authorization(
+            foundation,
+            root,
+            request,
+            expires_at=request.occurred_at + 50,
+        )
+    before_bytes = foundation.database.read_bytes()
+    before_counts = _counts(foundation.database)
+    before_files = _database_family_snapshot(foundation.database)
+    late = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=root,
+        official_input_root=service.official_input_root,
+        execution_context_receipt_path=service.execution_context_receipt_path,
+        clock=lambda: request.occurred_at + offset,
+    )
+
+    with pytest.raises(Phase9ForensicReplaySafetyError, match=message):
+        late.execute(request)
+
+    assert foundation.database.read_bytes() == before_bytes
+    assert _database_family_snapshot(foundation.database) == before_files
+    assert _counts(foundation.database) == before_counts
+
+
+def test_unsafe_snapshot_state_is_a_domain_conflict_without_mutation(tmp_path):
+    foundation, _root, request, service = _fixture(tmp_path)
+    journal = Path(f"{foundation.database}-journal")
+    journal.write_bytes(b"ambiguous-hot-journal")
+    before = _database_family_snapshot(foundation.database)
+
+    with pytest.raises(
+        Phase9ForensicReplayConflict,
+        match="Authority state snapshot cannot be read safely",
+    ):
+        service.execute(request)
+
+    assert _database_family_snapshot(foundation.database) == before
+
+
+@pytest.mark.parametrize("damage", ("missing", "moved_key", "moved_workflow"))
+def test_idempotency_miss_cannot_fall_through_an_existing_replay(
+    tmp_path,
+    damage,
+):
+    foundation, _root, request, service = _fixture(tmp_path)
+    service.execute(request)
+    table = "authority_production_phase9_replay_idempotency"
+    connection = sqlite3.connect(foundation.database)
+    try:
+        triggers = connection.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name=?",
+            (table,),
+        ).fetchall()
+        for name, _sql in triggers:
+            connection.execute(f'DROP TRIGGER "{name}"')
+        if damage == "missing":
+            connection.execute(
+                f"DELETE FROM {table} WHERE workflow_id=? AND idempotency_key=?",
+                (request.workflow_id, request.idempotency_key),
+            )
+        elif damage == "moved_key":
+            connection.execute(
+                f"UPDATE {table} SET idempotency_key='phase9-replay-key-moved' "
+                "WHERE workflow_id=? AND idempotency_key=?",
+                (request.workflow_id, request.idempotency_key),
+            )
+        else:
+            connection.execute(
+                f"UPDATE {table} SET workflow_id='workflow-id-moved' "
+                "WHERE workflow_id=? AND idempotency_key=?",
+                (request.workflow_id, request.idempotency_key),
+            )
+        for _name, sql in triggers:
+            connection.execute(sql)
+        connection.commit()
+    finally:
+        connection.close()
+    service.evidence_root = tmp_path / "evidence-no-longer-live"
+    service._clock = lambda: request.occurred_at + 301
+    before = _database_family_snapshot(foundation.database)
+
+    with pytest.raises(
+        Phase9ForensicReplayConflict,
+        match="idempotency",
+    ):
+        service.execute(request)
+
+    assert _database_family_snapshot(foundation.database) == before
+
+
+def test_orphaned_replay_request_reserves_global_key_across_workflows(
+    tmp_path,
+):
+    foundation, _root, request, service = _fixture(tmp_path)
+    service.execute(request)
+    table = "authority_production_phase9_replay_idempotency"
+    connection = sqlite3.connect(foundation.database)
+    try:
+        triggers = connection.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name=?",
+            (table,),
+        ).fetchall()
+        for name, _sql in triggers:
+            connection.execute(f'DROP TRIGGER "{name}"')
+        connection.execute(
+            f"DELETE FROM {table} WHERE workflow_id=? AND idempotency_key=?",
+            (request.workflow_id, request.idempotency_key),
+        )
+        for _name, sql in triggers:
+            connection.execute(sql)
+        connection.commit()
+    finally:
+        connection.close()
+    changed = replace(request, workflow_id="workflow-orphaned-global-key")
+    changed_service = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=tmp_path / "missing-orphaned-key-evidence",
+        official_input_root=tmp_path / "missing-orphaned-key-input",
+        execution_context_receipt_path=(tmp_path / "missing-orphaned-key-context"),
+        clock=lambda: changed.occurred_at + 301,
+    )
+    before = _database_family_snapshot(foundation.database)
+
+    with pytest.raises(
+        Phase9ForensicReplayConflict,
+        match="trace lacks its exact global idempotency key binding",
+    ):
+        changed_service.execute(changed)
+
+    assert _database_family_snapshot(foundation.database) == before
+    assert _counts(foundation.database)["authority_production_phase9_replays"] == 1
+
+
+@pytest.mark.parametrize(
+    "damage",
+    (
+        "terminal_receipt",
+        "terminal_event",
+        "missing_typed_receipt",
+        "missing_generation_succession",
+        "missing_generation_current",
+        "missing_replay_current",
+        "source_inventory_recorded_at",
+        "missing_business_object",
+        "idempotency_alias",
+    ),
+)
+def test_exact_recovery_rejects_corrupt_or_incomplete_terminal_graph(
+    tmp_path,
+    damage,
+):
+    foundation, _root, request, service = _fixture(tmp_path)
+    service.execute(request)
+    table = {
+        "terminal_receipt": "authority_production_phase9_terminal_receipts",
+        "terminal_event": "authority_production_phase9_replay_events",
+        "missing_typed_receipt": "authority_production_phase9_evidence_receipts",
+        "missing_generation_succession": (
+            "authority_production_run_generation_successions"
+        ),
+        "missing_generation_current": (
+            "authority_production_run_generation_current"
+        ),
+        "missing_replay_current": "authority_production_phase9_replay_current",
+        "source_inventory_recorded_at": (
+            "authority_production_run_generation_source_inventories"
+        ),
+        "missing_business_object": "authority_production_phase9_replays",
+        "idempotency_alias": "authority_production_phase9_replay_idempotency",
+    }[damage]
+    connection = sqlite3.connect(foundation.database)
+    try:
+        triggers = connection.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name=?",
+            (table,),
+        ).fetchall()
+        for name, _sql in triggers:
+            connection.execute(f'DROP TRIGGER "{name}"')
+        if damage == "terminal_receipt":
+            connection.execute(
+                "UPDATE authority_production_phase9_terminal_receipts "
+                "SET receipt_json='{}' WHERE replay_id=?",
+                (request.replay_id,),
+            )
+        elif damage == "terminal_event":
+            connection.execute(
+                "UPDATE authority_production_phase9_replay_events "
+                "SET event_json='{}' WHERE replay_id=? AND sequence=6",
+                (request.replay_id,),
+            )
+        elif damage == "missing_typed_receipt":
+            connection.execute(
+                "DELETE FROM authority_production_phase9_evidence_receipts "
+                "WHERE replay_id=? AND receipt_kind='PACKET'",
+                (request.replay_id,),
+            )
+        elif damage == "missing_generation_succession":
+            connection.execute(
+                "DELETE FROM authority_production_run_generation_successions "
+                "WHERE run_generation=?",
+                (request.run_generation,),
+            )
+        elif damage == "missing_generation_current":
+            connection.execute(
+                "DELETE FROM authority_production_run_generation_current "
+                "WHERE workflow_id=?",
+                (request.workflow_id,),
+            )
+        elif damage == "missing_replay_current":
+            connection.execute(
+                "DELETE FROM authority_production_phase9_replay_current "
+                "WHERE workflow_id=?",
+                (request.workflow_id,),
+            )
+        elif damage == "source_inventory_recorded_at":
+            connection.execute(
+                "UPDATE authority_production_run_generation_source_inventories "
+                "SET recorded_at=0 WHERE inventory_sha256=?",
+                (request.source_inventory_sha256,),
+            )
+        elif damage == "idempotency_alias":
+            connection.execute(
+                "INSERT INTO authority_production_phase9_replay_idempotency "
+                "SELECT workflow_id, 'phase9-replay-key-alias', request_sha256, "
+                "replay_id, terminal_receipt_sha256 FROM "
+                "authority_production_phase9_replay_idempotency "
+                "WHERE workflow_id=? AND idempotency_key=?",
+                (request.workflow_id, request.idempotency_key),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM authority_production_phase9_replays WHERE replay_id=?",
+                (request.replay_id,),
+            )
+        for _name, sql in triggers:
+            connection.execute(sql)
+        connection.commit()
+    finally:
+        connection.close()
+    damaged_bytes = foundation.database.read_bytes()
+    damaged_counts = _counts(foundation.database)
+
+    with pytest.raises(Phase9ForensicReplayConflict):
+        service.execute(request)
+
+    assert foundation.database.read_bytes() == damaged_bytes
+    assert _counts(foundation.database) == damaged_counts
+
+
+def test_exact_recovery_rejects_cross_workflow_dangling_successor(tmp_path):
+    """A successor edge cannot be hidden by assigning it another workflow."""
+
+    foundation, _root, request, service = _fixture(tmp_path)
+    service.execute(request)
+    connection = sqlite3.connect(foundation.database)
+    connection.row_factory = sqlite3.Row
+    table = "authority_production_phase9_replays"
+    try:
+        triggers = connection.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name=?",
+            (table,),
+        ).fetchall()
+        for name, _sql in triggers:
+            connection.execute(f'DROP TRIGGER "{name}"')
+        source = dict(
+            connection.execute(
+                f"SELECT * FROM {table} WHERE replay_id=?",
+                (request.replay_id,),
+            ).fetchone()
+        )
+        source.update(
+            replay_id="phase9-replay:cross-workflow-dangling",
+            workflow_id="workflow-cross-dangling",
+            run_generation="run-generation:cross-workflow-dangling",
+            operation_kind="ROTATE",
+            predecessor_replay_id=request.replay_id,
+            predecessor_terminal_receipt_sha256=connection.execute(
+                "SELECT receipt_sha256 FROM "
+                "authority_production_phase9_terminal_receipts "
+                "WHERE replay_id=?",
+                (request.replay_id,),
+            ).fetchone()[0],
+            request_sha256="d" * 64,
+        )
+        columns = tuple(source)
+        connection.execute(
+            f"INSERT INTO {table}({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})",
+            tuple(source[name] for name in columns),
+        )
+        for _name, sql in triggers:
+            connection.execute(sql)
+        connection.commit()
+    finally:
+        connection.close()
+    damaged = _database_family_snapshot(foundation.database)
+
+    with pytest.raises(
+        Phase9ForensicReplayConflict, match="dangling successor"
+    ):
+        service.execute(request)
+
+    assert _database_family_snapshot(foundation.database) == damaged
+
+
+def test_two_concurrent_identical_replays_commit_once_and_recover_once(tmp_path):
+    foundation, root, request, first_service = _fixture(tmp_path)
+    second_service = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=root,
+        official_input_root=first_service.official_input_root,
+        execution_context_receipt_path=first_service.execution_context_receipt_path,
+        clock=lambda: request.occurred_at,
+    )
+    barrier = threading.Barrier(2)
+    results = []
+    errors = []
+
+    def invoke(service):
+        try:
+            barrier.wait(timeout=10)
+            results.append(service.execute(request))
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    workers = [
+        threading.Thread(target=invoke, args=(first_service,)),
+        threading.Thread(target=invoke, args=(second_service,)),
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=120)
+
+    assert errors == []
+    assert len(results) == 2
+    assert all(result.replayed is False for result in results)
+    assert results[0] == results[1]
+    assert results[0].as_dict() == results[1].as_dict()
+    assert _counts(foundation.database) == {
+        "authority_production_phase9_replays": 1,
+        "authority_production_phase9_replay_events": 6,
+        "authority_production_phase9_terminal_receipts": 1,
+        "authority_production_phase9_replay_idempotency": 1,
+        "authority_production_phase9_replay_current": 1,
+        "authority_production_phase9_evidence_receipts": 30,
+        "authority_production_phase9_gate_consumptions": 1,
+    }
+
+
+def test_exact_peer_commit_queued_on_lease_preempts_closed_live_gates(
+    tmp_path,
+):
+    foundation, root, request, first_service = _fixture(tmp_path)
+    first_inside_transaction = threading.Event()
+    second_started = threading.Event()
+
+    def pause_first(checkpoint):
+        if checkpoint == "after_live_gate_start":
+            first_inside_transaction.set()
+            assert second_started.wait(timeout=30)
+
+    first_service.fault_hook = pause_first
+    second_service = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=root,
+        official_input_root=first_service.official_input_root,
+        execution_context_receipt_path=first_service.execution_context_receipt_path,
+        clock=lambda: request.occurred_at + 301,
+    )
+    second_has_lease = threading.Event()
+    allow_recovery = threading.Event()
+    original_recover = second_service._recover_committed
+
+    def pause_after_lease(value):
+        second_has_lease.set()
+        assert allow_recovery.wait(timeout=30)
+        return original_recover(value)
+
+    second_service._recover_committed = pause_after_lease
+    outcomes = []
+    errors = []
+
+    def invoke(service, *, mark_started=False):
+        try:
+            if mark_started:
+                second_started.set()
+            outcomes.append(service.execute(request))
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    second_service.evidence_root = tmp_path / "evidence-no-longer-live"
+    first_worker = threading.Thread(target=invoke, args=(first_service,))
+    second_worker = threading.Thread(
+        target=invoke, args=(second_service,), kwargs={"mark_started": True}
+    )
+    first_worker.start()
+    assert first_inside_transaction.wait(timeout=60)
+    second_worker.start()
+    assert second_has_lease.wait(timeout=60)
+    before = _database_family_snapshot(foundation.database)
+    allow_recovery.set()
+    first_worker.join(timeout=120)
+    second_worker.join(timeout=120)
+
+    assert not first_worker.is_alive()
+    assert not second_worker.is_alive()
+    assert errors == []
+    assert len(outcomes) == 2
+    assert all(result.replayed is False for result in outcomes)
+    assert outcomes[0] == outcomes[1]
+    assert outcomes[0].as_dict() == outcomes[1].as_dict()
+    assert _database_family_snapshot(foundation.database) == before
+
+
+def test_queued_same_key_cross_workflow_request_cannot_overwrite_commit(
+    tmp_path,
+):
+    foundation, root, request, first_service = _fixture(tmp_path)
+    first_inside_transaction = threading.Event()
+    second_started = threading.Event()
+
+    def pause_first(checkpoint):
+        if checkpoint == "after_live_gate_start":
+            first_inside_transaction.set()
+            assert second_started.wait(timeout=30)
+
+    first_service.fault_hook = pause_first
+    changed = replace(request, workflow_id="workflow-concurrent-global-key")
+    second_service = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=tmp_path / "missing-concurrent-workflow-evidence",
+        official_input_root=tmp_path / "missing-concurrent-workflow-input",
+        execution_context_receipt_path=(
+            tmp_path / "missing-concurrent-workflow-context.json"
+        ),
+        clock=lambda: changed.occurred_at + 301,
+    )
+    evidence_before = tuple(
+        (path.relative_to(root).as_posix(), path.read_bytes())
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    )
+    outcomes = []
+
+    def invoke(service, value, *, mark_started=False):
+        try:
+            if mark_started:
+                second_started.set()
+            outcomes.append(service.execute(value))
+        except Exception as exc:  # pragma: no cover - asserted below
+            outcomes.append(exc)
+
+    first_worker = threading.Thread(target=invoke, args=(first_service, request))
+    second_worker = threading.Thread(
+        target=invoke,
+        args=(second_service, changed),
+        kwargs={"mark_started": True},
+    )
+    first_worker.start()
+    assert first_inside_transaction.wait(timeout=60)
+    second_worker.start()
+    first_worker.join(timeout=120)
+    second_worker.join(timeout=120)
+
+    assert not first_worker.is_alive()
+    assert not second_worker.is_alive()
+    assert len(outcomes) == 2
+    results = [
+        value for value in outcomes if type(value) is Phase9ForensicReplayResult
+    ]
+    conflicts = [
+        value for value in outcomes if type(value) is Phase9ForensicReplayConflict
+    ]
+    assert len(results) == 1
+    assert results[0].replayed is False
+    assert len(conflicts) == 1
+    assert "idempotency key" in str(conflicts[0])
+    connection = sqlite3.connect(foundation.database)
+    try:
+        bindings = connection.execute(
+            "SELECT workflow_id, request_sha256, replay_id FROM "
+            "authority_production_phase9_replay_idempotency "
+            "WHERE idempotency_key=?",
+            (request.idempotency_key,),
+        ).fetchall()
+        assert len(bindings) == 1
+        assert bindings[0][0] == request.workflow_id
+        assert bindings[0][1] == request.request_sha256
+        assert bindings[0][2] == request.replay_id
+    finally:
+        connection.close()
+    assert _counts(foundation.database) == {
+        "authority_production_phase9_replays": 1,
+        "authority_production_phase9_replay_events": 6,
+        "authority_production_phase9_terminal_receipts": 1,
+        "authority_production_phase9_replay_idempotency": 1,
+        "authority_production_phase9_replay_current": 1,
+        "authority_production_phase9_evidence_receipts": 30,
+        "authority_production_phase9_gate_consumptions": 1,
+    }
+    assert evidence_before == tuple(
+        (path.relative_to(root).as_posix(), path.read_bytes())
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    )
+
+
+@pytest.mark.parametrize("peer_kind", ("exact", "cross_workflow"))
+def test_independent_processes_serialize_same_key_forensic_requests(
+    tmp_path,
+    peer_kind,
+):
+    """Exercise the real OS flock around one complete forensic commit."""
+
+    context = multiprocessing.get_context("fork")
+    foundation, root, request, first_service = _fixture(tmp_path)
+    changed = (
+        request
+        if peer_kind == "exact"
+        else replace(request, workflow_id="workflow-process-global-key")
+    )
+    first_inside_transaction = context.Event()
+    peer_started = context.Event()
+
+    def hold_first(checkpoint):
+        if checkpoint == "after_live_gate_start":
+            first_inside_transaction.set()
+            assert peer_started.wait(timeout=30)
+
+    first_service.fault_hook = hold_first
+    second_service = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=tmp_path / f"missing-process-{peer_kind}-evidence",
+        official_input_root=tmp_path / f"missing-process-{peer_kind}-input",
+        execution_context_receipt_path=(
+            tmp_path / f"missing-process-{peer_kind}-context.json"
+        ),
+        clock=lambda: changed.occurred_at + 301,
+    )
+    evidence_before = tuple(
+        (path.relative_to(root).as_posix(), path.read_bytes())
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    )
+    output = context.Queue()
+
+    def invoke(service, value, *, mark_started=False):
+        if mark_started:
+            peer_started.set()
+        try:
+            output.put(("result", service.execute(value).as_dict()))
+        except Exception as exc:  # pragma: no cover - asserted in parent
+            output.put(("error", type(exc).__name__, str(exc)))
+
+    first_process = context.Process(target=invoke, args=(first_service, request))
+    second_process = context.Process(
+        target=invoke,
+        args=(second_service, changed),
+        kwargs={"mark_started": True},
+    )
+    first_process.start()
+    assert first_inside_transaction.wait(timeout=60)
+    second_process.start()
+    first_process.join(timeout=180)
+    second_process.join(timeout=180)
+    for process in (first_process, second_process):
+        if process.is_alive():  # pragma: no cover - defensive cleanup
+            process.terminate()
+            process.join(timeout=10)
+        assert process.exitcode == 0
+    outcomes = [output.get(timeout=10), output.get(timeout=10)]
+    results = [item[1] for item in outcomes if item[0] == "result"]
+    errors = [item for item in outcomes if item[0] == "error"]
+
+    if peer_kind == "exact":
+        assert errors == []
+        assert len(results) == 2
+        assert results[0] == results[1]
+        assert results[0]["replayed"] is False
+    else:
+        assert len(results) == 1
+        assert len(errors) == 1
+        assert errors[0][1] == "Phase9ForensicReplayConflict"
+        assert "idempotency key" in errors[0][2]
+    assert _counts(foundation.database) == {
+        "authority_production_phase9_replays": 1,
+        "authority_production_phase9_replay_events": 6,
+        "authority_production_phase9_terminal_receipts": 1,
+        "authority_production_phase9_replay_idempotency": 1,
+        "authority_production_phase9_replay_current": 1,
+        "authority_production_phase9_evidence_receipts": 30,
+        "authority_production_phase9_gate_consumptions": 1,
+    }
+    connection = sqlite3.connect(foundation.database)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM "
+            "authority_production_phase9_start_authorization_consumptions"
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
+    assert evidence_before == tuple(
+        (path.relative_to(root).as_posix(), path.read_bytes())
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    )
+
+
+def test_concurrent_same_key_different_replays_never_overwrite(tmp_path):
+    """A racing nonmatching payload cannot replace the one valid commit."""
+
+    (
+        foundation,
+        input_root,
+        generation_request,
+        candidate,
+        state,
+        p0_root,
+        p0_root_sha,
+        p0_receipts,
+    ) = _ready_fixture(tmp_path)
+    gate = _ready_gate(
+        input_root,
+        generation_request,
+        candidate,
+        state,
+        p0_root,
+        p0_root_sha,
+        p0_receipts,
+    )
+    first_root = tmp_path / "concurrent-first-evidence"
+    second_root = tmp_path / "concurrent-second-evidence"
+    request = _request_for_evidence(
+        first_root,
+        generation_request,
+        state,
+        gate,
+        idempotency_key="phase9-racing-shared-key",
+        occurred_at=2200,
+    )
+    request = _attest_fixture_evidence(
+        foundation=foundation,
+        root=first_root,
+        request=request,
+        input_root=input_root,
+        context_path=tmp_path / "execution-context.json",
+    )
+    changed = _request_for_evidence(
+        second_root,
+        generation_request,
+        state,
+        gate,
+        idempotency_key=request.idempotency_key,
+        occurred_at=request.occurred_at + 1,
+    )
+    second_values, _second_inventory = replay_module._read_evidence_set(
+        second_root, changed
+    )
+    second_evaluation = replay_module._evaluate_evidence(
+        changed,
+        second_values,
+        trusted_now=changed.occurred_at,
+        require_component_receipts=False,
+    )
+    replay_evidence_module._write_authority_component_receipts(
+        root=second_root,
+        request=changed,
+        values=second_values,
+        evaluation=second_evaluation,
+    )
+    changed = _refresh_start_authorization(second_root, changed)
+    second_preflight = preflight_phase9_forensic_replay(
+        changed,
+        evidence_root=second_root,
+        trusted_now=changed.occurred_at,
+    )
+    assert second_preflight["blockers"] == []
+    assert second_preflight["status"] == "READY"
+    first_inside_lease = threading.Event()
+    second_entered_service = threading.Event()
+
+    def hold_first_writer(checkpoint):
+        if checkpoint == "after_live_gate_start":
+            first_inside_lease.set()
+            assert second_entered_service.wait(timeout=30)
+
+    first_service = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=first_root,
+        official_input_root=input_root,
+        execution_context_receipt_path=tmp_path / "execution-context.json",
+        clock=lambda: request.occurred_at,
+        fault_hook=hold_first_writer,
+    )
+    second_service = Phase9ForensicReplayService(
+        foundation.database,
+        expected_source_fence_sha256=foundation.preflight.source_fence_sha256,
+        source_repository=_source_repository(),
+        evidence_root=second_root,
+        official_input_root=input_root,
+        execution_context_receipt_path=tmp_path / "execution-context.json",
+        clock=lambda: changed.occurred_at,
+    )
+    assert request.idempotency_key == changed.idempotency_key
+    assert request.request_sha256 != changed.request_sha256
+    assert request.replay_id != changed.replay_id
+    first_files_before = tuple(
+        (path.relative_to(first_root).as_posix(), path.read_bytes())
+        for path in sorted(first_root.rglob("*"))
+        if path.is_file()
+    )
+    second_files_before = tuple(
+        (path.relative_to(second_root).as_posix(), path.read_bytes())
+        for path in sorted(second_root.rglob("*"))
+        if path.is_file()
+    )
+
+    outcomes = []
+
+    def invoke(service, request, entered=None):
+        try:
+            if entered is not None:
+                entered.set()
+            outcomes.append(service.execute(request))
+        except Exception as exc:  # pragma: no cover - asserted below
+            outcomes.append(exc)
+
+    workers = [threading.Thread(target=invoke, args=(first_service, request))]
+    workers[0].start()
+    assert first_inside_lease.wait(timeout=30)
+    workers.append(
+        threading.Thread(
+            target=invoke,
+            args=(second_service, changed, second_entered_service),
+        )
+    )
+    workers[1].start()
+    for worker in workers:
+        worker.join(timeout=120)
+
+    assert len(outcomes) == 2
+    assert sum(type(value) is Phase9ForensicReplayResult for value in outcomes) == 1
+    refusals = [value for value in outcomes if type(value) is Phase9ForensicReplayConflict]
+    assert len(refusals) == 1
+    assert "idempotency key" in str(refusals[0])
+    winner = next(
+        value for value in outcomes if type(value) is Phase9ForensicReplayResult
+    )
+    connection = sqlite3.connect(foundation.database)
+    connection.row_factory = sqlite3.Row
+    try:
+        binding = connection.execute(
+            "SELECT * FROM authority_production_phase9_replay_idempotency "
+            "WHERE workflow_id=? AND idempotency_key=?",
+            (request.workflow_id, request.idempotency_key),
+        ).fetchone()
+        assert binding is not None
+        assert binding["request_sha256"] == request.request_sha256
+        assert binding["replay_id"] == winner.replay_id == request.replay_id
+        assert binding["terminal_receipt_sha256"] == winner.receipt_sha256
+        assert connection.execute(
+            "SELECT COUNT(*) FROM authority_production_phase9_replays "
+            "WHERE replay_id=?",
+            (changed.replay_id,),
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+    assert first_files_before == tuple(
+        (path.relative_to(first_root).as_posix(), path.read_bytes())
+        for path in sorted(first_root.rglob("*"))
+        if path.is_file()
+    )
+    assert second_files_before == tuple(
+        (path.relative_to(second_root).as_posix(), path.read_bytes())
+        for path in sorted(second_root.rglob("*"))
+        if path.is_file()
+    )
+    assert _counts(foundation.database) == {
+        "authority_production_phase9_replays": 1,
+        "authority_production_phase9_replay_events": 6,
+        "authority_production_phase9_terminal_receipts": 1,
+        "authority_production_phase9_replay_idempotency": 1,
+        "authority_production_phase9_replay_current": 1,
+        "authority_production_phase9_evidence_receipts": 30,
+        "authority_production_phase9_gate_consumptions": 1,
+    }
 
 
 def test_shared_current_terminal_graph_validator_is_query_only(tmp_path):

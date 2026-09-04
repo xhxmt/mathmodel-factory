@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +9,7 @@ from .domain import AuditSnapshot
 from .persistence import atomic_write_json, utc_now
 
 
-SCHEMA_VERSION = "final-acceptance-receipt-v4"
+SCHEMA_VERSION = "final-acceptance-receipt-v3"
 RECEIPT_PATH = Path("judge_outputs/final_acceptance_receipt.json")
 
 
@@ -56,15 +55,22 @@ def build_final_acceptance_receipt(
 ) -> dict[str, object]:
     project = project.resolve()
     # This check deliberately precedes every read, directory creation, and
-    # receipt write in this producer.  Project-local PASS/override material is
-    # never an Authority substitute.
-    from ..phase9_delivery_fence import require_phase9_delivery_authority
-
-    delivery_fence = require_phase9_delivery_authority(
-        project,
-        workflow_id=workflow_id,
-        run_generation=run_generation,
+    # receipt write in this producer.  It is a no-op only for projects without
+    # an explicit/current Phase9 coordinate.
+    from ..phase9_delivery_fence import (
+        delivery_side_effect_commit_lease,
+        require_delivery_side_effect_authority,
     )
+
+    def verify_fence() -> None:
+        require_delivery_side_effect_authority(
+            project,
+            operation="acceptance",
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
+
+    verify_fence()
     from ..decision_receipts import verified_approval_receipts
 
     approvals = verified_approval_receipts(project)
@@ -120,7 +126,6 @@ def build_final_acceptance_receipt(
         "bibliography_build_required": production_snapshot,
         "approval_receipts": approvals,
         "artifacts": artifacts,
-        "phase9_delivery_fence": asdict(delivery_fence),
     }
     from ..submission_bundle import submission_bundle_manifest
 
@@ -131,7 +136,13 @@ def build_final_acceptance_receipt(
         "member_count": len(bundle["members"]),
     }
     receipt["content_sha256"] = _canonical_hash(receipt)
-    atomic_write_json(project / RECEIPT_PATH, receipt)
+    with delivery_side_effect_commit_lease(
+        project,
+        operation="acceptance",
+        workflow_id=workflow_id,
+        run_generation=run_generation,
+    ):
+        atomic_write_json(project / RECEIPT_PATH, receipt)
     return receipt
 
 
@@ -159,16 +170,6 @@ def verify_final_acceptance_receipt(
         errors.append("final acceptance receipt schema mismatch")
     if receipt.get("base") != project.name:
         errors.append("final acceptance receipt base mismatch")
-    fence = receipt.get("phase9_delivery_fence")
-    if not isinstance(fence, dict):
-        errors.append("final acceptance Phase9 delivery fence is missing")
-    elif (
-        fence.get("project_id") != project.name
-        or not isinstance(fence.get("workflow_id"), str)
-        or not isinstance(fence.get("run_generation"), str)
-        or not isinstance(fence.get("terminal_receipt_sha256"), str)
-    ):
-        errors.append("final acceptance Phase9 delivery fence is invalid")
     if expected_snapshot_id is not None and receipt.get("snapshot_id") != expected_snapshot_id:
         errors.append("final acceptance receipt snapshot mismatch")
     if expected_status is not None and receipt.get("status") != expected_status:

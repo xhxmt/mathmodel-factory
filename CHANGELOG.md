@@ -1,5 +1,53 @@
 # Changelog
 
+- Phase9 independent-audit finding closure: committed run-generation and
+  forensic-replay requests now recover their exact immutable result before
+  live authorization/freshness gates, while revalidating the complete stored
+  receipt, consumption, source, generation, terminal, event, and typed-evidence
+  graph. Recovery and deterministic preflight run under one cross-process
+  Authority commit lease against a private, stable main/WAL snapshot, so they
+  neither consume a nonce nor create source-database WAL/SHM sidecars. A new
+  operation repeats all gates and the exact lookup under `BEGIN IMMEDIATE`;
+  idempotency keys are globally reserved across workflows even when their
+  composite-key row is corrupt or missing, and reverse aliases, non-unique
+  successors, a different request, or any damaged graph fail closed. Exact
+  recovery returns the byte-for-byte same immutable result as the committing
+  call; the retained `replayed` compatibility field is always `false` and
+  cannot reveal which service path produced the result.
+
+- Phase9 audit/delivery boundary correction: final audit is analysis-only by
+  default, so non-Phase9 and Phase1-8/legacy analysis remain available without
+  fabricating Phase9 coordinates. Step 16 explicitly enters the legacy
+  acceptance boundary. Actual Phase9 acceptance, release, submission,
+  delivery, completion, and archive operations are classified and rejected
+  before their first side effect. Phase9 migration/schema residue can no
+  longer be reclassified as legacy if generation controls are dropped or
+  emptied, and commit-lease reentrancy is process-bound so a forked child must
+  acquire its own OS lock. Tests no longer replace the production fence with
+  an autouse allow-value monkeypatch.
+
+- Phase9 composite evidence closure: the formal `full_repository` suite now
+  executes all Python tests, a frontend production build, and the documented
+  Chromium `npm run test:phase6` target in both source and fresh environments.
+  Command records bind ordered per-stage commands, environments, exits, raw-log
+  slices, complete Node/browser dependency inventories, and runtime versions;
+  any missing, skipped, or failing stage makes the combined suite non-passing.
+  The production-build inventory is also revalidated after the browser stage,
+  and the package binds the exact frontend scripts and test-source bytes. The
+  formal build pins Vite's `--configLoader runner`, bypassing the default
+  bundled-config path that tries to materialize `.vite-temp` below the
+  read-only dependency mount. Formal P0 raw-log validation also recognizes
+  pytest's verified `H:MM:SS` duration suffix when a suite reaches 60 seconds,
+  while binding the exact PASS summary and rounded duration to the fixed
+  265-second suite deadline and the monotonic command record. The unchanged
+  300-second runner-authorization TTL also budgets five seconds for process
+  completion and thirty seconds total for pre-run checks, post-run validation,
+  and authority attestation; evidence outside that complete authorization time
+  chain fails closed. Mismatched, injected, duplicated, or fabricated summary
+  fields remain fail closed.
+  Production remains `BLOCKED`; no migration, provider, worker, outbox,
+  acceptance, delivery, release, deployment, or cutover was authorized.
+
 - Phase9 trusted-evidence hardening: implement the additive
   `A2_0017_PHASE9_AUDIT_HARDENING` (SHA-256
   `c886700e817098e04c325d414a0b0ed7f267a84ea60a05a0f0501e95f86fcc4d`)

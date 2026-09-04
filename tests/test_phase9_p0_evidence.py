@@ -170,6 +170,144 @@ def test_pytest_semantic_parser_requires_every_exact_node_and_zero_nonpass() -> 
         _pytest_outcomes(failed, nodes)
 
 
+@pytest.mark.parametrize(
+    "duration",
+    (
+        "60.00s",
+        "60.00s (0:01:00)",
+        "60.28s (0:01:00)",
+        "61.00s (0:01:00)",
+        "61.00s (0:01:01)",
+        "265.00s (0:04:24)",
+        "265.00s (0:04:25)",
+    ),
+)
+def test_pytest_semantic_parser_accepts_verified_long_duration_summary(
+    duration: str,
+) -> None:
+    nodes = phase9_p0_test_nodes()
+    lines = [f"collected {len(nodes)} items"]
+    lines.extend(f"{node} PASSED [100%]" for node in nodes)
+    lines.append(
+        f"================ {len(nodes)} passed in {duration} ================"
+    )
+    result = _pytest_outcomes(("\n".join(lines) + "\n").encode(), nodes)
+    assert result["passed"] == len(nodes)
+
+
+@pytest.mark.parametrize(
+    "duration",
+    (
+        "60.28s (0:01:01)",
+        "59.99s (0:00:59)",
+        "60.01s",
+        "61.00s (0:01:02)",
+        "265.01s (0:04:25)",
+        "900.00s (0:15:00)",
+        "3600.00s (1:00:00)",
+        "90061.25s (1 day, 1:01:01)",
+        "90061.25s (1 day, 1:01:02)",
+        "999999999999999999999999999999999999999.00s (0:00:00)",
+        "00060.28s (0:01:00)",
+        "60.2s (0:01:00)",
+        "60s (0:01:00)",
+    ),
+)
+def test_pytest_semantic_parser_rejects_false_long_duration_suffix(
+    duration: str,
+) -> None:
+    nodes = phase9_p0_test_nodes()
+    lines = [f"collected {len(nodes)} items"]
+    lines.extend(f"{node} PASSED [100%]" for node in nodes)
+    lines.append(
+        f"================ {len(nodes)} passed in {duration} ================"
+    )
+    with pytest.raises(Phase9P0EvidenceError):
+        _pytest_outcomes(("\n".join(lines) + "\n").encode(), nodes)
+
+
+def test_pytest_semantic_parser_rejects_duration_over_integer_digit_limit() -> None:
+    nodes = phase9_p0_test_nodes()
+    lines = [f"collected {len(nodes)} items"]
+    lines.extend(f"{node} PASSED [100%]" for node in nodes)
+    lines.append(
+        f"================ {len(nodes)} passed in "
+        f"{'9' * 5000}.00s (0:00:00) ================"
+    )
+    with pytest.raises(Phase9P0EvidenceError, match="duration is invalid"):
+        _pytest_outcomes(("\n".join(lines) + "\n").encode(), nodes)
+
+
+@pytest.mark.parametrize(
+    "summary_body",
+    (
+        "13 passed, injected-token",
+        "0 failed, 13 passed",
+        "6 passed, 7 passed",
+        "13 passed garbage 999 bananas",
+    ),
+)
+def test_pytest_semantic_parser_rejects_noncanonical_summary_body(
+    summary_body: str,
+) -> None:
+    nodes = phase9_p0_test_nodes()
+    assert len(nodes) == 13
+    lines = [f"collected {len(nodes)} items"]
+    lines.extend(f"{node} PASSED [100%]" for node in nodes)
+    lines.append(f"================ {summary_body} in 0.01s ================")
+    with pytest.raises(Phase9P0EvidenceError, match="non-PASS"):
+        _pytest_outcomes(("\n".join(lines) + "\n").encode(), nodes)
+
+
+def test_pytest_semantic_parser_binds_duration_to_monotonic_record() -> None:
+    nodes = phase9_p0_test_nodes()
+    lines = [f"collected {len(nodes)} items"]
+    lines.extend(f"{node} PASSED [100%]" for node in nodes)
+    lines.append(
+        f"================ {len(nodes)} passed in 60.28s (0:01:00) ================"
+    )
+    raw = ("\n".join(lines) + "\n").encode()
+    assert _pytest_outcomes(raw, nodes, duration_ns=61_000_000_000)["passed"] == 13
+    assert _pytest_outcomes(raw, nodes, duration_ns=65_285_000_000)["passed"] == 13
+    with pytest.raises(Phase9P0EvidenceError, match="duration"):
+        _pytest_outcomes(raw, nodes, duration_ns=1_000_000_000)
+    with pytest.raises(Phase9P0EvidenceError, match="duration"):
+        _pytest_outcomes(raw, nodes, duration_ns=65_285_000_001)
+    with pytest.raises(Phase9P0EvidenceError, match="duration"):
+        _pytest_outcomes(raw, nodes, duration_ns=271_000_000_000)
+
+    boundary_lines = [f"collected {len(nodes)} items"]
+    boundary_lines.extend(f"{node} PASSED [100%]" for node in nodes)
+    boundary_lines.append(
+        f"================ {len(nodes)} passed in 265.00s (0:04:25) ================"
+    )
+    boundary_raw = ("\n".join(boundary_lines) + "\n").encode()
+    assert (
+        _pytest_outcomes(boundary_raw, nodes, duration_ns=270_000_000_000)[
+            "passed"
+        ]
+        == 13
+    )
+    with pytest.raises(Phase9P0EvidenceError, match="duration"):
+        _pytest_outcomes(boundary_raw, nodes, duration_ns=270_000_000_001)
+
+
+def test_formal_p0_spec_binds_suite_timeout_and_duration_grace() -> None:
+    spec = phase9_p0_acceptance_spec()
+    assert spec["schema"] == "phase9-p0-acceptance-spec-v4"
+    assert spec["runner_authorization_ttl_seconds"] == 300
+    assert spec["authorization_overhead_budget_seconds"] == 30
+    assert spec["suite_timeout_seconds"] == 265
+    assert spec["command_duration_grace_seconds"] == 5
+    assert spec["pytest_duration_rounding_ns"] == 5_000_000
+    assert (
+        spec["suite_timeout_seconds"]
+        + spec["command_duration_grace_seconds"]
+        + spec["authorization_overhead_budget_seconds"]
+        == spec["runner_authorization_ttl_seconds"]
+    )
+
+
 @pytest.mark.parametrize("trailer", ("PASS", "12 passed in 0.01s"))
 def test_pytest_semantic_parser_rejects_any_trailing_record(trailer: str) -> None:
     nodes = phase9_p0_test_nodes()

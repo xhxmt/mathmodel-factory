@@ -69,6 +69,7 @@ def test_step16_uses_shared_final_audit_and_atomic_release_before_delivery_check
     audit = 'python3 -m factory_core.cli audit "$PROJECT"'
     publish = 'scripts/publish_release.py" "$PROJECT" --root "$FACTORY"'
     assert audit in step16
+    assert '--accept-delivery' in step16
     assert publish in step16
     assert step16.index(audit) < step16.index(publish)
     assert step16.index(publish) < step16.index("delivery_quality_gate")

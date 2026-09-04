@@ -19,6 +19,7 @@ from factory_core.phase9_forensic_replay import (
     collect_phase9_forensic_replay_state,
     preflight_phase9_forensic_replay,
     read_phase9_forensic_replay_request,
+    read_phase9_forensic_replay_request_binding,
 )
 from factory_core.phase9_replay_evidence import (
     Phase9ReplayEvidenceProducerError,
@@ -92,7 +93,11 @@ def main(argv: list[str] | None = None) -> int:
         settings = load_phase9_settings()
         if not settings.enabled:
             return _disabled()
-        request = read_phase9_forensic_replay_request(args.request)
+        request = (
+            read_phase9_forensic_replay_request_binding(args.request)
+            if args.command == "execute" and args.confirm
+            else read_phase9_forensic_replay_request(args.request)
+        )
         assert settings.evidence_root is not None
         if args.command == "produce":
             if not args.confirm:

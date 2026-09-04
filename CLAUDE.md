@@ -352,13 +352,20 @@ decision routing, snapshot fingerprints, and judgment receipts. Final records
 are stored under `.factory/audits/<snapshot>/`; current `judge_outputs/` files
 remain compatibility projections.
 
-`python3 -m factory_core.cli audit <project>` runs that subsystem independently.
-It must not publish into `papers/`, package, clean, archive, or mutate SQLite
-workflow state. Step 16 is a compatibility adapter: it invokes or reuses the
-same snapshot-bound audit, then publishes and packages only a `PASS` or explicit
-`OVERRIDDEN` result. Final audit ordering is compile → full paper/provenance
-checks → visual/page gate → packets/fingerprint → enforce-mode three-role Judge
-→ snapshot recheck → judgment/final-acceptance receipts. Audit failures return
+`python3 -m factory_core.cli audit <project>` runs that subsystem independently
+in analysis-only mode. It may write audit/Judge evidence, but must not create
+`final_submission.sha256`, an override receipt, or a final acceptance receipt,
+publish into `papers/`, package, clean, archive, or mutate SQLite workflow state.
+Analysis results use `.factory/audits/analysis_latest.json`; rerunning analysis
+for an accepted snapshot does not replace its acceptance-authority `latest.json`.
+Step 16 is a compatibility adapter: Native explicitly selects acceptance mode;
+Legacy invokes `audit --accept-delivery`. Only after that boundary may a
+non-Phase9 `PASS` or explicit `OVERRIDDEN` result be published and packaged.
+Phase9 acceptance, release, submission, and delivery are permanently disabled.
+Final analysis ordering is compile → full paper/provenance checks → visual/page
+gate → packets/fingerprint → enforce-mode three-role Judge → snapshot recheck →
+judgment receipt; acceptance adds the final-submission marker and final acceptance receipt.
+Audit failures return
 structured repair hints to the engine; the audit subsystem does not directly
 rewind workflow state.
 
@@ -455,7 +462,7 @@ See `STEPS.md` for exact outputs and line/file gates. In short:
 - Step 13: isolated math-only precheck; `PRECHECK_PASS` allows progress but never delivery.
 - Step 14: abstract replacement.
 - Step 15: citation audit, table/prose polish, de-robotification; these edits make the Step-13 precheck non-final and produce the `CONTENT_READY` boundary.
-- Step 16: require Human Gate 2 (`content_freeze`) before execution, then consume the independent final-audit result. On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. The Step then copies, packages, cleans, and moves to `complete/`; audit alone performs none of those delivery mutations.
+- Step 16: require Human Gate 2 (`content_freeze`) before execution, then explicitly request acceptance for the independent final-audit result (Legacy uses `--accept-delivery`). On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. Only a non-Phase9 accepted result may then be copied, packaged, cleaned, and moved to `complete/`; default audit alone performs none of those delivery mutations or acceptance writes.
 
 Step 13 precheck verdict tokens are `PRECHECK_PASS`,
 `REOPEN_REVISION_MODEL`, and `INDETERMINATE_REVIEW`. Final-audit Gate 2 verdict

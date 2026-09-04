@@ -27,16 +27,27 @@ from tools.trusted_pytest_reporter import (
     TRUSTED_PYTEST_EVENT_SCHEMA,
     validate_trusted_pytest_events,
 )
+from tools.run_full_repo_with_frontend_deps import (
+    COMPOSITE_EVENT_SCHEMA,
+    COMPOSITE_EVENT_TRANSPORT,
+    COMPOSITE_STAGE_IDS,
+    _verify_locked_dependencies,
+    composite_stage_contract,
+)
+from tools.phase9_composite_evidence import validate_composite_events
 
 
-COMMAND_SCHEMA = "paper-factory-phase9-audit-command-v6"
+COMMAND_SCHEMA = "paper-factory-phase9-audit-command-v8"
+PREFLIGHT_FAILURE_SCHEMA = "paper-factory-phase9-audit-preflight-failure-v1"
+PREFLIGHT_FAILURE_EXIT_CODE = 125
 INVENTORY_SCHEMA = "paper-factory-executed-source-inventory-v1"
-DEPENDENCY_INVENTORY_SCHEMA = "paper-factory-executed-dependency-inventory-v1"
+DEPENDENCY_INVENTORY_SCHEMA = "paper-factory-executed-dependency-inventory-v2"
 SANDBOX_SCHEMA = "paper-factory-audit-execution-sandbox-v1"
 PARENT_OBSERVER_SCHEMA = "paper-factory-audit-parent-observer-v1"
 TRUSTED_REPORTER_PATH = "tools/trusted_pytest_reporter.py"
 _OUTCOMES = ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,127}\Z")
+NON_RECORDABLE_INVOCATION_VALIDATION = "NON_RECORDABLE_INVOCATION_VALIDATION"
 _SENSITIVE_ENV = re.compile(
     r"(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|AUTH|PROVIDER|ANTHROPIC|OPENAI|"
     r"GEMINI|VERTEX|GCP|GOOGLE_APPLICATION|AWS|AZURE|SOLVER|OUTBOX|RELEASE|"
@@ -444,26 +455,13 @@ def _prepare_test_source_repository(
     return target
 
 
-def _dependency_tree_inventory(
-    dependency_root: Path, source_root: Path
-) -> dict[str, object]:
-    """Bind every byte and link in the external frontend dependency tree."""
+def _external_tree_component(root: Path, *, kind: str) -> dict[str, object]:
+    """Bind every byte and safe in-root link below one external runtime root."""
 
-    dependency_root = dependency_root.resolve(strict=True)
-    root_before = dependency_root.lstat()
+    root = root.resolve(strict=True)
+    root_before = root.lstat()
     if not stat.S_ISDIR(root_before.st_mode) or stat.S_ISLNK(root_before.st_mode):
-        raise RuntimeError("frontend dependency root is not an ordinary directory")
-    lock = source_root / "web/frontend/package-lock.json"
-    lock_metadata = lock.lstat()
-    lock_mode = "100755" if stat.S_IMODE(lock_metadata.st_mode) & 0o111 else "100644"
-    lock_raw = _read_regular(lock, lock_mode)
-    try:
-        lock_wire = json.loads(lock_raw)
-    except (UnicodeError, ValueError) as exc:
-        raise RuntimeError("frontend dependency lock is not JSON") from exc
-    if type(lock_wire) is not dict or type(lock_wire.get("packages")) is not dict:
-        raise RuntimeError("frontend dependency lock packages map is invalid")
-
+        raise RuntimeError(f"{kind} root is not an ordinary directory")
     records: list[dict[str, object]] = []
     collision_keys: set[str] = set()
     directory_identities: dict[Path, tuple[int, ...]] = {}
@@ -480,19 +478,19 @@ def _dependency_tree_inventory(
         )
 
     def traversal_error(error: OSError) -> None:
-        raise RuntimeError("frontend dependency tree cannot be enumerated") from error
+        raise RuntimeError(f"{kind} tree cannot be enumerated") from error
 
     for current, directories, files in os.walk(
-        dependency_root, topdown=True, followlinks=False, onerror=traversal_error
+        root, topdown=True, followlinks=False, onerror=traversal_error
     ):
         current_path = Path(current)
         current_metadata = current_path.lstat()
         if not stat.S_ISDIR(current_metadata.st_mode) or stat.S_ISLNK(
             current_metadata.st_mode
         ):
-            raise RuntimeError("frontend dependency directory changed during traversal")
+            raise RuntimeError(f"{kind} directory changed during traversal")
         directory_identities[current_path] = identity(current_metadata)
-        relative_current = current_path.relative_to(dependency_root).as_posix()
+        relative_current = current_path.relative_to(root).as_posix()
         if relative_current != ".":
             records.append(
                 {
@@ -507,23 +505,23 @@ def _dependency_tree_inventory(
             item = current_path / name
             metadata = item.lstat()
             relative = _safe_git_path(
-                item.relative_to(dependency_root).as_posix().encode("utf-8")
+                item.relative_to(root).as_posix().encode("utf-8")
             )
             if stat.S_ISLNK(metadata.st_mode):
                 target_before = os.readlink(item)
                 try:
                     target_before.encode("utf-8", errors="strict")
                     resolved = item.resolve(strict=True)
-                    resolved.relative_to(dependency_root)
+                    resolved.relative_to(root)
                 except (UnicodeError, OSError, ValueError) as exc:
                     raise RuntimeError(
-                        f"frontend dependency link escapes or is unreadable: {relative}"
+                        f"{kind} link escapes or is unreadable: {relative}"
                     ) from exc
                 target_after = os.readlink(item)
                 final = item.lstat()
                 if target_after != target_before or identity(final) != identity(metadata):
                     raise RuntimeError(
-                        f"frontend dependency link changed while read: {relative}"
+                        f"{kind} link changed while read: {relative}"
                     )
                 records.append(
                     {
@@ -537,7 +535,7 @@ def _dependency_tree_inventory(
                 kept_directories.append(name)
             else:
                 raise RuntimeError(
-                    f"frontend dependency contains a special directory entry: {relative}"
+                    f"{kind} contains a special directory entry: {relative}"
                 )
         directories[:] = kept_directories
 
@@ -545,23 +543,23 @@ def _dependency_tree_inventory(
             item = current_path / name
             metadata = item.lstat()
             relative = _safe_git_path(
-                item.relative_to(dependency_root).as_posix().encode("utf-8")
+                item.relative_to(root).as_posix().encode("utf-8")
             )
             if stat.S_ISLNK(metadata.st_mode):
                 target_before = os.readlink(item)
                 try:
                     target_before.encode("utf-8", errors="strict")
                     resolved = item.resolve(strict=True)
-                    resolved.relative_to(dependency_root)
+                    resolved.relative_to(root)
                 except (UnicodeError, OSError, ValueError) as exc:
                     raise RuntimeError(
-                        f"frontend dependency link escapes or is unreadable: {relative}"
+                        f"{kind} link escapes or is unreadable: {relative}"
                     ) from exc
                 target_after = os.readlink(item)
                 final = item.lstat()
                 if target_after != target_before or identity(final) != identity(metadata):
                     raise RuntimeError(
-                        f"frontend dependency link changed while read: {relative}"
+                        f"{kind} link changed while read: {relative}"
                     )
                 records.append(
                     {
@@ -574,7 +572,7 @@ def _dependency_tree_inventory(
                 continue
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
                 raise RuntimeError(
-                    f"frontend dependency contains a hardlink or special file: {relative}"
+                    f"{kind} contains a hardlink or special file: {relative}"
                 )
             mode = "100755" if stat.S_IMODE(metadata.st_mode) & 0o111 else "100644"
             raw = _read_regular(item, mode)
@@ -591,32 +589,80 @@ def _dependency_tree_inventory(
     for directory, before in directory_identities.items():
         after = directory.lstat()
         if identity(after) != before:
-            raise RuntimeError("frontend dependency directory changed during traversal")
-    root_after = dependency_root.lstat()
+            raise RuntimeError(f"{kind} directory changed during traversal")
+    root_after = root.lstat()
     if identity(root_after) != identity(root_before):
-        raise RuntimeError("frontend dependency root changed during traversal")
+        raise RuntimeError(f"{kind} root changed during traversal")
     ordered = sorted(records, key=lambda item: str(item["path"]))
     paths = [str(item["path"]) for item in ordered]
     for relative in paths:
         collision = unicodedata.normalize("NFC", relative).casefold()
         if collision in collision_keys:
-            raise RuntimeError("frontend dependency paths collide by case or Unicode")
+            raise RuntimeError(f"{kind} paths collide by case or Unicode")
         collision_keys.add(collision)
     if len(paths) != len(set(paths)):
-        raise RuntimeError("frontend dependency paths are duplicated")
+        raise RuntimeError(f"{kind} paths are duplicated")
     regular = [item for item in ordered if item["type"] == "file"]
     links = [item for item in ordered if item["type"] == "symlink"]
-    body: dict[str, object] = {
-        "schema": DEPENDENCY_INVENTORY_SCHEMA,
-        "kind": "FRONTEND_NODE_MODULES",
-        "root": str(dependency_root),
+    return {
+        "kind": kind,
+        "root": str(root),
         "path_count": len(ordered),
         "regular_file_count": len(regular),
         "symlink_count": len(links),
         "total_file_bytes": sum(int(item["bytes"]) for item in regular),
-        "lockfile_sha256": hashlib.sha256(lock_raw).hexdigest(),
         "tree_sha256": canonical_sha256(ordered),
         "files": ordered,
+    }
+
+
+def _dependency_tree_inventory(
+    dependency_root: Path,
+    source_root: Path,
+    *,
+    browser_root: Path,
+    browser_executable: Path,
+) -> dict[str, object]:
+    """Bind Node dependencies and the explicit Playwright browser runtime."""
+
+    dependency_root = dependency_root.resolve(strict=True)
+    browser_root = browser_root.resolve(strict=True)
+    browser_executable = browser_executable.resolve(strict=True)
+    try:
+        browser_relative = browser_executable.relative_to(browser_root).as_posix()
+    except ValueError as exc:
+        raise RuntimeError("browser executable is outside browser runtime root") from exc
+    lock = source_root / "web/frontend/package-lock.json"
+    lock_metadata = lock.lstat()
+    lock_mode = "100755" if stat.S_IMODE(lock_metadata.st_mode) & 0o111 else "100644"
+    lock_raw = _read_regular(lock, lock_mode)
+    try:
+        lock_wire = json.loads(lock_raw)
+    except (UnicodeError, ValueError) as exc:
+        raise RuntimeError("frontend dependency lock is not JSON") from exc
+    if type(lock_wire) is not dict or type(lock_wire.get("packages")) is not dict:
+        raise RuntimeError("frontend dependency lock packages map is invalid")
+    node = _external_tree_component(dependency_root, kind="FRONTEND_NODE_MODULES")
+    browser = _external_tree_component(browser_root, kind="PLAYWRIGHT_BROWSER_RUNTIME")
+    executable_rows = [
+        item
+        for item in browser["files"]
+        if item.get("path") == browser_relative and item.get("type") == "file"
+    ]
+    if len(executable_rows) != 1 or not os.access(browser_executable, os.X_OK):
+        raise RuntimeError("browser executable is not bound by browser runtime inventory")
+    browser["executable"] = {
+        "relative_path": browser_relative,
+        "bytes": executable_rows[0]["bytes"],
+        "sha256": executable_rows[0]["sha256"],
+    }
+    body: dict[str, object] = {
+        "schema": DEPENDENCY_INVENTORY_SCHEMA,
+        "kind": "FULL_REPOSITORY_DEPENDENCIES",
+        "lockfile_sha256": hashlib.sha256(lock_raw).hexdigest(),
+        "node_modules": node,
+        "browser_runtime": browser,
+        "path_count": int(node["path_count"]) + int(browser["path_count"]),
     }
     body["inventory_sha256"] = canonical_sha256(body)
     return body
@@ -626,14 +672,10 @@ def _no_dependency_inventory() -> dict[str, object]:
     body: dict[str, object] = {
         "schema": DEPENDENCY_INVENTORY_SCHEMA,
         "kind": "NONE",
-        "root": None,
-        "path_count": 0,
-        "regular_file_count": 0,
-        "symlink_count": 0,
-        "total_file_bytes": 0,
         "lockfile_sha256": None,
-        "tree_sha256": canonical_sha256([]),
-        "files": [],
+        "node_modules": None,
+        "browser_runtime": None,
+        "path_count": 0,
     }
     body["inventory_sha256"] = canonical_sha256(body)
     return body
@@ -648,11 +690,60 @@ def _within(root: Path, value: Path, label: str) -> tuple[Path, str]:
     return path, relative
 
 
+def _canonical_existing_directory(value: Path, label: str) -> Path:
+    """Resolve no aliases when selecting a source or evidence trust root."""
+
+    if not value.is_absolute() or value != Path(os.path.abspath(os.fspath(value))):
+        raise RuntimeError(f"{label} must be canonical and absolute")
+    metadata = value.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise RuntimeError(f"{label} must be an ordinary directory")
+    if value.resolve(strict=True) != value:
+        raise RuntimeError(f"{label} must not use path aliases")
+    return value
+
+
+def _non_recordable_invocation(stage: str, exc: Exception) -> None:
+    """Classify failures before an append-only evidence coordinate is trusted."""
+
+    detail = " ".join(str(exc).split())[:512]
+    raise RuntimeError(
+        f"{NON_RECORDABLE_INVOCATION_VALIDATION}: {stage}: "
+        f"{type(exc).__name__}: {detail}"
+    ) from exc
+
+
 def _write_new(path: Path, raw: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() or path.is_symlink():
-        raise RuntimeError(f"audit evidence is append-only and already exists: {path}")
-    path.write_bytes(raw)
+    parent_fd = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    descriptor: int | None = None
+    try:
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent_fd,
+            )
+        except FileExistsError as exc:
+            raise RuntimeError(
+                f"audit evidence is append-only and already exists: {path}"
+            ) from exc
+        view = memoryview(raw)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise RuntimeError("audit evidence write made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent_fd)
 
 
 def _persist_inventory(
@@ -779,6 +870,18 @@ def _persist_trusted_events(
     }
 
 
+def _persist_composite_events(
+    audit_root: Path, identifier: str, raw: bytes
+) -> dict[str, object]:
+    relative = f"evidence/composite_events/{identifier}.jsonl"
+    _write_new(audit_root / relative, raw)
+    return {
+        "path": relative,
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
 def _command_executable(command: list[str]) -> dict[str, object]:
     raw = Path(command[0])
     if not raw.is_absolute():
@@ -805,15 +908,110 @@ def _command_executable(command: list[str]) -> dict[str, object]:
     }
 
 
+def _producer_descriptor() -> dict[str, object]:
+    raw = Path(__file__).read_bytes()
+    return {
+        "type": "PAPER_FACTORY_AUDIT_RUNNER",
+        "version": COMMAND_SCHEMA,
+        "path": "tools/run_audit_command.py",
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def _persist_preflight_failure(
+    *,
+    identifier: str,
+    suite: str,
+    kind: str,
+    execution_environment: str,
+    repository: Path,
+    cwd: Path,
+    audit_root: Path,
+    record_path: Path,
+    log_path: Path,
+    log_relative: str,
+    requested_command: list[str],
+    executable: dict[str, object] | None,
+    before_inventory: dict[str, object],
+    before_raw: bytes,
+    failure_stage: str,
+    error_type: str,
+    started_at: str,
+    started_ns: int,
+) -> int:
+    """Persist a process-not-started failure without fabricating stage evidence."""
+
+    try:
+        after_inventory, after_raw = executed_source_inventory(
+            repository, cwd, execution_environment=execution_environment
+        )
+        source_stable = after_raw == before_raw and after_inventory == before_inventory
+        source_postcheck = "MATCH" if source_stable else "DIFFERS"
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        source_stable = False
+        source_postcheck = "ERROR"
+    failure_event = {
+        "schema": PREFLIGHT_FAILURE_SCHEMA,
+        "event": "preflight_failure",
+        "failure_stage": failure_stage,
+        "error_type": error_type,
+        "process_started": False,
+        "runner_exit_code": PREFLIGHT_FAILURE_EXIT_CODE,
+    }
+    raw_log = canonical_bytes(failure_event) + b"\n"
+    completed_at = _utc()
+    duration_ms = (time.monotonic_ns() - started_ns) // 1_000_000
+    inventory_record = _persist_inventory(
+        audit_root, identifier, before_inventory, before_raw
+    )
+    _write_new(log_path, raw_log)
+    record: dict[str, object] = {
+        "schema": PREFLIGHT_FAILURE_SCHEMA,
+        "id": identifier,
+        "suite": suite,
+        "kind": kind,
+        "execution_environment": execution_environment,
+        "attempt_kind": "preflight_failed",
+        "producer": _producer_descriptor(),
+        "candidate": before_inventory["candidate"],
+        "source_inventory": inventory_record,
+        "source_stable": source_stable,
+        "source_postcheck": source_postcheck,
+        "source_identity_repository": str(repository),
+        "requested_command_argv": requested_command,
+        "command_executable": executable,
+        "cwd": str(cwd),
+        "audit_root": str(audit_root),
+        "python_executable": executable,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "duration_milliseconds": duration_ms,
+        "process_started": False,
+        "exit_code": None,
+        "runner_exit_code": PREFLIGHT_FAILURE_EXIT_CODE,
+        "failure_stage": failure_stage,
+        "error_type": error_type,
+        "raw_log": {
+            "path": log_relative,
+            "bytes": len(raw_log),
+            "sha256": hashlib.sha256(raw_log).hexdigest(),
+        },
+    }
+    record["record_sha256"] = canonical_sha256(record)
+    _write_new(record_path, canonical_bytes(record) + b"\n")
+    return PREFLIGHT_FAILURE_EXIT_CODE
+
+
 def _validate_command_shape(
     command: list[str], *, suite: str, cwd: Path, audit_root: Path,
     identifier: str,
-) -> tuple[Path | None, Path]:
+) -> tuple[Path | None, Path | None, Path | None, Path | None, Path | None, Path]:
     """Allow only the two recorded, non-shrinking offline test command forms."""
 
     python = command[0]
     if suite == "full_repository":
-        if len(command) != 11 or command[:4] != [
+        if len(command) != 19 or command[:4] != [
             python,
             "-B",
             "tools/run_full_repo_with_frontend_deps.py",
@@ -823,15 +1021,43 @@ def _validate_command_shape(
         if command[4] != str(cwd) or command[5] != "--dependency-target":
             raise RuntimeError("full-repository source binding differs")
         dependency = Path(command[6])
+        browser_root = Path(command[8])
+        browser_executable = Path(command[10])
+        node = Path(command[12])
+        npm = Path(command[14])
         if (
             not dependency.is_absolute()
             or dependency != Path(os.path.abspath(os.fspath(dependency)))
             or dependency.resolve(strict=True) != dependency
             or not dependency.resolve(strict=True).is_dir()
-            or command[7:10] != ["--python", python, "--basetemp"]
+            or command[7] != "--browser-root"
+            or not browser_root.is_absolute()
+            or browser_root != Path(os.path.abspath(os.fspath(browser_root)))
+            or browser_root.resolve(strict=True) != browser_root
+            or not browser_root.is_dir()
+            or command[9] != "--browser-executable"
+            or not browser_executable.is_absolute()
+            or browser_executable != Path(
+                os.path.abspath(os.fspath(browser_executable))
+            )
+            or browser_executable.resolve(strict=True) != browser_executable
+            or not browser_executable.is_file()
+            or command[11] != "--node"
+            or not node.is_absolute()
+            or node != Path(os.path.abspath(os.fspath(node)))
+            or not node.resolve(strict=True).is_file()
+            or command[13] != "--npm"
+            or not npm.is_absolute()
+            or npm != Path(os.path.abspath(os.fspath(npm)))
+            or not npm.resolve(strict=True).is_file()
+            or command[15:18] != ["--python", python, "--basetemp"]
         ):
-            raise RuntimeError("full-repository dependency/Python binding differs")
-        raw_basetemp = Path(command[10])
+            raise RuntimeError("full-repository runtime/dependency binding differs")
+        try:
+            browser_executable.relative_to(browser_root)
+        except ValueError as exc:
+            raise RuntimeError("full-repository browser binding differs") from exc
+        raw_basetemp = Path(command[18])
         basetemp = raw_basetemp.resolve()
     else:
         prefix = [python, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
@@ -869,10 +1095,16 @@ def _validate_command_shape(
     )
     if basetemp != expected_basetemp:
         raise RuntimeError("audit command basetemp must use its dedicated mount parent")
-    return (
-        dependency.resolve(strict=True) if suite == "full_repository" else None,
-        basetemp,
-    )
+    if suite == "full_repository":
+        return (
+            dependency.resolve(strict=True),
+            browser_root.resolve(strict=True),
+            browser_executable,
+            node,
+            npm,
+            basetemp,
+        )
+    return None, None, None, None, None, basetemp
 
 
 def _strict_child_path_overlap(first: Path, second: Path) -> bool:
@@ -895,9 +1127,11 @@ def _sandbox_descriptor_and_argv(
     audit_root: Path,
     child_env: dict[str, str],
     dependency_root: Path | None,
+    browser_root: Path | None,
     basetemp: Path,
     identifier: str,
     event_write_fd: int,
+    composite_write_fd: int | None,
 ) -> tuple[dict[str, object], list[str]]:
     """Build a mandatory networkless, read-only-source bubblewrap invocation."""
 
@@ -1060,6 +1294,10 @@ def _sandbox_descriptor_and_argv(
                 str(frontend),
             ]
         )
+    if browser_root is not None:
+        sandbox_argv.extend(
+            ["--ro-bind", str(browser_root), str(browser_root)]
+        )
     sandbox_argv.extend(["--chdir", str(cwd), "--clearenv"])
     for name, value in sorted(child_env.items()):
         sandbox_argv.extend(["--setenv", name, value])
@@ -1104,6 +1342,11 @@ def _sandbox_descriptor_and_argv(
             if dependency_root is None
             else {"path": str(dependency_root), "access": "READ_ONLY"}
         ),
+        "browser_runtime_mount": (
+            None
+            if browser_root is None
+            else {"path": str(browser_root), "access": "READ_ONLY"}
+        ),
         "frontend_overlay": None if overlay_path is None else str(overlay_path),
         "network_namespace": "UNSHARED",
         "event_transport": {
@@ -1111,6 +1354,15 @@ def _sandbox_descriptor_and_argv(
             "write_fd": event_write_fd,
             "tested_process_access": "WRITE_ONLY_APPEND_STREAM",
         },
+        "composite_event_transport": (
+            None
+            if composite_write_fd is None
+            else {
+                "kind": "PARENT_CAPTURED_ANONYMOUS_PIPE",
+                "write_fd": composite_write_fd,
+                "tested_process_access": "WRITE_ONLY_APPEND_STREAM",
+            }
+        ),
         "launcher_argv": sandbox_argv,
     }
     body["sandbox_sha256"] = canonical_sha256(body)
@@ -1121,6 +1373,8 @@ def _sanitized_environment(
     audit_root: Path, source_root: Path, repository: Path, *, identifier: str,
     reporter_root: Path, event_fd: int, reporter_nonce: str,
     runtime_site_packages: Path,
+    composite_fd: int | None = None,
+    composite_nonce: str | None = None,
 ) -> tuple[dict[str, str], dict[str, object]]:
     writable_root = audit_root / "runtime" / f"{identifier}-writable"
     home = writable_root / "home"
@@ -1147,6 +1401,18 @@ def _sanitized_environment(
         # immutable candidate identity.  Production modules never consume it.
         "PHASE9_TEST_SOURCE_REPOSITORY": str(repository),
     }
+    if composite_fd is not None:
+        if composite_nonce is None:
+            raise RuntimeError("composite event nonce is absent")
+        environment.update(
+            {
+                "PHASE9_TRUSTED_COMPOSITE_EVENT_PATH": (
+                    "PARENT_CAPTURED_ANONYMOUS_PIPE"
+                ),
+                "PHASE9_TRUSTED_COMPOSITE_EVENT_FD": str(composite_fd),
+                "PHASE9_TRUSTED_COMPOSITE_NONCE": composite_nonce,
+            }
+        )
     removed = sorted(name for name in os.environ if _SENSITIVE_ENV.search(name))
     descriptor: dict[str, object] = {
         "policy": "paper-factory-sanitized-audit-environment-v1",
@@ -1163,7 +1429,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--id", required=True)
     parser.add_argument("--suite", required=True)
     parser.add_argument("--environment", required=True, choices=("source", "fresh"))
-    parser.add_argument("--kind", required=True, choices=("pytest", "bootstrap"))
+    parser.add_argument("--kind", required=True, choices=("pytest", "composite"))
     parser.add_argument("--repository", required=True, type=Path)
     parser.add_argument("--audit-root", required=True, type=Path)
     parser.add_argument("--cwd", required=True, type=Path)
@@ -1180,50 +1446,150 @@ def main(argv: list[str] | None = None) -> int:
         requested_command.pop(0)
     if not requested_command:
         parser.error("a command is required after --")
-    if args.kind != "pytest":
-        raise RuntimeError("formal audit commands require the trusted pytest protocol")
-
-    repository = args.repository.resolve(strict=True)
-    audit_root = args.audit_root.resolve(strict=True)
-    cwd = args.cwd.resolve(strict=True)
-    log_path, log_relative = _within(audit_root, args.log, "raw log")
-    record_path, _ = _within(audit_root, args.record, "command record")
-    if log_path == record_path:
-        raise RuntimeError("command record and raw log paths must differ")
-    if (
-        log_path.exists()
-        or log_path.is_symlink()
-        or record_path.exists()
-        or record_path.is_symlink()
-    ):
-        raise RuntimeError("command records and logs are append-only; choose new paths")
-
     expected_record = f"command_records/{args.id}.json"
     expected_log = f"test_logs/{args.id}.log"
-    if record_path.relative_to(audit_root).as_posix() != expected_record:
-        raise RuntimeError("command record path must be canonical for its id")
-    if log_relative != expected_log:
-        raise RuntimeError("raw log path must be canonical for its id")
-
-    before_inventory, before_raw = executed_source_inventory(
-        repository, cwd, execution_environment=args.environment
-    )
-    executable = _command_executable(requested_command)
-    dependency_root, basetemp = _validate_command_shape(
-        requested_command, suite=args.suite, cwd=cwd, audit_root=audit_root,
-        identifier=args.id,
-    )
-    reporter_root, reporter_nonce, trusted_reporter = _prepare_trusted_pytest_reporter(
-        audit_root=audit_root,
-        cwd=cwd,
-        identifier=args.id,
-        inventory=before_inventory,
-    )
-    test_source_repository = _prepare_test_source_repository(
-        repository, audit_root, args.id, before_inventory
-    )
-    event_read_fd, event_write_fd = os.pipe()
     try:
+        repository = _canonical_existing_directory(args.repository, "repository")
+        audit_root = _canonical_existing_directory(args.audit_root, "audit root")
+        cwd = _canonical_existing_directory(args.cwd, "execution cwd")
+        log_path = audit_root / expected_log
+        record_path = audit_root / expected_record
+        if args.log != log_path:
+            raise RuntimeError("raw log path must be canonical for its id")
+        if args.record != record_path:
+            raise RuntimeError("command record path must be canonical for its id")
+        for parent, label in (
+            (log_path.parent, "raw log parent"),
+            (record_path.parent, "command record parent"),
+        ):
+            if parent.exists() or parent.is_symlink():
+                metadata = parent.lstat()
+                if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(
+                    metadata.st_mode
+                ):
+                    raise RuntimeError(f"{label} is not an ordinary directory")
+        if (
+            log_path.exists()
+            or log_path.is_symlink()
+            or record_path.exists()
+            or record_path.is_symlink()
+        ):
+            raise RuntimeError(
+                "command records and logs are append-only; choose new paths"
+            )
+        before_inventory, before_raw = executed_source_inventory(
+            repository, cwd, execution_environment=args.environment
+        )
+    except Exception as exc:
+        _non_recordable_invocation("TRUST_COORDINATE_OR_SOURCE", exc)
+    log_relative = expected_log
+    preflight_started_at = _utc()
+    preflight_started_ns = time.monotonic_ns()
+    executable: dict[str, object] | None = None
+    event_read_fd: int | None = None
+    event_write_fd: int | None = None
+    composite_read_fd: int | None = None
+    composite_write_fd: int | None = None
+
+    def preflight_failure(exc: Exception, stage: str) -> int:
+        for descriptor in {
+            event_read_fd,
+            event_write_fd,
+            composite_read_fd,
+            composite_write_fd,
+        }:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+        return _persist_preflight_failure(
+            identifier=args.id,
+            suite=args.suite,
+            kind=args.kind,
+            execution_environment=args.environment,
+            repository=repository,
+            cwd=cwd,
+            audit_root=audit_root,
+            record_path=record_path,
+            log_path=log_path,
+            log_relative=log_relative,
+            requested_command=requested_command,
+            executable=executable,
+            before_inventory=before_inventory,
+            before_raw=before_raw,
+            failure_stage=stage,
+            error_type=type(exc).__name__,
+            started_at=preflight_started_at,
+            started_ns=preflight_started_ns,
+        )
+
+    expected_kind = "composite" if args.suite == "full_repository" else "pytest"
+    if args.kind != expected_kind:
+        return preflight_failure(
+            RuntimeError("formal audit command kind differs from its suite"),
+            "SUITE_KIND",
+        )
+
+    try:
+        executable = _command_executable(requested_command)
+    except Exception as exc:
+        return preflight_failure(exc, "COMMAND_EXECUTABLE")
+    try:
+        (
+            dependency_root,
+            browser_root,
+            browser_executable,
+            node_executable,
+            npm_executable,
+            basetemp,
+        ) = _validate_command_shape(
+            requested_command, suite=args.suite, cwd=cwd, audit_root=audit_root,
+            identifier=args.id,
+        )
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        return preflight_failure(exc, "COMMAND_SHAPE")
+    try:
+        dependency_before = (
+            _no_dependency_inventory()
+            if dependency_root is None
+            else _dependency_tree_inventory(
+                dependency_root,
+                cwd,
+                browser_root=browser_root,
+                browser_executable=browser_executable,
+            )
+        )
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        return preflight_failure(exc, "DEPENDENCY_INVENTORY")
+    try:
+        reporter_root, reporter_nonce, trusted_reporter = (
+            _prepare_trusted_pytest_reporter(
+                audit_root=audit_root,
+                cwd=cwd,
+                identifier=args.id,
+                inventory=before_inventory,
+            )
+        )
+    except Exception as exc:
+        return preflight_failure(exc, "TRUSTED_REPORTER_PREPARATION")
+    try:
+        test_source_repository = _prepare_test_source_repository(
+            repository, audit_root, args.id, before_inventory
+        )
+    except Exception as exc:
+        return preflight_failure(exc, "TEST_SOURCE_PREPARATION")
+    try:
+        event_read_fd, event_write_fd = os.pipe()
+        if args.suite == "full_repository":
+            composite_read_fd, composite_write_fd = os.pipe()
+            composite_nonce = secrets.token_hex(16)
+        else:
+            composite_nonce = None
+    except Exception as exc:
+        return preflight_failure(exc, "EVENT_PIPE_PREPARATION")
+    try:
+        assert event_write_fd is not None
         child_env, environment_record = _sanitized_environment(
             audit_root,
             cwd,
@@ -1235,51 +1601,43 @@ def main(argv: list[str] | None = None) -> int:
             runtime_site_packages=Path(
                 str(trusted_reporter["runtime_site_packages"])
             ),
+            composite_fd=composite_write_fd,
+            composite_nonce=composite_nonce,
         )
-    except Exception:
-        os.close(event_read_fd)
-        os.close(event_write_fd)
-        raise
-    command = (
-        [requested_command[0], "-I", "-S", *requested_command[1:]]
-        if args.suite == "full_repository"
-        else _isolated_pytest_command(
-            requested_command,
-            cwd=cwd,
-            reporter_path=reporter_root / "phase9_trusted_reporter.py",
-            runtime_site_packages=Path(
-                str(trusted_reporter["runtime_site_packages"])
-            ),
-        )
-    )
-    dependency_before = (
-        _no_dependency_inventory()
-        if dependency_root is None
-        else _dependency_tree_inventory(dependency_root, cwd)
-    )
+    except Exception as exc:
+        return preflight_failure(exc, "ENVIRONMENT_PREPARATION")
     try:
+        command = (
+            [requested_command[0], "-I", "-S", *requested_command[1:]]
+            if args.suite == "full_repository"
+            else _isolated_pytest_command(
+                requested_command,
+                cwd=cwd,
+                reporter_path=reporter_root / "phase9_trusted_reporter.py",
+                runtime_site_packages=Path(
+                    str(trusted_reporter["runtime_site_packages"])
+                ),
+            )
+        )
+    except Exception as exc:
+        return preflight_failure(exc, "COMMAND_PREPARATION")
+    try:
+        assert event_write_fd is not None
         execution_sandbox, sandbox_argv = _sandbox_descriptor_and_argv(
             command=command,
             cwd=cwd,
             audit_root=audit_root,
             child_env=child_env,
             dependency_root=dependency_root,
+            browser_root=browser_root,
             basetemp=basetemp,
             identifier=args.id,
             event_write_fd=event_write_fd,
+            composite_write_fd=composite_write_fd,
         )
-    except Exception:
-        os.close(event_read_fd)
-        os.close(event_write_fd)
-        raise
-    producer_raw = Path(__file__).read_bytes()
-    producer = {
-        "type": "PAPER_FACTORY_AUDIT_RUNNER",
-        "version": COMMAND_SCHEMA,
-        "path": "tools/run_audit_command.py",
-        "bytes": len(producer_raw),
-        "sha256": hashlib.sha256(producer_raw).hexdigest(),
-    }
+    except Exception as exc:
+        return preflight_failure(exc, "SANDBOX_PREPARATION")
+    producer = _producer_descriptor()
     inventory_record = _persist_inventory(
         audit_root, args.id, before_inventory, before_raw
     )
@@ -1291,7 +1649,9 @@ def main(argv: list[str] | None = None) -> int:
     before = time.monotonic_ns()
     chunks: list[bytes] = []
     event_chunks: list[bytes] = []
+    composite_chunks: list[bytes] = []
     event_capture_error: str | None = None
+    composite_capture_error: str | None = None
 
     def capture_events() -> None:
         nonlocal event_capture_error
@@ -1306,6 +1666,20 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             os.close(event_read_fd)
 
+    def capture_composite_events() -> None:
+        nonlocal composite_capture_error
+        assert composite_read_fd is not None
+        try:
+            while True:
+                chunk = os.read(composite_read_fd, 65536)
+                if not chunk:
+                    break
+                composite_chunks.append(chunk)
+        except OSError:
+            composite_capture_error = "COMPOSITE_EVENT_PIPE_READ_ERROR"
+        finally:
+            os.close(composite_read_fd)
+
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("xb") as output:
         try:
@@ -1316,12 +1690,22 @@ def main(argv: list[str] | None = None) -> int:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                pass_fds=(event_write_fd,),
+                pass_fds=tuple(
+                    descriptor
+                    for descriptor in (event_write_fd, composite_write_fd)
+                    if descriptor is not None
+                ),
             )
         except OSError as exc:
             os.close(event_write_fd)
             os.close(event_read_fd)
+            if composite_write_fd is not None:
+                os.close(composite_write_fd)
+            if composite_read_fd is not None:
+                os.close(composite_read_fd)
             event_capture_error = "EVENT_PIPE_PROCESS_START_ERROR"
+            if composite_read_fd is not None:
+                composite_capture_error = "COMPOSITE_EVENT_PIPE_PROCESS_START_ERROR"
             chunk = (
                 f"[audit-runner] command preparation failed: {type(exc).__name__}\n"
             ).encode("utf-8")
@@ -1336,12 +1720,22 @@ def main(argv: list[str] | None = None) -> int:
             # Candidate code cannot truncate or replace bytes already observed
             # by this parent process.
             os.close(event_write_fd)
+            if composite_write_fd is not None:
+                os.close(composite_write_fd)
             event_reader = threading.Thread(
                 target=capture_events,
                 name=f"phase9-events-{args.id}",
                 daemon=False,
             )
             event_reader.start()
+            composite_reader = None
+            if composite_read_fd is not None:
+                composite_reader = threading.Thread(
+                    target=capture_composite_events,
+                    name=f"phase9-composite-events-{args.id}",
+                    daemon=False,
+                )
+                composite_reader.start()
             assert process.stdout is not None
             while True:
                 chunk = process.stdout.read1(65536)
@@ -1354,6 +1748,8 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.buffer.flush()
             process_exit_code = process.wait()
             event_reader.join()
+            if composite_reader is not None:
+                composite_reader.join()
         os.fsync(output.fileno())
     duration_ms = (time.monotonic_ns() - before) // 1_000_000
     ended = _utc()
@@ -1369,6 +1765,82 @@ def main(argv: list[str] | None = None) -> int:
     trusted_event_record = _persist_trusted_events(
         audit_root, args.id, event_raw
     )
+    composite_result: dict[str, object] | None = None
+    composite_error: str | None = None
+    composite_descriptor: dict[str, object] | None = None
+    pytest_log = raw_log
+    if args.suite == "full_repository":
+        composite_raw = b"".join(composite_chunks)
+        if composite_capture_error is not None or not composite_raw:
+            composite_raw = canonical_bytes(
+                {
+                    "schema": "paper-factory-trusted-composite-capture-error-v1",
+                    "error": composite_capture_error or "COMPOSITE_EVENT_STREAM_UNAVAILABLE",
+                }
+            ) + b"\n"
+        composite_artifact = _persist_composite_events(
+            audit_root, args.id, composite_raw
+        )
+        try:
+            assert composite_nonce is not None
+            assert dependency_root is not None
+            assert browser_root is not None
+            assert browser_executable is not None
+            assert node_executable is not None
+            assert npm_executable is not None
+            composite_result = validate_composite_events(
+                composite_raw,
+                raw_log=raw_log,
+                nonce=composite_nonce,
+                source=cwd,
+                dependency=dependency_root,
+                browser_root=browser_root,
+                browser_executable=browser_executable,
+                python=Path(requested_command[0]),
+                node=node_executable,
+                npm=npm_executable,
+                basetemp=basetemp,
+                environment=child_env,
+                source_inventory=before_inventory,
+                dependency_inventory=dependency_before,
+                expected_stage_contract=composite_stage_contract(),
+                runtime_validation=True,
+            )
+            pytest_log = composite_result["python_log"]
+        except (AssertionError, OSError, RuntimeError, UnicodeError, ValueError) as exc:
+            composite_error = type(exc).__name__
+        composite_descriptor = {
+            "schema": COMPOSITE_EVENT_SCHEMA,
+            "nonce": composite_nonce,
+            "event_transport": COMPOSITE_EVENT_TRANSPORT,
+            "validation": "PASS" if composite_error is None else "NONPASS",
+            "validation_error": composite_error,
+            "stage_results": (
+                None if composite_result is None else composite_result["stage_results"]
+            ),
+            "browser_test_summary": (
+                None
+                if composite_result is None
+                else composite_result["browser_test_summary"]
+            ),
+            "browser_node_outcomes": (
+                None
+                if composite_result is None
+                else composite_result["browser_node_outcomes"]
+            ),
+            "browser_complete_pass": (
+                None
+                if composite_result is None
+                else composite_result["browser_complete_pass"]
+            ),
+            "build_output": (
+                None if composite_result is None else composite_result["build_output"]
+            ),
+            "contract_sha256": (
+                None if composite_result is None else composite_result["contract_sha256"]
+            ),
+            "event_artifact": composite_artifact,
+        }
     expected_targets = (
         () if args.suite == "full_repository" else tuple(requested_command[8:])
     )
@@ -1401,7 +1873,12 @@ def main(argv: list[str] | None = None) -> int:
         dependency_after = (
             _no_dependency_inventory()
             if dependency_root is None
-            else _dependency_tree_inventory(dependency_root, cwd)
+            else _dependency_tree_inventory(
+                dependency_root,
+                cwd,
+                browser_root=browser_root,
+                browser_executable=browser_executable,
+            )
         )
         dependency_stable = dependency_after == dependency_before
         dependency_postcheck = "MATCH" if dependency_stable else "DIFFERS"
@@ -1410,10 +1887,15 @@ def main(argv: list[str] | None = None) -> int:
         dependency_postcheck = "ERROR"
     if not dependency_stable and runner_exit_code == 0:
         runner_exit_code = 86
-    outcomes = parse_outcomes(raw_log, args.kind)
+    outcomes = parse_outcomes(pytest_log, "pytest")
     trusted_counts = None if trusted_result is None else trusted_result["counts"]
     complete_pass = (
         process_exit_code == 0
+        and composite_error is None
+        and (
+            composite_result is None
+            or composite_result["browser_complete_pass"] is True
+        )
         and trusted_error is None
         and trusted_counts == outcomes
         and outcomes["collected"] > 0
@@ -1452,8 +1934,9 @@ def main(argv: list[str] | None = None) -> int:
         "duration_milliseconds": duration_ms,
         "exit_code": process_exit_code,
         "runner_exit_code": runner_exit_code,
-        "outcome_parser": "paper-factory-pytest-summary-and-trusted-events-v4",
+        "outcome_parser": "paper-factory-composite-and-trusted-events-v5",
         "outcomes": outcomes,
+        "composite_suite": composite_descriptor,
         "trusted_pytest": {
             **trusted_reporter,
             "validation": "PASS" if trusted_error is None else "NONPASS",

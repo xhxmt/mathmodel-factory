@@ -5,15 +5,6 @@ import zipfile
 
 import pytest
 
-from tests.phase9_delivery_test_support import nonformal_delivery_fence
-
-
-@pytest.fixture(autouse=True)
-def _nonformal_delivery_mechanics(monkeypatch):
-    monkeypatch.setattr(
-        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
-        nonformal_delivery_fence,
-    )
 
 
 def write_file(path: Path, text: str) -> None:

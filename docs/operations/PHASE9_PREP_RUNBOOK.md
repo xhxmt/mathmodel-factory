@@ -33,8 +33,42 @@ recompute commit/tree/parent and the complete tracked-source byte inventory.
 The audit runner uses an explicit Python executable, cwd, argv, isolated HOME
 and cache, no user site, no bytecode and disabled pytest plugin autoload. It
 does not inherit unrecorded provider, production database, release, deployment
-or cutover configuration. Every attempt gets a unique append-only command
-record and full raw log; a later success never overwrites a failed attempt.
+or cutover configuration. Every safely addressable attempt gets a unique
+append-only command record and full raw log; a later success never overwrites a
+failed attempt. The recorder becomes safe only after it has proved that the
+audit root is a canonical ordinary directory, the canonical id-derived record
+and log paths are unused children with safe parents, and the initial candidate
+source inventory is complete. A failure before that boundary is explicitly
+classified `NON_RECORDABLE_INVOCATION_VALIDATION` and creates no artifact: an
+untrusted/aliased/missing root or unproved source cannot safely name or populate
+an evidence record. After that boundary, a suite-kind, Python/runtime/dependency,
+reporter/source-copy/environment/pipe/sandbox preparation failure returns 125
+and writes a separate preflight-failure record plus canonical raw event and
+source inventory. That record says `process_started=false` and does not
+fabricate dependency, pytest, composite-stage or outcome evidence.
+Summary/package verification keeps the attempt visible, while it cannot satisfy
+a required final suite.
+
+Committed run-generation and forensic-replay retries have a separate recovery
+boundary. The service first validates only the lookup coordinate and then,
+while holding the shared Authority commit lease, copies a stable database
+main/WAL image into a private directory for a query-only lookup. It returns a
+stored result only after reconstructing the canonical request, unique
+idempotency binding, authorization/nonce consumption, generation succession,
+receipts, terminal/event graph, source inventory and every referenced typed
+business object. An exact recovery does not consult current authorization or
+freshness, consume a nonce, write a row, or create WAL/SHM beside the source
+database. The retained `replayed` compatibility field is part of the immutable
+wire result: the committing call and every exact recovery both return
+`replayed=false`, so callers cannot infer the service path from result bytes. A
+key is reserved globally across workflows, and the services rebuild canonical
+requests from creation receipts/replay business rows to retain that reservation
+even if the composite-key idempotency row is missing or moved. A true miss
+releases no safety gate: the service performs all live checks and repeats both
+lookup and validation under `BEGIN IMMEDIATE` before a new commit. Unsafe
+sidecars, aliases, incomplete graphs and same-key/different-request or
+same-key/different-workflow lookups fail closed rather than falling through to
+a new execution.
 
 The required suite graph is owned by
 `docs/operations/PHASE9_TEST_SUITE_CONTRACT.json`. It requires independent
@@ -48,12 +82,47 @@ source and fresh executions for:
 6. `release_workflow`; and
 7. `full_repository`.
 
+`full_repository` is an ordered composite suite, not a pytest-only alias. Its
+machine-readable `composite_stages` entries bind each stage's symbolic argv,
+cwd, source targets and exact npm-script name/body. The runner, summary builder
+and portable package verifier all require that projection to equal the single
+trusted definition; a missing stage/target or command/script drift fails closed.
+In both source and fresh it runs the same three targets: all Python tests, a
+production frontend build, then the documented `npm run test:phase6` Chromium
+tests. The command must name canonical absolute Python, Node, npm, `node_modules`
+and browser-runtime coordinates. Both dependency trees are mounted read-only
+and recursively inventoried before and after execution; the browser executable
+is also byte- and version-bound. The npm CLI entrypoint is resolved and hashed,
+and the recorded Node executable explicitly invokes that exact CLI for both
+frontend stages; merely probing an unrelated Node is not sufficient. The
+production build uses Vite's explicit `--configLoader runner`, bypassing the
+default bundled-config path that tries to materialize `.vite-temp` below the
+read-only dependency mount. Its
+outDir and every temporary browser build live below the invocation's writable
+basetemp/TMPDIR, never in the read-only candidate. Missing locked development
+dependencies or Chromium,
+skipped/todo/cancelled/malformed browser TAP, a stage-record gap, or any nonzero
+stage makes the suite non-passing. Even when npm exits zero, the child runner
+turns an incomplete browser TAP result into stage exit 88; the parent verifier
+independently repeats the semantic check. The runner additionally requires the candidate-bound exact
+`vite build` and documented two-module `test:phase6` scripts. A zero-exit build
+must produce a safe nonempty `index.html` plus `assets/` tree; its complete
+path/byte/hash inventory is revalidated and compared exactly across source and
+fresh. The requirement map must make the runner and `package.json` reachable as
+implementations and both exact browser modules reachable as tests from the
+requirements citing `full_repository`.
+
 `tools/build_phase9_test_summary.py` reparses the raw logs, enforces the exact
-suite/environment set and required targets, checks every file reference and
-source inventory, accounts for all outcome categories and warnings, and
-requires exact source/fresh outcomes. Passed counts are claimed only when the
-corresponding complete raw log and command record exist; unbound aggregate
-counts are not evidence.
+suite/environment set and required targets/stages, checks every file reference
+and source/dependency/browser inventory, accounts for all outcome categories and
+warnings, and requires exact source/fresh outcomes. For `full_repository`, it
+independently reconstructs every stage's argv/cwd/environment/exit/log slice,
+uses only the Python slice for pytest statistics, validates the Node browser
+summary plus its ordered test-node/outcome inventory, and compares the
+normalized composite contract. Passed counts are
+claimed only when the corresponding complete raw log, command record, trusted
+pytest stream, and composite stream exist; unbound aggregate counts are not
+evidence.
 
 The package builder accepts only that reproducible summary and an honestly
 `BLOCKED` production status. It reads candidate files from immutable Git

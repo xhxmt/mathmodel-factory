@@ -28,6 +28,7 @@ from tools.build_phase9_test_summary import (
     _stable_regular_bytes,
 )
 from tools.run_audit_command import INVENTORY_SCHEMA, executed_source_inventory
+from tools.run_full_repo_with_frontend_deps import composite_stage_contract
 
 
 FIXED_ZIP_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
@@ -36,6 +37,11 @@ MANIFEST_SCHEMA = "paper-factory-phase9-audit-manifest-v1"
 IDENTITY_SCHEMA = "paper-factory-phase9-candidate-identity-v1"
 PRODUCTION_STATUS_SCHEMA = "paper-factory-phase9-production-status-v1"
 REVIEW_STATUS_SCHEMA = "paper-factory-phase9-review-status-v1"
+AUDITED_BASELINE_IDENTITY = {
+    "commit": "2de2f29d25970c2a3cefa4f674fc53894d782f57",
+    "tree": "6f911507c16fbec1d80eca345bf2133ce50ede9d",
+    "parent": "f7a2eb85a90730639166f35e4deae708d4762d00",
+}
 PRODUCTION_BLOCK_REASON = (
     "production authority database, official inputs, credentials, runtime state, "
     "and live operator authorization are intentionally absent from the audit package"
@@ -46,6 +52,12 @@ REVIEW_PATHS = {
     "review/PRO_AUDIT_PROMPT_ZH.md",
     "review/REVIEW_STATUS.json",
 }
+FULL_REPOSITORY_BROWSER_TEST_PATHS = frozenset(
+    str(target)
+    for stage in composite_stage_contract()
+    if stage["id"] == "phase6_browser"
+    for target in stage["targets"]
+)
 _HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -54,6 +66,10 @@ PACKAGE_README = (
     "This deterministic, single-root package is bound to the candidate in "
     "`identity/CANDIDATE_IDENTITY.json`. It contains a full tracked-file "
     "inventory, a frozen source subset, exact test commands/raw logs/statistics, "
+    "parent-captured Python/build/browser stage records and ordered browser-node "
+    "outcomes, exact frontend scripts, safe production-build output inventories, "
+    "byte-bound Node/npm identities, and Node dependency/browser runtime inventories, "
+    "plus process-not-started preflight failures without synthetic stage evidence, "
     "requirements/gaps, receipt contracts and schemas, tests, offline evidence, "
     "and an honestly BLOCKED production status. It contains no real production "
     "receipts. It contains no production database, official input, credentials, "
@@ -74,6 +90,7 @@ def _validate_freeze_utc(value: object) -> str:
     return value
 DEFAULT_SOURCE_PATHS = (
     "AGENTS.md", "CHANGELOG.md", "CLAUDE.md", "DOCUMENTATION_INDEX.md",
+    "README.md", "STEPS.md",
     "docs/architecture/PHASE2_PRODUCTION_AUTHORITY_FOUNDATION.md",
     "docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md",
     "docs/operations/PHASE9_ENTRY_GATE.md",
@@ -88,27 +105,28 @@ DEFAULT_SOURCE_PATHS = (
     "factory_core/authority_operator_workflow.py",
     "factory_core/authority_outbox_delivery.py",
     "factory_core/authority_production_schema.py",
-    "factory_core/authority_read_repository.py",
+    "factory_core/authority_read_repository.py", "factory_core/engine.py",
     "factory_core/cli.py",
     "factory_core/service.py",
     "factory_core/delivery/release.py",
     "factory_core/audit/acceptance.py", "factory_core/audit/service.py",
     "factory_core/adapters/legacy_runner.sh",
     "factory_core/phase9_delivery_fence.py",
+    "factory_core/phase9_authority_lease.py",
     "factory_core/phase9_config.py", "factory_core/phase9_entry.py",
     "factory_core/phase9_forensic_replay.py",
     "factory_core/phase9_replay_evidence.py",
     "factory_core/phase9_run_generation.py",
     "factory_core/phase9_p0_evidence.py", "factory_core/steps/specialized.py",
     "factory_core/phase5_shadow_supervisor.py", "factory_core/phase78_worker.py",
-    "scripts/authority_operator.py", "scripts/phase9_entry_gate.py",
+    "scripts/audit_complete_projects.py", "scripts/authority_operator.py",
+    "scripts/phase9_entry_gate.py",
     "scripts/phase9_forensic_replay.py", "scripts/phase9_prep_manifest.py",
     "scripts/check_phase9_delivery_fence.py", "scripts/publish_release.py",
     "scripts/package_submission.py",
     "scripts/workflow_state.py", "scripts/evaluate_modeling_project.py",
     "scripts/delivery_contract.py",
     "tools/run_phase9_p0_evidence.py",
-    "tests/phase9_delivery_test_support.py",
     "tests/test_atomic_release.py", "tests/test_authority_operations.py",
     "tests/test_audit_service.py", "tests/test_authority_outbox_delivery.py",
     "tests/test_authority_production_migration.py",
@@ -125,9 +143,17 @@ DEFAULT_SOURCE_PATHS = (
     "tests/test_phase9_audit_bundle.py", "tests/test_phase9_audit_evidence.py",
     "tests/test_package_submission.py",
     "tests/test_workflow_state.py", "tools/build_phase9_audit_bundle.py",
+    "tests/test_dirty_and_finalization.py",
+    "tests/test_quality_gates_regression.py",
     "tools/build_phase9_test_summary.py", "tools/run_audit_command.py",
     "tools/run_full_repo_with_frontend_deps.py",
+    "tools/phase9_composite_evidence.py",
     "tools/trusted_pytest_reporter.py",
+    "web/README.md", "web/frontend/package.json",
+    "web/frontend/package-lock.json",
+    "web/frontend/tests/phase6-controller.test.mjs",
+    "web/frontend/tests/phase6-build-browser.test.mjs",
+    "web/frontend/tests/phase6-panel.harness.html",
     "web/backend/project_api.py", "web/backend/contest_dashboard.py",
     "web/backend/showcase.py",
 )
@@ -305,8 +331,14 @@ def _expected_evidence_paths(summary: dict[str, object]) -> set[str]:
         expected.add(str(record["command_record_path"]))
         expected.add(str(record["raw_log"]["path"]))
         expected.add(str(record["source_inventory"]["path"]))
-        expected.add(str(record["dependency_inventory"]["path"]))
-        expected.add(str(record["trusted_pytest"]["event_artifact"]["path"]))
+        if record["dependency_inventory"] is not None:
+            expected.add(str(record["dependency_inventory"]["path"]))
+        if record["trusted_pytest"] is not None:
+            expected.add(str(record["trusted_pytest"]["event_artifact"]["path"]))
+        if record["composite_suite"] is not None:
+            expected.add(
+                str(record["composite_suite"]["event_artifact"]["path"])
+            )
     return expected
 
 
@@ -438,6 +470,21 @@ def _references(value: str, label: str) -> list[str]:
     return result
 
 
+def _full_repository_executes_test_path(path: str) -> bool:
+    """Recognize only tests reached by the two full-repository test stages."""
+
+    if path in FULL_REPOSITORY_BROWSER_TEST_PATHS:
+        return True
+    pure = PurePosixPath(path)
+    name = pure.name
+    return bool(
+        len(pure.parts) > 1
+        and pure.parts[0] == "tests"
+        and name.endswith(".py")
+        and (name.startswith("test_") or name.endswith("_test.py"))
+    )
+
+
 def _verify_requirement_map(
     mapping: bytes,
     *,
@@ -473,6 +520,8 @@ def _verify_requirement_map(
     referenced_final_records: set[str] = set()
     referenced_implementations: set[str] = set()
     referenced_tests: set[str] = set()
+    full_repository_tests: set[str] = set()
+    full_repository_implementations: set[str] = set()
     for line in lines[1:]:
         fields = line.split("\t")
         if len(fields) != len(columns):
@@ -536,8 +585,15 @@ def _verify_requirement_map(
             for target in suite_specs[suite]["required_targets"]
         }
         full_repository_cited = "full_repository" in suites
+        if full_repository_cited:
+            full_repository_tests.update(tests)
+            full_repository_implementations.update(implementations)
         if any(
-            test not in directly_executed and not full_repository_cited
+            test not in directly_executed
+            and not (
+                full_repository_cited
+                and _full_repository_executes_test_path(test)
+            )
             for test in tests
         ):
             raise RuntimeError(
@@ -577,6 +633,30 @@ def _verify_requirement_map(
             f"tests={sorted(uncovered_test_targets)}, "
             f"tools={sorted(uncovered_tool_targets)}"
         )
+    if "full_repository" in suite_specs:
+        stage_targets = {
+            str(target)
+            for stage in suite_specs["full_repository"]["composite_stages"]
+            for target in stage["targets"]
+        }
+        required_stage_tests = {
+            target for target in stage_targets
+            if _full_repository_executes_test_path(target)
+        }
+        required_stage_implementations = {
+            target for target in stage_targets
+            if target != "tests" and target not in required_stage_tests
+        }
+        missing_stage_tests = required_stage_tests - full_repository_tests
+        missing_stage_implementations = (
+            required_stage_implementations - full_repository_implementations
+        )
+        if missing_stage_tests or missing_stage_implementations:
+            raise RuntimeError(
+                "full-repository stage targets are not reachable from requirements: "
+                f"tests={sorted(missing_stage_tests)}, "
+                f"implementations={sorted(missing_stage_implementations)}"
+            )
 
 
 def _verify_semantic_evidence(
@@ -1068,11 +1148,7 @@ def _verify_extracted_package_for_policy(
     ):
         raise RuntimeError("candidate identity OIDs differ")
     baseline = identity.get("baseline")
-    if baseline != {
-        "commit": "7c7f0d3f388e54913b036f4566bd6604e9c3d850",
-        "tree": "9927e11e5f771206ac2a0403d6541c0853ccc096",
-        "parent": "43138c5a5ee957fb19162abb9c33edb99f2ff010",
-    }:
+    if baseline != AUDITED_BASELINE_IDENTITY:
         raise RuntimeError("candidate baseline identity differs")
     unsigned_identity = dict(identity)
     identity_digest = unsigned_identity.pop("identity_sha256")
@@ -1209,11 +1285,7 @@ def _build_for_policy(
     identity_body = {
         "schema": "paper-factory-phase9-candidate-identity-v1",
         **identity,
-        "baseline": {
-            "commit": "7c7f0d3f388e54913b036f4566bd6604e9c3d850",
-            "tree": "9927e11e5f771206ac2a0403d6541c0853ccc096",
-            "parent": "43138c5a5ee957fb19162abb9c33edb99f2ff010",
-        },
+        "baseline": dict(AUDITED_BASELINE_IDENTITY),
         "freeze_utc": freeze_utc,
         "candidate_inventory_bytes": len(inventory),
         "candidate_inventory_sha256": hashlib.sha256(inventory).hexdigest(),

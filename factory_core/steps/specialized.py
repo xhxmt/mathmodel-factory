@@ -34,6 +34,7 @@ from ..governance.overrides import (
     OverrideProvider,
     default_override_provider,
 )
+from ..phase9_delivery_fence import Phase9DeliveryFenceError
 from ..delivery.release import ReleasePublisher
 from ..contest import ContestDeadlineExceeded
 from ..deadline import ensure_deadline
@@ -1237,9 +1238,14 @@ class DeliveryStep:
         project = context.project_dir
         base = project.name
         try:
-            from ..phase9_delivery_fence import require_phase9_delivery_authority
+            from ..phase9_delivery_fence import (
+                delivery_side_effect_commit_lease,
+                require_delivery_side_effect_authority,
+            )
 
-            delivery_fence = require_phase9_delivery_authority(project)
+            require_delivery_side_effect_authority(
+                project, operation="delivery"
+            )
         except (OSError, ValueError) as exc:
             return ExecutionResult.failed(
                 "PERMANENT_PHASE9_DELIVERY_DISABLED",
@@ -1247,18 +1253,27 @@ class DeliveryStep:
                 delivery_error=str(exc),
                 delivery_allowed=False,
             )
-        cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
-        if cleanup.is_file():
-            self.runner.python(
-                self.factory_root,
-                project,
-                "scripts/cleanup_project_artifacts.py",
-                [project],
-                label="delivery_cleanup",
-                timeout_seconds=300,
-                accepted=(0, 1),
+        try:
+            with delivery_side_effect_commit_lease(project, operation="delivery"):
+                cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
+                if cleanup.is_file():
+                    self.runner.python(
+                        self.factory_root,
+                        project,
+                        "scripts/cleanup_project_artifacts.py",
+                        [project],
+                        label="delivery_cleanup",
+                        timeout_seconds=300,
+                        accepted=(0, 1),
+                    )
+                final_input = build_final_input_manifest(project)
+        except Phase9DeliveryFenceError as exc:
+            return ExecutionResult.failed(
+                "PERMANENT_PHASE9_DELIVERY_DISABLED",
+                returncode=2,
+                delivery_error=str(exc),
+                delivery_allowed=False,
             )
-        final_input = build_final_input_manifest(project)
         workflow_events: list[dict[str, object]] = [
             {
                 "type": "FINAL_SNAPSHOT_CREATED",
@@ -1288,7 +1303,19 @@ class DeliveryStep:
             )
         else:
             audit_service = self.audit_service
-        outcome = audit_service.run(context)
+        try:
+            outcome = audit_service.run(context, analysis_only=False)
+        except Phase9DeliveryFenceError as exc:
+            return self._with_workflow_events(
+                ExecutionResult.failed(
+                    "PERMANENT_PHASE9_DELIVERY_DISABLED",
+                    returncode=2,
+                    delivery_error=str(exc),
+                    delivery_allowed=False,
+                    final_input_fingerprint=final_input.fingerprint,
+                ),
+                workflow_events,
+            )
         audit = outcome.execution
         try:
             finalization_guard()
@@ -1345,15 +1372,7 @@ class DeliveryStep:
                 self.factory_root,
                 project,
                 "scripts/package_submission.py",
-                [
-                    project,
-                    base,
-                    output,
-                    "--workflow-id",
-                    delivery_fence.workflow_id,
-                    "--run-generation",
-                    delivery_fence.run_generation,
-                ],
+                [project, base, output, "--stage-only"],
                 label="package_submission",
                 timeout_seconds=600,
             )
@@ -1366,14 +1385,23 @@ class DeliveryStep:
                 status=outcome.record.status.value,
                 package_builder=build_package,
                 deadline_check=finalization_guard,
-                workflow_id=delivery_fence.workflow_id,
-                run_generation=delivery_fence.run_generation,
             )
         except ContestDeadlineExceeded:
             raise
         except FinalizationSnapshotChanged as exc:
             return self._snapshot_changed_result(
                 final_input.fingerprint, exc, workflow_events
+            )
+        except Phase9DeliveryFenceError as exc:
+            return self._with_workflow_events(
+                ExecutionResult.failed(
+                    "PERMANENT_PHASE9_DELIVERY_DISABLED",
+                    returncode=2,
+                    delivery_error=str(exc),
+                    audit_snapshot=outcome.snapshot.snapshot_id,
+                    delivery_allowed=False,
+                ),
+                workflow_events,
             )
         except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
             return self._with_workflow_events(

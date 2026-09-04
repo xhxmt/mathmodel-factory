@@ -3274,6 +3274,16 @@ class AuthorityProductionMigrationRunner:
             connection.close()
 
     def run(self, owner_token: str) -> ProductionMigrationReport:
+        """Run while excluding delivery commits for project-local state."""
+
+        from .phase9_authority_lease import authority_database_commit_lease
+
+        with authority_database_commit_lease(self.path):
+            return self._run_under_commit_lease(owner_token)
+
+    def _run_under_commit_lease(
+        self, owner_token: str
+    ) -> ProductionMigrationReport:
         owner = _plain_text(owner_token, "owner_token")
         connection = connect_authority_rw(self.path)
         try:

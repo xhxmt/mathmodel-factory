@@ -325,6 +325,10 @@ def _assert_delivery_side_effects_blocked(
         "factory_core.phase9_delivery_fence.collect_phase9_delivery_fence",
         collect,
     )
+    monkeypatch.setattr(
+        "factory_core.phase9_delivery_fence._current_phase9_generation",
+        lambda _project: _delivery_fence(replay_mode),
+    )
     snapshot = AuditSnapshot(
         snapshot_id="8" * 64,
         base=project.name,
@@ -368,6 +372,7 @@ def _assert_delivery_side_effects_blocked(
             override_provider=NeverCalled(),
         ).run(
             StepContext(project, project.name, 16, 1, 60, 0),
+            analysis_only=False,
             workflow_id="probe-workflow",
             run_generation="run-generation:new",
         ),

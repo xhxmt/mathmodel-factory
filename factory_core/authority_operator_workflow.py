@@ -276,6 +276,34 @@ def run_authority_migrate_operation(
     occurred_at: int,
     failure_injector: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
+    """Run the complete project-local migration operation under one lease."""
+
+    from .phase9_authority_lease import authority_database_commit_lease
+
+    with authority_database_commit_lease(database):
+        return _run_authority_migrate_operation_under_commit_lease(
+            database,
+            database_id=database_id,
+            expected_source_fence_sha256=expected_source_fence_sha256,
+            backup=backup,
+            evidence_output=evidence_output,
+            owner_token=owner_token,
+            occurred_at=occurred_at,
+            failure_injector=failure_injector,
+        )
+
+
+def _run_authority_migrate_operation_under_commit_lease(
+    database: str | Path,
+    *,
+    database_id: str,
+    expected_source_fence_sha256: str,
+    backup: str | Path,
+    evidence_output: str | Path,
+    owner_token: str,
+    occurred_at: int,
+    failure_injector: Callable[[str], None] | None = None,
+) -> dict[str, object]:
     database_path = authority_database_path(database)
     backup_path = _prospective_output_path(backup)
     output_path = _output_path(evidence_output)
@@ -507,6 +535,38 @@ def _restored_evidence_from_journal(
 
 
 def run_authority_restore_operation(
+    database: str | Path,
+    backup: str | Path,
+    *,
+    database_id: str,
+    occurred_at: int,
+    expected_current_source_fence_sha256: str,
+    expected_backup_sha256: str,
+    expected_switch_epoch: int,
+    evidence_output: str | Path,
+    failure_injector: Callable[[str], None] | None = None,
+) -> dict[str, object]:
+    """Run the complete project-local restore operation under one lease."""
+
+    from .phase9_authority_lease import authority_database_commit_lease
+
+    with authority_database_commit_lease(database):
+        return _run_authority_restore_operation_under_commit_lease(
+            database,
+            backup,
+            database_id=database_id,
+            occurred_at=occurred_at,
+            expected_current_source_fence_sha256=(
+                expected_current_source_fence_sha256
+            ),
+            expected_backup_sha256=expected_backup_sha256,
+            expected_switch_epoch=expected_switch_epoch,
+            evidence_output=evidence_output,
+            failure_injector=failure_injector,
+        )
+
+
+def _run_authority_restore_operation_under_commit_lease(
     database: str | Path,
     backup: str | Path,
     *,

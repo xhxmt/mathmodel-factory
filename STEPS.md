@@ -352,9 +352,12 @@ Do not treat `PRECHECK_PASS` or a skip receipt as the delivered-paper verdict.
 
 After Step 15 validation, the project is `CONTENT_READY`: its content may be
 audited independently with `python3 -m factory_core.cli audit <project>`. That
-command writes snapshot-bound records under `.factory/audits/` and compatibility
-judge artifacts, but does not publish, package, clean, archive, or mutate the
-workflow database.
+command is analysis-only by default. It writes snapshot-bound records under
+`.factory/audits/` and compatibility judge artifacts, but does not create
+`final_submission.sha256`, an override receipt, or a final acceptance receipt,
+and does not publish, package, clean, archive, or mutate the workflow database.
+Its current analysis projection is `.factory/audits/analysis_latest.json`; a
+same-snapshot analysis rerun does not replace a verified acceptance `latest.json`.
 
 ### Step 16: Final Compile + Judge + Appendix + Package
 
@@ -372,9 +375,13 @@ content reruns the owning work and reaches Gate 2 again.
 
 Step 16 is the workflow compatibility adapter between the independent audit
 subsystem and delivery. It invokes or reuses the audit for the current content
-snapshot, then performs delivery mutations only when the result is `PASS` or an
-administrator-issued, exact-snapshot `deliver_snapshot` authorization produces
-an `OVERRIDDEN` audit result. Native and Legacy adapters use this same path.
+snapshot, then explicitly enters the acceptance boundary before any delivery
+mutation. The Native adapter selects acceptance mode directly; the Legacy
+adapter invokes the final audit with `--accept-delivery`. Only a non-Phase9
+`PASS`, or an administrator-issued exact-snapshot `deliver_snapshot`
+authorization that produces `OVERRIDDEN`, may continue. A current Phase9
+acceptance, release, submission, or delivery request is permanently rejected,
+including requests with an exact workflow/run-generation coordinate.
 Stage 10 runs cleanup before building the canonical authored
 `factory-final-input-manifest-v4`, which binds the shared artifact-ownership
 schema. From `FINAL_SNAPSHOT_CREATED` until the atomic current-pointer switch,
@@ -397,8 +404,9 @@ Produce:
 On a fingerprint cache miss, the audit subsystem compiles the final PDF, reruns
 the complete Step-10 paper checks plus provenance, runs the visual/page gate,
 builds packets and the enforce-mode three-role Judge result, rejects any
-snapshot mutation during judging, then creates a judgment receipt and final
-acceptance receipt. `FINAL_AUDIT_MAX_PAGES` or machine-readable
+snapshot mutation during judging, then creates a judgment receipt. Only the
+explicit Step-16 acceptance mode may additionally create the final-submission
+marker and final acceptance receipt. `FINAL_AUDIT_MAX_PAGES` or machine-readable
 `problem/deliverables.json` `max_pages` configures the page limit. A compile
 failure, hard check failure, visual failure, non-PASS, INDETERMINATE, malformed
 receipt, missing/changed human approval, bibliography mismatch, or stale fingerprint blocks normal delivery. Submission packaging is

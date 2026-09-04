@@ -31,6 +31,11 @@ from .authority_production_schema import (
     verify_production_installation,
 )
 from .canonical import canonical_bytes, canonical_sha256
+from .phase9_authority_lease import (
+    AuthorityStateLeaseError,
+    authority_state_commit_lease,
+    isolated_authority_snapshot_ro,
+)
 from .contract_pins import (
     CONTRACT_PIN_SET_SCHEMA,
     ContractPinSetV1,
@@ -443,6 +448,14 @@ class RunGenerationRequestV1:
 
 @dataclass(frozen=True)
 class RunGenerationCreationResult:
+    """Immutable creation result.
+
+    ``replayed`` is retained for wire compatibility but is itself part of the
+    frozen result object.  Both an original commit and exact recovery therefore
+    return ``False``; callers must not infer the service path from immutable
+    result bytes.
+    """
+
     run_generation: str
     workflow_id: str
     operation_kind: str
@@ -618,6 +631,45 @@ def validate_operator_authorization(
     *,
     trusted_now: int,
 ) -> OperatorAuthorizationEvidenceV1:
+    _validate_operator_authorization_binding(value, request)
+    uid = value.operator_uid
+    account = value.operator_account
+    try:
+        current_uid = os.geteuid()
+        current_account = pwd.getpwuid(current_uid).pw_name
+    except (AttributeError, KeyError) as exc:
+        raise Phase9RunGenerationSafetyError(
+            "controlled OS account identity cannot be verified"
+        ) from exc
+    if uid != current_uid or account != current_account:
+        raise Phase9RunGenerationSafetyError(
+            "operator authorization does not match the executing OS account"
+        )
+    issued = value.issued_at
+    expires = value.expires_at
+    if not issued <= trusted_now <= expires:
+        raise Phase9RunGenerationSafetyError(
+            "operator authorization is not valid at trusted current time"
+        )
+    if trusted_now - issued > PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS:
+        raise Phase9RunGenerationSafetyError(
+            "operator authorization issue time exceeds trusted clock skew"
+        )
+    return value
+
+
+def _validate_operator_authorization_binding(
+    value: OperatorAuthorizationEvidenceV1,
+    request: RunGenerationRequestV1,
+) -> OperatorAuthorizationEvidenceV1:
+    """Validate immutable authorization/request binding without using live time.
+
+    A committed idempotent result is keyed by the exact authorization envelope,
+    but recovering that result must not require the authorization to still be
+    live.  Executing-account and trusted-time checks remain in the public
+    new-operation validator above.
+    """
+
     _exact(value, OperatorAuthorizationEvidenceV1, "operator_authorization")
     if value.schema_version != OPERATOR_AUTHORIZATION_EVIDENCE_SCHEMA:
         raise Phase9RunGenerationSafetyError(
@@ -634,21 +686,10 @@ def validate_operator_authorization(
     )
     if value.authorized is not True:
         raise Phase9RunGenerationSafetyError("operator is not authorized")
-    uid = _nonnegative(value.operator_uid, "operator_authorization.operator_uid")
-    account = _concrete(
+    _nonnegative(value.operator_uid, "operator_authorization.operator_uid")
+    _concrete(
         value.operator_account, "operator_authorization.operator_account"
     )
-    try:
-        current_uid = os.geteuid()
-        current_account = pwd.getpwuid(current_uid).pw_name
-    except (AttributeError, KeyError) as exc:
-        raise Phase9RunGenerationSafetyError(
-            "controlled OS account identity cannot be verified"
-        ) from exc
-    if uid != current_uid or account != current_account:
-        raise Phase9RunGenerationSafetyError(
-            "operator authorization does not match the executing OS account"
-        )
     _concrete(value.authorizer_subject, "operator_authorization.authorizer_subject")
     _concrete(value.operator_subject, "operator_authorization.operator_subject")
     _sha(
@@ -665,13 +706,9 @@ def validate_operator_authorization(
         )
     issued = _nonnegative(value.issued_at, "operator_authorization.issued_at")
     expires = _nonnegative(value.expires_at, "operator_authorization.expires_at")
-    if expires < issued or not issued <= trusted_now <= expires:
+    if expires < issued:
         raise Phase9RunGenerationSafetyError(
-            "operator authorization is not valid at trusted current time"
-        )
-    if trusted_now - issued > PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS:
-        raise Phase9RunGenerationSafetyError(
-            "operator authorization issue time exceeds trusted clock skew"
+            "operator authorization expiry precedes its issue time"
         )
     if (
         value.operation_kind != request.operation_kind
@@ -694,6 +731,80 @@ def validate_run_generation_request(
     now = int(time.time()) if trusted_now is None else _nonnegative(
         trusted_now, "trusted_now"
     )
+    _validate_run_generation_request_binding(value)
+    try:
+        validate_contract_pin_set(
+            value.contract_pins, compile_workflow_contract_bundle_v2()
+        )
+    except ContractPinValidationError as exc:
+        raise Phase9RunGenerationSafetyError(
+            f"contract pin source authorization failed: {exc}"
+        ) from exc
+    if abs(value.occurred_at - now) > PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS:
+        raise Phase9RunGenerationSafetyError(
+            "request occurrence metadata exceeds trusted clock skew"
+        )
+    validate_operator_authorization(
+        value.operator_authorization,
+        value,
+        trusted_now=now,
+    )
+    return value
+
+
+def _validate_contract_pin_set_binding(
+    value: ContractPinSetV1,
+) -> ContractPinSetV1:
+    """Validate the persisted pin envelope without consulting today's runtime.
+
+    Exact recovery is bound to the byte-identical historical pin set.  Whether
+    that historical set is authorized by the *current* source and Python
+    runtime is a live new-write gate and is therefore enforced only by
+    :func:`validate_run_generation_request` above.
+    """
+
+    if type(value) is not ContractPinSetV1:
+        raise Phase9RunGenerationSafetyError(
+            "contract pin set has an unsupported runtime type"
+        )
+    for item in fields(ContractPinSetV1):
+        try:
+            field_value = object.__getattribute__(value, item.name)
+        except AttributeError as exc:  # pragma: no cover - defensive boundary
+            raise Phase9RunGenerationSafetyError(
+                f"contract_pins.{item.name} is missing"
+            ) from exc
+        if item.name == "schema_version":
+            if field_value != CONTRACT_PIN_SET_SCHEMA:
+                raise Phase9RunGenerationSafetyError(
+                    "contract pin set schema is unsupported"
+                )
+        else:
+            _sha(field_value, f"contract_pins.{item.name}")
+    return value
+
+
+def _validate_run_generation_recovery_identity(
+    value: RunGenerationRequestV1,
+) -> RunGenerationRequestV1:
+    """Validate only fields required for a read-only idempotency lookup.
+
+    A row for the key takes precedence over validation of a different request:
+    this preserves an explicit same-key/different-request conflict while an
+    absent key still reaches the complete structural and live validators.
+    """
+
+    _exact(value, RunGenerationRequestV1, "request")
+    _concrete(value.workflow_id, "request.workflow_id")
+    _concrete(value.idempotency_key, "request.idempotency_key")
+    return value
+
+
+def _validate_run_generation_request_binding(
+    value: RunGenerationRequestV1,
+) -> RunGenerationRequestV1:
+    """Validate canonical immutable request content, excluding live-time gates."""
+
     _exact(value, RunGenerationRequestV1, "request")
     if value.schema_version != RUN_GENERATION_REQUEST_SCHEMA:
         raise Phase9RunGenerationSafetyError("run-generation request schema is unsupported")
@@ -748,30 +859,15 @@ def validate_run_generation_request(
         )
     validate_git_source_identity(value.source)
     _sha(value.source_inventory_sha256, "request.source_inventory_sha256")
-    try:
-        validate_contract_pin_set(
-            value.contract_pins, compile_workflow_contract_bundle_v2()
-        )
-    except ContractPinValidationError as exc:
-        raise Phase9RunGenerationSafetyError(
-            f"contract pin source authorization failed: {exc}"
-        ) from exc
+    _validate_contract_pin_set_binding(value.contract_pins)
     validate_official_inputs(value.official_inputs)
     validate_execution_context(value.execution_context)
     _nonnegative(value.occurred_at, "request.occurred_at")
-    if abs(value.occurred_at - now) > PHASE9_AUTHORIZATION_CLOCK_SKEW_SECONDS:
-        raise Phase9RunGenerationSafetyError(
-            "request occurrence metadata exceeds trusted clock skew"
-        )
     if value.execution_context.captured_at > value.occurred_at:
         raise Phase9RunGenerationSafetyError(
             "execution context was captured after request occurrence"
         )
-    validate_operator_authorization(
-        value.operator_authorization,
-        value,
-        trusted_now=now,
-    )
+    _validate_operator_authorization_binding(value.operator_authorization, value)
     return value
 
 
@@ -788,10 +884,10 @@ def _exact_mapping(
     return value
 
 
-def run_generation_request_from_dict(
-    value: object, *, trusted_now: int | None = None
+def _run_generation_request_from_dict_binding(
+    value: object,
 ) -> RunGenerationRequestV1:
-    """Decode one strict JSON-domain request into the typed creation API."""
+    """Decode strict JSON structure without semantic or live gates."""
 
     item = _exact_mapping(
         value,
@@ -884,7 +980,31 @@ def run_generation_request_from_dict(
         operator_authorization=OperatorAuthorizationEvidenceV1(**authorization),
         occurred_at=item["occurred_at"],
     )
-    return validate_run_generation_request(decoded, trusted_now=trusted_now)
+    return decoded
+
+
+def run_generation_request_from_dict(
+    value: object, *, trusted_now: int | None = None
+) -> RunGenerationRequestV1:
+    """Decode one strict JSON-domain request into the live creation API."""
+
+    return validate_run_generation_request(
+        _run_generation_request_from_dict_binding(value),
+        trusted_now=trusted_now,
+    )
+
+
+def decode_run_generation_request_binding(value: object) -> RunGenerationRequestV1:
+    """Structurally decode request bytes for a service-owned recovery decision.
+
+    This decoder intentionally omits semantic and live checks so a reused key
+    is resolved as a conflict before a nonmatching payload can fail a new-write
+    gate.  Callers must pass its result directly to ``create_or_rotate``; that
+    service fully validates an exact committed binding or applies every check
+    before a new write.
+    """
+
+    return _run_generation_request_from_dict_binding(value)
 
 
 _SAFE_GIT_ENV = {
@@ -1691,6 +1811,127 @@ def _result(
     )
 
 
+def _stored_mapping(raw: object, label: str) -> dict[str, object]:
+    """Decode canonical JSON persisted by the run-generation transaction."""
+
+    if type(raw) is not str:
+        raise Phase9RunGenerationConflict(f"stored {label} is not JSON text")
+    encoded = raw.encode("utf-8")
+    try:
+        value = json.loads(encoded)
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise Phase9RunGenerationConflict(
+            f"stored {label} is not valid JSON"
+        ) from exc
+    if type(value) is not dict or canonical_bytes(value) != encoded:
+        raise Phase9RunGenerationConflict(
+            f"stored {label} is not canonical JSON"
+        )
+    return value
+
+
+def _verify_stored_source_inventory(
+    row: sqlite3.Row,
+    request: RunGenerationRequestV1,
+    connection: sqlite3.Connection,
+) -> None:
+    body = _stored_mapping(row["inventory_json"], "source inventory")
+    expected_keys = {
+        "schema_version", "source_commit", "source_tree", "source_parent",
+        "entries", "path_count", "total_bytes",
+    }
+    entries = body.get("entries")
+    if set(body) != expected_keys or type(entries) is not list or not entries:
+        raise Phase9RunGenerationConflict("stored source inventory shape differs")
+    paths: list[str] = []
+    collision_keys: set[str] = set()
+    total_bytes = 0
+    for index, entry in enumerate(entries):
+        if type(entry) is not dict or set(entry) != {
+            "schema_version", "logical_path", "git_mode", "git_object_type",
+            "git_object_id", "byte_length", "raw_bytes_sha256",
+        }:
+            raise Phase9RunGenerationConflict(
+                "stored source inventory entry shape differs"
+            )
+        try:
+            logical_path = _relative_posix_path(
+                entry["logical_path"], f"stored source inventory[{index}].path"
+            )
+            _git_oid(
+                entry["git_object_id"],
+                f"stored source inventory[{index}].git_object_id",
+            )
+        except Phase9RunGenerationSafetyError as exc:
+            raise Phase9RunGenerationConflict(
+                "stored source inventory entry is invalid"
+            ) from exc
+        collision = unicodedata.normalize("NFC", logical_path).casefold()
+        if collision in collision_keys:
+            raise Phase9RunGenerationConflict(
+                "stored source inventory paths collide"
+            )
+        collision_keys.add(collision)
+        paths.append(logical_path)
+        mode = entry["git_mode"]
+        object_type = entry["git_object_type"]
+        if entry["schema_version"] != GIT_TRACKED_SOURCE_ENTRY_SCHEMA or (
+            mode not in {"100644", "100755", "160000"}
+        ) or ((mode == "160000") != (object_type == "commit")) or (
+            mode != "160000" and object_type != "blob"
+        ):
+            raise Phase9RunGenerationConflict(
+                "stored source inventory entry semantics differ"
+            )
+        if mode == "160000":
+            if entry["byte_length"] is not None or entry["raw_bytes_sha256"] is not None:
+                raise Phase9RunGenerationConflict(
+                    "stored source inventory submodule fields differ"
+                )
+        else:
+            try:
+                length = _nonnegative(
+                    entry["byte_length"],
+                    f"stored source inventory[{index}].byte_length",
+                )
+                _sha(
+                    entry["raw_bytes_sha256"],
+                    f"stored source inventory[{index}].raw_bytes_sha256",
+                )
+            except Phase9RunGenerationSafetyError as exc:
+                raise Phase9RunGenerationConflict(
+                    "stored source inventory file fields differ"
+                ) from exc
+            total_bytes += length
+    if paths != sorted(paths, key=lambda value: value.encode("utf-8")):
+        raise Phase9RunGenerationConflict(
+            "stored source inventory order differs"
+        )
+    scalars = {
+        "schema_version": GIT_TRACKED_SOURCE_INVENTORY_SCHEMA,
+        "source_commit": request.source.source_commit,
+        "source_tree": request.source.source_tree,
+        "source_parent": request.source.source_parent,
+        "path_count": len(entries),
+        "total_bytes": total_bytes,
+    }
+    recorded_reference = connection.execute(
+        "SELECT 1 FROM authority_production_run_generations "
+        "WHERE source_inventory_sha256=? AND created_at=? LIMIT 1",
+        (request.source_inventory_sha256, row["recorded_at"]),
+    ).fetchone()
+    if (
+        canonical_sha256(body) != request.source_inventory_sha256
+        or row["inventory_sha256"] != request.source_inventory_sha256
+        or any(body[name] != value or row[name] != value for name, value in scalars.items())
+        or type(row["recorded_at"]) is not int
+        or recorded_reference is None
+    ):
+        raise Phase9RunGenerationConflict(
+            "stored source inventory identity differs"
+        )
+
+
 class Phase9RunGenerationService:
     """Atomic create/rotate service with a live Git source identity reader."""
 
@@ -1899,26 +2140,137 @@ class Phase9RunGenerationService:
     def _replay(
         connection: sqlite3.Connection,
         request: RunGenerationRequestV1,
+        *,
+        _verify_current_chain: bool = True,
+        _verify_predecessor_graph: bool = True,
     ) -> RunGenerationCreationResult | None:
-        row = connection.execute(
-            """
-            SELECT * FROM authority_production_run_generation_idempotency
-            WHERE workflow_id=? AND idempotency_key=?
-            """,
-            (request.workflow_id, request.idempotency_key),
-        ).fetchone()
-        if row is None:
+        rows = connection.execute(
+            "SELECT * FROM authority_production_run_generation_idempotency "
+            "WHERE idempotency_key=? ORDER BY workflow_id",
+            (request.idempotency_key,),
+        ).fetchall()
+        if rows and (
+            len(rows) != 1 or rows[0]["workflow_id"] != request.workflow_id
+        ):
+            raise Phase9RunGenerationConflict(
+                "run-generation idempotency key has a different workflow binding"
+            )
+        if not rows:
+            # The schema's historical primary key is ``(workflow_id, key)``.
+            # Creation receipts nevertheless retain the canonical request, so
+            # a deleted/moved idempotency row must not make an already-used key
+            # appear new in another workflow.  Strictly rebuild every stored
+            # receipt before deciding that the global key is absent.
+            for stored_receipt in connection.execute(
+                "SELECT * FROM "
+                "authority_production_run_generation_creation_receipts"
+            ).fetchall():
+                stored_request = (
+                    Phase9RunGenerationService._request_from_creation_receipt(
+                        stored_receipt
+                    )
+                )
+                if stored_request.idempotency_key == request.idempotency_key:
+                    raise Phase9RunGenerationConflict(
+                        "committed run-generation trace lacks its exact global "
+                        "idempotency key binding"
+                    )
+            identity = (request.request_sha256, request.derived_run_generation)
+            trace_queries = (
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_run_generation_idempotency "
+                    "WHERE request_sha256=? OR run_generation=? LIMIT 1",
+                    identity,
+                ),
+                (
+                    "SELECT 1 FROM authority_production_run_generations "
+                    "WHERE request_sha256=? OR run_generation=? LIMIT 1",
+                    identity,
+                ),
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_run_generation_creation_receipts "
+                    "WHERE request_sha256=? OR run_generation=? LIMIT 1",
+                    identity,
+                ),
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_run_generation_successions "
+                    "WHERE run_generation=? LIMIT 1",
+                    (request.derived_run_generation,),
+                ),
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_run_generation_authorization_consumptions "
+                    "WHERE request_sha256=? OR run_generation=? LIMIT 1",
+                    identity,
+                ),
+                (
+                    "SELECT 1 FROM authority_production_run_generation_current "
+                    "WHERE run_generation=? LIMIT 1",
+                    (request.derived_run_generation,),
+                ),
+            )
+            if any(
+                connection.execute(query, parameters).fetchone() is not None
+                for query, parameters in trace_queries
+            ):
+                raise Phase9RunGenerationConflict(
+                    "committed run-generation trace lacks its exact "
+                    "idempotency binding"
+                )
             return None
+        row = rows[0]
         if row["request_sha256"] != request.request_sha256:
             raise Phase9RunGenerationConflict(
                 "run-generation idempotency key has different request bytes"
             )
+        # Only an exact hash match may proceed past the key conflict check.
+        # Revalidate every immutable request field before trusting any stored
+        # result derived from the caller-supplied object.
+        _validate_run_generation_request_binding(request)
+        run_generation = request.derived_run_generation
+        receipt_body = _receipt_body(request)
+        receipt_json = canonical_bytes(receipt_body).decode("utf-8")
+        receipt_sha256 = canonical_sha256(receipt_body)
+        receipt_id = f"run-generation-receipt:{receipt_sha256[:32]}"
+        if (
+            row["workflow_id"] != request.workflow_id
+            or row["run_generation"] != run_generation
+            or row["creation_receipt_sha256"] != receipt_sha256
+        ):
+            raise Phase9RunGenerationConflict(
+                "run-generation idempotency binding differs"
+            )
+        reverse_bindings = connection.execute(
+            "SELECT COUNT(*) FROM "
+            "authority_production_run_generation_idempotency "
+            "WHERE request_sha256=? OR run_generation=? "
+            "OR creation_receipt_sha256=?",
+            (request.request_sha256, run_generation, receipt_sha256),
+        ).fetchone()[0]
+        if reverse_bindings != 1:
+            raise Phase9RunGenerationConflict(
+                "run-generation idempotency reverse binding is not unique"
+            )
+
+        generation = connection.execute(
+            "SELECT * FROM authority_production_run_generations "
+            "WHERE run_generation=?",
+            (run_generation,),
+        ).fetchone()
         receipt = connection.execute(
             """
             SELECT * FROM authority_production_run_generation_creation_receipts
             WHERE run_generation=? AND receipt_sha256=?
             """,
-            (row["run_generation"], row["creation_receipt_sha256"]),
+            (run_generation, receipt_sha256),
+        ).fetchone()
+        succession = connection.execute(
+            "SELECT * FROM authority_production_run_generation_successions "
+            "WHERE run_generation=?",
+            (run_generation,),
         ).fetchone()
         consumption = connection.execute(
             """
@@ -1926,41 +2278,443 @@ class Phase9RunGenerationService:
             FROM authority_production_run_generation_authorization_consumptions
             WHERE run_generation=? AND request_sha256=?
             """,
-            (request.derived_run_generation, request.request_sha256),
+            (run_generation, request.request_sha256),
+        ).fetchone()
+        inventory = connection.execute(
+            "SELECT * FROM authority_production_run_generation_source_inventories "
+            "WHERE inventory_sha256=?",
+            (request.source_inventory_sha256,),
+        ).fetchone()
+        pin_sha256 = canonical_sha256(request.contract_pins)
+        pin = connection.execute(
+            "SELECT * FROM authority_contract_pin_sets WHERE pin_set_sha256=?",
+            (pin_sha256,),
         ).fetchone()
         expected_consumption = _authorization_consumption_body(request)
         expected_consumption_json = canonical_bytes(expected_consumption).decode(
             "utf-8"
         )
         expected_consumption_sha256 = canonical_sha256(expected_consumption)
-        expected_body = _receipt_body(request)
-        expected_bytes = canonical_bytes(expected_body).decode("utf-8")
-        expected_sha = canonical_sha256(expected_body)
+        succession_body = {
+            "schema": "authority-phase9-run-generation-succession-v1",
+            "workflow_id": request.workflow_id,
+            "run_generation": run_generation,
+            "predecessor_run_generation": request.predecessor_run_generation,
+            "predecessor_creation_receipt_sha256": (
+                request.predecessor_creation_receipt_sha256
+            ),
+            "predecessor_terminal_receipt_sha256": (
+                request.predecessor_terminal_receipt_sha256
+            ),
+            "request_sha256": request.request_sha256,
+        }
+        succession_json = canonical_bytes(succession_body).decode("utf-8")
+        succession_sha256 = canonical_sha256(succession_body)
+        generation_expected = {
+            "run_generation": run_generation,
+            "workflow_id": request.workflow_id,
+            "project_id": request.project_id,
+            "project_revision": request.project_revision,
+            "project_generation": request.project_generation,
+            "runtime_generation": request.runtime_generation,
+            "scheduler_generation": request.scheduler_generation,
+            "predecessor_run_generation": request.predecessor_run_generation,
+            "predecessor_creation_receipt_sha256": (
+                request.predecessor_creation_receipt_sha256
+            ),
+            "predecessor_terminal_receipt_sha256": (
+                request.predecessor_terminal_receipt_sha256
+            ),
+            "operation_kind": request.operation_kind,
+            "run_mode": request.run_mode,
+            "modeling_consultation_contract": (
+                request.modeling_consultation_contract
+            ),
+            "delivery_capability": request.delivery_capability,
+            "source_commit": request.source.source_commit,
+            "source_tree": request.source.source_tree,
+            "source_parent": request.source.source_parent,
+            "source_inventory_sha256": request.source_inventory_sha256,
+            "contract_pin_set_sha256": pin_sha256,
+            "official_input_manifest_sha256": (
+                request.official_inputs.manifest_sha256
+            ),
+            "official_input_raw_bytes_set_sha256": (
+                request.official_inputs.raw_bytes_set_sha256
+            ),
+            "execution_context_receipt_sha256": (
+                request.execution_context.receipt_sha256
+            ),
+            "operator_authorization_receipt_sha256": (
+                request.operator_authorization.receipt_sha256
+            ),
+            "authorization_id": request.operator_authorization.authorization_id,
+            "authorization_target_sha256": request.authorization_target_sha256,
+            "request_sha256": request.request_sha256,
+            "created_at": request.occurred_at,
+        }
         if (
-            receipt is None
+            generation is None
+            or receipt is None
+            or succession is None
             or consumption is None
-            or row["run_generation"] != request.derived_run_generation
+            or inventory is None
+            or pin is None
+            or any(generation[name] != value for name, value in generation_expected.items())
+            or receipt["receipt_id"] != receipt_id
+            or receipt["run_generation"] != run_generation
+            or receipt["workflow_id"] != request.workflow_id
+            or receipt["operation_kind"] != request.operation_kind
             or receipt["request_sha256"] != request.request_sha256
-            or receipt["receipt_json"] != expected_bytes
-            or receipt["receipt_sha256"] != expected_sha
+            or receipt["occurred_at"] != request.occurred_at
+            or receipt["receipt_json"] != receipt_json
+            or receipt["receipt_sha256"] != receipt_sha256
+            or succession["workflow_id"] != request.workflow_id
+            or succession["predecessor_run_generation"]
+            != request.predecessor_run_generation
+            or succession["predecessor_creation_receipt_sha256"]
+            != request.predecessor_creation_receipt_sha256
+            or succession["predecessor_terminal_receipt_sha256"]
+            != request.predecessor_terminal_receipt_sha256
+            or succession["succession_json"] != succession_json
+            or succession["succession_sha256"] != succession_sha256
             or consumption["authorization_id"]
             != request.operator_authorization.authorization_id
             or consumption["authorization_receipt_sha256"]
             != request.operator_authorization.receipt_sha256
             or consumption["authorization_target_sha256"]
             != request.authorization_target_sha256
+            or consumption["request_sha256"] != request.request_sha256
+            or consumption["run_generation"] != run_generation
+            or consumption["workflow_id"] != request.workflow_id
+            or consumption["consumed_at"] != request.occurred_at
             or consumption["receipt_json"] != expected_consumption_json
             or consumption["receipt_sha256"] != expected_consumption_sha256
+            or pin["schema_version"] != CONTRACT_PIN_SET_SCHEMA
+            or pin["pin_set_json"] != _pin_json(request.contract_pins)
         ):
             raise Phase9RunGenerationConflict(
-                "run-generation replay receipt identity differs"
+                "run-generation committed replay graph differs"
+            )
+        _verify_stored_source_inventory(inventory, request, connection)
+        if request.operation_kind == ROTATE and _verify_predecessor_graph:
+            Phase9RunGenerationService._verify_committed_predecessor_graph(
+                connection, request
+            )
+        if _verify_current_chain:
+            Phase9RunGenerationService._verify_committed_current_chain(
+                connection,
+                request=request,
+                creation_receipt_sha256=receipt_sha256,
             )
         return _result(
             request,
-            receipt_id=str(receipt["receipt_id"]),
-            receipt_sha256=expected_sha,
-            replayed=True,
+            receipt_id=receipt_id,
+            receipt_sha256=receipt_sha256,
+            replayed=False,
         )
+
+    @staticmethod
+    def _request_from_creation_receipt(
+        receipt: sqlite3.Row,
+    ) -> RunGenerationRequestV1:
+        body = _stored_mapping(
+            receipt["receipt_json"], "run-generation creation receipt"
+        )
+        try:
+            request = _run_generation_request_from_dict_binding(body.get("request"))
+            _validate_run_generation_request_binding(request)
+        except Phase9RunGenerationError as exc:
+            raise Phase9RunGenerationConflict(
+                "stored run-generation creation request is invalid"
+            ) from exc
+        if (
+            body.get("schema") != RUN_GENERATION_RECEIPT_SCHEMA
+            or body.get("run_generation") != request.derived_run_generation
+            or body.get("workflow_id") != request.workflow_id
+            or body.get("operation_kind") != request.operation_kind
+            or body.get("request_sha256") != request.request_sha256
+            or canonical_sha256(body) != receipt["receipt_sha256"]
+            or receipt["receipt_id"]
+            != f"run-generation-receipt:{receipt['receipt_sha256'][:32]}"
+            or receipt["run_generation"] != request.derived_run_generation
+            or receipt["workflow_id"] != request.workflow_id
+            or receipt["operation_kind"] != request.operation_kind
+            or receipt["request_sha256"] != request.request_sha256
+            or receipt["occurred_at"] != request.occurred_at
+        ):
+            raise Phase9RunGenerationConflict(
+                "stored run-generation creation receipt identity differs"
+            )
+        return request
+
+    @staticmethod
+    def _verify_committed_predecessor_graph(
+        connection: sqlite3.Connection,
+        request: RunGenerationRequestV1,
+    ) -> None:
+        predecessor_receipt = connection.execute(
+            "SELECT * FROM authority_production_run_generation_creation_receipts "
+            "WHERE run_generation=? AND receipt_sha256=?",
+            (
+                request.predecessor_run_generation,
+                request.predecessor_creation_receipt_sha256,
+            ),
+        ).fetchone()
+        if predecessor_receipt is None:
+            raise Phase9RunGenerationConflict(
+                "ROTATE committed predecessor creation receipt is missing"
+            )
+        predecessor_request = (
+            Phase9RunGenerationService._request_from_creation_receipt(
+                predecessor_receipt
+            )
+        )
+        replayed = Phase9RunGenerationService._replay(
+            connection,
+            predecessor_request,
+            _verify_current_chain=True,
+            _verify_predecessor_graph=True,
+        )
+        if (
+            replayed is None
+            or replayed.run_generation != request.predecessor_run_generation
+            or replayed.receipt_sha256
+            != request.predecessor_creation_receipt_sha256
+        ):
+            raise Phase9RunGenerationConflict(
+                "ROTATE committed predecessor generation graph differs"
+            )
+        predecessor_terminal = connection.execute(
+            "SELECT replay_id FROM authority_production_phase9_terminal_receipts "
+            "WHERE run_generation=? AND receipt_sha256=?",
+            (
+                request.predecessor_run_generation,
+                request.predecessor_terminal_receipt_sha256,
+            ),
+        ).fetchone()
+        if predecessor_terminal is None:
+            raise Phase9RunGenerationConflict(
+                "ROTATE committed predecessor terminal receipt is missing"
+            )
+        try:
+            from .phase9_forensic_replay import (
+                Phase9ForensicReplayError,
+                _validate_phase9_completed_replay_in_transaction,
+            )
+
+            completed = _validate_phase9_completed_replay_in_transaction(
+                connection,
+                workflow_id=request.workflow_id,
+                expected_run_generation=str(request.predecessor_run_generation),
+                expected_terminal_receipt_sha256=str(
+                    request.predecessor_terminal_receipt_sha256
+                ),
+                expected_replay_id=str(predecessor_terminal["replay_id"]),
+                require_current=False,
+                _validate_generation_provenance=False,
+                _validate_current_chain=True,
+            )
+        except Phase9ForensicReplayError as exc:
+            raise Phase9RunGenerationConflict(
+                "ROTATE committed predecessor terminal graph differs"
+            ) from exc
+        if completed.get("run_generation") != request.predecessor_run_generation:
+            raise Phase9RunGenerationConflict(
+                "ROTATE committed predecessor terminal coordinate differs"
+            )
+
+    @staticmethod
+    def _committed_successor_ids(
+        connection: sqlite3.Connection,
+        predecessor_run_generation: str,
+    ) -> tuple[str, ...]:
+        generation_ids = tuple(
+            row["run_generation"]
+            for row in connection.execute(
+                "SELECT run_generation FROM "
+                "authority_production_run_generations "
+                "WHERE predecessor_run_generation=? ORDER BY run_generation",
+                (predecessor_run_generation,),
+            ).fetchall()
+        )
+        succession_ids = tuple(
+            row["run_generation"]
+            for row in connection.execute(
+                "SELECT run_generation FROM "
+                "authority_production_run_generation_successions "
+                "WHERE predecessor_run_generation=? ORDER BY run_generation",
+                (predecessor_run_generation,),
+            ).fetchall()
+        )
+        if generation_ids != succession_ids:
+            raise Phase9RunGenerationConflict(
+                "run-generation dangling successor edge sets differ"
+            )
+        return generation_ids
+
+    @staticmethod
+    def _verify_committed_current_chain(
+        connection: sqlite3.Connection,
+        *,
+        request: RunGenerationRequestV1,
+        creation_receipt_sha256: str,
+    ) -> None:
+        """Prove the committed generation is current or on its unique chain."""
+
+        current = connection.execute(
+            "SELECT * FROM authority_production_run_generation_current "
+            "WHERE workflow_id=?",
+            (request.workflow_id,),
+        ).fetchone()
+        workflow = connection.execute(
+            "SELECT * FROM authority_workflows WHERE workflow_id=?",
+            (request.workflow_id,),
+        ).fetchone()
+        if current is None or workflow is None:
+            raise Phase9RunGenerationConflict(
+                "run-generation current pointer is missing"
+            )
+        current_generation = connection.execute(
+            "SELECT * FROM authority_production_run_generations "
+            "WHERE run_generation=? AND workflow_id=?",
+            (current["run_generation"], request.workflow_id),
+        ).fetchone()
+        current_receipt = connection.execute(
+            "SELECT * FROM authority_production_run_generation_creation_receipts "
+            "WHERE run_generation=?",
+            (current["run_generation"],),
+        ).fetchone()
+        if (
+            current_generation is None
+            or current_receipt is None
+            or current["creation_receipt_sha256"]
+            != current_receipt["receipt_sha256"]
+            or current["updated_at"] != current_generation["created_at"]
+            or workflow["run_generation"] != current["run_generation"]
+            or workflow["project_id"] != current_generation["project_id"]
+            or workflow["project_generation"]
+            != current_generation["project_generation"]
+            or workflow["current_revision"]
+            != current_generation["project_revision"]
+            or workflow["current_revision_availability"] != "RECORDED"
+            or workflow["runtime_generation"]
+            != current_generation["runtime_generation"]
+            or workflow["scheduler_generation"]
+            != current_generation["scheduler_generation"]
+            or workflow["contract_pin_set_sha256"]
+            != current_generation["contract_pin_set_sha256"]
+            or workflow["contract_pin_availability"] != "RECORDED"
+        ):
+            raise Phase9RunGenerationConflict(
+                "run-generation current/workflow pointer differs"
+            )
+        current_successors = Phase9RunGenerationService._committed_successor_ids(
+            connection, str(current["run_generation"])
+        )
+        if current_successors:
+            raise Phase9RunGenerationConflict(
+                "run-generation current has a dangling successor"
+            )
+
+        target = request.derived_run_generation
+        seen: set[str] = set()
+        generation = current_generation
+        receipt = current_receipt
+        while True:
+            run_generation = str(generation["run_generation"])
+            if run_generation in seen:
+                raise Phase9RunGenerationConflict(
+                    "run-generation current succession chain cycles"
+                )
+            seen.add(run_generation)
+            if run_generation == target:
+                if receipt["receipt_sha256"] != creation_receipt_sha256:
+                    raise Phase9RunGenerationConflict(
+                        "run-generation current succession target differs"
+                    )
+                return
+            if generation["operation_kind"] != ROTATE:
+                raise Phase9RunGenerationConflict(
+                    "committed generation is not on the current succession chain"
+                )
+            successor_request = (
+                Phase9RunGenerationService._request_from_creation_receipt(receipt)
+            )
+            successor = Phase9RunGenerationService._replay(
+                connection,
+                successor_request,
+                _verify_current_chain=False,
+                _verify_predecessor_graph=False,
+            )
+            if successor is None:
+                raise Phase9RunGenerationConflict(
+                    "run-generation successor graph is incomplete"
+                )
+            predecessor = generation["predecessor_run_generation"]
+            predecessor_receipt_sha256 = generation[
+                "predecessor_creation_receipt_sha256"
+            ]
+            predecessor_terminal_sha256 = generation[
+                "predecessor_terminal_receipt_sha256"
+            ]
+            if predecessor is None or predecessor_receipt_sha256 is None:
+                raise Phase9RunGenerationConflict(
+                    "run-generation successor lacks a predecessor"
+                )
+            predecessor_terminal = connection.execute(
+                "SELECT replay_id FROM "
+                "authority_production_phase9_terminal_receipts "
+                "WHERE run_generation=? AND receipt_sha256=?",
+                (predecessor, predecessor_terminal_sha256),
+            ).fetchone()
+            if predecessor_terminal is None:
+                raise Phase9RunGenerationConflict(
+                    "run-generation successor predecessor terminal is missing"
+                )
+            try:
+                from .phase9_forensic_replay import (
+                    Phase9ForensicReplayError,
+                    _validate_phase9_completed_replay_in_transaction,
+                )
+
+                _validate_phase9_completed_replay_in_transaction(
+                    connection,
+                    workflow_id=request.workflow_id,
+                    expected_run_generation=str(predecessor),
+                    expected_terminal_receipt_sha256=str(
+                        predecessor_terminal_sha256
+                    ),
+                    expected_replay_id=str(predecessor_terminal["replay_id"]),
+                    require_current=False,
+                    _validate_generation_provenance=False,
+                    _validate_current_chain=True,
+                )
+            except Phase9ForensicReplayError as exc:
+                raise Phase9RunGenerationConflict(
+                    "run-generation successor predecessor terminal graph differs"
+                ) from exc
+            successors = Phase9RunGenerationService._committed_successor_ids(
+                connection, str(predecessor)
+            )
+            if successors != (run_generation,):
+                raise Phase9RunGenerationConflict(
+                    "run-generation succession chain is not unique"
+                )
+            generation = connection.execute(
+                "SELECT * FROM authority_production_run_generations "
+                "WHERE run_generation=? AND workflow_id=?",
+                (predecessor, request.workflow_id),
+            ).fetchone()
+            receipt = connection.execute(
+                "SELECT * FROM authority_production_run_generation_creation_receipts "
+                "WHERE run_generation=? AND receipt_sha256=?",
+                (predecessor, predecessor_receipt_sha256),
+            ).fetchone()
+            if generation is None or receipt is None:
+                raise Phase9RunGenerationConflict(
+                    "run-generation current succession chain is incomplete"
+                )
 
     @staticmethod
     def _verify_coordinate(
@@ -2069,22 +2823,98 @@ class Phase9RunGenerationService:
                 "a strictly valid completed graph"
             ) from exc
 
+    def _recover_committed(
+        self,
+        request: RunGenerationRequestV1,
+    ) -> RunGenerationCreationResult | None:
+        """Recover a fully verified immutable result without live-write gates."""
+
+        with isolated_authority_snapshot_ro(self.path) as connection:
+            try:
+                connection.execute("BEGIN")
+                self._verify_database(connection)
+                result = self._replay(connection, request)
+                connection.commit()
+                return result
+            except Exception:
+                connection.rollback()
+                raise
+
     def create_or_rotate(
         self, request: RunGenerationRequestV1
     ) -> RunGenerationCreationResult:
-        value = validate_run_generation_request(
-            request, trusted_now=self._trusted_now()
-        )
-        official_snapshot = verify_official_input_snapshot(
-            self.official_input_root, value.official_inputs
-        )
-        execution_context_bytes = _verified_execution_context_receipt(
-            self.execution_context_receipt_path, value.execution_context
-        )
-        connection = connect_authority_rw(self.path)
+        lookup = _validate_run_generation_recovery_identity(request)
+        commit_lease = authority_state_commit_lease(self.path.parent.parent)
         try:
+            commit_lease.__enter__()
+        except AuthorityStateLeaseError as exc:
+            raise Phase9RunGenerationConflict(
+                "Authority state commit lease cannot be acquired"
+            ) from exc
+        connection: sqlite3.Connection | None = None
+        try:
+            committed = self._recover_committed(lookup)
+            if committed is not None:
+                return committed
+            # The project/inode lease serializes every participating writer.
+            # Recheck and evaluate every deterministic rejection on a query-only
+            # connection so an expired or invalid request cannot create/remove
+            # SQLite WAL/SHM sidecars merely by opening a writer.
+            with isolated_authority_snapshot_ro(self.path) as preflight:
+                try:
+                    preflight.execute("BEGIN")
+                    self._verify_database(preflight)
+                    replay = self._replay(preflight, lookup)
+                    if replay is not None:
+                        preflight.commit()
+                        return replay
+                    value = validate_run_generation_request(
+                        lookup, trusted_now=self._trusted_now()
+                    )
+                    official_snapshot = verify_official_input_snapshot(
+                        self.official_input_root, value.official_inputs
+                    )
+                    execution_context_bytes = _verified_execution_context_receipt(
+                        self.execution_context_receipt_path, value.execution_context
+                    )
+                    self._control_fence(preflight)
+                    source_snapshot = read_verified_execution_source_snapshot(
+                        self.source_repository,
+                        execution_root=self.execution_root,
+                    )
+                    if (
+                        source_snapshot.source != value.source
+                        or source_snapshot.source_inventory_sha256
+                        != value.source_inventory_sha256
+                    ):
+                        raise Phase9RunGenerationConflict(
+                            "request source identity or tracked inventory is not current"
+                        )
+                    preflight_workflow = self._verify_coordinate(preflight, value)
+                    self._verify_predecessor(
+                        preflight, value, preflight_workflow
+                    )
+                    preflight.commit()
+                except Exception:
+                    preflight.rollback()
+                    raise
+
+            connection = connect_authority_rw(self.path)
             connection.execute("BEGIN IMMEDIATE")
             self._verify_database(connection)
+            replay = self._replay(connection, lookup)
+            if replay is not None:
+                connection.commit()
+                return replay
+            value = validate_run_generation_request(
+                lookup, trusted_now=self._trusted_now()
+            )
+            official_snapshot = verify_official_input_snapshot(
+                self.official_input_root, value.official_inputs
+            )
+            execution_context_bytes = _verified_execution_context_receipt(
+                self.execution_context_receipt_path, value.execution_context
+            )
             self._control_fence(connection)
             source_snapshot = read_verified_execution_source_snapshot(
                 self.source_repository,
@@ -2098,10 +2928,6 @@ class Phase9RunGenerationService:
                 raise Phase9RunGenerationConflict(
                     "request source identity or tracked inventory is not current"
                 )
-            replay = self._replay(connection, value)
-            if replay is not None:
-                connection.commit()
-                return replay
             workflow = self._verify_coordinate(connection, value)
             predecessor_graph = self._verify_predecessor(
                 connection, value, workflow
@@ -2388,8 +3214,17 @@ class Phase9RunGenerationService:
                 receipt_sha256=receipt_sha256,
                 replayed=False,
             )
+        except AuthorityStateLeaseError as exc:
+            if connection is not None:
+                connection.rollback()
+            raise Phase9RunGenerationConflict(
+                "Authority state snapshot cannot be read safely"
+            ) from exc
         except Exception:
-            connection.rollback()
+            if connection is not None:
+                connection.rollback()
             raise
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
+            commit_lease.__exit__(*sys.exc_info())

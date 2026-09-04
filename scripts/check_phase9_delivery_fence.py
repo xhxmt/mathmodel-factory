@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import subprocess
 import sys
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factory_core.phase9_delivery_fence import require_phase9_delivery_authority
+from factory_core.phase9_delivery_fence import (
+    delivery_side_effect_commit_lease,
+    require_delivery_side_effect_authority,
+)
 
 
 def main() -> int:
@@ -18,13 +22,29 @@ def main() -> int:
     parser.add_argument("project")
     parser.add_argument("--workflow-id")
     parser.add_argument("--run-generation")
+    parser.add_argument(
+        "--exec",
+        dest="command",
+        nargs=argparse.REMAINDER,
+        help="run a mutation command while holding the final Authority lease",
+    )
     args = parser.parse_args()
     try:
-        require_phase9_delivery_authority(
-            Path(args.project),
-            workflow_id=args.workflow_id,
-            run_generation=args.run_generation,
-        )
+        if args.command:
+            with delivery_side_effect_commit_lease(
+                Path(args.project),
+                operation="delivery",
+                workflow_id=args.workflow_id,
+                run_generation=args.run_generation,
+            ):
+                return subprocess.run(args.command, check=False).returncode
+        else:
+            require_delivery_side_effect_authority(
+                Path(args.project),
+                operation="delivery",
+                workflow_id=args.workflow_id,
+                run_generation=args.run_generation,
+            )
     except (OSError, ValueError) as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 2

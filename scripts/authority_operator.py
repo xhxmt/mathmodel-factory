@@ -319,11 +319,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run-generation":
             from factory_core.phase9_run_generation import (
+                decode_run_generation_request_binding,
                 run_generation_request_from_dict,
             )
 
-            request = run_generation_request_from_dict(
-                _read_evidence_object(args.request)
+            request_payload = _read_evidence_object(args.request)
+            request = (
+                decode_run_generation_request_binding(request_payload)
+                if args.confirm
+                else run_generation_request_from_dict(request_payload)
             )
             if not args.confirm:
                 _emit(

@@ -192,15 +192,21 @@ python3 -m factory_core.cli audit ongoing/test_cumcm2024b --profile paper
 ```
 
 Step 15 完成后，项目内容达到 `CONTENT_READY` 边界。此时可独立运行最终审计，
-但仍不发布、打包、归档或修改工作流状态：
+该命令默认是 `analysis_only`：会写审计与 Judge 分析证据，但不会创建
+`final_submission.sha256`、override/acceptance receipt，也不会发布、打包、归档或修改工作流状态：
 
 ```bash
 python3 -m factory_core.cli audit ongoing/test_cumcm2024b
 ```
 
 阶段审计写入 `.factory/audits/profiles/<profile>/<snapshot>/`，最终审计继续写入
-兼容交付契约的 `.factory/audits/<snapshot>/`。同一快照已有可验证 PASS 时会复用；
+`.factory/audits/<snapshot>/`。同一模式、同一快照已有可验证 PASS 时会复用；
 使用 `--no-reuse` 可强制新审计，最终 profile 可用 `--no-compile` 审计现有 PDF。
+分析结果另投影到 `.factory/audits/analysis_latest.json`；对同一快照重跑只读分析
+不会覆盖已验证 acceptance 的 `.factory/audits/latest.json`。
+Step 16 才显式请求 acceptance；Legacy Adapter 使用 `--accept-delivery`，Native Adapter
+调用同一服务的 acceptance 模式。该请求只恢复 Phase1–8/legacy 交付合同；任何真正的
+Phase9 acceptance、release、submission 或 delivery 副作用仍永久 fail closed。
 
 跟踪运行日志：
 
@@ -247,7 +253,7 @@ python3 -m factory_core.cli audit ongoing/test_cumcm2024b
 - Step 13：运行隔离的数学预审；`PRECHECK_PASS` 只允许继续写摘要和润色，不代表最终质量 PASS。
 - Step 14：撰写摘要。
 - Step 15：引用、图表及排版润色；任何修改都会使 Step 13 的预提交结果失效。通过校验后形成 `CONTENT_READY` 内容边界。
-- Step 16：Native 与 Legacy 兼容适配器调用同一独立 Final Audit；依次完成最终编译、完整论文/溯源检查、视觉页数门禁、三角色 Judge、快照复核及双 receipt。只有审计 PASS 或管理员在 `web/auth.db` 中签发并绑定精确快照的 `OVERRIDDEN` 结果，才会在同文件系统 staging 中构建不可变 release，并以一次原子替换切换 `papers/<base>/current.json` 后归档。项目内 override JSON 没有授权能力。
+- Step 16：Native 与 Legacy 兼容适配器调用同一独立 Final Audit，并在副作用边界显式请求 acceptance；Legacy 使用 `--accept-delivery`。依次完成最终编译、完整论文/溯源检查、视觉页数门禁、三角色 Judge、快照复核及 judgment/acceptance receipt。只有非 Phase9 工作流的审计 PASS，或管理员在 `web/auth.db` 中签发并绑定精确快照的 `OVERRIDDEN` 结果，才会在同文件系统 staging 中构建不可变 release，并以一次原子替换切换 `papers/<base>/current.json` 后归档。真正的 Phase9 acceptance、release、submission 和 delivery 永久禁用；项目内 override JSON 没有授权能力。
 
 完整的详细步骤要求请参阅 `STEPS.md`。这些文件仍是产物与验证契约；项目的运行状态权威见下节。
 
@@ -257,7 +263,7 @@ python3 -m factory_core.cli audit ongoing/test_cumcm2024b
 - 未迁移建模项目继续由冻结的 Legacy Adapter 根据产物文件推断。不要手工创建 `.factory/state.db`；使用下述显式迁移命令。
 - 当 `modeling_guide.md` 和遗留的 `analysis_guide.md` 同时存在时，以 `modeling_guide.md` 为准。
 - 已完成的项目将从 `ongoing/` 移至 `complete/`。
-- 独立审计模块同时负责阶段化确定性审计和最终发布审计。Step 13 只调用数学角色；最终 profile 才运行数学、执行和论文质量三角色 Judge、判决路由、指纹和 receipt。兼容文件继续投影到 `judge_outputs/`。`judge_outputs/final_submission.sha256` 绑定 packet、角色 prompts、聚合 / 调用实现、Judge 模型路由与 PDF 精确字节。审计本身不会写 `papers/`、打包、清理或归档；Step 16 消费获准的最终审计结果后才执行这些交付动作。
+- 独立审计模块同时负责阶段化确定性审计和最终发布分析。Step 13 只调用数学角色；最终 profile 才运行数学、执行和论文质量三角色 Judge、判决路由与指纹。默认 CLI final audit 只生成分析记录和 judgment receipt；`judge_outputs/final_submission.sha256`、override receipt 和 final acceptance receipt 只在 Step 16 显式 acceptance 模式且安全 fence 通过后创建。兼容文件继续投影到 `judge_outputs/`。审计本身不会写 `papers/`、打包、清理或归档；Step 16 消费获准的非 Phase9 acceptance 结果后才执行这些交付动作。
 - 交付权威是 `papers/releases/<base>/<snapshot>/` 与原子指针 `papers/<base>/current.json`；顶层同名 PDF/ZIP 仅为兼容副本。任何 staging、打包或校验失败都不会切换旧的 current release。
 - `complete/` 是历史交付目录，不等价于“符合当前最新契约”。使用 `python3 scripts/audit_complete_projects.py --write-manifests` 生成 `complete/_validation_index.json`，将项目分为 `CURRENT_PASS`、`LEGACY_DELIVERED` 和 `INVALID_OR_INCOMPLETE`。
 

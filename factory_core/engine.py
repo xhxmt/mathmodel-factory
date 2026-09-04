@@ -115,6 +115,17 @@ class FactoryEngine:
         }:
             return state
 
+        # An already exhausted step schedule must not write RUN_STARTED before
+        # the production-state completion boundary is classified.  This path
+        # is also used by service.run() for a migrated Step-16 project.
+        if (
+            not stage_mode
+            and state.active_step is None
+            and state.runner_pid is None
+            and self.registry.next_after(state.last_completed_step) is None
+        ):
+            return self._commit_project_completed(state, stage_mode=False)
+
         if state.runner_pid is not None and not runner_is_live:
             state = self._transition(
                 expected_revision=state.revision,
@@ -178,23 +189,10 @@ class FactoryEngine:
             else:
                 definition = self.registry.next_after(state.last_completed_step)
             if definition is None:
-                return self._owned_transition(
+                return self._commit_project_completed(
                     state,
-                    lease,
-                    event_type="PROJECT_COMPLETED",
-                    changes={
-                        "status": WorkflowStatus.COMPLETED,
-                        "active_step": None,
-                        "active_stage": None,
-                        "active_subtask": None,
-                        "source_step_id": None,
-                        "last_completed_stage": 10 if stage_mode else state.last_completed_stage,
-                        "attempt": 0,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
-                    subtask_baseline=None,
+                    stage_mode=stage_mode,
+                    runner_lease=lease,
                 )
             if max_steps is not None and completed_this_run >= max_steps:
                 return self._owned_transition(
@@ -857,6 +855,8 @@ class FactoryEngine:
                 )
         return state
 
+    # These methods participate in the frozen persisted-owner symbol manifest;
+    # keep their source-span coordinates stable when editing earlier code.
     def _stage_manifest_delta(
         self,
         task: ScheduledStageTask,
@@ -1896,6 +1896,22 @@ class FactoryEngine:
     def archive_completed(self, factory_root: str | Path) -> WorkflowState:
         root = Path(factory_root).resolve()
         state = self.store.load()
+        if state.status not in {WorkflowStatus.ARCHIVING, WorkflowStatus.COMPLETED}:
+            raise InvalidTransition("only completed projects can be archived")
+        if state.status is WorkflowStatus.COMPLETED and self.project_dir.parent.name == "complete":
+            return state
+
+        from .phase9_delivery_fence import delivery_side_effect_commit_lease
+
+        with delivery_side_effect_commit_lease(
+            self.project_dir,
+            operation="archive",
+        ):
+            return self._archive_completed_locked(root, state)
+
+    def _archive_completed_locked(
+        self, root: Path, state: WorkflowState
+    ) -> WorkflowState:
         if state.status is WorkflowStatus.ARCHIVING:
             if self.project_dir.parent.name == "complete":
                 return self._transition(
@@ -1918,10 +1934,6 @@ class FactoryEngine:
                 event_type="PROJECT_ARCHIVED",
                 changes={"status": WorkflowStatus.COMPLETED, "storage_scope": "complete"},
             )
-        if state.status is not WorkflowStatus.COMPLETED:
-            raise InvalidTransition("only completed projects can be archived")
-        if self.project_dir.parent.name == "complete":
-            return state
         destination = root / "complete" / self.project_dir.name
         if destination.exists():
             raise InvalidTransition(f"archive destination already exists: {destination}")
@@ -1943,6 +1955,48 @@ class FactoryEngine:
             event_type="PROJECT_ARCHIVED",
             changes={"status": WorkflowStatus.COMPLETED, "storage_scope": "complete"},
         )
+
+    def _commit_project_completed(
+        self,
+        state: WorkflowState,
+        *,
+        stage_mode: bool,
+        runner_lease: str | None = None,
+    ) -> WorkflowState:
+        from .phase9_delivery_fence import delivery_side_effect_commit_lease
+
+        with delivery_side_effect_commit_lease(
+            self.project_dir,
+            operation="completion",
+        ):
+            changes = {
+                "status": WorkflowStatus.COMPLETED,
+                "active_step": None,
+                "active_stage": None,
+                "active_subtask": None,
+                "source_step_id": None,
+                "last_completed_stage": (
+                    10 if stage_mode else state.last_completed_stage
+                ),
+                "attempt": 0,
+                "runner_pid": None,
+                "runner_lease_id": None,
+                "heartbeat_at": None,
+            }
+            if runner_lease is None:
+                return self._transition(
+                    expected_revision=state.revision,
+                    event_type="PROJECT_COMPLETED",
+                    changes=changes,
+                    subtask_baseline=None,
+                )
+            return self._owned_transition(
+                state,
+                runner_lease,
+                event_type="PROJECT_COMPLETED",
+                changes=changes,
+                subtask_baseline=None,
+            )
 
     def _transition(self, **kwargs) -> WorkflowState:
         return self._transitions.transition(**kwargs)

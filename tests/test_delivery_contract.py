@@ -1,27 +1,49 @@
 import json
+import sqlite3
 import zipfile
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
-
 from test_evaluate_modeling_project_step8_5 import make_complete_project, write_file
-from tests.phase9_delivery_test_support import nonformal_delivery_fence
-
-
-@pytest.fixture(autouse=True)
-def _nonformal_delivery_mechanics(monkeypatch):
-    monkeypatch.setattr(
-        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
-        nonformal_delivery_fence,
-    )
 
 
 def make_valid_zip(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("paper.pdf", b"pdf")
+
+
+def install_current_phase9_coordinate(project: Path) -> None:
+    state = project / ".factory"
+    state.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(state / "state.db")
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE authority_production_run_generations (
+                project_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                run_mode TEXT NOT NULL,
+                PRIMARY KEY (workflow_id, run_generation)
+            );
+            CREATE TABLE authority_production_run_generation_current (
+                workflow_id TEXT PRIMARY KEY,
+                run_generation TEXT NOT NULL
+            );
+            INSERT INTO authority_production_run_generations VALUES (
+                'phase9', 'workflow:phase9', 'run-generation:current',
+                'FORENSIC_REPLAY'
+            );
+            INSERT INTO authority_production_run_generation_current VALUES (
+                'workflow:phase9', 'run-generation:current'
+            );
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def make_current_contract_project(project: Path, *, overridden: bool = False) -> None:
@@ -231,9 +253,7 @@ def test_delivery_manifest_does_not_mark_gate2_override_as_current_pass(tmp_path
     assert manifest["evaluation"]["gate2_delivery_override"] is True
 
 
-def test_current_artifacts_without_snapshot_audit_are_not_deliverable(
-    tmp_path, monkeypatch
-):
+def test_current_artifacts_without_snapshot_audit_are_legacy(tmp_path, monkeypatch):
     project = tmp_path / "complete" / "pre_split"
     make_complete_project(project)
     make_current_contract_project(project)
@@ -263,10 +283,10 @@ def test_current_artifacts_without_snapshot_audit_are_not_deliverable(
 
     checks = {check.name: check for check in ev.checks}
     assert checks["final_audit_current"].ok is False
-    assert delivery_contract.classify_evaluation(ev, project) == "INVALID_OR_INCOMPLETE"
+    assert delivery_contract.classify_evaluation(ev, project) == "LEGACY_DELIVERED"
 
 
-def test_audit_complete_projects_rejects_legacy_and_invalid(tmp_path, monkeypatch):
+def test_audit_complete_projects_classifies_current_legacy_and_invalid(tmp_path, monkeypatch):
     current = tmp_path / "complete" / "current"
     legacy = tmp_path / "complete" / "legacy"
     invalid = tmp_path / "complete" / "invalid"
@@ -296,14 +316,74 @@ def test_audit_complete_projects_rejects_legacy_and_invalid(tmp_path, monkeypatc
     statuses = {entry["base"]: entry["status"] for entry in result["projects"]}
 
     assert statuses["current"] == "CURRENT_PASS"
-    assert statuses["legacy"] == "INVALID_OR_INCOMPLETE"
+    assert statuses["legacy"] == "LEGACY_DELIVERED"
     assert statuses["invalid"] == "INVALID_OR_INCOMPLETE"
     assert (current / "delivery_manifest.json").is_file()
     assert (legacy / "delivery_manifest.json").is_file()
     assert (invalid / "delivery_manifest.json").is_file()
+    legacy_manifest = json.loads(
+        (legacy / "delivery_manifest.json").read_text(encoding="utf-8")
+    )
+    assert legacy_manifest["artifacts"]["papers_pdf"]["path"] == str(
+        tmp_path / "papers" / "legacy_paper.pdf"
+    )
+    assert legacy_manifest["artifacts"]["submission_zip"]["path"] == str(
+        tmp_path / "papers" / "legacy_submission.zip"
+    )
     assert result["summary"] == {
         "CURRENT_PASS": 1,
         "GATE2_OVERRIDE_DELIVERED": 0,
-        "LEGACY_DELIVERED": 0,
-        "INVALID_OR_INCOMPLETE": 2,
+        "LEGACY_DELIVERED": 1,
+        "INVALID_OR_INCOMPLETE": 1,
     }
+
+
+def test_current_phase9_generation_cannot_reuse_legacy_delivery_projection(
+    tmp_path, monkeypatch
+):
+    project = tmp_path / "complete" / "phase9"
+    make_complete_project(project)
+    make_valid_zip(tmp_path / "papers" / "phase9_submission.zip")
+    install_current_phase9_coordinate(project)
+
+    from scripts import delivery_contract
+    from scripts import evaluate_modeling_project as evaluator
+
+    monkeypatch.setattr(evaluator, "infer_step", lambda root, project: (16, "16"))
+    monkeypatch.setattr(
+        evaluator, "run_python_check", lambda root, args, timeout=60: (True, "ok")
+    )
+    monkeypatch.setattr(
+        evaluator, "symbol_check_ok", lambda root, project, base: (True, "ok")
+    )
+
+    ev = evaluator.evaluate(project, tmp_path)
+    checks = {check.name: check for check in ev.checks}
+    assert checks["papers_pdf"].ok is False
+    assert checks["submission_zip"].ok is False
+    assert delivery_contract.classify_evaluation(ev, project) == "INVALID_OR_INCOMPLETE"
+
+    manifest = delivery_contract.build_delivery_manifest(project, tmp_path, ev)
+    assert "invalid-current-release" in manifest["artifacts"]["papers_pdf"]["path"]
+    assert (
+        "invalid-current-release"
+        in manifest["artifacts"]["submission_zip"]["path"]
+    )
+
+
+def test_legacy_v1_release_becomes_historical_when_phase9_is_current(tmp_path):
+    project = tmp_path / "complete" / "phase9"
+    make_complete_project(project)
+    make_current_contract_project(project)
+
+    from factory_core.delivery.release import resolve_current_release
+
+    assert (
+        resolve_current_release(tmp_path / "papers", "phase9", project=project)
+        is not None
+    )
+    install_current_phase9_coordinate(project)
+    assert (
+        resolve_current_release(tmp_path / "papers", "phase9", project=project)
+        is None
+    )

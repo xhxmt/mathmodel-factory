@@ -642,7 +642,8 @@ def test_declared_unowned_attachment_is_covered_and_included(tmp_path):
 class MutatingAudit:
     project: object
 
-    def run(self, _context):
+    def run(self, _context, *, analysis_only=True):
+        assert analysis_only is False
         paper = self.project / "demo_paper.tex"
         paper.write_text(
             paper.read_text(encoding="utf-8") + "% mutation\n",
@@ -676,14 +677,8 @@ class Unused:
 
 
 def test_delivery_returns_events_without_writing_workflow_state_when_input_changes(
-    tmp_path, monkeypatch
+    tmp_path,
 ):
-    from tests.phase9_delivery_test_support import nonformal_delivery_fence
-
-    monkeypatch.setattr(
-        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
-        nonformal_delivery_fence,
-    )
     project = tmp_path / "demo"
     project.mkdir()
     (project / "demo_paper.tex").write_text(

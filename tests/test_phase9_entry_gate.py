@@ -640,6 +640,8 @@ def test_formal_runner_expiry_before_attestation_writes_no_attestation(
         "setup-error-log",
         "truncated-log",
         "command-log-mismatch",
+        "command-duration-mismatch",
+        "command-outside-authorization-window",
         "cross-coordinate",
     ),
 )
@@ -779,6 +781,24 @@ def test_gate_rejects_fully_rehashed_nonformal_p0_semantics(tmp_path, forgery):
         command = json.loads(command_path.read_bytes())
         command["observed_outcomes"] = dict(command["observed_outcomes"])
         command["observed_outcomes"]["passed"] -= 1
+        command.pop("command_record_sha256")
+        command["command_record_sha256"] = canonical_sha256(command)
+        command_path.write_bytes(canonical_bytes(command))
+    elif forgery == "command-duration-mismatch":
+        command_path = p0_root / "command_records/p0_suite.json"
+        command = json.loads(command_path.read_bytes())
+        command["duration_ns"] = 1
+        command.pop("command_record_sha256")
+        command["command_record_sha256"] = canonical_sha256(command)
+        command_path.write_bytes(canonical_bytes(command))
+    elif forgery == "command-outside-authorization-window":
+        authority = json.loads(
+            (p0_root / "attestations/authority_runner.json").read_bytes()
+        )
+        command_path = p0_root / "command_records/p0_suite.json"
+        command = json.loads(command_path.read_bytes())
+        command["started_at"] = authority["expires_at"] + 1
+        command["finished_at"] = authority["expires_at"] + 2
         command.pop("command_record_sha256")
         command["command_record_sha256"] = canonical_sha256(command)
         command_path.write_bytes(canonical_bytes(command))

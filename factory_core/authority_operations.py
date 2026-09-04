@@ -745,6 +745,37 @@ def restore_authority_backup(
     expected_switch_epoch: int,
     failure_injector: Callable[[str], None] | None = None,
 ) -> RestoreEvidence:
+    """Restore under the shared lease when the target is project workflow state."""
+
+    from .phase9_authority_lease import authority_database_commit_lease
+
+    target = authority_database_path(database)
+    with authority_database_commit_lease(target):
+        return _restore_authority_backup_under_commit_lease(
+            target,
+            backup,
+            database_id=database_id,
+            occurred_at=occurred_at,
+            expected_current_source_fence_sha256=(
+                expected_current_source_fence_sha256
+            ),
+            expected_backup_sha256=expected_backup_sha256,
+            expected_switch_epoch=expected_switch_epoch,
+            failure_injector=failure_injector,
+        )
+
+
+def _restore_authority_backup_under_commit_lease(
+    database: str | Path,
+    backup: str | Path,
+    *,
+    database_id: str,
+    occurred_at: int,
+    expected_current_source_fence_sha256: str,
+    expected_backup_sha256: str,
+    expected_switch_epoch: int,
+    failure_injector: Callable[[str], None] | None = None,
+) -> RestoreEvidence:
     preflight = preflight_authority_restore(
         database,
         backup,

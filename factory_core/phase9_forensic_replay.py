@@ -33,6 +33,11 @@ from .authority_production_schema import (
     verify_production_installation,
 )
 from .canonical import canonical_bytes, canonical_sha256
+from .phase9_authority_lease import (
+    AuthorityStateLeaseError,
+    authority_state_commit_lease,
+    isolated_authority_snapshot_ro,
+)
 from .phase9_entry import (
     PHASE9_ENTRY_GATE_SCHEMA,
     P0_REQUIREMENTS,
@@ -47,12 +52,14 @@ from .phase9_run_generation import (
     RUN_GENERATION_AUTHORIZATION_CONSUMPTION_SCHEMA,
     RUN_GENERATION_RECEIPT_SCHEMA,
     Phase9RunGenerationError,
+    Phase9RunGenerationService,
     RunGenerationRequestV1,
     _StableDirectoryTree,
     _authorization_consumption_body,
+    _run_generation_request_from_dict_binding,
+    _verify_stored_source_inventory,
     read_current_git_source_snapshot,
     read_verified_execution_source_snapshot,
-    run_generation_request_from_dict,
     verify_execution_context_receipt,
     verify_official_input_snapshot,
 )
@@ -322,6 +329,14 @@ class Phase9ForensicReplayRequestV1:
 
 @dataclass(frozen=True)
 class Phase9ForensicReplayResult:
+    """Immutable terminal result.
+
+    ``replayed`` is retained for wire compatibility but is itself part of the
+    frozen result object.  Both an original commit and exact recovery therefore
+    return ``False``; callers must not infer the service path from immutable
+    result bytes.
+    """
+
     replay_id: str
     workflow_id: str
     run_generation: str
@@ -417,9 +432,11 @@ def _strict_json(raw: bytes, path: str) -> dict[str, object]:
     return result
 
 
-def phase9_forensic_replay_request_from_dict(
+def _phase9_forensic_replay_request_from_dict_binding(
     value: object,
 ) -> Phase9ForensicReplayRequestV1:
+    """Decode strict JSON structure without semantic or live gates."""
+
     keys = {
         "schema_version", "idempotency_key", "operation_kind", "project_id",
         "workflow_id", "project_revision", "project_generation",
@@ -442,41 +459,43 @@ def phase9_forensic_replay_request_from_dict(
         )
         files.append(
             ReplayEvidenceFileV1(
-                _text(item["logical_path"], f"evidence_files[{index}].logical_path"),
-                _integer(
-                    item["byte_length"],
-                    f"evidence_files[{index}].byte_length",
-                    minimum=1,
-                ),
-                _sha(item["raw_bytes_sha256"], f"evidence_files[{index}].raw_bytes_sha256"),
+                item["logical_path"],
+                item["byte_length"],
+                item["raw_bytes_sha256"],
             )
         )
     request = Phase9ForensicReplayRequestV1(
-        _text(body["schema_version"], "request.schema_version"),
-        _text(body["idempotency_key"], "request.idempotency_key", identifier=True),
-        _text(body["operation_kind"], "request.operation_kind", identifier=True),
-        _text(body["project_id"], "request.project_id", identifier=True),
-        _text(body["workflow_id"], "request.workflow_id", identifier=True),
-        _integer(body["project_revision"], "request.project_revision"),
-        _text(body["project_generation"], "request.project_generation", identifier=True),
-        _text(body["run_generation"], "request.run_generation", identifier=True),
-        _sha(
-            body["run_generation_creation_receipt_sha256"],
-            "request.run_generation_creation_receipt_sha256",
-        ),
+        body["schema_version"],
+        body["idempotency_key"],
+        body["operation_kind"],
+        body["project_id"],
+        body["workflow_id"],
+        body["project_revision"],
+        body["project_generation"],
+        body["run_generation"],
+        body["run_generation_creation_receipt_sha256"],
         body["predecessor_replay_id"],
         body["predecessor_terminal_receipt_sha256"],
-        _text(body["replay_mode"], "request.replay_mode", identifier=True),
-        _text(body["requested_resume_target"], "request.requested_resume_target", identifier=True),
-        _text(body["delivery_capability"], "request.delivery_capability", identifier=True),
-        _git_oid(body["source_commit"], "request.source_commit"),
-        _git_oid(body["source_tree"], "request.source_tree"),
-        _git_oid(body["source_parent"], "request.source_parent"),
-        _sha(body["source_inventory_sha256"], "request.source_inventory_sha256"),
-        _sha(body["entry_gate_result_sha256"], "request.entry_gate_result_sha256"),
-        tuple(files), _integer(body["occurred_at"], "request.occurred_at"),
+        body["replay_mode"],
+        body["requested_resume_target"],
+        body["delivery_capability"],
+        body["source_commit"],
+        body["source_tree"],
+        body["source_parent"],
+        body["source_inventory_sha256"],
+        body["entry_gate_result_sha256"],
+        tuple(files),
+        body["occurred_at"],
     )
-    return validate_phase9_forensic_replay_request(request)
+    return request
+
+
+def phase9_forensic_replay_request_from_dict(
+    value: object,
+) -> Phase9ForensicReplayRequestV1:
+    return validate_phase9_forensic_replay_request(
+        _phase9_forensic_replay_request_from_dict_binding(value)
+    )
 
 
 def read_phase9_forensic_replay_request(
@@ -488,6 +507,24 @@ def read_phase9_forensic_replay_request(
         Path(path), maximum=4 * 1024 * 1024, label="Phase9 replay request"
     )
     return phase9_forensic_replay_request_from_dict(
+        _strict_json(raw, "Phase9 replay request")
+    )
+
+
+def read_phase9_forensic_replay_request_binding(
+    path: str | Path,
+) -> Phase9ForensicReplayRequestV1:
+    """Decode canonical request bytes for service-owned exact recovery.
+
+    The returned object must be passed directly to ``execute``.  That service
+    resolves an existing idempotency key before applying the full immutable
+    and live new-write contract.
+    """
+
+    raw = _regular_file_bytes(
+        Path(path), maximum=4 * 1024 * 1024, label="Phase9 replay request"
+    )
+    return _phase9_forensic_replay_request_from_dict_binding(
         _strict_json(raw, "Phase9 replay request")
     )
 
@@ -591,6 +628,16 @@ def validate_phase9_forensic_replay_request(
         raise Phase9ForensicReplaySafetyError("required control evidence files are missing")
     if sum(item.byte_length for item in request.evidence_files) > 64 * 1024 * 1024:
         raise Phase9ForensicReplaySafetyError("evidence set is too large")
+    return request
+
+
+def _validate_phase9_forensic_recovery_identity(
+    request: Phase9ForensicReplayRequestV1,
+) -> Phase9ForensicReplayRequestV1:
+    if type(request) is not Phase9ForensicReplayRequestV1:
+        raise Phase9ForensicReplaySafetyError("request type is unsupported")
+    _text(request.workflow_id, "request.workflow_id", identifier=True)
+    _text(request.idempotency_key, "request.idempotency_key", identifier=True)
     return request
 
 
@@ -2245,6 +2292,7 @@ def _verify_start_authorization(
     request: Phase9ForensicReplayRequestV1,
     *,
     trusted_now: int,
+    require_current_operator: bool = True,
 ) -> tuple[str, str, str, str, str, str]:
     if sum(
         item.logical_path == "start_authorization.json"
@@ -2322,19 +2370,24 @@ def _verify_start_authorization(
         raise Phase9ForensicReplaySafetyError(
             "start authorization issue time exceeds trusted clock skew"
         )
-    try:
-        uid = os.geteuid()
-        account = pwd.getpwuid(uid).pw_name
-    except (AttributeError, KeyError) as exc:
-        raise Phase9ForensicReplaySafetyError("OS account cannot be verified") from exc
     operator_uid = _integer(body.get("operator_uid"), "start_authorization.operator_uid")
     operator_account = _text(
         body.get("operator_account"),
         "start_authorization.operator_account",
         identifier=True,
     )
-    if operator_uid != uid or operator_account != account:
-        raise Phase9ForensicReplaySafetyError("start authorization OS account differs")
+    if require_current_operator:
+        try:
+            uid = os.geteuid()
+            account = pwd.getpwuid(uid).pw_name
+        except (AttributeError, KeyError) as exc:
+            raise Phase9ForensicReplaySafetyError(
+                "OS account cannot be verified"
+            ) from exc
+        if operator_uid != uid or operator_account != account:
+            raise Phase9ForensicReplaySafetyError(
+                "start authorization OS account differs"
+            )
     scope = _mapping(body.get("authorization_scope"), "start_authorization.scope")
     expected_scope = {
         "phase9_a_forensic_replay": True,
@@ -3188,6 +3241,7 @@ def _validate_authority_runtime_completion(
     request: Phase9ForensicReplayRequestV1,
     runtime: sqlite3.Row,
     receipt_body: Mapping[str, object],
+    require_current_operator: bool = True,
 ) -> None:
     """Require the one-use runtime authorization and immutable completion fact."""
 
@@ -3287,13 +3341,6 @@ def _validate_authority_runtime_completion(
     expected_authorization["authorization_receipt_sha256"] = canonical_sha256(
         expected_authorization
     )
-    try:
-        current_uid = os.geteuid()
-        current_account = pwd.getpwuid(current_uid).pw_name
-    except (AttributeError, KeyError) as exc:
-        raise Phase9ForensicReplayConflict(
-            "Authority runtime OS account cannot be verified"
-        ) from exc
     if (
         authorization_body != expected_authorization
         or authorization["authorization_receipt_sha256"]
@@ -3306,12 +3353,25 @@ def _validate_authority_runtime_completion(
         or authorization["source_commit"] != request.source_commit
         or authorization["source_tree"] != request.source_tree
         or authorization["source_parent"] != request.source_parent
-        or authorization["operator_uid"] != current_uid
-        or authorization["operator_account"] != current_account
     ):
         raise Phase9ForensicReplayConflict(
             "Authority runtime authorization semantics differ"
         )
+    if require_current_operator:
+        try:
+            current_uid = os.geteuid()
+            current_account = pwd.getpwuid(current_uid).pw_name
+        except (AttributeError, KeyError) as exc:
+            raise Phase9ForensicReplayConflict(
+                "Authority runtime OS account cannot be verified"
+            ) from exc
+        if (
+            authorization["operator_uid"] != current_uid
+            or authorization["operator_account"] != current_account
+        ):
+            raise Phase9ForensicReplayConflict(
+                "Authority runtime authorization OS account differs"
+            )
     source_sha256 = _authority_runtime_source_sha256(
         connection,
         request=request,
@@ -3652,6 +3712,7 @@ def _verify_authority_replay_attestation(
     *,
     trusted_now: int,
     evidence_root: Path | None,
+    require_current_operator: bool = True,
 ) -> sqlite3.Row:
     attestation_sha256 = _sha(
         evaluation.get("evidence_attestation_sha256"),
@@ -4064,6 +4125,7 @@ def _verify_authority_replay_attestation(
                 request=request,
                 runtime=runtime,
                 receipt_body=body,
+                require_current_operator=require_current_operator,
             )
             runtime_record_hashes.append(str(runtime["record_sha256"]))
     expected_runtime_set = canonical_sha256(
@@ -4135,8 +4197,16 @@ def _verify_authority_replay_attestation(
                 start_descriptor.raw_bytes_sha256
             ),
             "final_evidence_set_sha256": request.evidence_set_sha256,
-            "operator_uid": os.geteuid(),
-            "operator_account": pwd.getpwuid(os.geteuid()).pw_name,
+                "operator_uid": (
+                    os.geteuid()
+                    if require_current_operator
+                    else authorization["operator_uid"]
+                ),
+                "operator_account": (
+                    pwd.getpwuid(os.geteuid()).pw_name
+                    if require_current_operator
+                    else authorization["operator_account"]
+                ),
         }
     )
     if any(authorization[key] != value for key, value in expected_authorization.items()):
@@ -4341,34 +4411,43 @@ class Phase9ForensicReplayService:
             )
         return tuple(identities)
 
-    def _precheck_idempotency(
-        self, request: Phase9ForensicReplayRequestV1
-    ) -> None:
-        """Reject a reused key before accepting evidence for another payload."""
+    def _recover_committed(
+        self,
+        request: Phase9ForensicReplayRequestV1,
+    ) -> Phase9ForensicReplayResult | None:
+        """Recover one exact committed terminal graph using database facts only."""
 
-        connection = connect_authority_ro(self.path)
-        try:
-            connection.execute("BEGIN")
-            self._verify_installation(connection)
-            row = connection.execute(
-                "SELECT request_sha256, replay_id "
-                "FROM authority_production_phase9_replay_idempotency "
-                "WHERE workflow_id=? AND idempotency_key=?",
-                (request.workflow_id, request.idempotency_key),
-            ).fetchone()
-            if row is not None and (
-                row["request_sha256"] != request.request_sha256
-                or row["replay_id"] != request.replay_id
-            ):
-                raise Phase9ForensicReplayConflict(
-                    "idempotency key has different request bytes"
-                )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with isolated_authority_snapshot_ro(self.path) as connection:
+            try:
+                connection.execute("BEGIN")
+                self._verify_installation(connection)
+                replay = self._replay(connection, request)
+                if replay is not None:
+                    try:
+                        completed = _validate_phase9_completed_replay_in_transaction(
+                            connection,
+                            workflow_id=request.workflow_id,
+                            expected_run_generation=request.run_generation,
+                            expected_terminal_receipt_sha256=replay.receipt_sha256,
+                            expected_replay_id=request.replay_id,
+                            require_current=False,
+                        )
+                    except Phase9ForensicReplaySafetyError as exc:
+                        raise Phase9ForensicReplayConflict(
+                            "committed replay graph is invalid"
+                        ) from exc
+                    if (
+                        completed.get("replay_id") != request.replay_id
+                        or completed.get("request_sha256") != request.request_sha256
+                    ):
+                        raise Phase9ForensicReplayConflict(
+                            "idempotent replay is not the exact committed terminal graph"
+                        )
+                connection.commit()
+                return replay
+            except Exception:
+                connection.rollback()
+                raise
 
     def _fault(self, checkpoint: str) -> None:
         if self.fault_hook is not None:
@@ -4474,8 +4553,8 @@ class Phase9ForensicReplayService:
             body.get("occurred_at"), "run-generation creation receipt.occurred_at"
         )
         try:
-            generation_request = run_generation_request_from_dict(
-                body.get("request"), trusted_now=occurred_at
+            generation_request = _run_generation_request_from_dict_binding(
+                body.get("request")
             )
         except Phase9RunGenerationError as exc:
             raise Phase9ForensicReplayConflict(
@@ -4525,6 +4604,12 @@ class Phase9ForensicReplayService:
         }
         if (
             canonical_sha256(body) != row["receipt_sha256"]
+            or row["receipt_id"]
+            != f"run-generation-receipt:{row['receipt_sha256'][:32]}"
+            or row["run_generation"] != request.run_generation
+            or row["workflow_id"] != request.workflow_id
+            or row["operation_kind"] != generation_request.operation_kind
+            or row["occurred_at"] != generation_request.occurred_at
             or row["request_sha256"] != generation_request.request_sha256
             or any(body.get(name) != value for name, value in expected.items())
             or body.get("request") != generation_request.as_dict()
@@ -4726,15 +4811,121 @@ class Phase9ForensicReplayService:
     def _replay(
         connection: sqlite3.Connection, request: Phase9ForensicReplayRequestV1
     ) -> Phase9ForensicReplayResult | None:
-        row = connection.execute(
+        rows = connection.execute(
             "SELECT * FROM authority_production_phase9_replay_idempotency "
-            "WHERE workflow_id=? AND idempotency_key=?",
-            (request.workflow_id, request.idempotency_key),
-        ).fetchone()
-        if row is None:
+            "WHERE idempotency_key=? ORDER BY workflow_id",
+            (request.idempotency_key,),
+        ).fetchall()
+        if rows and (
+            len(rows) != 1 or rows[0]["workflow_id"] != request.workflow_id
+        ):
+            raise Phase9ForensicReplayConflict(
+                "idempotency key has a different workflow binding"
+            )
+        if not rows:
+            # ``request_json`` is the immutable reverse binding for the legacy
+            # composite-key table.  A removed/moved idempotency row must not
+            # make its key reusable in another workflow.
+            for stored_replay in connection.execute(
+                "SELECT replay_id, request_json, request_sha256 FROM "
+                "authority_production_phase9_replays"
+            ).fetchall():
+                stored_body = _strict_json(
+                    str(stored_replay["request_json"]).encode("utf-8"),
+                    "stored replay request",
+                )
+                try:
+                    stored_request = phase9_forensic_replay_request_from_dict(
+                        stored_body
+                    )
+                except Phase9ForensicReplayError as exc:
+                    raise Phase9ForensicReplayConflict(
+                        "stored replay request is invalid"
+                    ) from exc
+                if (
+                    stored_request.request_sha256
+                    != stored_replay["request_sha256"]
+                    or stored_request.replay_id != stored_replay["replay_id"]
+                ):
+                    raise Phase9ForensicReplayConflict(
+                        "stored replay request identity differs"
+                    )
+                if stored_request.idempotency_key == request.idempotency_key:
+                    raise Phase9ForensicReplayConflict(
+                        "committed replay trace lacks its exact global "
+                        "idempotency key binding"
+                    )
+            identity = (request.request_sha256, request.replay_id)
+            trace_queries = (
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_phase9_replay_idempotency "
+                    "WHERE request_sha256=? OR replay_id=? LIMIT 1",
+                    identity,
+                ),
+                (
+                    "SELECT 1 FROM authority_production_phase9_replays "
+                    "WHERE request_sha256=? OR replay_id=? LIMIT 1",
+                    identity,
+                ),
+                (
+                    "SELECT 1 FROM authority_production_phase9_replay_events "
+                    "WHERE replay_id=? LIMIT 1",
+                    (request.replay_id,),
+                ),
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_phase9_terminal_receipts "
+                    "WHERE replay_id=? LIMIT 1",
+                    (request.replay_id,),
+                ),
+                (
+                    "SELECT 1 FROM authority_production_phase9_replay_current "
+                    "WHERE replay_id=? LIMIT 1",
+                    (request.replay_id,),
+                ),
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_phase9_evidence_receipts "
+                    "WHERE replay_id=? LIMIT 1",
+                    (request.replay_id,),
+                ),
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_phase9_gate_consumptions "
+                    "WHERE request_sha256=? OR replay_id=? LIMIT 1",
+                    identity,
+                ),
+                (
+                    "SELECT 1 FROM "
+                    "authority_production_phase9_start_authorization_consumptions "
+                    "WHERE request_sha256=? OR replay_id=? LIMIT 1",
+                    identity,
+                ),
+            )
+            for query, parameters in trace_queries:
+                if connection.execute(query, parameters).fetchone() is not None:
+                    raise Phase9ForensicReplayConflict(
+                        "committed replay trace lacks its exact idempotency binding"
+                    )
             return None
+        row = rows[0]
         if row["request_sha256"] != request.request_sha256 or row["replay_id"] != request.replay_id:
             raise Phase9ForensicReplayConflict("idempotency key has different request bytes")
+        validate_phase9_forensic_replay_request(request)
+        reverse_bindings = connection.execute(
+            "SELECT COUNT(*) FROM authority_production_phase9_replay_idempotency "
+            "WHERE request_sha256=? OR replay_id=? OR terminal_receipt_sha256=?",
+            (
+                request.request_sha256,
+                request.replay_id,
+                row["terminal_receipt_sha256"],
+            ),
+        ).fetchone()[0]
+        if reverse_bindings != 1:
+            raise Phase9ForensicReplayConflict(
+                "idempotency reverse binding is not unique"
+            )
         receipt = connection.execute(
             "SELECT * FROM authority_production_phase9_terminal_receipts "
             "WHERE replay_id=? AND receipt_sha256=?",
@@ -4742,7 +4933,7 @@ class Phase9ForensicReplayService:
         ).fetchone()
         if receipt is None:
             raise Phase9ForensicReplayConflict("idempotent terminal receipt differs")
-        return _result_from_receipt(request, receipt, replayed=True)
+        return _result_from_receipt(request, receipt, replayed=False)
 
     @staticmethod
     def _consume_entry_gate(
@@ -4995,33 +5186,156 @@ class Phase9ForensicReplayService:
     def execute(
         self, request: Phase9ForensicReplayRequestV1
     ) -> Phase9ForensicReplayResult:
-        value = validate_phase9_forensic_replay_request(request)
-        self._precheck_idempotency(value)
-        first_now = self._trusted_now()
-        first_values, first_evidence_inventory = _read_evidence_set(
-            self.evidence_root, value
-        )
-        evaluation = _evaluate_evidence(
-            value, first_values, trusted_now=first_now
-        )
-        if evaluation["blockers"]:
-            raise Phase9ForensicReplaySafetyError(
-                "Phase9 replay preflight is BLOCKED: "
-                + canonical_bytes(evaluation["blockers"]).decode("utf-8")
-            )
-        expected_source = (
-            value.source_commit,
-            value.source_tree,
-            value.source_parent,
-            value.source_inventory_sha256,
-        )
-        first_runner_identity = self._verify_acceptance_runner_bindings(
-            evaluation
-        )
-        connection = connect_authority_rw(self.path)
+        lookup = _validate_phase9_forensic_recovery_identity(request)
+        commit_lease = authority_state_commit_lease(self.path.parent.parent)
         try:
+            commit_lease.__enter__()
+        except AuthorityStateLeaseError as exc:
+            raise Phase9ForensicReplayConflict(
+                "Authority state commit lease cannot be acquired"
+            ) from exc
+        connection: sqlite3.Connection | None = None
+        try:
+            committed = self._recover_committed(lookup)
+            if committed is not None:
+                return committed
+            value = validate_phase9_forensic_replay_request(lookup)
+            # Resolve every deterministic rejection through a query-only
+            # connection while holding the shared writer lease.  A rejected
+            # request must not create or remove WAL/SHM state merely because a
+            # write-capable SQLite connection was opened.
+            with isolated_authority_snapshot_ro(self.path) as preflight:
+                try:
+                    preflight.execute("BEGIN")
+                    self._verify_installation(preflight)
+                    replay = self._replay(preflight, value)
+                    if replay is not None:
+                        completed = _validate_phase9_completed_replay_in_transaction(
+                            preflight,
+                            workflow_id=value.workflow_id,
+                            expected_run_generation=value.run_generation,
+                            expected_terminal_receipt_sha256=replay.receipt_sha256,
+                            expected_replay_id=value.replay_id,
+                            require_current=False,
+                        )
+                        if (
+                            completed.get("replay_id") != value.replay_id
+                            or completed.get("request_sha256")
+                            != value.request_sha256
+                        ):
+                            raise Phase9ForensicReplayConflict(
+                                "idempotent replay is not the exact committed "
+                                "terminal graph"
+                            )
+                        preflight.commit()
+                        return replay
+                    first_now = self._trusted_now()
+                    preflight_values, _preflight_inventory = _read_evidence_set(
+                        self.evidence_root, value
+                    )
+                    preflight_evaluation = _evaluate_evidence(
+                        value, preflight_values, trusted_now=first_now
+                    )
+                    if preflight_evaluation["blockers"]:
+                        raise Phase9ForensicReplaySafetyError(
+                            "Phase9 replay preflight is BLOCKED: "
+                            + canonical_bytes(
+                                preflight_evaluation["blockers"]
+                            ).decode("utf-8")
+                        )
+                    expected_source = (
+                        value.source_commit,
+                        value.source_tree,
+                        value.source_parent,
+                        value.source_inventory_sha256,
+                    )
+                    self._verify_acceptance_runner_bindings(preflight_evaluation)
+                    self._control_fence(preflight)
+                    self._verify_coordinate(preflight, value)
+                    source = self._current_source_snapshot()
+                    if _source_snapshot_tuple(source) != expected_source:
+                        raise Phase9ForensicReplayConflict(
+                            "current source identity differs"
+                        )
+                    self._verify_external_generation_inputs(preflight, value)
+                    _verify_authority_replay_attestation(
+                        preflight,
+                        value,
+                        preflight_evaluation,
+                        trusted_now=first_now,
+                        evidence_root=self.evidence_root,
+                    )
+                    self._verify_predecessor(preflight, value)
+                    preflight_live_state = self._live_entry_state(preflight, value)
+                    self._verify_live_entry_state(
+                        preflight_live_state,
+                        expected_state_receipt_sha256=str(
+                            preflight_evaluation["entry_state_receipt_sha256"]
+                        ),
+                        runtime_counts=_mapping(
+                            preflight_evaluation["runtime_counts"],
+                            "runtime_counts",
+                        ),
+                    )
+                    _verify_authority_replay_attestation(
+                        preflight,
+                        value,
+                        preflight_evaluation,
+                        trusted_now=first_now,
+                        evidence_root=self.evidence_root,
+                    )
+                    preflight.commit()
+                except Exception:
+                    preflight.rollback()
+                    raise
+
+            connection = connect_authority_rw(self.path)
             connection.execute("BEGIN IMMEDIATE")
             self._verify_installation(connection)
+            replay = self._replay(connection, value)
+            if replay is not None:
+                try:
+                    completed = _validate_phase9_completed_replay_in_transaction(
+                        connection,
+                        workflow_id=value.workflow_id,
+                        expected_run_generation=value.run_generation,
+                        expected_terminal_receipt_sha256=replay.receipt_sha256,
+                        expected_replay_id=value.replay_id,
+                        require_current=False,
+                    )
+                except Phase9ForensicReplaySafetyError as exc:
+                    raise Phase9ForensicReplayConflict(
+                        "committed replay graph is invalid"
+                    ) from exc
+                if (
+                    completed.get("replay_id") != value.replay_id
+                    or completed.get("request_sha256") != value.request_sha256
+                ):
+                    raise Phase9ForensicReplayConflict(
+                        "idempotent replay is not the exact committed terminal graph"
+                    )
+                connection.commit()
+                return replay
+            first_values, first_evidence_inventory = _read_evidence_set(
+                self.evidence_root, value
+            )
+            evaluation = _evaluate_evidence(
+                value, first_values, trusted_now=first_now
+            )
+            if evaluation["blockers"]:
+                raise Phase9ForensicReplaySafetyError(
+                    "Phase9 replay preflight is BLOCKED: "
+                    + canonical_bytes(evaluation["blockers"]).decode("utf-8")
+                )
+            expected_source = (
+                value.source_commit,
+                value.source_tree,
+                value.source_parent,
+                value.source_inventory_sha256,
+            )
+            first_runner_identity = self._verify_acceptance_runner_bindings(
+                evaluation
+            )
             self._control_fence(connection)
             self._verify_coordinate(connection, value)
             source = self._current_source_snapshot()
@@ -5038,21 +5352,6 @@ class Phase9ForensicReplayService:
                 connection, value, evaluation, trusted_now=first_now,
                 evidence_root=self.evidence_root,
             )
-            replay = self._replay(connection, value)
-            if replay is not None:
-                self._verify_committed_bindings(connection, value, evaluation)
-                completed = validate_current_phase9_completed_replay_in_transaction(
-                    connection,
-                    workflow_id=value.workflow_id,
-                    expected_run_generation=value.run_generation,
-                    expected_terminal_receipt_sha256=replay.receipt_sha256,
-                )
-                if completed.get("replay_id") != value.replay_id:
-                    raise Phase9ForensicReplayConflict(
-                        "idempotent replay is not the strict current terminal graph"
-                    )
-                connection.commit()
-                return replay
             self._verify_predecessor(connection, value)
             first_live_state = self._live_entry_state(connection, value)
             self._verify_live_entry_state(
@@ -5317,11 +5616,20 @@ class Phase9ForensicReplayService:
             ).fetchone()
             assert receipt is not None
             return _result_from_receipt(value, receipt, replayed=False)
+        except AuthorityStateLeaseError as exc:
+            if connection is not None:
+                connection.rollback()
+            raise Phase9ForensicReplayConflict(
+                "Authority state snapshot cannot be read safely"
+            ) from exc
         except Exception:
-            connection.rollback()
+            if connection is not None:
+                connection.rollback()
             raise
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
+            commit_lease.__exit__(*sys.exc_info())
 
 
 def _request_file_reference_matches(
@@ -5828,6 +6136,24 @@ def _validate_stored_generation_provenance(
 ) -> None:
     """Rebuild the immutable source and one-use creation authorization graph."""
 
+    try:
+        committed = Phase9RunGenerationService._replay(
+            connection, generation_request
+        )
+    except Phase9RunGenerationError as exc:
+        raise Phase9ForensicReplayConflict(
+            "current completed replay run-generation graph differs"
+        ) from exc
+    if (
+        committed is None
+        or committed.run_generation != request.run_generation
+        or committed.receipt_sha256
+        != request.run_generation_creation_receipt_sha256
+    ):
+        raise Phase9ForensicReplayConflict(
+            "current completed replay run-generation graph is incomplete"
+        )
+
     consumption_body = _authorization_consumption_body(generation_request)
     consumption_sha256 = canonical_sha256(consumption_body)
     consumption_json = canonical_bytes(consumption_body).decode("utf-8")
@@ -5883,124 +6209,151 @@ def _validate_stored_generation_provenance(
         raise Phase9ForensicReplayConflict(
             "current completed replay source inventory is unavailable"
         )
-    body = _strict_json(
-        str(inventory["inventory_json"]).encode("utf-8"),
-        "run-generation source inventory",
-    )
-    _mapping(
-        body,
-        "run-generation source inventory",
-        {
-            "schema_version", "source_commit", "source_tree",
-            "source_parent", "entries", "path_count", "total_bytes",
-        },
-    )
-    entries = body.get("entries")
-    if type(entries) is not list or not entries:
-        raise Phase9ForensicReplayConflict(
-            "current completed replay source inventory entries differ"
+    try:
+        _verify_stored_source_inventory(
+            inventory,
+            generation_request,
+            connection,
         )
-    paths: list[str] = []
-    total_bytes = 0
-    for index, entry_value in enumerate(entries):
-        entry = _mapping(
-            entry_value,
-            f"run-generation source inventory entry {index}",
-            {
-                "schema_version", "logical_path", "git_mode",
-                "git_object_type", "git_object_id", "byte_length",
-                "raw_bytes_sha256",
-            },
-        )
-        logical_path = _text(
-            entry.get("logical_path"),
-            f"run-generation source inventory entry {index}.logical_path",
-        )
-        pure = PurePosixPath(logical_path)
-        if (
-            pure.is_absolute()
-            or pure.as_posix() != logical_path
-            or not pure.parts
-            or any(part in {"", ".", ".."} for part in pure.parts)
-        ):
-            raise Phase9ForensicReplayConflict(
-                "current completed replay source inventory path differs"
-            )
-        mode = entry.get("git_mode")
-        object_type = entry.get("git_object_type")
-        if (
-            entry.get("schema_version") != GIT_TRACKED_SOURCE_ENTRY_SCHEMA
-            or mode not in {"100644", "100755", "160000"}
-            or (mode == "160000") != (object_type == "commit")
-            or (mode != "160000" and object_type != "blob")
-        ):
-            raise Phase9ForensicReplayConflict(
-                "current completed replay source inventory entry type differs"
-            )
-        _git_oid(
-            entry.get("git_object_id"),
-            f"run-generation source inventory entry {index}.git_object_id",
-        )
-        if mode == "160000":
-            if entry.get("byte_length") is not None or entry.get(
-                "raw_bytes_sha256"
-            ) is not None:
-                raise Phase9ForensicReplayConflict(
-                    "current completed replay submodule inventory differs"
-                )
-        else:
-            total_bytes += _integer(
-                entry.get("byte_length"),
-                f"run-generation source inventory entry {index}.byte_length",
-            )
-            _sha(
-                entry.get("raw_bytes_sha256"),
-                f"run-generation source inventory entry {index}.raw_bytes_sha256",
-            )
-        paths.append(logical_path)
-    collision_keys = [
-        unicodedata.normalize("NFC", value).casefold() for value in paths
-    ]
-    if (
-        paths != sorted(paths, key=lambda value: value.encode("utf-8"))
-        or len(paths) != len(set(paths))
-        or len(collision_keys) != len(set(collision_keys))
-    ):
-        raise Phase9ForensicReplayConflict(
-            "current completed replay source inventory paths differ"
-        )
-    expected_inventory_scalars = {
-        "schema_version": GIT_TRACKED_SOURCE_INVENTORY_SCHEMA,
-        "source_commit": request.source_commit,
-        "source_tree": request.source_tree,
-        "source_parent": request.source_parent,
-        "path_count": len(entries),
-        "total_bytes": total_bytes,
-    }
-    if (
-        canonical_sha256(body) != request.source_inventory_sha256
-        or inventory["inventory_sha256"] != request.source_inventory_sha256
-        or any(
-            body.get(name) != value
-            or inventory[name] != value
-            for name, value in expected_inventory_scalars.items()
-        )
-        or _integer(inventory["recorded_at"], "source inventory recorded_at")
-        > generation_request.occurred_at
-    ):
+    except Phase9RunGenerationError as exc:
         raise Phase9ForensicReplayConflict(
             "current completed replay source inventory identity differs"
+        ) from exc
+
+
+def _validate_replay_current_chain(
+    connection: sqlite3.Connection,
+    *,
+    request: Phase9ForensicReplayRequestV1,
+    terminal_receipt_sha256: str,
+    final_event_sha256: str,
+) -> None:
+    """Prove an immutable replay is current or on its unique successor chain."""
+
+    current = connection.execute(
+        "SELECT * FROM authority_production_phase9_replay_current "
+        "WHERE workflow_id=?",
+        (request.workflow_id,),
+    ).fetchone()
+    if current is None:
+        raise Phase9ForensicReplayConflict(
+            "completed replay current pointer is missing"
+        )
+    current_successor_count = connection.execute(
+        "SELECT COUNT(*) FROM authority_production_phase9_replays "
+        "WHERE predecessor_replay_id=?",
+        (current["replay_id"],),
+    ).fetchone()[0]
+    if current_successor_count != 0:
+        raise Phase9ForensicReplayConflict(
+            "completed replay current has a dangling successor"
+        )
+    seen: set[str] = set()
+    replay_id = str(current["replay_id"])
+    current_terminal_sha256 = str(current["terminal_receipt_sha256"])
+    while True:
+        if replay_id in seen:
+            raise Phase9ForensicReplayConflict(
+                "completed replay successor chain cycles"
+            )
+        seen.add(replay_id)
+        replay = connection.execute(
+            "SELECT * FROM authority_production_phase9_replays "
+            "WHERE replay_id=? AND workflow_id=?",
+            (replay_id, request.workflow_id),
+        ).fetchone()
+        terminal = connection.execute(
+            "SELECT * FROM authority_production_phase9_terminal_receipts "
+            "WHERE replay_id=? AND receipt_sha256=?",
+            (replay_id, current_terminal_sha256),
+        ).fetchone()
+        if replay is None or terminal is None:
+            raise Phase9ForensicReplayConflict(
+                "completed replay successor chain is incomplete"
+            )
+        if replay_id == str(current["replay_id"]):
+            if (
+                current["workflow_id"] != request.workflow_id
+                or current["run_generation"] != replay["run_generation"]
+                or current["terminal_receipt_sha256"]
+                != terminal["receipt_sha256"]
+                or current["final_event_sha256"]
+                != terminal["final_event_sha256"]
+                or current["state"] != "COMPLETED"
+                or current["updated_at"] != terminal["occurred_at"]
+            ):
+                raise Phase9ForensicReplayConflict(
+                    "completed replay current pointer differs"
+                )
+        if replay_id == request.replay_id:
+            if (
+                current_terminal_sha256 != terminal_receipt_sha256
+                or terminal["final_event_sha256"] != final_event_sha256
+            ):
+                raise Phase9ForensicReplayConflict(
+                    "completed replay successor target differs"
+                )
+            return
+
+        successor_request_body = _strict_json(
+            str(replay["request_json"]).encode("utf-8"),
+            "completed replay successor request",
+        )
+        successor_request = phase9_forensic_replay_request_from_dict(
+            successor_request_body
+        )
+        if (
+            successor_request.replay_id != replay_id
+            or successor_request.operation_kind != ROTATE
+            or successor_request.request_sha256 != replay["request_sha256"]
+            or successor_request.predecessor_replay_id is None
+            or successor_request.predecessor_terminal_receipt_sha256 is None
+        ):
+            raise Phase9ForensicReplayConflict(
+                "completed replay successor request differs"
+            )
+        completed = _validate_phase9_completed_replay_in_transaction(
+            connection,
+            workflow_id=request.workflow_id,
+            expected_run_generation=successor_request.run_generation,
+            expected_terminal_receipt_sha256=current_terminal_sha256,
+            expected_replay_id=replay_id,
+            require_current=False,
+            _validate_generation_provenance=False,
+            _validate_current_chain=False,
+        )
+        if completed.get("replay_id") != replay_id:
+            raise Phase9ForensicReplayConflict(
+                "completed replay successor graph differs"
+            )
+        predecessor_id = successor_request.predecessor_replay_id
+        branch_count = connection.execute(
+            "SELECT COUNT(*) FROM authority_production_phase9_replays "
+            "WHERE predecessor_replay_id=?",
+            (predecessor_id,),
+        ).fetchone()[0]
+        if branch_count != 1:
+            raise Phase9ForensicReplayConflict(
+                "completed replay successor chain is not unique"
+            )
+        replay_id = predecessor_id
+        current_terminal_sha256 = (
+            successor_request.predecessor_terminal_receipt_sha256
         )
 
 
-def validate_current_phase9_completed_replay_in_transaction(
+def _validate_phase9_completed_replay_in_transaction(
     connection: sqlite3.Connection,
     *,
     workflow_id: str,
     expected_run_generation: str,
     expected_terminal_receipt_sha256: str,
+    expected_replay_id: str | None,
+    require_current: bool,
+    _validate_generation_provenance: bool = True,
+    _validate_current_chain: bool = True,
 ) -> dict[str, object]:
-    """Reconstruct the exact current terminal graph without owning its transaction."""
+    """Reconstruct an immutable terminal graph without owning its transaction."""
 
     workflow = _text(workflow_id, "workflow_id", identifier=True)
     run_generation = _text(
@@ -6010,31 +6363,45 @@ def validate_current_phase9_completed_replay_in_transaction(
         expected_terminal_receipt_sha256,
         "expected_terminal_receipt_sha256",
     )
-    current = connection.execute(
-        "SELECT * FROM authority_production_phase9_replay_current "
-        "WHERE workflow_id=?",
-        (workflow,),
-    ).fetchone()
-    if current is None or any(
-        current[name] != value
-        for name, value in (
-            ("workflow_id", workflow),
-            ("run_generation", run_generation),
-            ("terminal_receipt_sha256", expected_terminal),
-            ("state", "COMPLETED"),
-        )
-    ):
-        raise Phase9ForensicReplayConflict(
-            "current completed replay pointer differs"
+    current = None
+    replay_id = None
+    if require_current:
+        current = connection.execute(
+            "SELECT * FROM authority_production_phase9_replay_current "
+            "WHERE workflow_id=?",
+            (workflow,),
+        ).fetchone()
+        if current is None or any(
+            current[name] != value
+            for name, value in (
+                ("workflow_id", workflow),
+                ("run_generation", run_generation),
+                ("terminal_receipt_sha256", expected_terminal),
+                ("state", "COMPLETED"),
+            )
+        ):
+            raise Phase9ForensicReplayConflict(
+                "current completed replay pointer differs"
+            )
+        replay_id = str(current["replay_id"])
+        if expected_replay_id is not None and replay_id != expected_replay_id:
+            raise Phase9ForensicReplayConflict(
+                "current completed replay identity differs"
+            )
+    else:
+        replay_id = _text(
+            expected_replay_id,
+            "expected_replay_id",
+            identifier=True,
         )
     replay = connection.execute(
         "SELECT * FROM authority_production_phase9_replays WHERE replay_id=?",
-        (current["replay_id"],),
+        (replay_id,),
     ).fetchone()
     terminal = connection.execute(
         "SELECT * FROM authority_production_phase9_terminal_receipts "
         "WHERE replay_id=? AND receipt_sha256=?",
-        (current["replay_id"], expected_terminal),
+        (replay_id, expected_terminal),
     ).fetchone()
     if replay is None or terminal is None:
         raise Phase9ForensicReplayConflict(
@@ -6084,13 +6451,8 @@ def validate_current_phase9_completed_replay_in_transaction(
             "current completed replay/request fields differ"
         )
     generation = connection.execute(
-        """
-        SELECT g.*, c.creation_receipt_sha256
-        FROM authority_production_run_generations g
-        JOIN authority_production_run_generation_current c
-          ON c.workflow_id=g.workflow_id AND c.run_generation=g.run_generation
-        WHERE g.workflow_id=? AND g.run_generation=?
-        """,
+        "SELECT * FROM authority_production_run_generations "
+        "WHERE workflow_id=? AND run_generation=?",
         (workflow, run_generation),
     ).fetchone()
     generation_expected = {
@@ -6099,9 +6461,6 @@ def validate_current_phase9_completed_replay_in_transaction(
         "project_revision": request.project_revision,
         "project_generation": request.project_generation,
         "run_generation": run_generation,
-        "creation_receipt_sha256": (
-            request.run_generation_creation_receipt_sha256
-        ),
         "run_mode": "FORENSIC_REPLAY",
         "modeling_consultation_contract": "LEGACY_NOT_APPLICABLE",
         "delivery_capability": DELIVERY_DISABLED,
@@ -6138,34 +6497,36 @@ def validate_current_phase9_completed_replay_in_transaction(
         raise Phase9ForensicReplayConflict(
             "current completed replay/run-generation semantic graph differs"
         )
-    _validate_stored_generation_provenance(
-        connection,
-        request=request,
-        generation=generation,
-        generation_request=generation_request,
-    )
-    workflow_row = connection.execute(
-        "SELECT * FROM authority_workflows WHERE workflow_id=?",
-        (workflow,),
-    ).fetchone()
-    if workflow_row is None or any(
-        workflow_row[name] != value
-        for name, value in (
-            ("project_id", request.project_id),
-            ("project_generation", request.project_generation),
-            ("run_generation", request.run_generation),
-            ("current_revision", request.project_revision),
-            ("current_revision_availability", "RECORDED"),
-            (
-                "contract_pin_set_sha256",
-                canonical_sha256(generation_request.contract_pins),
-            ),
-            ("contract_pin_availability", "RECORDED"),
+    if _validate_generation_provenance:
+        _validate_stored_generation_provenance(
+            connection,
+            request=request,
+            generation=generation,
+            generation_request=generation_request,
         )
-    ):
-        raise Phase9ForensicReplayConflict(
-            "current completed replay workflow coordinate differs"
-        )
+    if require_current:
+        workflow_row = connection.execute(
+            "SELECT * FROM authority_workflows WHERE workflow_id=?",
+            (workflow,),
+        ).fetchone()
+        if workflow_row is None or any(
+            workflow_row[name] != value
+            for name, value in (
+                ("project_id", request.project_id),
+                ("project_generation", request.project_generation),
+                ("run_generation", request.run_generation),
+                ("current_revision", request.project_revision),
+                ("current_revision_availability", "RECORDED"),
+                (
+                    "contract_pin_set_sha256",
+                    canonical_sha256(generation_request.contract_pins),
+                ),
+                ("contract_pin_availability", "RECORDED"),
+            )
+        ):
+            raise Phase9ForensicReplayConflict(
+                "current completed replay workflow coordinate differs"
+            )
     consumption = connection.execute(
         "SELECT * FROM authority_production_phase9_gate_consumptions "
         "WHERE replay_id=?",
@@ -6316,6 +6677,7 @@ def validate_current_phase9_completed_replay_in_transaction(
             authorization_body,
             request,
             trusted_now=consumed_at,
+            require_current_operator=False,
         )
     except Phase9ForensicReplaySafetyError as exc:
         raise Phase9ForensicReplayConflict(
@@ -6491,6 +6853,7 @@ def validate_current_phase9_completed_replay_in_transaction(
         stored_evaluation,
         trusted_now=int(start_consumption["consumed_at"]),
         evidence_root=None,
+        require_current_operator=False,
     )
     attestation_body = _strict_json(
         str(attestation["attestation_json"]).encode(),
@@ -6567,6 +6930,7 @@ def validate_current_phase9_completed_replay_in_transaction(
                 request=request,
                 runtime=runtime,
                 receipt_body=typed_body,
+                require_current_operator=False,
             )
             runtime_hashes.append(str(runtime["record_sha256"]))
         elif item["source_kind"] == "ACCEPTANCE_RUNNER":
@@ -6784,19 +7148,28 @@ def validate_current_phase9_completed_replay_in_transaction(
         raise Phase9ForensicReplayConflict(
             "current completed replay terminal graph differs"
         )
-    current_expected = {
-        "workflow_id": workflow,
-        "replay_id": request.replay_id,
-        "run_generation": run_generation,
-        "terminal_receipt_sha256": terminal_sha256,
-        "final_event_sha256": predecessor,
-        "state": "COMPLETED",
-        "updated_at": request.occurred_at,
-    }
-    if any(current[name] != value for name, value in current_expected.items()):
-        raise Phase9ForensicReplayConflict(
-            "current completed replay final pointer differs"
+    if _validate_current_chain:
+        _validate_replay_current_chain(
+            connection,
+            request=request,
+            terminal_receipt_sha256=terminal_sha256,
+            final_event_sha256=predecessor,
         )
+    if require_current:
+        assert current is not None
+        current_expected = {
+            "workflow_id": workflow,
+            "replay_id": request.replay_id,
+            "run_generation": run_generation,
+            "terminal_receipt_sha256": terminal_sha256,
+            "final_event_sha256": predecessor,
+            "state": "COMPLETED",
+            "updated_at": request.occurred_at,
+        }
+        if any(current[name] != value for name, value in current_expected.items()):
+            raise Phase9ForensicReplayConflict(
+                "current completed replay final pointer differs"
+            )
     return {
         "workflow_id": workflow,
         "run_generation": run_generation,
@@ -6806,6 +7179,25 @@ def validate_current_phase9_completed_replay_in_transaction(
         "request_sha256": request.request_sha256,
         "typed_receipt_set_sha256": typed_set_sha256,
     }
+
+
+def validate_current_phase9_completed_replay_in_transaction(
+    connection: sqlite3.Connection,
+    *,
+    workflow_id: str,
+    expected_run_generation: str,
+    expected_terminal_receipt_sha256: str,
+) -> dict[str, object]:
+    """Reconstruct the exact current terminal graph without writing."""
+
+    return _validate_phase9_completed_replay_in_transaction(
+        connection,
+        workflow_id=workflow_id,
+        expected_run_generation=expected_run_generation,
+        expected_terminal_receipt_sha256=expected_terminal_receipt_sha256,
+        expected_replay_id=None,
+        require_current=True,
+    )
 
 
 def collect_phase9_forensic_replay_state(

@@ -22,15 +22,6 @@ from factory_core.steps.specialized import DeliveryStep, JudgeStep, ParallelProp
 from factory_core.steps.validators import NativeArtifactValidator
 from factory_core.storage import SQLiteStateStore
 from factory_core.delivery.release import ReleasePublisher
-from tests.phase9_delivery_test_support import nonformal_delivery_fence
-
-
-@pytest.fixture(autouse=True)
-def _nonformal_delivery_mechanics(monkeypatch):
-    monkeypatch.setattr(
-        "factory_core.phase9_delivery_fence.require_phase9_delivery_authority",
-        nonformal_delivery_fence,
-    )
 
 
 class RecordingBackend:
@@ -541,8 +532,8 @@ class FakeCommandRunner:
         elif script.endswith("package_submission.py"):
             from factory_core.submission_bundle import submission_bundle_manifest
 
-            # The first three positional arguments remain project/base/output;
-            # Phase 9 adds explicit Authority-coordinate flags afterwards.
+            # Release staging must not persist a project submission manifest.
+            assert args[3:] == ["--stage-only"]
             output = Path(args[2])
             output.parent.mkdir(parents=True, exist_ok=True)
             bundle = submission_bundle_manifest(project, project.name)
