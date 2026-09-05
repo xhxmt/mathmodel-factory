@@ -1,4 +1,5 @@
 # Changelog
+- Synchronized the expanded Phase9 focused targets with the independent summary/package policy and added a direct repository-contract acceptance check; exact policy comparisons remain enforced.
 - Closed full-audit findings: registered only the exact new Phase9 canonical/schema consumers, refreshed two storage symbol offsets without changing trusted symbol bytes, and bounded provider namespace argv. Unrelated sibling directories in project/runtime ancestors are omitted while complete project/source inputs and configuration proof remain intact.
 - Bound redirected CODEX_HOME configuration paths to approved original presence/bytes and independently checked the actual native environment and immutable directory closure. Absent config remains absent. SQLite/cache state uses separate writable locations; only local installation metadata is writable at the home root.
 - Froze approved configuration absence as well as present bytes using private read-only tmpfs namespaces, with independent native-root presence/mount/cwd checks. Native judge temporary replies now honor TMPDIR and use unique attempt directories.

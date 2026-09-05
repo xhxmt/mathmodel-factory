@@ -109,6 +109,11 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
             "tests/test_phase9_acceptance_probes.py",
             "tests/test_authority_outbox_delivery.py",
             "tests/test_phase5_shadow_supervisor.py",
+            "tests/test_m01_runtime_parity.py",
+            "tests/test_m03_persisted_dirty_owner_policy.py",
+            "tests/test_m03_contract_pins.py",
+            "tests/test_m03_command_envelope.py",
+            "tests/test_authority_operations.py",
         ],
         "requirements": [
             "P9-CANDIDATE-IDENTITY", "P9-TRUSTED-TIME",

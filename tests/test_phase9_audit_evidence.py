@@ -2100,6 +2100,13 @@ def test_full_repository_build_uses_read_only_safe_vite_config_loader():
     assert declared == build
 
 
+def test_repository_phase9_contract_matches_independent_policy():
+    _suite_contract(
+        REPOSITORY / "docs/operations/PHASE9_TEST_SUITE_CONTRACT.json",
+        expected_specs=PHASE9_REQUIRED_SUITE_SPECS,
+    )
+
+
 @pytest.mark.parametrize("field", ["command", "targets", "npm_script"])
 def test_summary_verifier_rejects_composite_stage_contract_drift(tmp_path, field):
     contract = json.loads(
