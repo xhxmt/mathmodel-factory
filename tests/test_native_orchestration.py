@@ -557,10 +557,12 @@ class FakeCommandRunner:
         return self._ok(project, label)
 
 
-def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_path):
+def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[1]
     project = tmp_path / "judge_fixture"
     project.mkdir()
+    scratch = tmp_path / "explicit-scratch"
+    monkeypatch.setenv("TMPDIR", str(scratch))
 
     class FinalResponseWritingDispatcher:
         requests = []
@@ -626,6 +628,9 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
         encoding="utf-8"
     ).startswith("VERDICT: PASS\n")
 
+    assert all(request.final_response_file.is_relative_to(scratch) for request in dispatcher.requests)
+    assert len({request.final_response_file for request in dispatcher.requests}) == 2
+    assert all(request.final_response_file.exists() for request in dispatcher.requests)
     assert dispatcher.accepted == [("paper", b"VERDICT: PASS\n{}\n")] * 2
 
 

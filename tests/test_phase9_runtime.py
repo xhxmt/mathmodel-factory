@@ -239,15 +239,19 @@ def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkey
     home = tmp_path / 'empty-codex-home'
     home.mkdir()
     monkeypatch.setenv('CODEX_HOME', str(home))
-    profile = {'native': _file(native), 'configuration': [], 'sandbox': _file('/usr/bin/bwrap')}
+    config = tmp_path / '.codex/config.toml'
+    profile = {'native': _file(native), 'configuration': [{'path': str(config), 'load_path': str(config), 'absent': True}], 'sandbox': _file('/usr/bin/bwrap')}
     scratch = tmp_path / 'scratch'
     scratch.mkdir()
     native_argv = [str(native)]
     sandbox = ProviderSandbox(scratch, profile, native_argv, tmp_path)
     native.write_bytes(Path('/usr/bin/false').read_bytes())
+    config.parent.mkdir()
+    config.write_text('model = "UNAPPROVED_HOST_CONFIG"\n')
     argv = ['/usr/bin/bwrap', '--die-with-parent', '--unshare-user', '--unshare-pid', '--ro-bind', '/', '/',
-            '--bind', str(scratch), str(scratch), *sandbox.mounts, '--proc', '/proc', '--dev', '/dev', '--', *sandbox.command]
-    call = {'provider_identity': profile, 'argv': native_argv, 'argv_sha256': canonical_sha256(native_argv)}
+            *sandbox.namespace_mounts, '--bind', str(scratch), str(scratch), *sandbox.mounts, '--proc', '/proc', '--dev', '/dev',
+            *sandbox.readonly_mounts, '--chdir', str(tmp_path), '--', *sandbox.command]
+    call = {'cwd': str(tmp_path), 'provider_identity': profile, 'argv': native_argv, 'argv_sha256': canonical_sha256(native_argv)}
     intent = {'provider_call': call}
     observations = []
     def started(pid):
@@ -262,6 +266,8 @@ def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkey
     finally:
         sandbox.close()
     assert result.returncode == 0  # sealed true, despite host path now containing false
+    assert observations[0]['configuration_observation']['states'][0]['presence'] == 'ABSENT'
+    assert config.is_file()
     assert observations[0]['kernel_executable_sha256'] == profile['native']['sha256']
     assert hashlib.sha256(native.read_bytes()).hexdigest() != profile['native']['sha256']
 

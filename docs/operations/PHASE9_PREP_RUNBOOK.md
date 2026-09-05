@@ -174,14 +174,22 @@ are deliberately separate from the normal Step13 math precheck:
    environment hash. Approval must verify these exact provider identities;
    a program merely named codex is not independently certified by its name.
    Actual argv/cwd bind each intent. The supervisor creates sealed memfd
-   snapshots of native/configuration bytes and mounts those read-only. A fixed
+   snapshots of native/configuration bytes and mounts those read-only.
+   Every configured file, including an approved absence, is represented in
+   private tmpfs directory namespaces through all ancestors. Unrelated ordinary
+   children use read-only O_PATH binds; the namespace mounts are remounted
+   read-only, so later host configuration creation cannot enter the view.
+   Authority independently reads configuration presence/bytes and mount flags
+   through the stopped native process root, and verifies cwd is inside it. A fixed
    ptrace exec-stop helper holds the actual native child before application
    execution, with EXITKILL protection. The private socket handshake binds its
    PID, ancestry, executable and argv; Authority commits this observation
    before GO. Wrapper identity alone cannot satisfy the receipt proof.
    Codex runtime state uses a private writable CODEX_HOME under TMPDIR with
    approved config mounted read-only and a private authentication copy; the
-   original client and credential files are not modified. Credentials are never printed; response model identity
+   original client and credential files are not modified. Native judge final
+   responses use a unique directory under explicit TMPDIR (project/tmp only
+   when TMPDIR is unset). Credentials are never printed; response model identity
    remains unavailable unless independently visible. Role execution uses the repository's two-attempt transport / three-round
    infrastructure retry budget, a pinned model/effort and an overall deadline.
    Providers require a private PID namespace and read-only host source, inputs

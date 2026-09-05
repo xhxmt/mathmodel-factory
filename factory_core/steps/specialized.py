@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import time
+import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -1163,8 +1164,10 @@ class JudgeStep:
         prompt += self._phase_instructions(context.step_id, role)
         prompt += retry_instructions
         snapshot.write_text(prompt, encoding="utf-8")
-        final_response = project / "tmp" / "native_judges" / role / "final_response.md"
-        final_response.parent.mkdir(parents=True, exist_ok=True)
+        scratch_root = Path(os.environ.get("TMPDIR", str(project / "tmp"))).resolve()
+        scratch_root.mkdir(parents=True, exist_ok=True)
+        response_root = Path(tempfile.mkdtemp(prefix=f"paper-factory-{role}-", dir=scratch_root))
+        final_response = response_root / "final_response.md"
         for stale in (
             output,
             output.with_suffix(output.suffix + ".llm-result.json"),

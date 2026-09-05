@@ -6,11 +6,12 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 import struct
 import sys
 import uuid
 from .canonical import canonical_sha256
-from .phase9_provider_identity import _file
+from .phase9_provider_identity import _file, configuration_observation, expected_configuration_states
 
 
 class ProviderSandbox:
@@ -54,10 +55,53 @@ class ProviderSandbox:
         helper = Path(__file__).with_name('phase9_provider_gate.py')
         self._snapshot(_file(helper), str(helper))
         self.command = [sys.executable, '-I', '-S', '-B', str(helper), str(self.endpoint), *argv]
-        self.execution_view = {'schema': 'phase9-sealed-provider-view-v1',
+        self.namespace_mounts, self.readonly_mounts = self._configuration_namespaces()
+        self.execution_view = {'working_directory': str(project), 'configuration_states': expected_configuration_states(profile),
+            'protected_directories': self.protected_directories, 'schema': 'phase9-sealed-provider-view-v1',
             'files': self.views, 'private_runtime_home': str(self.private_home),
             'helper': _file(helper), 'helper_interpreter': _file(sys.executable),
             'native_sha256': profile['native']['sha256']}
+
+    def _configuration_namespaces(self):
+        """Freeze directory entries in private tmpfs mounts, including absences.
+
+        O_PATH descriptors preserve non-configuration children without copying
+        database bytes. No writable host directory backs these namespace views.
+        """
+        critical = {Path(row.get('load_path', row['path'])): row for row in self.profile['configuration']}
+        directories = {parent for path in critical for parent in path.parents}
+        self.protected_directories = [str(path) for path in sorted(directories, key=lambda p: (len(p.parts), str(p)))]
+        options = []
+        for directory in map(Path, self.protected_directories):
+            options.extend(['--tmpfs', str(directory)])
+            try:
+                entries = list(directory.iterdir()) if directory.is_dir() else []
+            except FileNotFoundError:
+                entries = []
+            children = {path.name: path for path in entries}
+            children.update({path.name: path for path in directories if path.parent == directory and path != directory})
+            for name, path in sorted(children.items()):
+                if path in critical:
+                    # Present files are installed later from sealed descriptors;
+                    # absent ones never acquire a directory entry in this view.
+                    continue
+                if path in directories:
+                    options.extend(['--dir', str(path)])
+                    continue
+                try:
+                    info = path.lstat()
+                    if stat.S_ISLNK(info.st_mode):
+                        options.extend(['--symlink', os.readlink(path), str(path)])
+                    elif stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode):
+                        descriptor = os.open(path, os.O_PATH | os.O_CLOEXEC)
+                        self.fds.append(descriptor)
+                        options.extend(['--ro-bind-fd', str(descriptor), str(path)])
+                    # Host sockets/devices are not provider configuration inputs.
+                    # /proc and /dev are mounted explicitly by the supervisor.
+                except FileNotFoundError:
+                    continue
+        readonly = [part for path in reversed(self.protected_directories) for part in ('--remount-ro', path)]
+        return options, readonly
 
     def _snapshot(self, row, destination, executable=False):
         raw = Path(row['path']).read_bytes()
@@ -109,7 +153,8 @@ class ProviderSandbox:
                 'kernel_executable_sha256': hashlib.sha256(Path(f'/proc/{native_pid}/exe').read_bytes()).hexdigest(),
                 'kernel_cmdline_sha256': hashlib.sha256(Path(f'/proc/{native_pid}/cmdline').read_bytes()).hexdigest(),
                 'sandbox_argv': sandbox_argv, 'sandbox_argv_sha256': canonical_sha256(sandbox_argv),
-                'execution_view': self.execution_view, 'execution_view_sha256': canonical_sha256(self.execution_view)}
+                'execution_view': self.execution_view, 'execution_view_sha256': canonical_sha256(self.execution_view),
+                'configuration_observation': configuration_observation(native_pid, self.profile)}
 
     def release(self):
         self.channel.sendall(b'GO\n')

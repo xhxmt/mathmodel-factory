@@ -170,7 +170,7 @@ def _completed_identity_fixture(tmp_path, monkeypatch):
             output.write_bytes(b"SYNTHETIC UNIT FIXTURE OUTPUT\n")
         call = self.intent["provider_call"]
         wrapper = [call["provider_identity"]["sandbox"]["path"], "--", *call["argv"]]
-        view = {"native_sha256": call["provider_identity"]["native"]["sha256"], "files": [
+        view = {"configuration_states": [], "protected_directories": [], "native_sha256": call["provider_identity"]["native"]["sha256"], "files": [
             {"source": call["provider_identity"]["native"]["path"], "destination": call["provider_identity"]["native"]["path"],
              "sha256": call["provider_identity"]["native"]["sha256"], "byte_length": call["provider_identity"]["native"]["byte_length"], "seals": 15}]}
         def started(pid):
@@ -179,6 +179,7 @@ def _completed_identity_fixture(tmp_path, monkeypatch):
                 "native_process_pid": pid, "gate_process_pid": pid,
                 "native_process_start_ticks": "1", "pid_namespace_inode": 1,
                 "execution_view": view, "execution_view_sha256": canonical_sha256(view),
+                "configuration_observation": {"states": [], "read_only_directories": []},
                 "kernel_executable_sha256": call["provider_identity"]["native"]["sha256"],
                 "kernel_cmdline_sha256": hashlib.sha256(b"\0".join(x.encode() for x in call["argv"]) + b"\0").hexdigest(),
                 "sandbox_argv": wrapper, "sandbox_argv_sha256": canonical_sha256(wrapper),

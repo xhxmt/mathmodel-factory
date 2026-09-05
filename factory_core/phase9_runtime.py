@@ -242,12 +242,12 @@ class _AuthorityProcessSupervisor(ProcessSupervisor):
         from .phase9_provider_sandbox import ProviderSandbox
         sandbox = ProviderSandbox(call_scratch, call["provider_identity"], list(request.argv), request.cwd)
         argv = ["/usr/bin/bwrap", "--die-with-parent", "--unshare-user", "--unshare-pid",
-                "--ro-bind", "/", "/", *writable,
+                "--ro-bind", "/", "/", *sandbox.namespace_mounts, *writable,
                 "--bind", str(call_scratch), str(call_scratch), *sandbox.mounts,
                 "--setenv", "CODEX_HOME", str(sandbox.private_home),
                 "--setenv", "TMPDIR", str(call_scratch), "--setenv", "XDG_CACHE_HOME", str(call_scratch / "cache"),
-                "--proc", "/proc", "--dev", "/dev",
-                "--", *sandbox.command]
+                "--proc", "/proc", "--dev", "/dev", *sandbox.readonly_mounts,
+                "--chdir", str(request.cwd), "--", *sandbox.command]
         _write_new(self.records / "sandbox.json", {
             "schema": "authority-phase9-provider-sandbox-v1",
             "pid_namespace": "PRIVATE", "source_read_only": True,

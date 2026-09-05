@@ -4,11 +4,15 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import stat
+import re
 from .canonical import canonical_sha256
 
 
 def _file(path):
     path = Path(path).resolve(strict=True)
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise ValueError("provider identity requires an ordinary file")
     raw = path.read_bytes()
     return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "byte_length": len(raw)}
 
@@ -104,6 +108,13 @@ def verify_launch(intent, pid, execution):
             or execution.get("kernel_cmdline_sha256") != hashlib.sha256(command).hexdigest()):
         raise ValueError("kernel native provider identity differs from approved launch")
     validate_execution_view(execution, profile)
+    actual_configuration = configuration_observation(native_pid, profile)
+    if actual_configuration != execution.get("configuration_observation"):
+        raise ValueError("native configuration observation differs")
+    cwd = os.stat(f"/proc/{native_pid}/cwd")
+    expected_cwd = os.stat(Path(f"/proc/{native_pid}/root") / call["cwd"].lstrip("/"))
+    if (cwd.st_dev, cwd.st_ino) != (expected_cwd.st_dev, expected_cwd.st_ino):
+        raise ValueError("native cwd bypasses the frozen namespace")
 
 
 def validate_execution_view(execution, profile):
@@ -111,6 +122,16 @@ def validate_execution_view(execution, profile):
     if (execution.get("execution_view_sha256") != canonical_sha256(view)
             or view.get("native_sha256") != profile["native"]["sha256"]):
         raise ValueError("sealed provider execution view differs")
+    if view.get("configuration_states") != expected_configuration_states(profile):
+        raise ValueError("sealed view does not bind every configuration presence/absence")
+    observed = execution.get("configuration_observation")
+    if observed != {"states": expected_configuration_states(profile), "read_only_directories": view.get("protected_directories")}:
+        raise ValueError("native configuration namespace proof differs")
+    required_directories = sorted({str(parent) for row in profile["configuration"]
+                                  for parent in Path(row.get("load_path", row["path"])).parents},
+                                 key=lambda p: (len(Path(p).parts), p))
+    if view.get("protected_directories") != required_directories:
+        raise ValueError("configuration namespace ancestor closure differs")
     files = view.get("files", [])
     required = [profile["native"], *[row for row in profile["configuration"] if not row.get("absent")]]
     for row in required:
@@ -118,3 +139,40 @@ def validate_execution_view(execution, profile):
                    and item.get("sha256") == row["sha256"] and item.get("byte_length") == row["byte_length"]
                    and item.get("seals") == 15 for item in files):
             raise ValueError("approved provider/configuration lacks sealed execution bytes")
+
+
+def expected_configuration_states(profile):
+    return sorted([{"load_path": row.get("load_path", row["path"]),
+                    "presence": "ABSENT" if row.get("absent") else "PRESENT",
+                    "sha256": None if row.get("absent") else row["sha256"],
+                    "byte_length": 0 if row.get("absent") else row["byte_length"]}
+                   for row in profile["configuration"]], key=lambda row: row["load_path"])
+
+
+def configuration_observation(native_pid, profile):
+    """Independently inspect the stopped child's root and readonly mounts."""
+    root = Path(f"/proc/{native_pid}/root")
+    states = expected_configuration_states(profile)
+    for row in states:
+        path = root / row["load_path"].lstrip("/")
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            if row["presence"] != "ABSENT":
+                raise ValueError("approved config is absent in the native view")
+            continue
+        if row["presence"] == "ABSENT" or not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("unapproved config exists in the native view")
+        raw = path.read_bytes()
+        if len(raw) != row["byte_length"] or hashlib.sha256(raw).hexdigest() != row["sha256"]:
+            raise ValueError("native configuration bytes differ")
+    directories = sorted({str(parent) for row in states for parent in Path(row["load_path"]).parents},
+                         key=lambda p: (len(Path(p).parts), p))
+    mounts = {}
+    for line in Path(f"/proc/{native_pid}/mountinfo").read_text().splitlines():
+        fields = line.split()
+        name = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4])
+        mounts[name] = fields[5].split(',')
+    if any('ro' not in mounts.get(path, []) for path in directories):
+        raise ValueError("native configuration namespace is not immutable")
+    return {"states": states, "read_only_directories": directories}
