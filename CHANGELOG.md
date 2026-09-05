@@ -1,4 +1,5 @@
 # Changelog
+- Closed remaining Phase9 runtime review gaps: sealed native/configuration execution views and a native exec-stop handshake replace wrapper-only identity; Codex uses a private writable runtime home. CLI export selects latest Authority attempts before reading accepted outputs, and generated controls use canonical JSON. Added the required runtime implementation/test/evidence mapping.
 - Hardened Phase9 runtime identity and recovery: operator-approved native Codex/configuration hashes and exact argv now bind dispatch and kernel launch; post-launch transport errors remain UNCERTAIN without automatic resend. Native fallback output selection is persisted before export. Runtime request v3 keeps execution coordinates stable across freshly acquired completion entries; exact append-only export stages resume missing records/files and reject drift without provider redispatch. Existing request v2 semantics remain unchanged.
 
 - Added the default-off A2_0020 Phase9 runtime coordinator: separate operator

@@ -16,7 +16,7 @@ from .deadline import deadline_scope
 from .domain import StepContext
 from .governance.overrides import NullOverrideProvider
 from .phase9_runtime import (
-    Phase9RuntimeError, _ObservedDispatcher, _source_identity, _write_new,
+    Phase9RuntimeError, _ObservedDispatcher, _source_identity, _write_new, _write_control,
     run_step13_components,
 )
 from .phase9_runtime_authority import dispatch_target
@@ -64,8 +64,8 @@ def plan_runtime(*, source, project, records, request, model="gpt-6-astra", effo
     target = dispatch_target(request, packet_sha256=canonical_sha256(packet),
                              project_input_sha256=canonical_sha256(fingerprints), model=model, effort=effort,
                              timeout_seconds=timeout_seconds, total_timeout_seconds=total_timeout_seconds, provider=provider_identity(project))
-    _write_new(records / "formal_packet.json", packet)
-    _write_new(records / "dispatch_target.json", target)
+    _write_control(records / "formal_packet.json", packet)
+    _write_control(records / "dispatch_target.json", target)
     return {"status": "PREPARED", "target": target, "target_sha256": canonical_sha256(target),
             "model_dispatch_count": 0, "formal_phase9_completed": False, "delivery_capability": "DISABLED"}
 
@@ -90,7 +90,7 @@ def execute_runtime(*, source, project, records, request, entry, target, grant, 
                                  project_input_sha256=canonical_sha256(fingerprints), model=target["model"], effort=target["effort"],
                                  timeout_seconds=target["timeout_seconds"], total_timeout_seconds=target["total_timeout_seconds"], provider=provider_identity(project)):
         raise Phase9RuntimeError("prepared packet no longer matches the dispatch grant")
-    _write_new(records / "formal_packet.json", packet)
+    _write_control(records / "formal_packet.json", packet)
     start = authority.start(request, entry, target, grant)
     _write_new(records / "started.json", start)
 

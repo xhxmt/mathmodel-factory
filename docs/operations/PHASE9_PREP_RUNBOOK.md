@@ -173,8 +173,15 @@ are deliberately separate from the normal Step13 math precheck:
    is bypassed), resolution chain, configuration-file hashes and routing
    environment hash. Approval must verify these exact provider identities;
    a program merely named codex is not independently certified by its name.
-   Actual argv/cwd and kernel executable/command-line observations bind each
-   intent and launch. Credentials are never printed; response model identity
+   Actual argv/cwd bind each intent. The supervisor creates sealed memfd
+   snapshots of native/configuration bytes and mounts those read-only. A fixed
+   ptrace exec-stop helper holds the actual native child before application
+   execution, with EXITKILL protection. The private socket handshake binds its
+   PID, ancestry, executable and argv; Authority commits this observation
+   before GO. Wrapper identity alone cannot satisfy the receipt proof.
+   Codex runtime state uses a private writable CODEX_HOME under TMPDIR with
+   approved config mounted read-only and a private authentication copy; the
+   original client and credential files are not modified. Credentials are never printed; response model identity
    remains unavailable unless independently visible. Role execution uses the repository's two-attempt transport / three-round
    infrastructure retry budget, a pinned model/effort and an overall deadline.
    Providers require a private PID namespace and read-only host source, inputs
@@ -196,6 +203,9 @@ are deliberately separate from the normal Step13 math precheck:
    <id> --request <fresh-request> --entry <fresh-entry> --records <execution-records>`
    joins actual output bytes and OS observations and calls
    `record_formal_phase9_runtime_receipt` for roles and process scopes. It
+   first selects the Authority's latest attempt for every role; historical
+   attempts without accepted output remain preserved and do not block a valid
+   later attempt. Machine-consumed controls use canonical JSON bytes. It
    uses the native judge's persisted accepted output (including final-response
    fallback), and validates packet/verdict/snapshot controls before receipt writes.
 6. `finalize --request <fresh-request> --records <new-scratch-directory>` runs

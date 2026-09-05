@@ -19,6 +19,45 @@ from factory_core.phase9_runtime_authority import Phase9RuntimeAuthority
 from factory_core.phase9_runtime_coordinator import plan_runtime, execute_runtime, write_finalizer_controls
 
 
+def selected_runtime_outputs(records, runtime_id, authority):
+    """Select all latest attempts before opening any optional selection file."""
+    import hashlib
+    state = authority.collect(runtime_id)
+    latest = {}
+    for row in state["attempts"]:
+        if row["role"] in {"math", "execution", "paper"}:
+            old = latest.get(row["role"])
+            if old is None or old["role_attempt"] < row["role_attempt"]:
+                latest[row["role"]] = row
+    chosen = {}
+    for path in sorted((records / "calls").glob("*/dispatch_intent.json")):
+        intent = _strict_json(_regular_file_bytes(path, maximum=4 * 1024 * 1024, label="dispatch intent"), "dispatch intent")
+        if intent["runtime_id"] != runtime_id or intent["role"] not in latest:
+            raise ValueError("execution records differ from Authority runtime")
+        row = latest[intent["role"]]
+        if intent["role_attempt"] == row["role_attempt"]:
+            if intent["attempt_id"] != row["attempt_id"] or intent["role"] in chosen:
+                raise ValueError("latest attempt identity is conflicting or duplicated")
+            chosen[intent["role"]] = path
+        elif intent["role_attempt"] > row["role_attempt"]:
+            raise ValueError("local attempt is newer than Authority")
+    if set(chosen) != {"math", "execution", "paper"}:
+        raise ValueError("latest Authority attempts lack complete local records")
+    outputs = {}
+    for role, path in chosen.items():
+        selection = _strict_json(_regular_file_bytes(path.parent / "accepted_output.json", maximum=4 * 1024 * 1024, label="accepted output"), "accepted output")
+        stored = latest[role].get("selection_json")
+        accepted = _strict_json(stored.encode(), "Authority accepted output") if stored else {}
+        if (selection != accepted.get("selection") or selection.get("invocation_id") != path.parent.name
+                or selection.get("role") != role or selection.get("source") not in {"output", "final_response"}):
+            raise ValueError("accepted output selection differs from Authority")
+        raw = _regular_file_bytes(path.parent / (selection["source"] + ".raw"), maximum=64 * 1024 * 1024, label=role)
+        if len(raw) != selection["byte_length"] or hashlib.sha256(raw).hexdigest() != selection["sha256"]:
+            raise ValueError("accepted output bytes changed")
+        outputs[role] = raw
+    return outputs
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("plan", "execute", "collect", "export", "finalize"))
@@ -86,25 +125,7 @@ def main(argv=None):
             else:
                 if not args.runtime_id:
                     parser.error("export requires --runtime-id")
-                selected = {}
-                for path in sorted((args.records / "calls").glob("*/dispatch_intent.json")):
-                    intent = read(path, "dispatch intent")
-                    if intent["runtime_id"] != args.runtime_id:
-                        raise ValueError("records include a different runtime")
-                    old = selected.get(intent["role"])
-                    if old is None or intent["role_attempt"] > old[0]:
-                        selection = read(path.parent / "accepted_output.json", "accepted output")
-                        if (selection.get("invocation_id") != path.parent.name
-                                or selection.get("role") != intent["role"]
-                                or selection.get("source") not in {"output", "final_response"}):
-                            raise ValueError("accepted output selection differs")
-                        output = path.parent / (selection["source"] + ".raw")
-                        import hashlib
-                        raw = _regular_file_bytes(output, maximum=64 * 1024 * 1024, label="selected output")
-                        if len(raw) != selection["byte_length"] or hashlib.sha256(raw).hexdigest() != selection["sha256"]:
-                            raise ValueError("accepted output bytes changed")
-                        selected[intent["role"]] = (intent["role_attempt"], output)
-                outputs = {role: _regular_file_bytes(value[1], maximum=64 * 1024 * 1024, label=role) for role, value in selected.items()}
+                outputs = selected_runtime_outputs(args.records, args.runtime_id, authority)
                 write_finalizer_controls(
                     authority=authority, runtime_id=args.runtime_id, request=request, entry=read(args.entry, "entry"),
                     project=args.project or authority.project_root, evidence_root=settings.evidence_root, outputs=outputs,

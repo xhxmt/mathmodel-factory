@@ -46,7 +46,7 @@ def provider_identity(project=None):
         workdir = Path(project).resolve(strict=True)
         config_paths.update(parent / ".codex/config.toml" for parent in (workdir, *workdir.parents))
     for path in sorted(config_paths):
-        configuration.append(_file(path) if path.exists() else {"path": str(path), "absent": True})
+        configuration.append({**_file(path), "load_path": str(path)} if path.exists() else {"path": str(path), "load_path": str(path), "absent": True})
     # Authentication is deliberately excluded: provider credentials may rotate,
     # while routing and config values must remain exactly those approved.
     return {"schema": "phase9-codex-native-identity-v1", "native": _file(native),
@@ -76,11 +76,45 @@ def verify_launch(intent, pid, execution):
             or not wrapped or wrapped[0] != profile["sandbox"]["path"]
             or wrapped[-len(call["argv"]):] != call["argv"]):
         raise ValueError("provider launch does not bind its approved command")
-    executable = Path(f"/proc/{pid}/exe").read_bytes()
-    command = Path(f"/proc/{pid}/cmdline").read_bytes()
-    expected = {b"\0".join(part.encode() for part in argv) + b"\0" for argv in (wrapped, call["argv"])}
+    native_pid = execution.get("native_process_pid")
+    gate_pid = execution.get("gate_process_pid")
+    if type(native_pid) is not int or type(gate_pid) is not int:
+        raise ValueError("provider launch lacks native exec-stop identity")
+    raw = Path(f"/proc/{native_pid}/stat").read_text()
+    fields = raw[raw.rfind(")") + 2:].split()
+    status = Path(f"/proc/{native_pid}/status").read_text()
+    tracer = int(next(line.split()[1] for line in status.splitlines() if line.startswith("TracerPid:")))
+    if (fields[0] not in {"t", "T"} or int(fields[1]) != gate_pid or tracer != gate_pid
+            or execution.get("native_process_start_ticks") != fields[19]
+            or execution.get("pid_namespace_inode") != os.stat(f"/proc/{native_pid}/ns/pid").st_ino):
+        raise ValueError("native process was not held at the owned exec gate")
+    ancestor = gate_pid
+    while ancestor != pid:
+        raw = Path(f"/proc/{ancestor}/stat").read_text()
+        parent = int(raw[raw.rfind(")") + 2:].split()[1])
+        if parent <= 1 or parent == ancestor:
+            raise ValueError("native process escaped its wrapper scope")
+        ancestor = parent
+    executable = Path(f"/proc/{native_pid}/exe").read_bytes()
+    command = Path(f"/proc/{native_pid}/cmdline").read_bytes()
+    expected = b"\0".join(part.encode() for part in call["argv"]) + b"\0"
     digest = hashlib.sha256(executable).hexdigest()
-    if (command not in expected or digest not in {profile["native"]["sha256"], profile["sandbox"]["sha256"]}
+    if (command != expected or digest != profile["native"]["sha256"]
             or execution.get("kernel_executable_sha256") != digest
             or execution.get("kernel_cmdline_sha256") != hashlib.sha256(command).hexdigest()):
-        raise ValueError("kernel provider identity differs from approved launch")
+        raise ValueError("kernel native provider identity differs from approved launch")
+    validate_execution_view(execution, profile)
+
+
+def validate_execution_view(execution, profile):
+    view = execution.get("execution_view", {})
+    if (execution.get("execution_view_sha256") != canonical_sha256(view)
+            or view.get("native_sha256") != profile["native"]["sha256"]):
+        raise ValueError("sealed provider execution view differs")
+    files = view.get("files", [])
+    required = [profile["native"], *[row for row in profile["configuration"] if not row.get("absent")]]
+    for row in required:
+        if not any(item.get("source") == row["path"] and item.get("destination") == row.get("load_path", row["path"])
+                   and item.get("sha256") == row["sha256"] and item.get("byte_length") == row["byte_length"]
+                   and item.get("seals") == 15 for item in files):
+            raise ValueError("approved provider/configuration lacks sealed execution bytes")

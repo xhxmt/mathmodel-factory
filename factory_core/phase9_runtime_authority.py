@@ -415,7 +415,9 @@ class Phase9RuntimeAuthority:
             connection = self._connect()
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                self._run(connection, intent["runtime_id"])
+                runtime, _ = self._run(connection, intent["runtime_id"])
+                if int(time.time()) >= runtime["deadline_at"]:
+                    raise Phase9RuntimeAuthorityError("runtime deadline exhausted before native launch release")
                 stored = connection.execute("SELECT dispatch_intent_json FROM authority_production_phase9_runtime_attempts WHERE attempt_id=?", (intent["attempt_id"],)).fetchone()
                 if stored is None or stored[0] != canonical_bytes(intent).decode():
                     raise Phase9RuntimeAuthorityError("launch does not own its committed intent")
@@ -435,9 +437,10 @@ class Phase9RuntimeAuthority:
                 connection.execute("BEGIN")
                 row, start = self._run(connection, runtime_id, require_current=False)
                 attempts = [dict(value) for value in connection.execute(
-                    "SELECT a.attempt_id,a.role,a.role_attempt,o.outcome,o.observation_sha256 "
+                    "SELECT a.attempt_id,a.role,a.role_attempt,o.outcome,o.observation_sha256,x.selection_json "
                     "FROM authority_production_phase9_runtime_attempts a "
                     "LEFT JOIN authority_production_phase9_runtime_observations o ON o.attempt_id=a.attempt_id "
+                    "LEFT JOIN authority_production_phase9_runtime_accepted_outputs x ON x.attempt_id=a.attempt_id "
                     "WHERE a.runtime_id=? ORDER BY a.role,a.role_attempt", (runtime_id,),
                 )]
                 terminal = connection.execute(

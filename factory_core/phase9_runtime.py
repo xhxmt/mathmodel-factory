@@ -18,7 +18,7 @@ import uuid
 
 from .adapters.models.backends import CodexCliBackend
 from .adapters.infrastructure.process import ProcessSupervisor
-from .canonical import canonical_sha256
+from .canonical import canonical_sha256, canonical_bytes
 from .domain import ExecutionResult, StepContext
 from .deadline import deadline_scope, ensure_deadline
 from .governance.overrides import NullOverrideProvider
@@ -61,6 +61,14 @@ def _write_new(path: Path, value) -> None:
         os.fsync(stream.fileno())
 
 
+def _write_control(path: Path, value) -> None:
+    """Machine-consumed controls use the Authority canonical byte contract."""
+    with path.open("xb") as stream:
+        stream.write(canonical_bytes(value))
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 class _ObservedDispatcher:
     """One pinned backend; every transport attempt retains its own observation."""
 
@@ -90,7 +98,7 @@ class _ObservedDispatcher:
         }
         if self.authority is not None:
             self.authority.accept_output(self.intents[record["invocation_id"]], selection)
-        _write_new(self.records / record["invocation_id"] / "accepted_output.json", selection)
+        _write_control(self.records / record["invocation_id"] / "accepted_output.json", selection)
 
     def execute(self, request, *, step_key, defaults):
         del step_key, defaults
@@ -127,7 +135,7 @@ class _ObservedDispatcher:
             intent = self.authority.reserve_attempt(self.runtime_id, role, canonical_sha256(request_record),
                                                     provider_call=provider_call)
             self.intents[invocation] = intent
-            _write_new(attempt_root / "dispatch_intent.json", intent)
+            _write_control(attempt_root / "dispatch_intent.json", intent)
             supervisor = _AuthorityProcessSupervisor(
                 self.authority, intent, attempt_root,
                 [Path(path) for path in (configured.output_file, configured.final_response_file) if path is not None],
@@ -196,19 +204,13 @@ class _AuthorityProcessSupervisor(ProcessSupervisor):
 
     def run(self, request):
         def started(pid):
-            executable = Path(f"/proc/{pid}/exe").read_bytes()
-            command_line = Path(f"/proc/{pid}/cmdline").read_bytes()
-            allowed_commands = {b"\0".join(value.encode() for value in command) + b"\0"
-                                for command in (argv, request.argv)}
-            if command_line not in allowed_commands:
-                raise Phase9RuntimeError("launched provider command differs from sealed argv")
-            self.launch_record = self.authority.launch(self.intent, pid, execution={
-                "provider_call_sha256": canonical_sha256(self.intent["provider_call"]),
-                "kernel_executable_sha256": hashlib.sha256(executable).hexdigest(),
-                "kernel_cmdline_sha256": hashlib.sha256(command_line).hexdigest(),
-                "sandbox_argv": argv, "sandbox_argv_sha256": canonical_sha256(argv),
-            })
+            execution = sandbox.handshake(pid, self.intent, argv)
+            self.launch_record = self.authority.launch(self.intent, pid, execution=execution)
             _write_new(self.records / "launch.json", self.launch_record)
+            ensure_deadline()
+            if time.monotonic() >= process_deadline:
+                raise Phase9RuntimeError("per-call deadline exhausted before native release")
+            sandbox.release()
 
         from .phase9_provider_identity import provider_identity, routing_environment_sha256
         call = self.intent.get("provider_call", {})
@@ -237,12 +239,15 @@ class _AuthorityProcessSupervisor(ProcessSupervisor):
         # A private PID namespace closes descendants even if a provider starts
         # another session. Authority DB, inputs, earlier outputs and evidence
         # remain read-only. Only this call's output files and scratch can change.
+        from .phase9_provider_sandbox import ProviderSandbox
+        sandbox = ProviderSandbox(call_scratch, call["provider_identity"], list(request.argv), request.cwd)
         argv = ["/usr/bin/bwrap", "--die-with-parent", "--unshare-user", "--unshare-pid",
                 "--ro-bind", "/", "/", *writable,
-                "--bind", str(call_scratch), str(call_scratch),
+                "--bind", str(call_scratch), str(call_scratch), *sandbox.mounts,
+                "--setenv", "CODEX_HOME", str(sandbox.private_home),
                 "--setenv", "TMPDIR", str(call_scratch), "--setenv", "XDG_CACHE_HOME", str(call_scratch / "cache"),
                 "--proc", "/proc", "--dev", "/dev",
-                "--", *request.argv]
+                "--", *sandbox.command]
         _write_new(self.records / "sandbox.json", {
             "schema": "authority-phase9-provider-sandbox-v1",
             "pid_namespace": "PRIVATE", "source_read_only": True,
@@ -250,7 +255,12 @@ class _AuthorityProcessSupervisor(ProcessSupervisor):
             "authority_database_read_only": True,
             "sandbox_sha256": hashlib.sha256(Path("/usr/bin/bwrap").read_bytes()).hexdigest(),
         })
-        result = super().run(replace(request, argv=argv, on_started=started))
+        process_deadline = time.monotonic() + request.timeout_seconds
+        sandbox.server.settimeout(min(10, request.timeout_seconds))
+        try:
+            result = super().run(replace(request, argv=argv, on_started=started, pass_fds=tuple(sandbox.fds)))
+        finally:
+            sandbox.close()
         active = []
         for path in Path("/proc").iterdir():
             if not path.name.isdecimal():

@@ -22,6 +22,7 @@ class ProcessRequest:
     kill_grace_seconds: float = 10.0
     on_started: Callable[[int], None] | None = None
     stop_requested: Callable[[], bool] | None = None
+    pass_fds: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class ProcessSupervisor:
                         stdout=stdout_handle,
                         stderr=stderr_handle,
                         start_new_session=True,
+                        pass_fds=request.pass_fds,
                     )
                 except OSError as exc:
                     return ProcessResult(

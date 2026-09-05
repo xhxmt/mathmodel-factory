@@ -194,3 +194,85 @@ def test_provider_identity_rejects_script_and_binds_ancestor_configuration(tmp_p
     config.parent.mkdir()
     config.write_text('model = "changed"\n')
     assert provider.provider_identity(tmp_path) != before
+
+
+def test_cli_export_ignores_unaccepted_history_and_uses_authority_latest(tmp_path):
+    import hashlib
+    from factory_core.phase9_runtime import _write_control
+    from factory_core.canonical import canonical_bytes
+    from scripts.phase9_authorized_runtime import selected_runtime_outputs
+    rows = []
+    for role in ('math', 'execution', 'paper'):
+        for attempt in (1, 2):
+            directory = tmp_path / 'calls' / f'{role}-{attempt}'
+            directory.mkdir(parents=True)
+            identity = f'{role}-attempt-{attempt}'
+            _write_control(directory / 'dispatch_intent.json', {
+                'runtime_id': 'unit', 'role': role, 'role_attempt': attempt, 'attempt_id': identity})
+            selection = None
+            if attempt == 2:
+                raw = b'VERDICT: PASS\n'
+                selected = {'role': role, 'invocation_id': directory.name, 'source': 'final_response',
+                            'sha256': hashlib.sha256(raw).hexdigest(), 'byte_length': len(raw)}
+                _write_control(directory / 'accepted_output.json', selected)
+                (directory / 'final_response.raw').write_bytes(raw)
+                selection = canonical_bytes({'selection': selected}).decode()
+            rows.append({'role': role, 'role_attempt': attempt, 'attempt_id': identity, 'selection_json': selection})
+    authority = SimpleNamespace(collect=lambda _: {'attempts': rows})
+    assert selected_runtime_outputs(tmp_path, 'unit', authority) == {r: b'VERDICT: PASS\n' for r in ('math', 'execution', 'paper')}
+    rows.append({'role': 'math', 'role_attempt': 3, 'attempt_id': 'missing', 'selection_json': None})
+    with pytest.raises(ValueError, match='latest Authority attempts'):
+        selected_runtime_outputs(tmp_path, 'unit', authority)
+
+
+def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkeypatch):
+    """Real Linux exec-stop of /usr/bin/true bytes; NOT a model/provider receipt."""
+    import hashlib
+    import os
+    from factory_core.phase9_provider_sandbox import ProviderSandbox
+    from factory_core.phase9_provider_identity import _file, verify_launch
+    from factory_core.adapters.infrastructure.process import ProcessRequest, ProcessSupervisor
+    from factory_core.canonical import canonical_sha256
+    native = tmp_path / 'codex'
+    native.write_bytes(Path('/usr/bin/true').read_bytes())
+    native.chmod(0o700)
+    home = tmp_path / 'empty-codex-home'
+    home.mkdir()
+    monkeypatch.setenv('CODEX_HOME', str(home))
+    profile = {'native': _file(native), 'configuration': [], 'sandbox': _file('/usr/bin/bwrap')}
+    scratch = tmp_path / 'scratch'
+    scratch.mkdir()
+    native_argv = [str(native)]
+    sandbox = ProviderSandbox(scratch, profile, native_argv, tmp_path)
+    native.write_bytes(Path('/usr/bin/false').read_bytes())
+    argv = ['/usr/bin/bwrap', '--die-with-parent', '--unshare-user', '--unshare-pid', '--ro-bind', '/', '/',
+            '--bind', str(scratch), str(scratch), *sandbox.mounts, '--proc', '/proc', '--dev', '/dev', '--', *sandbox.command]
+    call = {'provider_identity': profile, 'argv': native_argv, 'argv_sha256': canonical_sha256(native_argv)}
+    intent = {'provider_call': call}
+    observations = []
+    def started(pid):
+        execution = sandbox.handshake(pid, intent, argv)
+        verify_launch(intent, pid, execution)
+        assert execution['native_process_pid'] != pid
+        observations.append(execution)
+        sandbox.release()
+    try:
+        result = ProcessSupervisor().run(ProcessRequest(argv, tmp_path, 15, tmp_path / 'exec-gate.log',
+            on_started=started, pass_fds=tuple(sandbox.fds), kill_grace_seconds=1))
+    finally:
+        sandbox.close()
+    assert result.returncode == 0  # sealed true, despite host path now containing false
+    assert observations[0]['kernel_executable_sha256'] == profile['native']['sha256']
+    assert hashlib.sha256(native.read_bytes()).hexdigest() != profile['native']['sha256']
+
+
+def test_runtime_requirement_mapping_covers_the_frozen_suite_contract():
+    import csv
+    root = Path(__file__).resolve().parents[1]
+    contract = json.loads((root / 'docs/operations/PHASE9_TEST_SUITE_CONTRACT.json').read_text())
+    with (root / 'docs/operations/PHASE9_REQUIREMENT_IMPLEMENTATION_TEST_EVIDENCE_MAP.tsv').open() as stream:
+        rows = list(csv.DictReader(stream, delimiter='\t'))
+    assert {row['requirement_id'] for row in rows} == {r for suite in contract['suites'] for r in suite['requirements']} | {'P9-PRODUCTION-RUN'}
+    covered = {p for row in rows for key in ('implementation', 'tests') for p in row[key].split(';')}
+    assert {p for suite in contract['suites'] for p in suite['required_targets']} <= covered
+    assert all((root / path).is_file() for path in covered)
