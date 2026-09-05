@@ -607,3 +607,7 @@ prefix. `web/README.md` owns current usage and
 - Root `pyproject.toml`/`uv.lock`, hash-locked Web/Cloud exports, and frontend `package-lock.json` own dependency resolution. Runtime start scripts must not install packages.
 - Do not change `STEPS.md`, `modeling_guide.md`, or active prompts casually; they are agent contracts.
 - Keep historical prompt/data files unless deletion is explicitly approved. They are not an executable compatibility promise.
+
+### Phase9 runtime coordination
+
+`factory_core/phase9_runtime*.py` and `scripts/phase9_authorized_runtime.py` own the default-off A2_0020 dispatch lifecycle and actual completion receipt path. The existing forensic service remains a finalizer. Read `docs/operations/PHASE9_PREP_RUNBOOK.md` for distinct runtime-grant acquisition, bounded execution, fresh completion entry and independent finalizer-start contracts. Production schema version 8 requires separately authorized migration; delivery remains disabled.

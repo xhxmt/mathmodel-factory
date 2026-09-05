@@ -3079,6 +3079,25 @@ def _authority_runtime_source_sha256(
     attempt_id: str,
     process_scope_id: str,
 ) -> str:
+    # A2_0020 dispatcher receipts have a pre-dispatch grant, durable intent and
+    # an observed OS launch. Join that graph instead of manufacturing a legacy
+    # completion command after the fact.
+    has_runtime_schema = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='authority_production_phase9_runtime_attempts'"
+    ).fetchone()
+    if has_runtime_schema and connection.execute(
+        "SELECT 1 FROM authority_production_phase9_runtime_attempts WHERE attempt_id=?", (attempt_id,)
+    ).fetchone():
+        from .phase9_runtime_receipts import runtime_receipt_source_sha256
+        return runtime_receipt_source_sha256(
+            connection, request=request, receipt_kind=receipt_kind, logical_id=logical_id,
+            logical_path=logical_path, raw_bytes_sha256=raw_bytes_sha256,
+            byte_length=byte_length, receipt_sha256=receipt_sha256,
+            dependency_fingerprint_sha256=dependency_fingerprint_sha256,
+            input_sha256=input_sha256, output_sha256=output_sha256,
+            packet_sha256=packet_sha256, invocation_id=invocation_id,
+            attempt_id=attempt_id, process_scope_id=process_scope_id,
+        )
     rows: dict[str, dict[str, object]] = {}
     for table, key, value in (
         ("authority_invocations", "invocation_id", invocation_id),

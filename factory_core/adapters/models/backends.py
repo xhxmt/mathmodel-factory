@@ -58,10 +58,13 @@ class _ProcessModelBackend:
             )
         )
         metadata = {
+            **result.metadata,
             "backend": self.name,
             "model": request.model,
             "log": str(log.relative_to(request.project_dir)),
             "duration_seconds": result.duration_seconds,
+            "process_pid": result.pid,
+            "process_timed_out": result.timed_out,
         }
         if result.returncode == 0:
             return ExecutionResult.succeeded(**metadata)

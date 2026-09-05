@@ -1760,6 +1760,14 @@ def _active_process_count(connection: sqlite3.Connection) -> int:
     )
     solver_rows = connection.execute("SELECT status FROM solver_jobs").fetchall()
     count += sum(str(row["status"]) in _ACTIVE_SOLVER_STATUS for row in solver_rows)
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='authority_production_phase9_runtime_runs'").fetchone():
+        # A dispatcher crash is unresolved work, even if its parent PID is gone.
+        # An UNCERTAIN terminal cannot turn an unobserved attempt into idle state.
+        count += connection.execute(
+            "SELECT COUNT(*) FROM authority_production_phase9_runtime_runs r "
+            "LEFT JOIN authority_production_phase9_runtime_terminals t ON t.runtime_id=r.runtime_id "
+            "WHERE t.runtime_id IS NULL OR t.terminal_status='UNCERTAIN'"
+        ).fetchone()[0]
     return count
 
 

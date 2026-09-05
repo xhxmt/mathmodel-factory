@@ -97,3 +97,33 @@ def test_dispatch_exception_is_counted_as_uncertain_attempt(tmp_path):
     assert len(dispatcher.calls) == 1
     assert dispatcher.calls[0]["status"] == "OUTCOME_UNCERTAIN"
     assert len(list(calls.glob("*/completion.json"))) == 1
+
+
+def test_total_deadline_caps_preparation_and_prepare_only_cannot_outlive_it(tmp_path, monkeypatch):
+    from factory_core.deadline import cap_timeout
+
+    kwargs, calls = _setup(tmp_path, monkeypatch)
+    now = [1000]
+    monkeypatch.setattr("time.time", lambda: now[0])
+
+    class SlowPreparation:
+        def prepare_packets(self, context):
+            assert cap_timeout(600) == 30
+            now[0] += 31
+            return ExecutionResult.succeeded()
+
+    monkeypatch.setattr("factory_core.phase9_runtime.build_native_registry",
+                        lambda source: SimpleNamespace(get=lambda n: SimpleNamespace(lifecycle=SlowPreparation())))
+    result = run_step13_components(**kwargs, mode="NORMAL_STEP13", prepare_only=True)
+    assert result["status"] == "BLOCKED"
+    assert "deadline" in result["reason"]
+    assert cap_timeout(600) == 600  # context was restored
+
+
+def test_records_cannot_overlap_executing_source(tmp_path, monkeypatch):
+    kwargs, calls = _setup(tmp_path, monkeypatch)
+    kwargs["records"] = kwargs["source"] / "observations"
+    with pytest.raises(Phase9RuntimeError, match="overlap"):
+        run_step13_components(**kwargs, mode="NORMAL_STEP13")
+    assert not kwargs["records"].exists()
+    assert not calls

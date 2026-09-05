@@ -87,6 +87,7 @@ def test_published_shadow_migration_checksums_are_unchanged_and_suffix_is_append
         "A2_0017_PHASE9_AUDIT_HARDENING",
         "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
         "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
+        "A2_0020_PHASE9_RUNTIME_EXECUTION",
     )
     assert PRODUCTION_MIGRATION_CHECKSUMS[:4] == FROZEN_A2_0010_0013
     assert PRODUCTION_MIGRATION_CHECKSUMS[4:7] == FROZEN_A2_0014_0016
@@ -99,7 +100,7 @@ def test_published_shadow_migration_checksums_are_unchanged_and_suffix_is_append
     assert PRODUCTION_MIGRATION_CHECKSUMS[9] == (
         "355c9419f56aa6266b3676f741e0e37a63856e820fa054e9bc217027f23646db"
     )
-    assert len(PRODUCTION_MIGRATION_CHECKSUMS) == len(set(PRODUCTION_MIGRATION_CHECKSUMS)) == 10
+    assert len(PRODUCTION_MIGRATION_CHECKSUMS) == len(set(PRODUCTION_MIGRATION_CHECKSUMS)) == 11
 
 
 def test_a2_0001_through_a2_0016_statement_bytes_are_frozen():
@@ -213,7 +214,7 @@ def test_ready_a2_0014_installation_upgrades_additively_through_a2_0018(
     monkeypatch.setattr(
         production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums
     )
-    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 7)
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 8)
     report = AuthorityProductionMigrationRunner(
         fixture.database,
         database_id="a2-0014-upgrade-db",
@@ -228,6 +229,7 @@ def test_ready_a2_0014_installation_upgrades_additively_through_a2_0018(
         "A2_0017_PHASE9_AUDIT_HARDENING",
         "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
         "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
+        "A2_0020_PHASE9_RUNTIME_EXECUTION",
     )
     connection = sqlite3.connect(fixture.database)
     connection.row_factory = sqlite3.Row
@@ -242,7 +244,7 @@ def test_ready_a2_0014_installation_upgrades_additively_through_a2_0018(
         }
     finally:
         connection.close()
-    assert state["production_schema_version"] == 7
+    assert state["production_schema_version"] == 8
     assert names == {
         "authority_production_run_generations",
         "authority_production_run_generation_current",
@@ -273,7 +275,7 @@ def test_ready_a2_0015_installation_upgrades_additively_through_a2_0018(
     monkeypatch.setattr(
         production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums
     )
-    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 7)
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 8)
     report = AuthorityProductionMigrationRunner(
         fixture.database,
         database_id="a2-0015-upgrade-db",
@@ -287,6 +289,7 @@ def test_ready_a2_0015_installation_upgrades_additively_through_a2_0018(
         "A2_0017_PHASE9_AUDIT_HARDENING",
         "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
         "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
+        "A2_0020_PHASE9_RUNTIME_EXECUTION",
     )
     connection = sqlite3.connect(fixture.database)
     connection.row_factory = sqlite3.Row
@@ -301,7 +304,7 @@ def test_ready_a2_0015_installation_upgrades_additively_through_a2_0018(
         }
     finally:
         connection.close()
-    assert state["production_schema_version"] == 7
+    assert state["production_schema_version"] == 8
     assert names == {
         "authority_production_phase9_replays",
         "authority_production_phase9_replay_events",
@@ -322,6 +325,13 @@ def test_ready_a2_0015_installation_upgrades_additively_through_a2_0018(
         "authority_production_phase9_replay_evidence_attestation_items",
         "authority_production_phase9_start_authorizations",
         "authority_production_phase9_start_authorization_consumptions",
+        "authority_production_phase9_dispatch_grants",
+        "authority_production_phase9_runtime_runs",
+        "authority_production_phase9_runtime_attempts",
+        "authority_production_phase9_runtime_launches",
+        "authority_production_phase9_runtime_observations",
+        "authority_production_phase9_runtime_terminals",
+        "authority_production_phase9_runtime_receipt_bindings",
     }
 
 
@@ -344,7 +354,7 @@ def test_ready_a2_0016_installation_upgrades_additively_through_a2_0018(
     monkeypatch.setattr(
         production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums
     )
-    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 7)
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 8)
     report = AuthorityProductionMigrationRunner(
         fixture.database,
         database_id="a2-0016-upgrade-db",
@@ -357,6 +367,7 @@ def test_ready_a2_0016_installation_upgrades_additively_through_a2_0018(
         "A2_0017_PHASE9_AUDIT_HARDENING",
         "A2_0018_PHASE9_P0_RUNNER_ATTESTATION",
         "A2_0019_PHASE9_REPLAY_EVIDENCE_ATTESTATION",
+        "A2_0020_PHASE9_RUNTIME_EXECUTION",
     )
     connection = sqlite3.connect(fixture.database)
     try:
@@ -378,7 +389,7 @@ def test_ready_a2_0016_installation_upgrades_additively_through_a2_0018(
         "authorization_target_sha256",
         "predecessor_terminal_receipt_sha256",
     } <= columns
-    assert state == (7, "READY")
+    assert state == (8, "READY")
 
 
 def test_a2_0017_refuses_to_grandfather_pre_hardening_phase9_rows(
@@ -410,7 +421,7 @@ def test_a2_0017_refuses_to_grandfather_pre_hardening_phase9_rows(
     monkeypatch.setattr(
         production_schema, "PRODUCTION_MIGRATION_CHECKSUMS", migration_checksums
     )
-    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 7)
+    monkeypatch.setattr(production_schema, "AUTHORITY_PRODUCTION_SCHEMA_VERSION", 8)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         AuthorityProductionMigrationRunner(
             fixture.database,
@@ -535,7 +546,7 @@ def test_future_production_schema_fails_closed(tmp_path):
     connection = sqlite3.connect(fixture.database)
     connection.execute(
         "UPDATE authority_production_schema_state "
-        "SET production_schema_version=8, state='RUNNING', "
+        "SET production_schema_version=9, state='RUNNING', "
         "lock_owner='future-owner', details_json='{\"future\":true}'"
     )
     connection.commit()
@@ -556,7 +567,7 @@ def test_future_production_schema_fails_closed(tmp_path):
         assert connection.execute(
             "SELECT production_schema_version, state, lock_owner, failure_code, details_json "
             "FROM authority_production_schema_state"
-        ).fetchone() == (8, "RUNNING", "future-owner", None, '{"future":true}')
+        ).fetchone() == (9, "RUNNING", "future-owner", None, '{"future":true}')
     finally:
         connection.close()
 

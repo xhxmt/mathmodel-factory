@@ -432,3 +432,7 @@ outbox intent, infer owner/generation, or import the joint Shadow harness. A
 future traffic switch additionally requires consolidation of the active v1
 writer inventory, real deployment fencing, authenticated operator authority,
 provider adapters, and an external rollback control; none is claimed here.
+
+## Phase9 runtime execution preparation (A2_0020)
+
+`A2_0020_PHASE9_RUNTIME_EXECUTION` adds append-only dispatch grants, execution plans, committed attempts, OS launch observations, completion observations, terminals and receipt bindings. Its checksum is `45ddef2fb5e3b3a5e98fa6f779d8b9bb83d1906263ff1d41f819a5e2a6f3d391`. Production schema version is 8. Published A2_0010–A2_0019 statement bytes remain unchanged. This migration has not been applied in production. The coordinator integration is under validation; this text is not formal acceptance evidence.

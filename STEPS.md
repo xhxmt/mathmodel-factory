@@ -267,6 +267,12 @@ Produce:
 
 ### Step 13: Preliminary Mathematical Audit
 
+Formal Phase9-A is a separate, delivery-disabled forensic route using
+`scripts/phase9_authorized_runtime.py` and the authorization sequence in
+`docs/operations/PHASE9_PREP_RUNBOOK.md`. It rebuilds Step13 packets and executes
+all three applicable roles under a distinct runtime grant. It does not change
+this normal math-only precheck or authorize Steps14–16.
+
 Step 13 is the conditional exit subtask of Stage 8 and remains an integer Step
 contract for validation and `step_v2` compatibility. When a machine-owned
 `MODEL_DIRTY`, `MATH_DIRTY`, or `RESULT_DIRTY` flag is present, it

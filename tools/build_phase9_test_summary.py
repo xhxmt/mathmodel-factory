@@ -100,6 +100,9 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
             "tests/test_phase9_entry_gate.py",
             "tests/test_phase9_run_generation.py",
             "tests/test_phase9_forensic_replay.py",
+            "tests/test_phase9_runtime_authority.py",
+            "tests/test_phase9_runtime.py",
+            "tests/test_json_evidence_view.py",
             "tests/test_authority_production_migration.py",
             "tests/test_phase9_delivery_fence.py",
             "tests/test_phase9_p0_evidence.py",
@@ -115,6 +118,7 @@ PHASE9_REQUIRED_SUITE_SPECS: dict[str, dict[str, object]] = {
             "P9-TYPED-ABLATION", "P9-LAYERED-VERDICT",
             "P9-REVISION-ATOMIC-SNAPSHOT", "P9-OUTBOX",
             "P9-SUPERVISOR", "P9-REPLAY-EVIDENCE", "P9-ROLLBACK",
+            "P9-RUNTIME-DISPATCH",
         ],
     },
     "entry_ar007": {

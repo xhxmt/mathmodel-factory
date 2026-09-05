@@ -33,7 +33,7 @@ from .canonical import canonical_bytes, canonical_sha256
 from .domain import SCHEMA_VERSION
 
 
-AUTHORITY_PRODUCTION_SCHEMA_VERSION = 7
+AUTHORITY_PRODUCTION_SCHEMA_VERSION = 8
 AUTHORITY_PRODUCTION_SOURCE_SCHEMA = "authority-production-source-v1"
 PRODUCTION_MIGRATION_RUNNING = "RUNNING"
 PRODUCTION_MIGRATION_INTERRUPTED = "INTERRUPTED"
@@ -2464,6 +2464,176 @@ PRODUCTION_MIGRATIONS = (
     ),
 )
 
+# This suffix is append-only. Never change an A2_0010..A2_0019 statement to
+# retrofit runtime authorization into an already published completion grant.
+_A19_RUNTIME_RECORD_GUARD = next(
+    statement for statement in PRODUCTION_MIGRATIONS[-1].statements
+    if "CREATE TRIGGER authority_production_phase9_runtime_record_guard" in statement
+)
+_A19_SCOPE_START = _A19_RUNTIME_RECORD_GUARD.index("AND cmd.command_type=")
+_A19_SCOPE_END = _A19_RUNTIME_RECORD_GUARD.index("\n              )\n            BEGIN", _A19_SCOPE_START)
+_A20_RUNTIME_RECORD_GUARD = (
+    _A19_RUNTIME_RECORD_GUARD[:_A19_SCOPE_START]
+    + "AND ((" + _A19_RUNTIME_RECORD_GUARD[_A19_SCOPE_START + 4:_A19_SCOPE_END] + ") OR ("
+    + """
+                        cmd.command_type='PHASE9_A_RUNTIME_DISPATCH'
+                        AND cmd.envelope_schema='authority-phase9-runtime-dispatch-intent-v1'
+                        AND i.invocation_kind='PHASE9_A_RUNTIME_DISPATCH'
+                        AND i.scope_schema=cmd.envelope_schema
+                        AND a.scope_schema=cmd.envelope_schema
+                        AND s.process_kind='PHASE9_A_RUNTIME_DISPATCH'
+                        AND s.scope_schema=cmd.envelope_schema
+                        AND i.scope_json=cmd.envelope_json
+                        AND a.scope_json=cmd.envelope_json
+                        AND s.scope_json=cmd.envelope_json
+                        AND EXISTS (
+                            SELECT 1 FROM authority_production_phase9_runtime_attempts da
+                            JOIN authority_production_phase9_runtime_runs dr ON dr.runtime_id=da.runtime_id
+                            JOIN authority_production_phase9_runtime_launches dl ON dl.attempt_id=da.attempt_id
+                            JOIN authority_production_phase9_runtime_observations obs ON obs.attempt_id=da.attempt_id
+                            JOIN authority_production_phase9_runtime_terminals dt ON dt.runtime_id=da.runtime_id
+                            JOIN authority_production_phase9_runtime_receipt_bindings rb ON rb.attempt_id=da.attempt_id
+                            WHERE da.attempt_id=NEW.attempt_id
+                              AND da.invocation_id=NEW.invocation_id
+                              AND da.process_scope_id=NEW.process_scope_id
+                              AND da.role=NEW.logical_id
+                              AND dr.workflow_id=NEW.workflow_id
+                              AND dr.run_generation=NEW.run_generation
+                              AND obs.outcome='SUCCEEDED' AND dt.terminal_status='COMPLETED'
+                              AND rb.receipt_kind=NEW.receipt_kind
+                              AND json_extract(rb.binding_json,'$.raw_bytes_sha256')=NEW.raw_bytes_sha256
+                              AND json_extract(rb.binding_json,'$.receipt_sha256')=NEW.receipt_sha256
+                              AND json_extract(rb.binding_json,'$.byte_length')=NEW.byte_length
+                              AND json_extract(rb.binding_json,'$.logical_path')=NEW.logical_path
+                              AND json_extract(rb.binding_json,'$.observation_sha256')=obs.observation_sha256
+                        )
+                    ))"""
+    + _A19_RUNTIME_RECORD_GUARD[_A19_SCOPE_END:]
+)
+PRODUCTION_MIGRATIONS += (
+    _ProductionMigration(
+        "A2_0020_PHASE9_RUNTIME_EXECUTION",
+        (
+            """
+            CREATE TABLE authority_production_phase9_dispatch_grants (
+                grant_id TEXT PRIMARY KEY,
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                target_sha256 TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                issued_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                grant_json TEXT NOT NULL,
+                grant_sha256 TEXT NOT NULL UNIQUE
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_runtime_runs (
+                runtime_id TEXT PRIMARY KEY,
+                grant_id TEXT NOT NULL UNIQUE REFERENCES authority_production_phase9_dispatch_grants(grant_id),
+                nonce_sha256 TEXT NOT NULL UNIQUE,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL UNIQUE,
+                target_sha256 TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                deadline_at INTEGER NOT NULL,
+                start_json TEXT NOT NULL,
+                start_sha256 TEXT NOT NULL UNIQUE
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_runtime_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                runtime_id TEXT NOT NULL REFERENCES authority_production_phase9_runtime_runs(runtime_id),
+                role TEXT NOT NULL CHECK (role IN ('math','execution','paper','failed','kill','pause')),
+                role_attempt INTEGER NOT NULL CHECK (role_attempt BETWEEN 1 AND 8),
+                invocation_id TEXT NOT NULL UNIQUE,
+                process_scope_id TEXT NOT NULL UNIQUE,
+                dispatch_intent_json TEXT NOT NULL,
+                dispatch_intent_sha256 TEXT NOT NULL UNIQUE,
+                committed_at INTEGER NOT NULL,
+                UNIQUE(runtime_id, role, role_attempt)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_runtime_observations (
+                attempt_id TEXT PRIMARY KEY REFERENCES authority_production_phase9_runtime_attempts(attempt_id),
+                outcome TEXT NOT NULL CHECK (outcome IN ('SUCCEEDED','FAILED','TIMEOUT','CANCELLED','UNCERTAIN')),
+                observed_at INTEGER NOT NULL,
+                observation_json TEXT NOT NULL,
+                observation_sha256 TEXT NOT NULL UNIQUE
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_runtime_launches (
+                attempt_id TEXT PRIMARY KEY REFERENCES authority_production_phase9_runtime_attempts(attempt_id),
+                process_pid INTEGER NOT NULL CHECK(process_pid > 0),
+                process_start_ticks TEXT NOT NULL,
+                launch_json TEXT NOT NULL,
+                launch_sha256 TEXT NOT NULL UNIQUE
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_runtime_receipt_bindings (
+                attempt_id TEXT NOT NULL REFERENCES authority_production_phase9_runtime_attempts(attempt_id),
+                receipt_kind TEXT NOT NULL CHECK(receipt_kind IN ('ROLE_PROVIDER','ROLE_PROCESS','PROCESS_SCOPE')),
+                replay_coordinate_sha256 TEXT NOT NULL,
+                binding_json TEXT NOT NULL,
+                binding_sha256 TEXT NOT NULL UNIQUE,
+                PRIMARY KEY(attempt_id,receipt_kind)
+            )
+            """,
+            """
+            CREATE TABLE authority_production_phase9_runtime_terminals (
+                runtime_id TEXT PRIMARY KEY REFERENCES authority_production_phase9_runtime_runs(runtime_id),
+                terminal_status TEXT NOT NULL CHECK (terminal_status IN ('COMPLETED','BLOCKED','UNCERTAIN')),
+                completed_at INTEGER NOT NULL,
+                terminal_json TEXT NOT NULL,
+                terminal_sha256 TEXT NOT NULL UNIQUE
+            )
+            """,
+            *tuple(
+                statement
+                for table, identity in (
+                    ("authority_production_phase9_dispatch_grants", "grant_id"),
+                    ("authority_production_phase9_runtime_runs", "runtime_id"),
+                    ("authority_production_phase9_runtime_attempts", "attempt_id"),
+                    ("authority_production_phase9_runtime_observations", "attempt_id"),
+                    ("authority_production_phase9_runtime_launches", "attempt_id"),
+                    ("authority_production_phase9_runtime_terminals", "runtime_id"),
+                )
+                for statement in (
+                    *_immutable_statements(table, ((identity,),)),
+                    f"""
+                    CREATE TRIGGER {table}_runtime_writer_guard
+                    BEFORE INSERT ON {table}
+                    WHEN COALESCE(phase9_runtime_execution_capability(),0) != 1
+                    BEGIN
+                        SELECT RAISE(ABORT, 'Phase9 runtime requires its trusted execution path');
+                    END
+                    """,
+                )
+            ),
+            *_immutable_statements("authority_production_phase9_runtime_receipt_bindings", (("attempt_id", "receipt_kind"),)),
+            """
+            CREATE TRIGGER authority_production_phase9_runtime_receipt_bindings_writer_guard
+            BEFORE INSERT ON authority_production_phase9_runtime_receipt_bindings
+            WHEN COALESCE(phase9_runtime_execution_capability(),0) != 1
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 runtime requires its trusted execution path');
+            END
+            """,
+            "DROP TRIGGER authority_production_phase9_runtime_record_guard",
+            _A20_RUNTIME_RECORD_GUARD,
+            """
+            UPDATE authority_production_schema_state
+            SET production_schema_version=8
+            WHERE singleton=1
+            """,
+        ),
+    ),
+)
+
 PRODUCTION_MIGRATION_IDS = tuple(item.migration_id for item in PRODUCTION_MIGRATIONS)
 PRODUCTION_MIGRATION_CHECKSUMS = tuple(
     item.checksum_sha256 for item in PRODUCTION_MIGRATIONS
@@ -3255,7 +3425,7 @@ class AuthorityProductionMigrationRunner:
                 ).fetchone()
                 if (
                     row is not None
-                    and row["production_schema_version"] in {1, 2, 3, 4, 5, 6, 7}
+                    and row["production_schema_version"] in {1, 2, 3, 4, 5, 6, 7, 8}
                     and row["lock_owner"] == owner
                 ):
                     connection.execute(
@@ -3319,7 +3489,7 @@ class AuthorityProductionMigrationRunner:
                 if state["production_schema_version"] > AUTHORITY_PRODUCTION_SCHEMA_VERSION:
                     raise AuthorityProductionFutureSchema("future production schema")
                 if (
-                    state["production_schema_version"] not in {1, 2, 3, 4, 5, 6, 7}
+                    state["production_schema_version"] not in {1, 2, 3, 4, 5, 6, 7, 8}
                     or state["source_schema_version"] != SCHEMA_VERSION
                     or state["source_schema_identity_sha256"] != schema_identity
                     or state["source_fence_sha256"] != source_fence

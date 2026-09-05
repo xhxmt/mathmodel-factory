@@ -1,5 +1,18 @@
 # Changelog
 
+- Added the default-off A2_0020 Phase9 runtime coordinator: separate operator
+  dispatch grants, committed command/invocation/attempt/scope identities before
+  provider calls, observed OS launches and completions, bounded local lifecycle
+  probes, real role/scope receipt recording and finalizer coordination.
+  Acquisition freshness and execution deadlines are distinct; completion needs
+  a fresh entry at the same stable Authority state. Uncertain work is never
+  automatically resent, delivery stays disabled, and production migration
+  still requires separate authorization.
+- Fixed total-deadline propagation through isolated Step13 preparation, blocked
+  record directories overlapping executing source, and preserved source modes
+  and Git status alongside working bytes. Process cancellation now closes the
+  owned process group even when its leader exits early or a callback fails.
+
 - Added an explicit isolated Step13 component coordinator with distinct normal
   math-only and forensic three-role routes, pinned model/effort, bounded calls,
   immutable attempt logs, input/source rechecks and an honest component terminal.

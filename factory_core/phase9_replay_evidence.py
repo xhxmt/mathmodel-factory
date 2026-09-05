@@ -850,7 +850,12 @@ def authorize_formal_phase9_runtime_receipt(
     dependency_fingerprint_sha256: str,
     input_sha256: str,
 ) -> tuple[str, str, str]:
-    """Issue a short-lived one-use capability before a runtime operation."""
+    """Issue a short-lived capability before the completion-record operation.
+
+    This capability explicitly excludes providers/network. Actual dispatch is
+    authorized separately before execution by the A2_0020 runtime grant; a
+    long-running provider does not consume this record-only TTL.
+    """
 
     if receipt_kind not in {"ROLE_PROCESS", "ROLE_PROVIDER", "PROCESS_SCOPE"}:
         raise Phase9ReplayEvidenceProducerError("unsupported runtime receipt kind")

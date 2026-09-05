@@ -20,6 +20,8 @@ class ProcessRequest:
     heartbeat: Callable[[], None] | None = None
     poll_seconds: float = 1.0
     kill_grace_seconds: float = 10.0
+    on_started: Callable[[int], None] | None = None
+    stop_requested: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -68,14 +70,25 @@ class ProcessSupervisor:
                     )
                 deadline = started + request.timeout_seconds
                 timed_out = False
-                while process.poll() is None:
-                    if request.heartbeat is not None:
-                        request.heartbeat()
-                    if time.monotonic() >= deadline:
-                        timed_out = True
-                        self._terminate_group(process, request.kill_grace_seconds)
-                        break
-                    time.sleep(min(request.poll_seconds, max(0.01, deadline - time.monotonic())))
+                stopped = False
+                try:
+                    if request.on_started is not None:
+                        request.on_started(process.pid)
+                    while process.poll() is None:
+                        if request.stop_requested is not None and request.stop_requested():
+                            stopped = True
+                            self._terminate_group(process, request.kill_grace_seconds)
+                            break
+                        if request.heartbeat is not None:
+                            request.heartbeat()
+                        if time.monotonic() >= deadline:
+                            timed_out = True
+                            self._terminate_group(process, request.kill_grace_seconds)
+                            break
+                        time.sleep(min(request.poll_seconds, max(0.01, deadline - time.monotonic())))
+                except BaseException:
+                    self._terminate_group(process, request.kill_grace_seconds)
+                    raise
                 returncode = process.wait()
             finally:
                 if close_stderr:
@@ -85,6 +98,7 @@ class ProcessSupervisor:
             timed_out=timed_out,
             duration_seconds=time.monotonic() - started,
             pid=process.pid,
+            metadata={"stop_requested": stopped},
         )
 
     @staticmethod
@@ -95,9 +109,10 @@ class ProcessSupervisor:
             pass
         try:
             process.wait(timeout=grace_seconds)
-            return
         except subprocess.TimeoutExpired:
             pass
+        # The leader exiting on TERM does not prove its children exited. Always
+        # close the owned process group before returning from cancellation.
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except (PermissionError, ProcessLookupError):

@@ -4,7 +4,7 @@ Status: this runbook defines the **fixed-offline implementation and immutable
 package-evidence process**. Exact candidate identity and outcomes belong to the
 generated package's manifest, command records, raw logs and derived summary;
 the package remains a candidate until a separate independent audit passes.
-Production remains `BLOCKED`; A2_0016 through A2_0019 are `NOT APPLIED` in
+Production remains `BLOCKED`; A2_0016 through A2_0020 are `NOT APPLIED` in
 production; formal Phase9-A and Run4 are `NOT RUN`; Phase 9 is incomplete; and
 Phase10-B is `NOT STARTED`.
 
@@ -148,22 +148,68 @@ does not expose it. These records are `ISOLATED_COMPONENT_RUN`, not formal
 Authority receipts; `COMPONENT_PASS` and `PREPARED` do not establish Phase9-A
 completion. Step14–16 and delivery are never invoked by this entry point.
 
-The formal runtime remains a separate implementation gap: the existing
-`record_formal_phase9_runtime_receipt` requires an Authority completion graph,
-and the evidence producer/finalizer consume that graph after execution. Their
-entry/start grants explicitly exclude provider/network dispatch. Neither an
-isolated component observation nor a caller-populated completion graph can be
-promoted to that domain. A real executor must own the distinct pre-dispatch
-authorization/nonce, actual invocation/attempt/scope lifecycle, completion hook,
-and final typed evidence production. Missing this wiring is an implementation
-gap in addition to the external material requirements below.
+### Authorized runtime coordination (candidate implementation)
+
+`scripts/phase9_authorized_runtime.py` is default-off through `PHASE9_ENABLED`.
+It uses the existing Phase9 database/source/input configuration. Its commands
+are deliberately separate from the normal Step13 math precheck:
+
+1. `plan --request <entry-coordinate-request> --records <new-directory>` rebuilds
+   objective evidence and all complete role packets with zero provider calls.
+   It writes the exact dispatch target and packet-v2 bytes. Generation creation
+   remains the existing `scripts/phase9_run_generation.py` operator workflow.
+2. The authorized operator supplies a private (0600), account-owned
+   `authority-phase9-dispatch-grant-v1` for that target. The scope permits only
+   role provider calls and the fixed local process-scope probes. Entry and
+   finalizer-start grants do not grant those capabilities. The coordinator does
+   not issue this external authorization or migration/production approval.
+3. `execute --request <request> --entry <READY-entry> --target <target>
+   --grant <grant> --records <new-directory>` consumes the distinct grant in
+   A2_0020 before dispatch. Each attempt first commits its command, invocation,
+   attempt and scope, then records the actual OS launch and completion. Role
+   execution uses the repository's two-attempt transport / three-round
+   infrastructure retry budget, a pinned model/effort and an overall deadline.
+   Providers require a private PID namespace and read-only host source, inputs
+   and Authority state; only the current output files and a private child of
+   the explicit `TMPDIR` are writable. There is no unsandboxed
+   fallback. Failed/kill/pause probes use fixed local processes, not models.
+4. `collect --runtime-id <id>` reads the immutable lifecycle. Unobserved or
+   uncertain attempts prohibit automatic redispatch; they remain active in
+   entry-state collection. An execution `COMPLETED` means role/process work
+   finished, not a forensic PASS or permission for Steps14–16.
+5. After execution, obtain a fresh READY entry and completion request at the
+   same candidate, generation, input and Authority-state coordinate. The stable
+   runtime target excludes entry acquisition timestamps and the later receipt
+   serialization timestamp; it retains all execution/input identities. The
+   original grant has a 300-second acquisition TTL and a separate bounded run
+   deadline. It is never renewed by editing a timestamp. `export --runtime-id
+   <id> --request <fresh-request> --entry <fresh-entry> --records <execution-records>`
+   joins actual output bytes and OS observations and calls
+   `record_formal_phase9_runtime_receipt` for roles and process scopes. It
+   recomputes packet/verdict/snapshot controls for the existing evidence producer.
+6. `finalize --request <fresh-request> --records <new-scratch-directory>` runs
+   the fixed real acceptance probes, obtains the independent one-use finalizer
+   start capability through the existing evidence producer, and invokes the
+   forensic finalizer. Its terminal still requires the independent formal
+   review prescribed below. No migration, production outbox or delivery path
+   is invoked by this CLI.
+
+A2_0020 is additive and production schema version 8. It retains published
+A2_0010–A2_0019 SQL bytes and upgrades the runtime-record guard to accept the
+new verified dispatch graph as well as the legacy completion graph. A
+receipt-record capability has its own short TTL immediately before recording;
+it is not the authority under which a long provider call executes. Interrupted
+export artifacts and failed attempts must be preserved and reconciled, not
+rewritten into success. This implementation requires current-candidate tests
+and independent review; fixture processes and their synthetic provider text
+are never formal runtime evidence.
 
 After the new candidate ZIP passes an independent audit, formal entry still
 requires all of the following real material:
 
 1. exact reviewed commit/tree/parent and full source-byte inventory;
 2. a real Authority database, verified backup, stable migration owner and
-   approved ordered A2_0016-A2_0019 application journal;
+   approved ordered A2_0016-A2_0020 application journal;
 3. exact project/workflow/revision and project/run/runtime/scheduler
    generations, with no `legacy_unknown`;
 4. frozen contract pins, strict official-input bytes and execution-context
