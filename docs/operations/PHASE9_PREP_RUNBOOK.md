@@ -159,7 +159,9 @@ are deliberately separate from the normal Step13 math precheck:
    The durable runtime requires `authority-phase9-forensic-replay-request-v3`;
    existing v2 finalizer evidence keeps its original coordinate semantics.
    It writes the exact dispatch target and packet-v2 bytes. Generation creation
-   remains the existing `scripts/phase9_run_generation.py` operator workflow.
+   remains the existing `scripts/authority_operator.py run-generation` operator
+   workflow. Without `--confirm` it emits a dry-run request summary; actual
+   creation requires the separately authorized canonical request and `--confirm`.
 2. The authorized operator supplies a private (0600), account-owned
    `authority-phase9-dispatch-grant-v1` for that target. The scope permits only
    role provider calls and the fixed local process-scope probes. Entry and
