@@ -11,12 +11,18 @@ import struct
 import sys
 import uuid
 from .canonical import canonical_sha256
-from .phase9_provider_identity import _file, configuration_observation, expected_configuration_states, execution_configuration, configuration_directories, runtime_environment
+from .phase9_provider_identity import _file, configuration_observation, expected_configuration_states, execution_configuration, configuration_directories, runtime_environment, ANCESTOR_VISIBILITY_POLICY
 
 
 class ProviderSandbox:
-    def __init__(self, scratch, profile, argv, project):
+    def __init__(self, scratch, profile, argv, project, *, output_paths=()):
         self.scratch, self.profile, self.native_argv = scratch, profile, argv
+        self.project = Path(project)
+        self.source_root = Path(__file__).resolve().parents[1]
+        self.visible_paths = {self.project, scratch, self.source_root, Path(sys.executable), Path(sys.executable).resolve(),
+                              Path(profile["native"]["path"]), *map(Path, output_paths)}
+        self.visible_paths.update(Path(row["path"]) for row in profile.get("resolution_chain", []))
+        self.hidden_ancestor_directory_count = 0
         self.fds = []
         self.mounts = []
         self.views = []
@@ -32,7 +38,9 @@ class ProviderSandbox:
         self._snapshot(profile['native'], profile['native']['path'], executable=True)
         # The actual load paths have the same approved presence and bytes.
         original_home = Path(profile.get('configuration_home') or os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
+        self.original_home = original_home
         self.configuration = execution_configuration(profile, str(self.private_home))
+        self.visible_paths.update(Path(row.get('load_path', row['path'])) for row in self.configuration)
         for row in self.configuration:
             if not row.get('absent'):
                 self._snapshot(row, row.get('load_path', row['path']))
@@ -67,7 +75,9 @@ class ProviderSandbox:
         self._snapshot(_file(helper), str(helper))
         self.command = [sys.executable, '-I', '-S', '-B', str(helper), str(self.endpoint), *argv]
         self.namespace_mounts, self.readonly_mounts = self._configuration_namespaces()
-        self.execution_view = {'working_directory': str(project), 'configuration_states': expected_configuration_states({'configuration': self.configuration}),
+        self.execution_view = {'ancestor_visibility_policy': ANCESTOR_VISIBILITY_POLICY,
+            'hidden_ancestor_directory_count': self.hidden_ancestor_directory_count,
+            'namespace_visible_paths': sorted(map(str, self.visible_paths)), 'working_directory': str(project), 'configuration_states': expected_configuration_states({'configuration': self.configuration}),
             'configuration_mapping': self.configuration, 'runtime_environment': self.runtime_environment,
             'protected_directories': self.protected_directories, 'schema': 'phase9-sealed-provider-view-v1',
             'files': self.views, 'private_runtime_home': str(self.private_home),
@@ -83,6 +93,14 @@ class ProviderSandbox:
         critical = {Path(row.get('load_path', row['path'])): row for row in self.configuration}
         directories = set(map(Path, configuration_directories(self.configuration, str(self.private_home))))
         self.protected_directories = [str(path) for path in sorted(directories, key=lambda p: (len(p.parts), str(p)))]
+        # Ancestor containers can hold thousands of unrelated projects/tests.
+        # Keep required branches, all ordinary files/symlinks, and all entries
+        # inside project/source roots; omit only unrelated sibling directories.
+        # Root/system/user-home levels and the approved Codex home stay visible.
+        selective = {parent for path in (self.project, self.scratch) for parent in path.parents
+                     if len(parent.parts) > 3 and parent != self.original_home
+                     and not parent.is_relative_to(self.project)
+                     and not parent.is_relative_to(self.source_root)}
         options = []
         for directory in map(Path, self.protected_directories):
             options.extend(['--tmpfs', str(directory)])
@@ -105,6 +123,10 @@ class ProviderSandbox:
                     if stat.S_ISLNK(info.st_mode):
                         options.extend(['--symlink', os.readlink(path), str(path)])
                     elif stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode):
+                        if (stat.S_ISDIR(info.st_mode) and directory in selective
+                                and not any(anchor == path or anchor.is_relative_to(path) for anchor in self.visible_paths)):
+                            self.hidden_ancestor_directory_count += 1
+                            continue
                         descriptor = os.open(path, os.O_PATH | os.O_CLOEXEC)
                         self.fds.append(descriptor)
                         options.extend(['--ro-bind-fd', str(descriptor), str(path)])
@@ -114,6 +136,12 @@ class ProviderSandbox:
                     continue
         readonly = [part for path in reversed(self.protected_directories) for part in ('--remount-ro', path)]
         return options, readonly
+
+    @staticmethod
+    def validate_argv(argv):
+        # bubblewrap0.11 also counts FD-loaded --args toward this fixed cap.
+        if len(argv) - 1 > 9000:
+            raise ValueError("provider namespace exceeds bubblewrap argument budget; no process launched")
 
     def _snapshot(self, row, destination, executable=False):
         raw = Path(row['path']).read_bytes()

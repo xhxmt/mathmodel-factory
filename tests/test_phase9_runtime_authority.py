@@ -170,11 +170,11 @@ def _completed_identity_fixture(tmp_path, monkeypatch):
             output.write_bytes(b"SYNTHETIC UNIT FIXTURE OUTPUT\n")
         call = self.intent["provider_call"]
         wrapper = [call["provider_identity"]["sandbox"]["path"], "--", *call["argv"]]
-        from factory_core.phase9_provider_identity import configuration_directories, runtime_environment
+        from factory_core.phase9_provider_identity import configuration_directories, runtime_environment, ANCESTOR_VISIBILITY_POLICY
         home = str(tmp_path / "mock-home/codex_home")
         directories = configuration_directories([], home)
         environment = runtime_environment(home)
-        view = {"private_runtime_home": home, "configuration_mapping": [], "runtime_environment": environment, "configuration_states": [], "protected_directories": directories, "native_sha256": call["provider_identity"]["native"]["sha256"], "files": [
+        view = {"ancestor_visibility_policy": ANCESTOR_VISIBILITY_POLICY, "private_runtime_home": home, "configuration_mapping": [], "runtime_environment": environment, "configuration_states": [], "protected_directories": directories, "native_sha256": call["provider_identity"]["native"]["sha256"], "files": [
             {"source": call["provider_identity"]["native"]["path"], "destination": call["provider_identity"]["native"]["path"],
              "sha256": call["provider_identity"]["native"]["sha256"], "byte_length": call["provider_identity"]["native"]["byte_length"], "seals": 15}]}
         def started(pid):

@@ -234,6 +234,14 @@ def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkey
     from factory_core.phase9_provider_identity import _file, verify_launch
     from factory_core.adapters.infrastructure.process import ProcessRequest, ProcessSupervisor
     from factory_core.canonical import canonical_sha256
+    container = tmp_path / 'crowded'
+    container.mkdir()
+    for number in range(3100):
+        (container / f'unrelated-{number}').mkdir()
+    tmp_path = container / 'project'
+    tmp_path.mkdir()
+    (tmp_path / 'data').mkdir()
+    (tmp_path / 'data/input.txt').write_text('required project input')
     native = tmp_path / 'codex'
     native.write_bytes(Path('/usr/bin/true').read_bytes())
     native.chmod(0o700)
@@ -257,11 +265,18 @@ def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkey
     argv = ['/usr/bin/bwrap', '--die-with-parent', '--unshare-user', '--unshare-pid', '--ro-bind', '/', '/',
             *sandbox.namespace_mounts, *sandbox.runtime_mounts, *sandbox.mounts, *sandbox.environment_options, '--proc', '/proc', '--dev', '/dev',
             *sandbox.readonly_mounts, '--chdir', str(tmp_path), '--', *sandbox.command]
+    sandbox.validate_argv(argv)
+    assert sandbox.hidden_ancestor_directory_count >= 3100
+    with pytest.raises(ValueError, match='argument budget'):
+        sandbox.validate_argv(['bwrap'] + ['unused'] * 9001)
     call = {'cwd': str(tmp_path), 'provider_identity': profile, 'argv': native_argv, 'argv_sha256': canonical_sha256(native_argv)}
     intent = {'provider_call': call}
     observations = []
     def started(pid):
         execution = sandbox.handshake(pid, intent, argv)
+        child_root = Path(f"/proc/{execution['native_process_pid']}/root")
+        assert (child_root / str(tmp_path / 'data/input.txt').lstrip('/')).read_text() == 'required project input'
+        assert not (child_root / str(container / 'unrelated-0').lstrip('/')).exists()
         # Host changes to BOTH original and redirected home are invisible.
         home_config.write_text('model = "late-host"\n')
         (sandbox.private_home / 'config.toml').write_text('model = "late-private"\n')

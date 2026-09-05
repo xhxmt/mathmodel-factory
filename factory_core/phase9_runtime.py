@@ -240,7 +240,7 @@ class _AuthorityProcessSupervisor(ProcessSupervisor):
         # another session. Authority DB, inputs, earlier outputs and evidence
         # remain read-only. Only this call's output files and scratch can change.
         from .phase9_provider_sandbox import ProviderSandbox
-        sandbox = ProviderSandbox(call_scratch, call["provider_identity"], list(request.argv), request.cwd)
+        sandbox = ProviderSandbox(call_scratch, call["provider_identity"], list(request.argv), request.cwd, output_paths=self.writable_files)
         argv = ["/usr/bin/bwrap", "--die-with-parent", "--unshare-user", "--unshare-pid",
                 "--ro-bind", "/", "/", *sandbox.namespace_mounts, *writable,
                 *sandbox.runtime_mounts, *sandbox.mounts, *sandbox.environment_options,
@@ -257,6 +257,7 @@ class _AuthorityProcessSupervisor(ProcessSupervisor):
         process_deadline = time.monotonic() + request.timeout_seconds
         sandbox.server.settimeout(min(10, request.timeout_seconds))
         try:
+            sandbox.validate_argv(argv)
             result = super().run(replace(request, argv=argv, on_started=started, pass_fds=tuple(sandbox.fds)))
         finally:
             sandbox.close()

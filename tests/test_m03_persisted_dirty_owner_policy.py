@@ -117,5 +117,5 @@ def test_owner_policy_identity_goldens() -> None:
         "8c5dad1b7d08672c4c5481d15bf525bd06757004887d3c435351cb7dbed8525d"
     )
     assert persisted_dirty_owner_policy_implementation_sha256() == (
-        "e3b93c91a1ecfaedf2e0ffcdcde8596629b7b42250789d5e313293d4c40b9715"
+        "125b5a6b7dfee0ef0a4e5dab8f3bfef6c98065cf5516991f11f8c75c14bca478"
     )

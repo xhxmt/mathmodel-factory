@@ -177,7 +177,13 @@ are deliberately separate from the normal Step13 math precheck:
    snapshots of native/configuration bytes and mounts those read-only.
    Every configured file, including an approved absence, is represented in
    private tmpfs directory namespaces through all ancestors. Unrelated ordinary
-   children use read-only O_PATH binds; the namespace mounts are remounted
+   children use read-only O_PATH binds. Along deep project/runtime ancestors,
+   unrelated sibling directories are omitted; complete project/source roots,
+   required executable/configuration/output branches, ordinary ancestor files,
+   symlinks and shared root/user-home/Codex-home levels remain visible. This
+   avoids enumerating unrelated test/project containers into the native argv.
+   A remaining argv over bubblewrap's 9000-argument cap blocks before launch;
+   no project input is silently dropped to fit that budget. The namespace mounts are remounted
    read-only, so later host configuration creation cannot enter the view.
    Authority independently reads configuration presence/bytes and mount flags
    through the stopped native process root, and verifies cwd is inside it. A fixed
@@ -354,3 +360,9 @@ dependencies, verified official input and a complete no-reuse/no-override run
 through all current Stages, Steps, Human Gates, Solver/provider receipts,
 snapshot, verdict and delivery process. This repair candidate neither starts
 nor authorizes Phase10-B.
+
+The current storage approval-reader repair shifted two existing M0.3 symbol
+spans by 57 lines. Their source bytes and hashes are unchanged; the trusted
+span offsets and deterministic identity/pin/snapshot test projections now
+match the current source. No live persisted pins are rewritten. Formal entry
+requires the current candidate pins and authorized generation/context records.

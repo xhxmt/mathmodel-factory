@@ -8,6 +8,8 @@ import stat
 import re
 from .canonical import canonical_sha256
 
+ANCESTOR_VISIBILITY_POLICY = "phase9-required-ancestor-directories-v1"
+
 
 def _file(path):
     path = Path(path).resolve(strict=True)
@@ -122,6 +124,8 @@ def validate_execution_view(execution, profile):
     if (execution.get("execution_view_sha256") != canonical_sha256(view)
             or view.get("native_sha256") != profile["native"]["sha256"]):
         raise ValueError("sealed provider execution view differs")
+    if view.get("ancestor_visibility_policy") != ANCESTOR_VISIBILITY_POLICY:
+        raise ValueError("provider ancestor visibility policy differs")
     home = view.get("private_runtime_home")
     if not isinstance(home, str) or not Path(home).is_absolute() or str(Path(home)) != home or Path(home).name != "codex_home":
         raise ValueError("invalid private configuration home")

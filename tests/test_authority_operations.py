@@ -793,6 +793,7 @@ def test_fresh_active_cli_imports_no_production_authority_modules_and_has_only_t
         "factory_core/phase9_p0_evidence.py": {"authority_production_schema"},
         "factory_core/phase9_replay_evidence.py": {"authority_production_schema"},
         "factory_core/phase9_run_generation.py": {"authority_production_schema"},
+        "factory_core/phase9_runtime_authority.py": {"authority_production_schema"},
     }
     matches = {}
     for path in active_files:
