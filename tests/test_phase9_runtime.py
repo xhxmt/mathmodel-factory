@@ -127,3 +127,70 @@ def test_records_cannot_overlap_executing_source(tmp_path, monkeypatch):
         run_step13_components(**kwargs, mode="NORMAL_STEP13")
     assert not kwargs["records"].exists()
     assert not calls
+
+
+@pytest.mark.parametrize("returncode,timed_out", [(1, False), (124, True)])
+def test_post_launch_nonzero_is_uncertain_and_never_automatically_resent(tmp_path, monkeypatch, returncode, timed_out):
+    from factory_core.adapters.models.backends import CodexCliBackend
+    observations, external = [], []
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    class Authority:
+        def reserve_attempt(self, *args, **kwargs):
+            if observations:
+                raise RuntimeError("uncertain; automatic resend prohibited")
+            return {"attempt_id": "UNIT", "provider_call": kwargs["provider_call"]}
+        def observe(self, intent, observation):
+            observations.append(observation)
+    profile = {"native": {"path": "/UNIT/codex"}}
+    monkeypatch.setattr("factory_core.phase9_provider_identity.provider_identity", lambda *args: profile)
+    def failed(self, request):
+        external.append(request)
+        self.supervisor.launch_record = {"launch_sha256": "5" * 64}
+        self.supervisor.active_count = 0
+        return ExecutionResult.failed("TRANSIENT_TIMEOUT", returncode=returncode, process_pid=123, process_timed_out=timed_out)
+    monkeypatch.setattr(CodexCliBackend, "execute", failed)
+    dispatcher = _ObservedDispatcher(tmp_path, calls, lambda: None, "gpt-6-astra", "medium", authority=Authority(), runtime_id="UNIT")
+    request = ModelRequest(tmp_path, 13, 1, "prompt", 5, 5, output_file=tmp_path / "math.md")
+    dispatcher.execute(request, step_key=13, defaults=())
+    assert observations[0]["outcome"] == "UNCERTAIN"
+    with pytest.raises(RuntimeError, match="resend prohibited"):
+        dispatcher.execute(request, step_key=13, defaults=())
+    assert len(external) == 1
+
+
+def test_accepted_final_response_is_sealed_instead_of_nonempty_primary(tmp_path):
+    import hashlib
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    (calls / "unit").mkdir()
+    dispatcher = _ObservedDispatcher(tmp_path, calls, lambda: None, "gpt-6-astra", "medium")
+    raw = b"VERDICT: PASS\n"
+    digest = {"sha256": hashlib.sha256(raw).hexdigest(), "byte_length": len(raw)}
+    dispatcher.calls.append({"role": "paper", "invocation_id": "unit", "outputs": {
+        "output": {"sha256": "0" * 64, "byte_length": 15}, "final_response": digest}})
+    output = tmp_path / "paper.md"
+    output.write_bytes(raw)
+    dispatcher.record_accepted_output("paper", output)
+    selected = json.loads((calls / "unit/accepted_output.json").read_text())
+    assert selected["source"] == "final_response"
+    assert selected["sha256"] == digest["sha256"]
+    output.write_bytes(b"unobserved")
+    with pytest.raises(Phase9RuntimeError, match="not observed"):
+        dispatcher.record_accepted_output("paper", output)
+
+
+def test_provider_identity_rejects_script_and_binds_ancestor_configuration(tmp_path, monkeypatch):
+    import factory_core.phase9_provider_identity as provider
+    script = tmp_path / "codex"
+    script.write_bytes(b"#!/usr/bin/env python3\nprint('standin')\n")
+    monkeypatch.setenv("CODEX_CLI_PATH", str(script))
+    with pytest.raises(ValueError, match="native Codex"):
+        provider.provider_identity(tmp_path)
+    # Identity-only ELF fixture, never executed or promoted to a provider.
+    script.write_bytes(b"\x7fELFUNIT_FIXTURE_NOT_EXECUTABLE")
+    before = provider.provider_identity(tmp_path)
+    config = tmp_path / ".codex/config.toml"
+    config.parent.mkdir()
+    config.write_text('model = "changed"\n')
+    assert provider.provider_identity(tmp_path) != before

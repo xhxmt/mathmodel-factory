@@ -18,8 +18,14 @@ from tests.test_phase9_forensic_replay import _fixture
 
 def _setup(tmp_path, monkeypatch):
     foundation, root, request, finalizer = _fixture(tmp_path, attest=False)
+    from factory_core.phase9_forensic_replay import PHASE9_RUNTIME_REPLAY_REQUEST_SCHEMA
+    request = replace(request, schema_version=PHASE9_RUNTIME_REPLAY_REQUEST_SCHEMA)
     now = [request.occurred_at]
     monkeypatch.setattr("time.time", lambda: now[0])
+    import factory_core.phase9_provider_identity as provider
+    profile = {"schema": "ISOLATED_IDENTITY_FIXTURE", "native": provider._file(sys.executable),
+               "sandbox": provider._file("/usr/bin/bwrap"), "configuration": [], "response_identity": "unavailable"}
+    monkeypatch.setattr(provider, "provider_identity", lambda *args: profile)
     authority = Phase9RuntimeAuthority(finalizer)
     target = dispatch_target(request, packet_sha256="1" * 64,
                              project_input_sha256="2" * 64, model="gpt-6-astra",
@@ -94,8 +100,8 @@ def test_deadline_exhaustion_and_delivery_scope_reject_before_dispatch(tmp_path,
     assert authority.finish(start["runtime_id"])["status"] == "BLOCKED"
 
 
-def test_actual_test_process_completion_reaches_runtime_receipt_writer(tmp_path, monkeypatch):
-    """Real OS processes, synthetic provider text, isolated DB: NOT formal evidence."""
+def test_synthetic_provider_program_cannot_reach_formal_receipt_writer(tmp_path, monkeypatch):
+    """A substituted process is rejected BEFORE launch, even with output code."""
     from factory_core.phase9_runtime import _ObservedDispatcher
     from factory_core.adapters.models.backends import CodexCliBackend, ModelRequest
 
@@ -115,24 +121,15 @@ def test_actual_test_process_completion_reaches_runtime_receipt_writer(tmp_path,
                          str(configured.output_file)], "synthetic_test_provider")
 
     monkeypatch.setattr(CodexCliBackend, "execute", execute_test_process)
-    outputs = {}
-    for role in target["roles"]:
-        output = authority.project_root / (role + ".md")
-        result = dispatcher.execute(ModelRequest(authority.project_root, 13, 1, "SYNTHETIC TEST PROMPT", 10, 10, output_file=output), step_key=13, defaults=())
-        assert result.returncode == 0
-        outputs[role] = output.read_bytes()
-    from factory_core.phase9_runtime_probes import run_process_scope_probes
-    run_process_scope_probes(authority, start["runtime_id"], tmp_path / "scope-probes")
-    assert authority.finish(start["runtime_id"])["status"] == "COMPLETED"
-    exported = authority.export_runtime_receipts(start["runtime_id"], request, entry, outputs, tmp_path / "synthetic-export")
-    assert len(exported["roles"]["roles"]) == 3
-    connection = sqlite3.connect(authority.database)
-    try:
-        assert connection.execute("SELECT COUNT(*) FROM authority_production_phase9_replay_runtime_records").fetchone()[0] == 9
-        assert connection.execute("SELECT COUNT(*) FROM authority_production_phase9_runtime_launches").fetchone()[0] == 6
-        assert connection.execute("SELECT COUNT(*) FROM authority_commands WHERE command_type='PHASE9_A_RUNTIME_DISPATCH'").fetchone()[0] == 6
-    finally:
-        connection.close()
+    from factory_core.phase9_runtime import Phase9RuntimeError
+    output = authority.project_root / "math.md"
+    with pytest.raises(Phase9RuntimeError, match="actual provider program"):
+        dispatcher.execute(ModelRequest(authority.project_root, 13, 1, "SYNTHETIC TEST PROMPT", 10, 10, output_file=output), step_key=13, defaults=())
+    state = authority.collect(start["runtime_id"])
+    assert state["attempts"][0]["outcome"] == "UNCERTAIN"
+    with sqlite3.connect(authority.database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM authority_production_phase9_runtime_launches").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM authority_production_phase9_replay_runtime_records").fetchone()[0] == 0
 
 
 def test_formal_cli_is_default_off_before_touching_supplied_paths(monkeypatch, capsys):
@@ -154,3 +151,84 @@ def test_success_cannot_be_recorded_without_an_observed_os_launch(tmp_path, monk
                                    "outputs": {"output": {"sha256": "6" * 64, "byte_length": 1}},
                                    "process_group_active_count": 0, "response_model_identity": "unavailable"})
     assert authority.finish(start["runtime_id"])["status"] == "UNCERTAIN"
+
+
+def _completed_identity_fixture(tmp_path, monkeypatch):
+    """MOCKED provider/kernel identity for SQL recovery tests; never formal proof."""
+    import hashlib
+    from factory_core.phase9_runtime import _ObservedDispatcher, _AuthorityProcessSupervisor
+    from factory_core.adapters.models.backends import ModelRequest
+    from factory_core.adapters.infrastructure.process import ProcessSupervisor
+    authority, request, target, grant, entry, now = _setup(tmp_path, monkeypatch)
+    start = authority.start(request, entry, target, grant)
+    calls = tmp_path / "mock-identity-calls"
+    calls.mkdir()
+    monkeypatch.setattr("factory_core.phase9_provider_identity.verify_launch", lambda *a: None)
+
+    def simulated(self, process_request):
+        for output in self.writable_files:
+            output.write_bytes(b"SYNTHETIC UNIT FIXTURE OUTPUT\n")
+        call = self.intent["provider_call"]
+        wrapper = [call["provider_identity"]["sandbox"]["path"], "--", *call["argv"]]
+        def started(pid):
+            self.launch_record = authority.launch(self.intent, pid, execution={
+                "provider_call_sha256": canonical_sha256(call),
+                "kernel_executable_sha256": call["provider_identity"]["native"]["sha256"],
+                "kernel_cmdline_sha256": hashlib.sha256(b"\0".join(x.encode() for x in call["argv"]) + b"\0").hexdigest(),
+                "sandbox_argv": wrapper, "sandbox_argv_sha256": canonical_sha256(wrapper),
+            })
+        result = ProcessSupervisor().run(replace(process_request,
+            argv=[sys.executable, "-B", "-c", "import time; time.sleep(.1)"], on_started=started))
+        self.active_count = 0
+        return result
+    monkeypatch.setattr(_AuthorityProcessSupervisor, "run", simulated)
+    dispatcher = _ObservedDispatcher(authority.finalizer.source_repository, calls, lambda: None,
+        "gpt-6-astra", "medium", authority=authority, runtime_id=start["runtime_id"])
+    outputs = {}
+    for role in target["roles"]:
+        output = authority.project_root / (role + ".md")
+        assert dispatcher.execute(ModelRequest(authority.project_root, 13, 1, "UNIT FIXTURE", 10, 10, output_file=output), step_key=13, defaults=()).returncode == 0
+        dispatcher.record_accepted_output(role, output)
+        outputs[role] = output.read_bytes()
+    from factory_core.phase9_runtime_probes import run_process_scope_probes
+    run_process_scope_probes(authority, start["runtime_id"], tmp_path / "scope-probes")
+    assert authority.finish(start["runtime_id"])["status"] == "COMPLETED"
+    return authority, request, entry, now, start["runtime_id"], outputs
+
+
+def test_export_resumes_after_record_commit_and_expired_entry_without_redispatch(tmp_path, monkeypatch):
+    authority, request, entry, now, runtime_id, outputs = _completed_identity_fixture(tmp_path, monkeypatch)
+    import factory_core.phase9_replay_evidence as writer
+    original = writer.record_formal_phase9_runtime_receipt
+    calls = []
+    def interrupted(**kwargs):
+        digest = original(**kwargs)
+        calls.append(digest)
+        if len(calls) == 3:
+            raise RuntimeError("FAULT AFTER THIRD RECORD COMMIT")
+        return digest
+    monkeypatch.setattr(writer, "record_formal_phase9_runtime_receipt", interrupted)
+    root = tmp_path / "partial-export"
+    with pytest.raises(RuntimeError, match="THIRD RECORD"):
+        authority.export_runtime_receipts(runtime_id, request, entry, outputs, root)
+    before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    monkeypatch.setattr(writer, "record_formal_phase9_runtime_receipt", original)
+    # Isolated fixture clock: production requires a newly acquired real entry.
+    now[0] += 301
+    with pytest.raises(Exception, match="stale"):
+        authority.export_runtime_receipts(runtime_id, request, entry, outputs, root)
+    entry = {**entry, "evaluated_at": now[0], "request_evaluated_at": now[0], "clock_skew_seconds": 0}
+    entry.pop("gate_result_sha256")
+    entry["gate_result_sha256"] = canonical_sha256(entry)
+    request = replace(request, occurred_at=now[0], entry_gate_result_sha256=entry["gate_result_sha256"])
+    authority.export_runtime_receipts(runtime_id, request, entry, outputs, root)
+    authority.export_runtime_receipts(runtime_id, request, entry, outputs, root)
+    authority.export_runtime_receipts(runtime_id, request, entry, outputs, tmp_path / "new-controls-root")
+    assert all((root / path).read_bytes() == raw for path, raw in before.items())
+    with sqlite3.connect(authority.database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM authority_production_phase9_replay_runtime_records").fetchone()[0] == 9
+        assert connection.execute("SELECT COUNT(*) FROM authority_production_phase9_runtime_attempts").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM authority_production_phase9_runtime_export_stages").fetchone()[0] == 22
+    (root / "roles/math.out").write_bytes(b"DRIFT")
+    with pytest.raises(ValueError, match="bytes differ"):
+        authority.export_runtime_receipts(runtime_id, request, entry, outputs, root)

@@ -93,11 +93,23 @@ def main(argv=None):
                         raise ValueError("records include a different runtime")
                     old = selected.get(intent["role"])
                     if old is None or intent["role_attempt"] > old[0]:
-                        output = path.parent / "output.raw"
-                        if not output.exists() or output.stat().st_size == 0:
-                            output = path.parent / "final_response.raw"
+                        selection = read(path.parent / "accepted_output.json", "accepted output")
+                        if (selection.get("invocation_id") != path.parent.name
+                                or selection.get("role") != intent["role"]
+                                or selection.get("source") not in {"output", "final_response"}):
+                            raise ValueError("accepted output selection differs")
+                        output = path.parent / (selection["source"] + ".raw")
+                        import hashlib
+                        raw = _regular_file_bytes(output, maximum=64 * 1024 * 1024, label="selected output")
+                        if len(raw) != selection["byte_length"] or hashlib.sha256(raw).hexdigest() != selection["sha256"]:
+                            raise ValueError("accepted output bytes changed")
                         selected[intent["role"]] = (intent["role_attempt"], output)
                 outputs = {role: _regular_file_bytes(value[1], maximum=64 * 1024 * 1024, label=role) for role, value in selected.items()}
+                write_finalizer_controls(
+                    authority=authority, runtime_id=args.runtime_id, request=request, entry=read(args.entry, "entry"),
+                    project=args.project or authority.project_root, evidence_root=settings.evidence_root, outputs=outputs,
+                    validate_only=True,
+                )
                 result = authority.export_runtime_receipts(args.runtime_id, request, read(args.entry, "entry"), outputs, settings.evidence_root)
                 result["verdict"] = write_finalizer_controls(
                     authority=authority, runtime_id=args.runtime_id, request=request, entry=read(args.entry, "entry"),

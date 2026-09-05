@@ -144,6 +144,7 @@ DEFAULT_SOURCE_PATHS = (
     "factory_core/phase9_runtime.py", "factory_core/phase9_runtime_authority.py",
     "factory_core/phase9_runtime_coordinator.py", "factory_core/phase9_runtime_probes.py",
     "factory_core/phase9_runtime_receipts.py",
+    "factory_core/phase9_provider_identity.py", "factory_core/phase9_runtime_export.py",
     "tests/test_phase9_prep_manifest.py", "tests/test_phase9_run_generation.py",
     "tests/test_phase9_delivery_fence.py", "tests/test_phase9_p0_evidence.py",
     "tests/test_phase9_audit_bundle.py", "tests/test_phase9_audit_evidence.py",

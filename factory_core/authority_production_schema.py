@@ -2574,6 +2574,13 @@ PRODUCTION_MIGRATIONS += (
             )
             """,
             """
+            CREATE TABLE authority_production_phase9_runtime_accepted_outputs (
+                attempt_id TEXT PRIMARY KEY REFERENCES authority_production_phase9_runtime_attempts(attempt_id),
+                selection_json TEXT NOT NULL,
+                selection_sha256 TEXT NOT NULL UNIQUE
+            )
+            """,
+            """
             CREATE TABLE authority_production_phase9_runtime_receipt_bindings (
                 attempt_id TEXT NOT NULL REFERENCES authority_production_phase9_runtime_attempts(attempt_id),
                 receipt_kind TEXT NOT NULL CHECK(receipt_kind IN ('ROLE_PROVIDER','ROLE_PROCESS','PROCESS_SCOPE')),
@@ -2592,6 +2599,25 @@ PRODUCTION_MIGRATIONS += (
                 terminal_sha256 TEXT NOT NULL UNIQUE
             )
             """,
+            """
+            CREATE TABLE authority_production_phase9_runtime_export_stages (
+                runtime_id TEXT NOT NULL REFERENCES authority_production_phase9_runtime_runs(runtime_id),
+                evidence_root TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                stage_json TEXT NOT NULL,
+                stage_sha256 TEXT NOT NULL UNIQUE,
+                PRIMARY KEY(runtime_id,evidence_root,stage)
+            )
+            """,
+            *_immutable_statements("authority_production_phase9_runtime_export_stages", (("runtime_id", "evidence_root", "stage"),)),
+            """
+            CREATE TRIGGER authority_production_phase9_runtime_export_stages_writer_guard
+            BEFORE INSERT ON authority_production_phase9_runtime_export_stages
+            WHEN COALESCE(phase9_runtime_execution_capability(),0) != 1
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase9 export requires its trusted execution path');
+            END
+            """,
             *tuple(
                 statement
                 for table, identity in (
@@ -2600,6 +2626,7 @@ PRODUCTION_MIGRATIONS += (
                     ("authority_production_phase9_runtime_attempts", "attempt_id"),
                     ("authority_production_phase9_runtime_observations", "attempt_id"),
                     ("authority_production_phase9_runtime_launches", "attempt_id"),
+                    ("authority_production_phase9_runtime_accepted_outputs", "attempt_id"),
                     ("authority_production_phase9_runtime_terminals", "runtime_id"),
                 )
                 for statement in (

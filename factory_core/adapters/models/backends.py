@@ -99,7 +99,7 @@ class _ProcessModelBackend:
 class CodexCliBackend(_ProcessModelBackend):
     name = "codex"
 
-    def execute(self, request: ModelRequest) -> ExecutionResult:
+    def command(self, request: ModelRequest):
         codex_cli = (
             request.env.get("CODEX_CLI_PATH", "")
             or os.getenv("CODEX_CLI_PATH", "")
@@ -141,7 +141,14 @@ class CodexCliBackend(_ProcessModelBackend):
             argv.append("--dangerously-bypass-approvals-and-sandbox")
         workdir = request.workdir or request.project_dir
         argv.extend(["-C", str(workdir), "--skip-git-repo-check", request.prompt])
-        return self._run(replace(request, workdir=workdir), argv, "codex")
+        return replace(request, workdir=workdir), argv
+
+    def execute(self, request: ModelRequest) -> ExecutionResult:
+        command = self.command(request)
+        if isinstance(command, ExecutionResult):
+            return command
+        configured, argv = command
+        return self._run(configured, argv, "codex")
 
 
 class ClaudeCliBackend(_ProcessModelBackend):

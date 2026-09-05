@@ -74,6 +74,23 @@ class _ObservedDispatcher:
         self.calls = []
         self.authority = authority
         self.runtime_id = runtime_id
+        self.intents = {}
+
+    def record_accepted_output(self, role, output):
+        """Seal the native judge's selection after its final-response fallback."""
+        record = next(value for value in reversed(self.calls) if value["role"] == role)
+        raw = Path(output).read_bytes()
+        digest = {"sha256": hashlib.sha256(raw).hexdigest(), "byte_length": len(raw)}
+        labels = [label for label, value in record["outputs"].items() if value == digest]
+        if not labels:
+            raise Phase9RuntimeError("accepted role output was not observed on its dispatch")
+        selection = {
+            "schema": "phase9-accepted-role-output-v1", "role": role,
+            "invocation_id": record["invocation_id"], "source": labels[0], **digest,
+        }
+        if self.authority is not None:
+            self.authority.accept_output(self.intents[record["invocation_id"]], selection)
+        _write_new(self.records / record["invocation_id"] / "accepted_output.json", selection)
 
     def execute(self, request, *, step_key, defaults):
         del step_key, defaults
@@ -96,7 +113,20 @@ class _ObservedDispatcher:
         intent = None
         supervisor = None
         if self.authority is not None:
-            intent = self.authority.reserve_attempt(self.runtime_id, role, canonical_sha256(request_record))
+            from .phase9_provider_identity import provider_identity
+            profile = provider_identity(configured.workdir or configured.project_dir)
+            configured = replace(configured, env={**configured.env, "CODEX_CLI_PATH": profile["native"]["path"]})
+            command = self.backend.command(configured)
+            if isinstance(command, ExecutionResult):
+                raise Phase9RuntimeError("provider configuration rejected before dispatch")
+            configured, expected_argv = command
+            provider_call = {"provider_identity": profile, "argv": expected_argv,
+                             "argv_sha256": canonical_sha256(expected_argv),
+                             "cwd": str(configured.workdir or configured.project_dir),
+                             "timeout_seconds": configured.timeout_seconds}
+            intent = self.authority.reserve_attempt(self.runtime_id, role, canonical_sha256(request_record),
+                                                    provider_call=provider_call)
+            self.intents[invocation] = intent
             _write_new(attempt_root / "dispatch_intent.json", intent)
             supervisor = _AuthorityProcessSupervisor(
                 self.authority, intent, attempt_root,
@@ -141,7 +171,8 @@ class _ObservedDispatcher:
             # deliberately rejects floating-point data.
             outcome = ("SUCCEEDED" if result.returncode == 0 and any(v["byte_length"] > 0 for v in record["outputs"].values())
                        and supervisor.launch_record is not None
-                       and supervisor.active_count == 0 else "FAILED")
+                       and supervisor.active_count == 0 else (
+                           "FAILED" if supervisor.launch_record is None else "UNCERTAIN"))
             self.authority.observe(intent, {
                 "outcome": outcome, "exit_code": result.returncode,
                 "process_pid": result.metadata.get("process_pid", 0),
@@ -165,9 +196,26 @@ class _AuthorityProcessSupervisor(ProcessSupervisor):
 
     def run(self, request):
         def started(pid):
-            self.launch_record = self.authority.launch(self.intent, pid)
+            executable = Path(f"/proc/{pid}/exe").read_bytes()
+            command_line = Path(f"/proc/{pid}/cmdline").read_bytes()
+            allowed_commands = {b"\0".join(value.encode() for value in command) + b"\0"
+                                for command in (argv, request.argv)}
+            if command_line not in allowed_commands:
+                raise Phase9RuntimeError("launched provider command differs from sealed argv")
+            self.launch_record = self.authority.launch(self.intent, pid, execution={
+                "provider_call_sha256": canonical_sha256(self.intent["provider_call"]),
+                "kernel_executable_sha256": hashlib.sha256(executable).hexdigest(),
+                "kernel_cmdline_sha256": hashlib.sha256(command_line).hexdigest(),
+                "sandbox_argv": argv, "sandbox_argv_sha256": canonical_sha256(argv),
+            })
             _write_new(self.records / "launch.json", self.launch_record)
 
+        from .phase9_provider_identity import provider_identity, routing_environment_sha256
+        call = self.intent.get("provider_call", {})
+        if (call.get("provider_identity") != provider_identity(request.cwd)
+                or routing_environment_sha256(request.env or {}) != call["provider_identity"].get("routing_environment_sha256")
+                or request.argv != call.get("argv") or str(request.cwd) != call.get("cwd")):
+            raise Phase9RuntimeError("actual provider program/argv/configuration differs from committed intent")
         scratch = Path(os.environ.get("TMPDIR", ""))
         if not scratch.is_absolute() or not scratch.is_dir() or scratch.resolve() != scratch:
             raise Phase9RuntimeError("formal process sandbox requires an explicit canonical TMPDIR")

@@ -92,7 +92,33 @@ def runtime_receipt_source_sha256(connection, *, request, receipt_kind, logical_
                                      project_input_sha256=target["project_input_sha256"],
                                      model=target["model"], effort=target["effort"],
                                      timeout_seconds=target["timeout_seconds"],
-                                     total_timeout_seconds=target["total_timeout_seconds"])
+                                     total_timeout_seconds=target["total_timeout_seconds"], provider=target["provider_identity"])
+    if not is_probe:
+        from .phase9_provider_identity import validate_call
+        validate_call(intent.get("provider_call"), target["provider_identity"], model=target["model"], effort=target["effort"])
+        selected_row = connection.execute("SELECT * FROM authority_production_phase9_runtime_accepted_outputs WHERE attempt_id=?", (attempt_id,)).fetchone()
+        if selected_row is None:
+            raise Phase9ForensicReplayConflict("runtime lacks native accepted output")
+        tables["accepted_output"] = dict(selected_row)
+        selected = _body(tables["accepted_output"], "selection_json", "selection_sha256", "selection_sha256")
+        if (selected["attempt_id"] != attempt_id or selected["selection"]["sha256"] != output_sha256
+                or selected["selection"]["role"] != logical_id
+                or observation["observation"]["outputs"].get(selected["selection"]["source"]) != {
+                    "sha256": output_sha256, "byte_length": selected["selection"]["byte_length"]}):
+            raise Phase9ForensicReplayConflict("receipt differs from native accepted output")
+        import hashlib
+        execution = launch.get("execution", {})
+        wrapped = execution.get("sandbox_argv", [])
+        argv = intent["provider_call"]["argv"]
+        command_hashes = {hashlib.sha256(b"\0".join(part.encode() for part in command) + b"\0").hexdigest() for command in (wrapped, argv)}
+        if (not wrapped or wrapped[0] != target["provider_identity"]["sandbox"]["path"]
+                or wrapped[-len(argv):] != argv
+                or execution.get("sandbox_argv_sha256") != canonical_sha256(wrapped)
+                or execution.get("kernel_cmdline_sha256") not in command_hashes
+                or execution.get("provider_call_sha256") != canonical_sha256(intent["provider_call"])
+                or execution.get("kernel_executable_sha256") not in {
+                    target["provider_identity"]["native"]["sha256"], target["provider_identity"]["sandbox"]["sha256"]}):
+            raise Phase9ForensicReplayConflict("provider launch execution identity differs")
     observed = observation["observation"]
     expected_binding = {
         "schema": "authority-phase9-runtime-receipt-binding-v1",

@@ -66,6 +66,7 @@ from .phase9_run_generation import (
 
 
 PHASE9_REPLAY_REQUEST_SCHEMA = "authority-phase9-forensic-replay-request-v2"
+PHASE9_RUNTIME_REPLAY_REQUEST_SCHEMA = "authority-phase9-forensic-replay-request-v3"
 PHASE9_REPLAY_RESULT_SCHEMA = "authority-phase9-forensic-replay-result-v1"
 PHASE9_REPLAY_PREFLIGHT_SCHEMA = "authority-phase9-forensic-preflight-v1"
 PHASE9_REPLAY_STATE_SCHEMA = "authority-phase9-forensic-state-v2"
@@ -534,7 +535,7 @@ def validate_phase9_forensic_replay_request(
 ) -> Phase9ForensicReplayRequestV1:
     if type(request) is not Phase9ForensicReplayRequestV1:
         raise Phase9ForensicReplaySafetyError("request type is unsupported")
-    if request.schema_version != PHASE9_REPLAY_REQUEST_SCHEMA:
+    if request.schema_version not in {PHASE9_REPLAY_REQUEST_SCHEMA, PHASE9_RUNTIME_REPLAY_REQUEST_SCHEMA}:
         raise Phase9ForensicReplaySafetyError("request schema is unsupported")
     for field, value in (
         ("idempotency_key", request.idempotency_key),
@@ -936,8 +937,7 @@ def _receipt_coordinate(
 
 
 def _replay_coordinate_sha256(request: Phase9ForensicReplayRequestV1) -> str:
-    return canonical_sha256(
-        {
+    body = {
             "schema": "authority-phase9-replay-coordinate-v1",
             "idempotency_key": request.idempotency_key,
             "operation_kind": request.operation_kind,
@@ -965,7 +965,11 @@ def _replay_coordinate_sha256(request: Phase9ForensicReplayRequestV1) -> str:
             "entry_gate_result_sha256": request.entry_gate_result_sha256,
             "occurred_at": request.occurred_at,
         }
-    )
+    if request.schema_version == PHASE9_RUNTIME_REPLAY_REQUEST_SCHEMA:
+        body["schema"] = "authority-phase9-replay-coordinate-v2"
+        body.pop("entry_gate_result_sha256")
+        body.pop("occurred_at")
+    return canonical_sha256(body)
 
 
 def _dependency_fingerprint_sha256(
@@ -3098,6 +3102,8 @@ def _authority_runtime_source_sha256(
             packet_sha256=packet_sha256, invocation_id=invocation_id,
             attempt_id=attempt_id, process_scope_id=process_scope_id,
         )
+    if request.schema_version == PHASE9_RUNTIME_REPLAY_REQUEST_SCHEMA:
+        raise Phase9ForensicReplayConflict("runtime v3 requires the actual dispatch source graph")
     rows: dict[str, dict[str, object]] = {}
     for table, key, value in (
         ("authority_invocations", "invocation_id", invocation_id),

@@ -20,6 +20,7 @@ from .phase9_runtime import (
     run_step13_components,
 )
 from .phase9_runtime_authority import dispatch_target
+from .phase9_provider_identity import provider_identity
 from .steps.registry import build_native_registry
 
 
@@ -62,7 +63,7 @@ def plan_runtime(*, source, project, records, request, model="gpt-6-astra", effo
     packet, fingerprints = prepared_packet(project)
     target = dispatch_target(request, packet_sha256=canonical_sha256(packet),
                              project_input_sha256=canonical_sha256(fingerprints), model=model, effort=effort,
-                             timeout_seconds=timeout_seconds, total_timeout_seconds=total_timeout_seconds)
+                             timeout_seconds=timeout_seconds, total_timeout_seconds=total_timeout_seconds, provider=provider_identity(project))
     _write_new(records / "formal_packet.json", packet)
     _write_new(records / "dispatch_target.json", target)
     return {"status": "PREPARED", "target": target, "target_sha256": canonical_sha256(target),
@@ -87,7 +88,7 @@ def execute_runtime(*, source, project, records, request, entry, target, grant, 
     packet, fingerprints = prepared_packet(project)
     if target != dispatch_target(request, packet_sha256=canonical_sha256(packet),
                                  project_input_sha256=canonical_sha256(fingerprints), model=target["model"], effort=target["effort"],
-                                 timeout_seconds=target["timeout_seconds"], total_timeout_seconds=target["total_timeout_seconds"]):
+                                 timeout_seconds=target["timeout_seconds"], total_timeout_seconds=target["total_timeout_seconds"], provider=provider_identity(project)):
         raise Phase9RuntimeError("prepared packet no longer matches the dispatch grant")
     _write_new(records / "formal_packet.json", packet)
     start = authority.start(request, entry, target, grant)
@@ -128,11 +129,11 @@ def execute_runtime(*, source, project, records, request, entry, target, grant, 
             "formal_phase9_completed": False, "delivery_capability": "DISABLED"}
 
 
-def write_finalizer_controls(*, authority, runtime_id, request, entry, project, evidence_root, outputs):
+def write_finalizer_controls(*, authority, runtime_id, request, entry, project, evidence_root, outputs, validate_only=False):
     """Recompute packet, verdict layers and snapshot reads from the completed run."""
     from scripts.aggregate_judges import aggregate_outputs, _read_role
     from .phase9_forensic_replay import _effective
-    from .phase9_replay_evidence import _write_new as write_bytes
+    from .phase9_runtime_export import write_equal as write_bytes
     from .phase9_authority_lease import authority_state_commit_lease, isolated_authority_snapshot_ro
 
     state = authority.collect(runtime_id)
@@ -185,6 +186,8 @@ def write_finalizer_controls(*, authority, runtime_id, request, entry, project, 
                           "sections": [{"section": section, "coordinate": coordinate, "read_failed": False,
                                         "read_status": "AVAILABLE"} for section in ("artifacts", "workflow")]},
     }
+    if validate_only:
+        return controls["verdict.json"]
     write_bytes(evidence_root / "payload/packet.bin", canonical_bytes(packet))
     for name, body in controls.items():
         write_bytes(evidence_root / name, canonical_bytes(body))

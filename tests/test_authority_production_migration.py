@@ -332,6 +332,8 @@ def test_ready_a2_0015_installation_upgrades_additively_through_a2_0018(
         "authority_production_phase9_runtime_observations",
         "authority_production_phase9_runtime_terminals",
         "authority_production_phase9_runtime_receipt_bindings",
+        "authority_production_phase9_runtime_accepted_outputs",
+        "authority_production_phase9_runtime_export_stages",
     }
 
 

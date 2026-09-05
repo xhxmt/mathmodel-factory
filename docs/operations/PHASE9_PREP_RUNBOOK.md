@@ -156,6 +156,8 @@ are deliberately separate from the normal Step13 math precheck:
 
 1. `plan --request <entry-coordinate-request> --records <new-directory>` rebuilds
    objective evidence and all complete role packets with zero provider calls.
+   The durable runtime requires `authority-phase9-forensic-replay-request-v3`;
+   existing v2 finalizer evidence keeps its original coordinate semantics.
    It writes the exact dispatch target and packet-v2 bytes. Generation creation
    remains the existing `scripts/phase9_run_generation.py` operator workflow.
 2. The authorized operator supplies a private (0600), account-owned
@@ -167,14 +169,22 @@ are deliberately separate from the normal Step13 math precheck:
    --grant <grant> --records <new-directory>` consumes the distinct grant in
    A2_0020 before dispatch. Each attempt first commits its command, invocation,
    attempt and scope, then records the actual OS launch and completion. Role
-   execution uses the repository's two-attempt transport / three-round
+   The target also binds the resolved native Codex ELF bytes (the JS launcher
+   is bypassed), resolution chain, configuration-file hashes and routing
+   environment hash. Approval must verify these exact provider identities;
+   a program merely named codex is not independently certified by its name.
+   Actual argv/cwd and kernel executable/command-line observations bind each
+   intent and launch. Credentials are never printed; response model identity
+   remains unavailable unless independently visible. Role execution uses the repository's two-attempt transport / three-round
    infrastructure retry budget, a pinned model/effort and an overall deadline.
    Providers require a private PID namespace and read-only host source, inputs
    and Authority state; only the current output files and a private child of
    the explicit `TMPDIR` are writable. There is no unsandboxed
    fallback. Failed/kill/pause probes use fixed local processes, not models.
 4. `collect --runtime-id <id>` reads the immutable lifecycle. Unobserved or
-   uncertain attempts prohibit automatic redispatch; they remain active in
+   uncertain attempts prohibit automatic redispatch; nonzero/timeout results
+   after launch are UNCERTAIN because local process closure cannot prove
+   remote cancellation. Only proven pre-launch failures may be retried; they remain active in
    entry-state collection. An execution `COMPLETED` means role/process work
    finished, not a forensic PASS or permission for Steps14–16.
 5. After execution, obtain a fresh READY entry and completion request at the
@@ -186,7 +196,8 @@ are deliberately separate from the normal Step13 math precheck:
    <id> --request <fresh-request> --entry <fresh-entry> --records <execution-records>`
    joins actual output bytes and OS observations and calls
    `record_formal_phase9_runtime_receipt` for roles and process scopes. It
-   recomputes packet/verdict/snapshot controls for the existing evidence producer.
+   uses the native judge's persisted accepted output (including final-response
+   fallback), and validates packet/verdict/snapshot controls before receipt writes.
 6. `finalize --request <fresh-request> --records <new-scratch-directory>` runs
    the fixed real acceptance probes, obtains the independent one-use finalizer
    start capability through the existing evidence producer, and invokes the
@@ -199,8 +210,14 @@ A2_0010–A2_0019 SQL bytes and upgrades the runtime-record guard to accept the
 new verified dispatch graph as well as the legacy completion graph. A
 receipt-record capability has its own short TTL immediately before recording;
 it is not the authority under which a long provider call executes. Interrupted
-export artifacts and failed attempts must be preserved and reconciled, not
-rewritten into success. This implementation requires current-candidate tests
+export artifacts and failed attempts are preserved. Repeating export compares
+existing bytes, bindings and runtime records exactly, then writes only missing
+stages. A fresh real entry/request is required after its acquisition window
+expires. V3 receipt coordinates exclude that acquisition metadata, while the
+full request and entry remain separately verified. If old entry control files
+already exist, use a new evidence root, preserving the original root. This
+never re-dispatches a provider. Any differing existing bytes or rows block
+recovery; no deletion or timestamp editing is a recovery mechanism. This implementation requires current-candidate tests
 and independent review; fixture processes and their synthetic provider text
 are never formal runtime evidence.
 

@@ -1210,6 +1210,9 @@ class JudgeStep:
                 missing_artifacts=missing_artifacts,
                 **result.metadata,
             )
+        accepted_output_observer = getattr(self.dispatcher, "record_accepted_output", None)
+        if accepted_output_observer is not None:
+            accepted_output_observer(role, output)
         model_id = str(result.metadata.get("model_id") or self.contract.default_models[0])
         backend = str(result.metadata.get("backend") or "unknown")
         model = str(result.metadata.get("model") or model_id)

@@ -564,6 +564,10 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
 
     class FinalResponseWritingDispatcher:
         requests = []
+        accepted = []
+
+        def record_accepted_output(self, role, output):
+            self.accepted.append((role, output.read_bytes()))
 
         def execute(self, request, **_kwargs):
             self.requests.append(request)
@@ -576,6 +580,7 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
                 request.output_file.write_text("VERDICT: PASS\n{}\n", encoding="utf-8")
                 request.final_response_file.write_text("judge summary\n", encoding="utf-8")
             else:
+                request.output_file.write_text("nonempty invalid primary")
                 request.final_response_file.write_text(
                     "VERDICT: PASS\n{}\n", encoding="utf-8"
                 )
@@ -620,6 +625,8 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
     assert (project / "judge_outputs/paper.md").read_text(
         encoding="utf-8"
     ).startswith("VERDICT: PASS\n")
+
+    assert dispatcher.accepted == [("paper", b"VERDICT: PASS\n{}\n")] * 2
 
 
 def test_native_judge_grounding_retry_includes_failure_and_packet_excerpt(

@@ -43,8 +43,11 @@ SCOPE = {
 
 def dispatch_target(request, *, packet_sha256: str, project_input_sha256: str,
                     model: str, effort: str, timeout_seconds: int,
-                    total_timeout_seconds: int) -> dict:
+                    total_timeout_seconds: int, provider=None) -> dict:
     """A stable execution identity does not contain a future completion time."""
+    from .phase9_forensic_replay import PHASE9_RUNTIME_REPLAY_REQUEST_SCHEMA
+    if request.schema_version != PHASE9_RUNTIME_REPLAY_REQUEST_SCHEMA:
+        raise Phase9RuntimeAuthorityError("durable runtime requires the v3 replay request coordinate")
     if request.replay_mode != "TECHNICAL":
         raise Phase9RuntimeAuthorityError("ablation uses its distinct no-provider finalizer route")
     for digest in (packet_sha256, project_input_sha256):
@@ -56,6 +59,9 @@ def dispatch_target(request, *, packet_sha256: str, project_input_sha256: str,
         raise Phase9RuntimeAuthorityError("per-call runtime limit is invalid")
     if type(total_timeout_seconds) is not int or not 1 <= total_timeout_seconds <= 7200:
         raise Phase9RuntimeAuthorityError("total runtime limit is invalid")
+    if provider is None:
+        from .phase9_provider_identity import provider_identity
+        provider = provider_identity()
     binding = request.as_dict()
     binding.pop("occurred_at")
     binding.pop("evidence_files")
@@ -66,7 +72,7 @@ def dispatch_target(request, *, packet_sha256: str, project_input_sha256: str,
         "schema": TARGET_SCHEMA, "replay_binding": binding,
         "packet_sha256": packet_sha256,
         "project_input_sha256": project_input_sha256,
-        "model": model, "effort": effort,
+        "model": model, "effort": effort, "provider_identity": provider,
         "roles": ["execution", "math", "paper"],
         "process_scope_actions": ["failed", "kill", "pause"],
         "max_attempts_per_role": 8,
@@ -128,10 +134,13 @@ class Phase9RuntimeAuthority:
             project_input_sha256=target["project_input_sha256"],
             model=target["model"], effort=target["effort"],
             timeout_seconds=target["timeout_seconds"],
-            total_timeout_seconds=target["total_timeout_seconds"],
+            total_timeout_seconds=target["total_timeout_seconds"], provider=target["provider_identity"],
         )
         if target != expected_target or request.delivery_capability != "DISABLED":
             raise Phase9RuntimeAuthorityError("runtime plan differs from its exact replay coordinate")
+        from .phase9_provider_identity import provider_identity
+        if provider_identity(self.project_root) != target["provider_identity"]:
+            raise Phase9RuntimeAuthorityError("approved provider installation/configuration changed")
         state_sha, _ = _verify_entry_gate(entry, request, trusted_now=now)
         with authority_state_commit_lease(self.project_root):
             connection = self._connect()
@@ -232,7 +241,7 @@ class Phase9RuntimeAuthority:
             self.finalizer._verify_external_generation_inputs(connection, bound_request)
         return row, start
 
-    def reserve_attempt(self, runtime_id: str, role: str, request_sha256: str) -> dict:
+    def reserve_attempt(self, runtime_id: str, role: str, request_sha256: str, *, provider_call=None) -> dict:
         """Commit intent once; a crash after this point requires reconciliation."""
         if not isinstance(request_sha256, str) or len(request_sha256) != 64 or any(c not in "0123456789abcdef" for c in request_sha256):
             raise Phase9RuntimeAuthorityError("dispatch request digest is malformed")
@@ -269,6 +278,10 @@ class Phase9RuntimeAuthority:
                     "request_sha256": request_sha256,
                     "target_sha256": row["target_sha256"], "committed_at": int(time.time()),
                 }
+                if provider_call is not None:
+                    from .phase9_provider_identity import validate_call
+                    validate_call(provider_call, start["target"]["provider_identity"], model=start["target"]["model"], effort=start["target"]["effort"])
+                    intent["provider_call"] = provider_call
                 intent["dispatch_intent_sha256"] = canonical_sha256(intent)
                 workflow = connection.execute(
                     "SELECT current_revision,contract_pin_set_sha256 FROM authority_workflows WHERE workflow_id=?", (row["workflow_id"],)
@@ -354,7 +367,29 @@ class Phase9RuntimeAuthority:
             finally:
                 connection.close()
 
-    def launch(self, intent: dict, pid: int) -> dict:
+    def accept_output(self, intent, selection):
+        """Persist the native judge selection, only after observed completion."""
+        with authority_state_commit_lease(self.project_root):
+            connection = self._connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                self._run(connection, intent["runtime_id"])
+                row = connection.execute("SELECT a.dispatch_intent_json,o.observation_json FROM authority_production_phase9_runtime_attempts a JOIN authority_production_phase9_runtime_observations o ON o.attempt_id=a.attempt_id WHERE a.attempt_id=?", (intent["attempt_id"],)).fetchone()
+                if row is None or row[0] != canonical_bytes(intent).decode():
+                    raise Phase9RuntimeAuthorityError("accepted output has no owned attempt")
+                observed = _strict_json(row[1].encode(), "accepted output observation")["observation"]
+                if (observed["outcome"] != "SUCCEEDED" or selection.get("role") != intent["role"]
+                        or observed["outputs"].get(selection.get("source")) != {
+                            "sha256": selection.get("sha256"), "byte_length": selection.get("byte_length")}):
+                    raise Phase9RuntimeAuthorityError("accepted output differs from actual observation")
+                body = {"schema": "phase9-native-output-selection-v1", "attempt_id": intent["attempt_id"], "selection": selection}
+                body["selection_sha256"] = canonical_sha256(body)
+                connection.execute("INSERT INTO authority_production_phase9_runtime_accepted_outputs VALUES(?,?,?)", (intent["attempt_id"], canonical_bytes(body).decode(), body["selection_sha256"]))
+                connection.commit()
+            finally:
+                connection.close()
+
+    def launch(self, intent: dict, pid: int, *, execution=None) -> dict:
         """Observe an actual owned Linux process immediately after Popen."""
         if type(pid) is not int or pid <= 0:
             raise Phase9RuntimeAuthorityError("runtime process PID is invalid")
@@ -369,6 +404,12 @@ class Phase9RuntimeAuthority:
             "boot_id_sha256": hashlib.sha256(Path("/proc/sys/kernel/random/boot_id").read_bytes()).hexdigest(),
             "observed_at": int(time.time()),
         }
+        if intent["role"] in {"math", "execution", "paper"}:
+            if not intent.get("provider_call") or execution is None:
+                raise Phase9RuntimeAuthorityError("provider launch lacks its approved execution identity")
+            from .phase9_provider_identity import verify_launch
+            verify_launch(intent, pid, execution)
+            launch["execution"] = execution
         launch["launch_sha256"] = canonical_sha256(launch)
         with authority_state_commit_lease(self.project_root):
             connection = self._connect()
@@ -434,6 +475,8 @@ class Phase9RuntimeAuthority:
                 latest = {a["role"]: a["outcome"] for a in attempts}
                 uncertain = any(a["outcome"] in (None, "UNCERTAIN") for a in attempts)
                 completed = latest == {role: "SUCCEEDED" for role in start["target"]["roles"] + start["target"]["process_scope_actions"]}
+                selected_roles = {r[0] for r in connection.execute("SELECT a.role FROM authority_production_phase9_runtime_accepted_outputs o JOIN authority_production_phase9_runtime_attempts a ON a.attempt_id=o.attempt_id WHERE a.runtime_id=? AND a.role_attempt=(SELECT MAX(b.role_attempt) FROM authority_production_phase9_runtime_attempts b WHERE b.runtime_id=a.runtime_id AND b.role=a.role)", (runtime_id,))}
+                completed = completed and selected_roles == set(start["target"]["roles"])
                 now = int(time.time())
                 terminal = {
                     "schema": "authority-phase9-runtime-terminal-v1",
@@ -464,7 +507,7 @@ class Phase9RuntimeAuthority:
         The existing finalizer still validates protocol, grounding and verdicts.
         """
         from .phase9_replay_evidence import (
-            _acceptance_provenance, _write_new,
+            _acceptance_provenance,
             authorize_formal_phase9_runtime_receipt, record_formal_phase9_runtime_receipt,
         )
         from .phase9_forensic_replay import (
@@ -472,6 +515,7 @@ class Phase9RuntimeAuthority:
             PHASE9_ROLE_PROVIDER_RECEIPT_SCHEMA, PHASE9_ROLE_PROCESS_RECEIPT_SCHEMA,
             PHASE9_PROCESS_SCOPE_RECEIPT_SCHEMA, PHASE9_RUNTIME_EVIDENCE_SCHEMA,
         )
+        from .phase9_runtime_export import write_equal as _write_new, bind_equal, existing_record, stage
         state_sha, _ = _verify_entry_gate(entry, request, trusted_now=int(time.time()))
         if abs(request.occurred_at - int(time.time())) > 300:
             raise Phase9RuntimeAuthorityError("completion request is stale")
@@ -495,7 +539,7 @@ class Phase9RuntimeAuthority:
                                    project_input_sha256=target["project_input_sha256"],
                                    model=target["model"], effort=target["effort"],
                                    timeout_seconds=target["timeout_seconds"],
-                                   total_timeout_seconds=target["total_timeout_seconds"]) != target:
+                                   total_timeout_seconds=target["total_timeout_seconds"], provider=target["provider_identity"]) != target:
                     raise Phase9RuntimeAuthorityError("completion request differs from the authorized execution")
                 terminal_row = connection.execute("SELECT terminal_status FROM authority_production_phase9_runtime_terminals WHERE runtime_id=?", (runtime_id,)).fetchone()
                 if terminal_row is None or terminal_row[0] != "COMPLETED" or set(outputs) != set(target["roles"]):
@@ -513,6 +557,9 @@ class Phase9RuntimeAuthority:
                     expected_output = {"sha256": output_sha, "byte_length": len(raw)}
                     if observation["observation"]["outcome"] != "SUCCEEDED" or expected_output not in observation["observation"]["outputs"].values():
                         raise Phase9RuntimeAuthorityError("role bytes are not the observed provider output")
+                    selection_row = connection.execute("SELECT selection_json FROM authority_production_phase9_runtime_accepted_outputs WHERE attempt_id=?", (row["attempt_id"],)).fetchone()
+                    if selection_row is None or _strict_json(selection_row[0].encode(), "accepted output")["selection"]["sha256"] != output_sha:
+                        raise Phase9RuntimeAuthorityError("export differs from native accepted output")
                     output_path = f"roles/{role}.out"
                     _write_new(root / output_path, raw)
                     dependency = _dependency_fingerprint_sha256(request, receipt_kind="ROLE", logical_id=role, input_sha256=packet_sha)
@@ -560,8 +607,7 @@ class Phase9RuntimeAuthority:
                             "observation_sha256": row["observation_sha256"],
                         }
                         binding["binding_sha256"] = canonical_sha256(binding)
-                        connection.execute("INSERT INTO authority_production_phase9_runtime_receipt_bindings VALUES(?,?,?,?,?)",
-                                           (row["attempt_id"], kind, binding["replay_coordinate_sha256"], canonical_bytes(binding).decode(), binding["binding_sha256"]))
+                        bind_equal(connection, binding)
                         _write_new(root / logical_path, encoded)
                         records.append((kind, role, logical_path, body, encoded))
                         previous = body
@@ -602,8 +648,7 @@ class Phase9RuntimeAuthority:
                         "replay_coordinate_sha256": _replay_coordinate_sha256(request), "observation_sha256": row["observation_sha256"],
                     }
                     binding["binding_sha256"] = canonical_sha256(binding)
-                    connection.execute("INSERT INTO authority_production_phase9_runtime_receipt_bindings VALUES(?,?,?,?,?)",
-                                       (row["attempt_id"], "PROCESS_SCOPE", binding["replay_coordinate_sha256"], canonical_bytes(binding).decode(), binding["binding_sha256"]))
+                    bind_equal(connection, binding)
                     _write_new(root / path, encoded)
                     records.append(("PROCESS_SCOPE", action, path, body, encoded))
                     scope_descriptors[action] = descriptor
@@ -613,22 +658,31 @@ class Phase9RuntimeAuthority:
                 raise
             finally:
                 connection.close()
+        stage(self, runtime_id, root, "BINDINGS_COMMITTED", [body["receipt_sha256"] for _, _, _, body, _ in records])
         for kind, role, path, body, raw in records:
+            with authority_state_commit_lease(self.project_root):
+                with isolated_authority_snapshot_ro(self.database) as connection:
+                    existing = existing_record(connection, request, kind, role, path, body, raw)
+            if existing is not None:
+                stage(self, runtime_id, root, kind + ":" + role, {"record_sha256": existing})
+                continue
             authorization_id, nonce, _ = authorize_formal_phase9_runtime_receipt(
                 database=self.database, expected_source_fence_sha256=self.finalizer.expected_source_fence_sha256,
                 request=request, receipt_kind=kind, logical_id=role, logical_path=path,
                 invocation_id=body["invocation_id"], attempt_id=body["attempt_id"], process_scope_id=body["process_scope_id"],
                 packet_sha256=body.get("packet_sha256"), dependency_fingerprint_sha256=body["dependency_fingerprint_sha256"], input_sha256=body["input_sha256"],
             )
-            record_formal_phase9_runtime_receipt(
+            recorded = record_formal_phase9_runtime_receipt(
                 database=self.database, expected_source_fence_sha256=self.finalizer.expected_source_fence_sha256,
                 authorization_id=authorization_id, authorization_nonce=nonce, request=request,
                 receipt_kind=kind, logical_id=role, logical_path=path, raw_bytes=raw,
             )
+            stage(self, runtime_id, root, kind + ":" + role, {"record_sha256": recorded})
         roles = {"schema": "authority-phase9-role-evidence-v2", "roles": role_rows}
         outbox = {"schema": PHASE9_RUNTIME_EVIDENCE_SCHEMA, "precommit_external_launch_count": 0,
                   "committed_reclaim_count": 0, "pending_outbox_count": 0, "uncertain_automatic_resend_count": 0,
                   "active_descendant_count": 0, "process_scope_receipts": scope_descriptors}
         _write_new(root / "roles.json", canonical_bytes(roles))
         _write_new(root / "outbox_supervisor.json", canonical_bytes(outbox))
+        stage(self, runtime_id, root, "RUNTIME_CONTROLS_WRITTEN", {"roles": roles, "outbox_supervisor": outbox})
         return {"roles": roles, "outbox_supervisor": outbox}
