@@ -185,9 +185,14 @@ are deliberately separate from the normal Step13 math precheck:
    execution, with EXITKILL protection. The private socket handshake binds its
    PID, ancestry, executable and argv; Authority commits this observation
    before GO. Wrapper identity alone cannot satisfy the receipt proof.
-   Codex runtime state uses a private writable CODEX_HOME under TMPDIR with
-   approved config mounted read-only and a private authentication copy; the
-   original client and credential files are not modified. Native judge final
+   CODEX_HOME is redirected through an explicit approved-to-actual configuration
+   mapping, including absent files, into a private read-only directory namespace.
+   Authority and receipt readers validate this mapping and the observed native
+   environment. SQLite state uses CODEX_SQLITE_HOME under a separate writable
+   runtime directory; cache/session/plugin child directories and one fresh local
+   installation_id file are separately writable. The installation UUID is local
+   bookkeeping, never authorization or response identity. A private authentication
+   copy is read-only; original client and credential files are not modified. Native judge final
    responses use a unique directory under explicit TMPDIR (project/tmp only
    when TMPDIR is unset). Credentials are never printed; response model identity
    remains unavailable unless independently visible. Role execution uses the repository's two-attempt transport / three-round

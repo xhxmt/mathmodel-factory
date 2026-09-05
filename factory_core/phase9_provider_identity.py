@@ -54,7 +54,7 @@ def provider_identity(project=None):
     # Authentication is deliberately excluded: provider credentials may rotate,
     # while routing and config values must remain exactly those approved.
     return {"schema": "phase9-codex-native-identity-v1", "native": _file(native),
-            "resolution_chain": chain, "configuration": configuration,
+            "resolution_chain": chain, "configuration": configuration, "configuration_home": str(codex_home),
             "routing_environment_sha256": routing_environment_sha256(os.environ),
             "sandbox": _file("/usr/bin/bwrap"), "response_identity": "unavailable"}
 
@@ -108,7 +108,7 @@ def verify_launch(intent, pid, execution):
             or execution.get("kernel_cmdline_sha256") != hashlib.sha256(command).hexdigest()):
         raise ValueError("kernel native provider identity differs from approved launch")
     validate_execution_view(execution, profile)
-    actual_configuration = configuration_observation(native_pid, profile)
+    actual_configuration = configuration_observation(native_pid, profile, execution["execution_view"]["private_runtime_home"])
     if actual_configuration != execution.get("configuration_observation"):
         raise ValueError("native configuration observation differs")
     cwd = os.stat(f"/proc/{native_pid}/cwd")
@@ -122,18 +122,24 @@ def validate_execution_view(execution, profile):
     if (execution.get("execution_view_sha256") != canonical_sha256(view)
             or view.get("native_sha256") != profile["native"]["sha256"]):
         raise ValueError("sealed provider execution view differs")
-    if view.get("configuration_states") != expected_configuration_states(profile):
+    home = view.get("private_runtime_home")
+    if not isinstance(home, str) or not Path(home).is_absolute() or str(Path(home)) != home or Path(home).name != "codex_home":
+        raise ValueError("invalid private configuration home")
+    rows = execution_configuration(profile, home)
+    states = expected_configuration_states({"configuration": rows})
+    environment = runtime_environment(home)
+    if view.get("configuration_mapping") != rows or view.get("runtime_environment") != environment:
+        raise ValueError("actual configuration mapping differs")
+    if view.get("configuration_states") != states:
         raise ValueError("sealed view does not bind every configuration presence/absence")
     observed = execution.get("configuration_observation")
-    if observed != {"states": expected_configuration_states(profile), "read_only_directories": view.get("protected_directories")}:
+    if observed != {"states": states, "read_only_directories": view.get("protected_directories"), "runtime_environment": environment}:
         raise ValueError("native configuration namespace proof differs")
-    required_directories = sorted({str(parent) for row in profile["configuration"]
-                                  for parent in Path(row.get("load_path", row["path"])).parents},
-                                 key=lambda p: (len(Path(p).parts), p))
+    required_directories = configuration_directories(rows, home)
     if view.get("protected_directories") != required_directories:
         raise ValueError("configuration namespace ancestor closure differs")
     files = view.get("files", [])
-    required = [profile["native"], *[row for row in profile["configuration"] if not row.get("absent")]]
+    required = [profile["native"], *[row for row in rows if not row.get("absent")]]
     for row in required:
         if not any(item.get("source") == row["path"] and item.get("destination") == row.get("load_path", row["path"])
                    and item.get("sha256") == row["sha256"] and item.get("byte_length") == row["byte_length"]
@@ -149,10 +155,38 @@ def expected_configuration_states(profile):
                    for row in profile["configuration"]], key=lambda row: row["load_path"])
 
 
-def configuration_observation(native_pid, profile):
+def execution_configuration(profile, home):
+    """Explicit original-to-actual load mapping, preserving approved absences."""
+    rows = [dict(row) for row in profile["configuration"]]
+    original = profile.get("configuration_home")
+    if original:
+        for row in profile["configuration"]:
+            if Path(row.get("load_path", row["path"])).parent == Path(original):
+                rows.append({**row, "load_path": str(Path(home) / Path(row.get("load_path", row["path"])).name)})
+    return sorted(rows, key=lambda row: row.get("load_path", row["path"]))
+
+
+def configuration_directories(rows, home):
+    paths = {parent for row in rows for parent in Path(row.get("load_path", row["path"])).parents}
+    paths.update((Path(home), *Path(home).parents))
+    return sorted(map(str, paths), key=lambda p: (len(Path(p).parts), p))
+
+
+def runtime_environment(home):
+    runtime = Path(home).parent / "runtime"
+    return {"CODEX_HOME": str(home), "CODEX_SQLITE_HOME": str(runtime / "sqlite"),
+            "TMPDIR": str(runtime), "XDG_CACHE_HOME": str(runtime / "cache")}
+
+
+def configuration_observation(native_pid, profile, home):
     """Independently inspect the stopped child's root and readonly mounts."""
     root = Path(f"/proc/{native_pid}/root")
-    states = expected_configuration_states(profile)
+    rows = execution_configuration(profile, home)
+    states = expected_configuration_states({"configuration": rows})
+    environment = runtime_environment(home)
+    native_env = dict(item.split(b"=", 1) for item in Path(f"/proc/{native_pid}/environ").read_bytes().split(b"\0") if b"=" in item)
+    if any(native_env.get(key.encode()) != value.encode() for key, value in environment.items()):
+        raise ValueError("native runtime environment differs from configuration mapping")
     for row in states:
         path = root / row["load_path"].lstrip("/")
         try:
@@ -166,8 +200,7 @@ def configuration_observation(native_pid, profile):
         raw = path.read_bytes()
         if len(raw) != row["byte_length"] or hashlib.sha256(raw).hexdigest() != row["sha256"]:
             raise ValueError("native configuration bytes differ")
-    directories = sorted({str(parent) for row in states for parent in Path(row["load_path"]).parents},
-                         key=lambda p: (len(Path(p).parts), p))
+    directories = configuration_directories(rows, home)
     mounts = {}
     for line in Path(f"/proc/{native_pid}/mountinfo").read_text().splitlines():
         fields = line.split()
@@ -175,4 +208,4 @@ def configuration_observation(native_pid, profile):
         mounts[name] = fields[5].split(',')
     if any('ro' not in mounts.get(path, []) for path in directories):
         raise ValueError("native configuration namespace is not immutable")
-    return {"states": states, "read_only_directories": directories}
+    return {"states": states, "read_only_directories": directories, "runtime_environment": environment}

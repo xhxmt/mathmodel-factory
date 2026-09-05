@@ -225,7 +225,8 @@ def test_cli_export_ignores_unaccepted_history_and_uses_authority_latest(tmp_pat
         selected_runtime_outputs(tmp_path, 'unit', authority)
 
 
-def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkeypatch):
+@pytest.mark.parametrize("home_present", [False, True])
+def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkeypatch, home_present):
     """Real Linux exec-stop of /usr/bin/true bytes; NOT a model/provider receipt."""
     import hashlib
     import os
@@ -241,6 +242,11 @@ def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkey
     monkeypatch.setenv('CODEX_HOME', str(home))
     config = tmp_path / '.codex/config.toml'
     profile = {'native': _file(native), 'configuration': [{'path': str(config), 'load_path': str(config), 'absent': True}], 'sandbox': _file('/usr/bin/bwrap')}
+    home_config = home / 'config.toml'
+    if home_present:
+        home_config.write_text('model = "approved"\n')
+    profile['configuration_home'] = str(home)
+    profile['configuration'].append({**_file(home_config), 'load_path': str(home_config)} if home_present else {'path': str(home_config), 'load_path': str(home_config), 'absent': True})
     scratch = tmp_path / 'scratch'
     scratch.mkdir()
     native_argv = [str(native)]
@@ -249,14 +255,31 @@ def test_sealed_native_exec_view_survives_host_path_replacement(tmp_path, monkey
     config.parent.mkdir()
     config.write_text('model = "UNAPPROVED_HOST_CONFIG"\n')
     argv = ['/usr/bin/bwrap', '--die-with-parent', '--unshare-user', '--unshare-pid', '--ro-bind', '/', '/',
-            *sandbox.namespace_mounts, '--bind', str(scratch), str(scratch), *sandbox.mounts, '--proc', '/proc', '--dev', '/dev',
+            *sandbox.namespace_mounts, *sandbox.runtime_mounts, *sandbox.mounts, *sandbox.environment_options, '--proc', '/proc', '--dev', '/dev',
             *sandbox.readonly_mounts, '--chdir', str(tmp_path), '--', *sandbox.command]
     call = {'cwd': str(tmp_path), 'provider_identity': profile, 'argv': native_argv, 'argv_sha256': canonical_sha256(native_argv)}
     intent = {'provider_call': call}
     observations = []
     def started(pid):
         execution = sandbox.handshake(pid, intent, argv)
+        # Host changes to BOTH original and redirected home are invisible.
+        home_config.write_text('model = "late-host"\n')
+        (sandbox.private_home / 'config.toml').write_text('model = "late-private"\n')
         verify_launch(intent, pid, execution)
+        actual = next(row for row in execution['configuration_observation']['states'] if row['load_path'] == str(sandbox.private_home / 'config.toml'))
+        assert actual['presence'] == ('PRESENT' if home_present else 'ABSENT')
+        assert str(sandbox.private_home) in execution['configuration_observation']['read_only_directories']
+        from copy import deepcopy
+        from factory_core.phase9_provider_identity import validate_execution_view
+        bad = deepcopy(execution)
+        bad['execution_view']['configuration_mapping'] = []
+        bad['execution_view_sha256'] = canonical_sha256(bad['execution_view'])
+        with pytest.raises(ValueError, match='mapping'):
+            validate_execution_view(bad, profile)
+        bad = deepcopy(execution)
+        bad['configuration_observation']['runtime_environment']['CODEX_HOME'] = str(home)
+        with pytest.raises(ValueError, match='namespace proof'):
+            validate_execution_view(bad, profile)
         assert execution['native_process_pid'] != pid
         observations.append(execution)
         sandbox.release()

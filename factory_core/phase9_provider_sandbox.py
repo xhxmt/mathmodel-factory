@@ -11,7 +11,7 @@ import struct
 import sys
 import uuid
 from .canonical import canonical_sha256
-from .phase9_provider_identity import _file, configuration_observation, expected_configuration_states
+from .phase9_provider_identity import _file, configuration_observation, expected_configuration_states, execution_configuration, configuration_directories, runtime_environment
 
 
 class ProviderSandbox:
@@ -30,20 +30,31 @@ class ProviderSandbox:
         self.channel = None
         self.closed = False
         self._snapshot(profile['native'], profile['native']['path'], executable=True)
-        # Pin every existing configuration file at its original pathname. Also
-        # install the approved home config in a separate writable runtime home.
-        original_home = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
-        for row in profile['configuration']:
-            path = Path(row.get('load_path', row['path']))
+        # The actual load paths have the same approved presence and bytes.
+        original_home = Path(profile.get('configuration_home') or os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))).resolve()
+        self.configuration = execution_configuration(profile, str(self.private_home))
+        for row in self.configuration:
             if not row.get('absent'):
-                self._snapshot(row, str(path))
-            if path.parent == original_home:
-                destination = self.private_home / path.name
-                destination.touch(mode=0o600)
-                if row.get('absent'):
-                    self._sealed(b'', str(destination), source=str(path))
-                else:
-                    self._snapshot(row, str(destination))
+                self._snapshot(row, row.get('load_path', row['path']))
+        self.runtime = scratch / 'runtime'
+        self.runtime.mkdir(mode=0o700)
+        (self.runtime / 'sqlite').mkdir()
+        self.runtime_mounts = ['--bind', str(self.runtime), str(self.runtime)]
+        # Only operational child directories are writable. The home root and
+        # configuration directory entries are private immutable namespace data.
+        for name in ('cache', 'shell_snapshots', 'skills', 'plugins', 'sessions', 'log', 'tmp'):
+            child = self.private_home / name
+            child.mkdir(mode=0o700)
+            self.runtime_mounts.extend(['--bind', str(child), str(child)])
+        # Native startup opens its local installation identifier read/write.
+        # This fresh UUID is operational metadata, never an authorization or
+        # model-response identity; only this file is writable below the RO root.
+        installation = self.private_home / 'installation_id'
+        installation.write_text(str(uuid.uuid4()))
+        installation.chmod(0o600)
+        self.runtime_mounts.extend(['--bind', str(installation), str(installation)])
+        self.runtime_environment = runtime_environment(str(self.private_home))
+        self.environment_options = [part for key, value in self.runtime_environment.items() for part in ('--setenv', key, value)]
         # Authentication bytes stay in this private test/runtime directory and
         # are never serialized in execution records or printed.
         auth = original_home / 'auth.json'
@@ -56,7 +67,8 @@ class ProviderSandbox:
         self._snapshot(_file(helper), str(helper))
         self.command = [sys.executable, '-I', '-S', '-B', str(helper), str(self.endpoint), *argv]
         self.namespace_mounts, self.readonly_mounts = self._configuration_namespaces()
-        self.execution_view = {'working_directory': str(project), 'configuration_states': expected_configuration_states(profile),
+        self.execution_view = {'working_directory': str(project), 'configuration_states': expected_configuration_states({'configuration': self.configuration}),
+            'configuration_mapping': self.configuration, 'runtime_environment': self.runtime_environment,
             'protected_directories': self.protected_directories, 'schema': 'phase9-sealed-provider-view-v1',
             'files': self.views, 'private_runtime_home': str(self.private_home),
             'helper': _file(helper), 'helper_interpreter': _file(sys.executable),
@@ -68,8 +80,8 @@ class ProviderSandbox:
         O_PATH descriptors preserve non-configuration children without copying
         database bytes. No writable host directory backs these namespace views.
         """
-        critical = {Path(row.get('load_path', row['path'])): row for row in self.profile['configuration']}
-        directories = {parent for path in critical for parent in path.parents}
+        critical = {Path(row.get('load_path', row['path'])): row for row in self.configuration}
+        directories = set(map(Path, configuration_directories(self.configuration, str(self.private_home))))
         self.protected_directories = [str(path) for path in sorted(directories, key=lambda p: (len(p.parts), str(p)))]
         options = []
         for directory in map(Path, self.protected_directories):
@@ -154,7 +166,7 @@ class ProviderSandbox:
                 'kernel_cmdline_sha256': hashlib.sha256(Path(f'/proc/{native_pid}/cmdline').read_bytes()).hexdigest(),
                 'sandbox_argv': sandbox_argv, 'sandbox_argv_sha256': canonical_sha256(sandbox_argv),
                 'execution_view': self.execution_view, 'execution_view_sha256': canonical_sha256(self.execution_view),
-                'configuration_observation': configuration_observation(native_pid, self.profile)}
+                'configuration_observation': configuration_observation(native_pid, self.profile, str(self.private_home))}
 
     def release(self):
         self.channel.sendall(b'GO\n')
