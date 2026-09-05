@@ -512,7 +512,13 @@ class FakeCommandRunner:
                 packet = project / "judge_packets" / role
                 packet.mkdir(parents=True, exist_ok=True)
                 (packet / "context.txt").write_text("context\n", encoding="utf-8")
-                (packet / "manifest.json").write_text("{}\n", encoding="utf-8")
+                (packet / "manifest.json").write_text(
+                    json.dumps({"completeness": {
+                        "contract_version": "judge-packet-completeness-v1",
+                        "status": "COMPLETE", "eligible": True,
+                        "requirements": [{"id": "fixture", "satisfied": True}],
+                    }}) + "\n", encoding="utf-8",
+                )
         elif script.endswith("aggregate_judges.py"):
             (project / "judge_evaluation.md").write_text("VERDICT: PASS\n", encoding="utf-8")
             output = project / "judge_outputs/aggregate.json"
@@ -625,6 +631,9 @@ def test_native_judge_grounding_retry_includes_failure_and_packet_excerpt(
     outputs = project / "judge_outputs"
     packet.mkdir(parents=True)
     outputs.mkdir(parents=True)
+    FakeCommandRunner().python(
+        root, project, "scripts/judge_packet.py", [], label="packet_fixture"
+    )
     chunk_id = "a" * 64
     source = (
         "unrelated line\n"
@@ -640,6 +649,9 @@ def test_native_judge_grounding_retry_includes_failure_and_packet_excerpt(
         json.dumps(
             {
                 "role": "math",
+                "completeness": json.loads(
+                    (packet / "manifest.json").read_text(encoding="utf-8")
+                )["completeness"],
                 "files": [
                     {
                         "path": "paper.tex",
@@ -1138,6 +1150,85 @@ def test_native_validator_routes_empty_claim_requirement_to_step4(tmp_path):
     assert valid is False
     assert metadata["resume_after_step"] == 3
     assert metadata["missing_artifacts"] == ["claim_registry.json"]
+
+
+@pytest.mark.parametrize("entry", ["execute", "execute_precheck", "execute_prepared"])
+@pytest.mark.parametrize("fault", ["missing", "incomplete", "inconsistent", "malformed", "empty_context"])
+def test_judge_blocks_all_dispatch_when_any_packet_is_ineligible(tmp_path, entry, fault):
+    root = Path(__file__).resolve().parents[1]
+    project = tmp_path / "demo"
+    project.mkdir()
+
+    class NoDispatch:
+        def execute(self, *_args, **_kwargs):
+            pytest.fail("ineligible packet must block every model call")
+
+    class IncompleteRunner(FakeCommandRunner):
+        def python(self, factory_root, project, script, args, **kwargs):
+            result = super().python(factory_root, project, script, args, **kwargs)
+            if script.endswith("judge_packet.py"):
+                packet = project / "judge_packets/execution"
+                path = packet / "manifest.json"
+                if fault == "missing":
+                    path.unlink()
+                elif fault == "malformed":
+                    path.write_text("[]", encoding="utf-8")
+                elif fault == "empty_context":
+                    (packet / "context.txt").write_text("", encoding="utf-8")
+                else:
+                    manifest = json.loads(path.read_text(encoding="utf-8"))
+                    completeness = manifest["completeness"]
+                    completeness["requirements"][0]["satisfied"] = False
+                    if fault == "incomplete":
+                        completeness.update(status="INCOMPLETE", eligible=False)
+                    path.write_text(json.dumps(manifest), encoding="utf-8")
+            return result
+
+    context = StepContext(project, project.name, 13, 1, 3600, 0)
+    runner = IncompleteRunner()
+    if entry != "execute":
+        runner.python(root, project, "scripts/judge_packet.py", [], label="packets")
+    step = JudgeStep(
+        next(item for item in STEP_CONTRACTS if item.id == 13), root,
+        PromptRenderer(root), NoDispatch(), NativeArtifactValidator(root, 13), runner,
+    )
+
+    result = getattr(step, entry)(context)
+
+    assert result.returncode != 0
+    assert result.metadata["model_dispatch_allowed"] is False
+    assert result.metadata["judge_completed"] is False
+    assert "execution" in result.metadata["blocked_roles"]
+    assert "INDETERMINATE_REVIEW" in (project / "judge_evaluation.md").read_text()
+
+
+@pytest.mark.parametrize("active_step", [13, 16])
+def test_missing_table_recovery_never_emits_same_or_future_step(tmp_path, active_step):
+    project = tmp_path / "demo"
+    project.mkdir()
+    (project / "judge_evaluation.md").write_text("VERDICT: INDETERMINATE_REVIEW\n")
+    packet = project / "judge_packets/execution"
+    packet.mkdir(parents=True)
+    (packet / "manifest.json").write_text(json.dumps({"completeness": {
+        "requirements": [{"id": "table", "paths": ["tables/m2_problem2_results.tex"],
+                          "satisfied": False}],
+    }}))
+    root = Path(__file__).resolve().parents[1]
+    validator = NativeArtifactValidator(root, 13)
+    context = StepContext(project, project.name, active_step, 1, 3600, 0)
+
+    result = validator.validate(context)
+
+    assert not result.is_valid
+    assert result.metadata["missing_artifacts"] == ["tables/m2_problem2_results.tex"]
+    if active_step == 13:
+        assert "resume_after_step" not in result.metadata
+        assert result.metadata["error_class"] == "PERMANENT_RECOVERY_TARGET"
+        assert result.metadata["rejected_resume_after_step"] == 13
+    else:
+        assert FactoryEngine._validated_resume_target(
+            result.metadata["resume_after_step"], active_step
+        ) == 13
 
 
 def test_native_step10_reports_the_exact_failed_incremental_check(monkeypatch, tmp_path):

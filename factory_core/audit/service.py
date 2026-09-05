@@ -164,8 +164,19 @@ class FinalAuditService:
         from ..storage import SQLiteStateStore
 
         decision_store = SQLiteStateStore(project)
-        if decision_store.exists and decision_store.contest_policy() is not None:
-            content_freeze = decision_store.decision("content_freeze")
+        try:
+            freeze_required, approvals = decision_store.read_finalization_approvals()
+        except ValueError as exc:
+            return self._failure(
+                project,
+                decision="CONTENT_FREEZE_EVIDENCE_INVALID",
+                status=AuditStatus.FAIL,
+                error_class="PERMANENT_CONTENT_FREEZE_RECEIPT",
+                returncode=2,
+                evidence={"approval_error": str(exc)},
+            )
+        if freeze_required:
+            content_freeze = approvals["content_freeze"]
             if technical_authorization is None and not (
                 content_freeze is not None
                 and content_freeze.get("approved") is True

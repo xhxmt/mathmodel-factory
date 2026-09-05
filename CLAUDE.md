@@ -356,6 +356,9 @@ remain compatibility projections.
 in analysis-only mode. It may write audit/Judge evidence, but must not create
 `final_submission.sha256`, an override receipt, or a final acceptance receipt,
 publish into `papers/`, package, clean, archive, or mutate SQLite workflow state.
+Contest-policy and approval-fingerprint reads use a private main/WAL snapshot,
+without upgrading the source schema, changing journal mode, or writing source
+WAL/SHM files. Unsupported or incomplete approval state blocks analysis.
 Analysis results use `.factory/audits/analysis_latest.json`; rerunning analysis
 for an accepted snapshot does not replace its acceptance-authority `latest.json`.
 Step 16 is a compatibility adapter: Native explicitly selects acceptance mode;
@@ -480,6 +483,10 @@ otherwise indeterminate review retry only the affected audit role and stop as
 `PERMANENT_JUDGE_INFRASTRUCTURE` when exhausted. A packet that
 names a genuinely absent upstream artifact reopens that artifact's earliest
 owning Step; packet truncation or judge uncertainty does not default to Step 4.
+All role packets must be eligible before the first model call, including direct
+prepared/precheck entry points. If an artifact's registered recovery boundary
+is not earlier than the active Step, report `PERMANENT_RECOVERY_TARGET` with the
+missing paths instead of emitting an invalid scheduler transition.
 
 The runner allows one repair cycle. If the reopened or final-submission judge still does not PASS, normal delivery is blocked. Legacy Markdown scorecards are `LEGACY_UNVERIFIED` and are never comparison-ready under the current contract.
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import fcntl
 import json
 import sqlite3
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +15,7 @@ from factory_core.adapters.infrastructure.commands import CommandResult
 from factory_core.audit import AuditStatus, FinalAuditService
 from factory_core.cli import build_parser
 from factory_core.domain import ExecutionResult, StepContext
+from factory_core.decision_receipts import verified_approval_receipts
 from factory_core.governance.overrides import SQLiteOverrideProvider
 from factory_core.contest import ContestPolicy
 from factory_core.phase9_authority_lease import authority_state_commit_lease
@@ -227,6 +230,142 @@ def test_analysis_only_final_audit_passes_without_acceptance_side_effects(
     assert not (project / "judge_outputs/delivery_override_receipt.json").exists()
     assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
     assert not (root / "papers").exists()
+
+
+def _workflow_database_bytes(project: Path):
+    return {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in (project / ".factory").glob("state.db*")
+        if path.is_file()
+    }
+
+
+def _audit_database(project: Path, schema_version: int, journal_mode: str):
+    store = SQLiteStateStore(project)
+    store.initialize(project_id=project.name, project_type="modeling")
+    connection = sqlite3.connect(store.path)
+    if schema_version == 8:
+        connection.executescript(
+            """
+            ALTER TABLE dirty_flags RENAME TO dirty_flags_v9;
+            CREATE TABLE dirty_flags (
+                flag TEXT PRIMARY KEY, owner_stage INTEGER NOT NULL,
+                cause_revision INTEGER NOT NULL, cause_artifact TEXT NOT NULL,
+                baseline_fingerprint TEXT NOT NULL, current_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL
+            );
+            DROP TABLE dirty_flags_v9;
+            UPDATE schema_info SET schema_version=8;
+            UPDATE project_state SET schema_version=8;
+            """
+        )
+        connection.commit()
+    connection.execute(f"PRAGMA journal_mode={journal_mode}")
+    connection.close()
+    return store
+
+
+@pytest.mark.parametrize("schema_version", [8, 9])
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+@pytest.mark.parametrize("compile_pdf", [False, True])
+def test_analysis_preserves_existing_database_on_success_and_failure(
+    tmp_path, schema_version, journal_mode, compile_pdf
+):
+    project = tmp_path / "demo"
+    project.mkdir()
+    context = make_context(project)
+    _audit_database(project, schema_version, journal_mode)
+    judge = PassingJudge()
+
+    def fingerprint(project, _base):
+        # Exercise the approval lookup also used by the real snapshot builder.
+        assert verified_approval_receipts(project) == []
+        return "9" * 64
+
+    service = FinalAuditService(
+        tmp_path, judge, FakeValidator(), RecordingRunner(), fingerprinter=fingerprint
+    )
+    before = _workflow_database_bytes(project)
+    outcome = service.run(context, compile_pdf=compile_pdf, reuse_pass=False)
+
+    assert _workflow_database_bytes(project) == before
+    assert outcome.record.status is (AuditStatus.PASS if compile_pdf else AuditStatus.FAIL)
+    assert judge.judge_calls == int(compile_pdf)
+    assert outcome.record.delivery_allowed is False
+
+
+@pytest.mark.parametrize("schema_version", [8, 9])
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_real_analysis_cli_preserves_existing_database(
+    tmp_path, schema_version, journal_mode
+):
+    project = tmp_path / "demo"
+    project.mkdir()
+    make_context(project)
+    _audit_database(project, schema_version, journal_mode)
+    before = _workflow_database_bytes(project)
+    result = subprocess.run(
+        [sys.executable, "-m", "factory_core.cli", "audit", str(project), "--no-compile"],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    assert "MISSING_COMPILED_PDF" in result.stdout
+    assert _workflow_database_bytes(project) == before
+
+
+def test_analysis_reads_uncheckpointed_contest_policy_without_touching_wal(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    context = make_context(project)
+    store = _audit_database(project, 9, "WAL")
+    judge = PassingJudge()
+    service = FinalAuditService(
+        tmp_path, judge, FakeValidator(), RecordingRunner(),
+        fingerprinter=lambda *_args: "9" * 64,
+    )
+    writer = sqlite3.connect(store.path)
+    try:
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        policy = ContestPolicy.default(started_at=1_000).to_dict()
+        writer.execute(
+            "INSERT INTO contest_policy VALUES (1, ?, ?, ?, ?, ?, ?)",
+            tuple(policy[key] for key in (
+                "profile", "contest_started_at", "contest_deadline_at",
+                "content_freeze_at", "delivery_freeze_at", "delivery_reserve_seconds",
+            )),
+        )
+        writer.commit()
+        before = _workflow_database_bytes(project)
+        assert before["state.db-wal"][0]
+
+        outcome = service.run(context, reuse_pass=False)
+
+        assert outcome.record.decision == "CONTENT_FREEZE_EVIDENCE_INVALID"
+        assert judge.judge_calls == 0
+        assert _workflow_database_bytes(project) == before
+    finally:
+        writer.close()
+
+
+def test_analysis_rejects_incomplete_current_schema_without_repairing_it(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    context = make_context(project)
+    store = _audit_database(project, 9, "DELETE")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE contest_policy")
+    before = _workflow_database_bytes(project)
+    judge = PassingJudge()
+    service = FinalAuditService(
+        tmp_path, judge, FakeValidator(), RecordingRunner(),
+        fingerprinter=lambda *_args: "9" * 64,
+    )
+
+    outcome = service.run(context, reuse_pass=False)
+
+    assert outcome.record.decision == "CONTENT_FREEZE_EVIDENCE_INVALID"
+    assert judge.judge_calls == 0
+    assert _workflow_database_bytes(project) == before
 
 
 def test_phase9_transition_at_acceptance_commit_leaves_no_acceptance_artifact(

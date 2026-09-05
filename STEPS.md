@@ -285,6 +285,13 @@ produces:
   - `VERDICT: INDETERMINATE_REVIEW` — packet, model, schema, or grounding
     uncertainty; retry Step 13 without consuming the scientific reopen budget.
 
+Every role packet must carry a valid, complete and eligible completeness record
+and nonempty context before the first model call. Ineligible packets stop
+dispatch at ordinary, prepared and precheck entry points. Truly missing inputs
+retain their owning-step recovery request only when it is earlier than the
+active Step; an unavailable earlier boundary returns `PERMANENT_RECOVERY_TARGET`
+with the missing paths and requires upstream repair.
+
 When none of those three semantic dirty flags is present, `stage_v1` does not
 invoke the math Agent. It writes a
 `SKIPPED_NO_MATH_SEMANTIC_CHANGE` receipt bound to the current authored-artifact

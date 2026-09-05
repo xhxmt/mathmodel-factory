@@ -206,6 +206,20 @@ class NativeArtifactValidator:
         action = metadata.get("pending_action")
         if isinstance(action, PendingAction):
             return ValidationResult.awaiting(action, *evidence)
+        target = metadata.get("resume_after_step")
+        if target is not None and (
+            type(target) is not int or target < -1 or target >= context.step_id
+        ):
+            metadata = {
+                key: value for key, value in metadata.items()
+                if key != "resume_after_step"
+            }
+            metadata.update(
+                error_class="PERMANENT_RECOVERY_TARGET",
+                rejected_resume_after_step=target,
+                repair_required=True,
+            )
+            reason = f"{reason}; no earlier recovery boundary for step {context.step_id}"
         return ValidationResult.invalid(reason, *evidence, metadata=metadata)
 
     def _step_0(self, project: Path):
@@ -391,6 +405,8 @@ class NativeArtifactValidator:
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(manifest, dict):
                 continue
             completeness = manifest.get("completeness")
             if not isinstance(completeness, dict):

@@ -1459,6 +1459,58 @@ class SQLiteStateStore:
             "delivery_reserve_seconds": row["delivery_reserve_seconds"],
         }
 
+    def read_finalization_approvals(
+        self,
+    ) -> tuple[bool, dict[str, dict[str, Any] | None]]:
+        """Read approval requirements and decisions without upgrading live state.
+
+        The private main/WAL snapshot also prevents a read connection from
+        creating or modifying SQLite sidecars beside the workflow database.
+        Older schemas without contest-core tables have no content-freeze
+        requirement; incomplete current schemas require explicit repair.
+        """
+        from .phase9_authority_lease import (
+            AuthorityStateLeaseError,
+            authority_state_commit_lease,
+            isolated_authority_snapshot_ro,
+        )
+
+        gates = ("content_freeze", "delivery_freeze_override")
+        decisions: dict[str, dict[str, Any] | None] = dict.fromkeys(gates)
+        try:
+            with authority_state_commit_lease(self.project_dir):
+                if not self.path.exists():
+                    return False, decisions
+                with isolated_authority_snapshot_ro(self.path) as connection:
+                    version_row = connection.execute(
+                        "SELECT schema_version FROM schema_info WHERE singleton=1"
+                    ).fetchone()
+                    if version_row is None or version_row[0] not in range(1, SCHEMA_VERSION + 1):
+                        raise ValueError("unsupported workflow schema for approval analysis")
+                    tables = {
+                        row[0] for row in connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                    }
+                    if "contest_policy" not in tables:
+                        if version_row[0] == SCHEMA_VERSION:
+                            raise ValueError("workflow contest policy table is missing")
+                        return False, decisions
+                    required = connection.execute(
+                        "SELECT 1 FROM contest_policy WHERE singleton=1"
+                    ).fetchone() is not None
+                    if not {"workflow_decision_requests", "workflow_decision_instances"} <= tables:
+                        if required or version_row[0] == SCHEMA_VERSION:
+                            raise ValueError("workflow approval tables require explicit migration")
+                        return False, decisions
+                    for gate in gates:
+                        decisions[gate] = self._current_decision_payload(
+                            self._latest_decision_row(connection, gate), gate
+                        )
+                    return required, decisions
+        except (AuthorityStateLeaseError, sqlite3.Error) as exc:
+            raise ValueError("workflow approvals cannot be read without mutation") from exc
+
     @staticmethod
     def _insert_decision_request(
         connection: sqlite3.Connection,
@@ -1645,6 +1697,11 @@ class SQLiteStateStore:
         with self._session() as connection:
             self._upgrade_schema(connection)
             row = self._latest_decision_row(connection, gate)
+        return self._current_decision_payload(row, gate, current_only=current_only)
+
+    def _current_decision_payload(
+        self, row: sqlite3.Row | None, gate: str, *, current_only: bool = True
+    ) -> dict[str, Any] | None:
         if row is None or row["decision_id"] is None:
             return None
         if current_only and row["subject_fingerprint"] != "LEGACY_UNBOUND":

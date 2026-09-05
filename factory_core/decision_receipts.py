@@ -208,13 +208,12 @@ def verified_approval_receipts(
     from .storage import SQLiteStateStore
 
     store = SQLiteStateStore(project)
-    if not store.exists:
-        return []
+    freeze_required, approvals = store.read_finalization_approvals()
     if require_content_freeze is None:
-        require_content_freeze = store.contest_policy() is not None
+        require_content_freeze = freeze_required
     records: list[dict[str, Any]] = []
     for gate in ("content_freeze", "delivery_freeze_override"):
-        decision = store.decision(gate)
+        decision = approvals[gate]
         if decision is None or decision.get("approved") is not True:
             if gate == "content_freeze" and require_content_freeze:
                 raise ValueError("verified content-freeze approval receipt is required")

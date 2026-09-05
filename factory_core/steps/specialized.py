@@ -518,6 +518,9 @@ class JudgeStep:
         """Run the in-loop math precheck; full three-role review belongs to final audit."""
 
         project = context.project_dir
+        packet_failure = self._packet_preflight(context)
+        if packet_failure is not None:
+            return packet_failure
         role_result = self._run_role_with_retry(
             context, "math", self.ROLE_PROMPTS["math"]
         )
@@ -645,12 +648,68 @@ class JudgeStep:
                 return ExecutionResult.failed(
                     "TRANSIENT_JUDGE_PACKET", returncode=result.returncode, command=label
                 )
+        packet_failure = self._packet_preflight(context)
+        if packet_failure is not None:
+            return packet_failure
         return ExecutionResult.succeeded(packets_prepared=True)
+
+    def _packet_preflight(self, context) -> ExecutionResult | None:
+        """Require eligible packets for the whole review before model dispatch."""
+        from scripts.judge_packet import COMPLETENESS_CONTRACT_VERSION
+
+        project = context.project_dir
+        blocked_roles: dict[str, list[str]] = {}
+        for role in self.ROLE_PROMPTS:
+            packet = project / "judge_packets" / role
+            try:
+                manifest = json.loads((packet / "manifest.json").read_text(encoding="utf-8"))
+                completeness = manifest.get("completeness") if isinstance(manifest, dict) else None
+                requirements = completeness.get("requirements") if isinstance(completeness, dict) else None
+                if not (
+                    isinstance(requirements, list)
+                    and requirements
+                    and completeness.get("contract_version") == COMPLETENESS_CONTRACT_VERSION
+                    and completeness.get("status") == "COMPLETE"
+                    and completeness.get("eligible") is True
+                    and all(isinstance(item, dict) and item.get("satisfied") is True for item in requirements)
+                    and (packet / "context.txt").is_file()
+                    and (packet / "context.txt").stat().st_size > 0
+                ):
+                    blocked_roles[role] = [
+                        str(item.get("id") or "unknown_requirement")
+                        for item in (requirements or []) if isinstance(item, dict)
+                        and item.get("satisfied") is not True
+                    ] if isinstance(requirements, list) else []
+            except (OSError, ValueError):
+                blocked_roles[role] = []
+        if not blocked_roles:
+            return None
+        evidence = {
+            "judge_verdict": "INDETERMINATE_REVIEW",
+            "judge_completed": False,
+            "model_dispatch_allowed": False,
+            "blocked_roles": blocked_roles,
+        }
+        # This is a deterministic preflight result, never a model verdict or
+        # formal Phase9 receipt. Replace a stale compatibility PASS as well.
+        (project / "judge_evaluation.md").write_text(
+            "VERDICT: INDETERMINATE_REVIEW\n\n"
+            "Packet completeness preflight blocked model dispatch.\n\n"
+            + json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        validation = NativeArtifactValidator(self.factory_root, 13).validate(context)
+        metadata = {**validation.metadata, **evidence}
+        error_class = str(metadata.pop("error_class", "TRANSIENT_JUDGE_PACKET"))
+        return ExecutionResult.failed(error_class, returncode=2, **metadata)
 
     def execute_prepared(self, context) -> ExecutionResult:
         """Run isolated roles against packets prepared for this content snapshot."""
 
         project = context.project_dir
+        packet_failure = self._packet_preflight(context)
+        if packet_failure is not None:
+            return packet_failure
         for role, template in self.ROLE_PROMPTS.items():
             result = self._run_role_with_retry(context, role, template)
             if result.returncode != 0:

@@ -1,5 +1,20 @@
 # Changelog
 
+- Phase9 follow-up repair: final analysis and approval fingerprints now read
+  contest-core requirements and current approval receipts from one private
+  main/WAL snapshot. They do not upgrade an existing workflow schema, switch
+  its journal mode, or create/modify source WAL/SHM files. Supported older
+  schemas without contest-core tables retain legacy analysis compatibility;
+  incomplete current schemas fail without implicit repair.
+- Judge packet preflight now rejects missing, malformed, empty, or ineligible
+  role inputs before any role is dispatched, including direct prepared and
+  math-precheck entry points. A packet-building command succeeding is not
+  sufficient to authorize a model call.
+- Native validation retains missing-artifact evidence but replaces a same-step
+  or future-step reopen request with `PERMANENT_RECOVERY_TARGET`. An earlier
+  valid owner boundary still reopens normally. Missing presentation artifacts
+  whose registered owner has not run require explicit upstream repair.
+
 - Phase9 independent-audit finding closure: committed run-generation and
   forensic-replay requests now recover their exact immutable result before
   live authorization/freshness gates, while revalidating the complete stored
