@@ -17,6 +17,7 @@ status is still neither independent acceptance nor production readiness.
 | Predecessor terminal and pointer CAS | Fixed offline | Packaged focused source/fresh logs exercise missing/stale/wrong terminal and concurrent revision conflicts | No production rotation | Current predecessor has the exact immutable terminal receipt |
 | A2_0016-A2_0019 migrations | Additive fixed-offline implementation; earlier published statement bytes retained | Packaged migration source/fresh logs exercise prefix/checksum, upgrade, interruption and restore behavior, including Authority-backed P0 runner and replay/runtime evidence attestation | All four `NOT APPLIED` in production | Explicit migration approval, verified backup and durable journal |
 | Typed forensic evidence | Fixed offline | Packaged focused source/fresh fixture logs exercise missing/extra/duplicate/cross-generation receipts and provenance failures | No real replay receipts | Real packet, role/provider/process/outbox/snapshot/verdict receipts |
+| Actual formal runtime coordination | OPEN implementation gap | Isolated component coordinator is executable but does not populate the Authority runtime graph | No formal executor | Distinct pre-dispatch authorization, real lifecycle/completion hooks and finalizer coordination; existing finalizer start excludes provider/network |
 | Terminal and semantic collector | Fixed offline | Packaged focused source/fresh logs exercise zero-side-effect failures and hash-correct/semantic-wrong SQL graphs | Run4 `NOT RUN` | One-use gate, exact typed inventory and both live checks succeed |
 | AR-007 and release fence | Fixed offline | Packaged entry/release source/fresh logs exercise technical/ablation/override/stale-generation rejection with zero release artifacts | Delivery `DISABLED` | Phase9 never enables delivery; a later phase needs separate authority |
 | Audit command/log/summary closure | Fixed-offline policy and tooling | Package requires seven source/fresh pairs (14 records plus 14 complete raw logs); `full_repository` additionally binds Python, exact frontend scripts, a safe inventoried production build, and Chromium-test stages in two parent-captured composite streams with identical dependency/runtime/output inventories; a derived exact-match summary retains append-only failed attempts | Independent audit `PENDING` | Independent verifier recomputes every record, per-stage log slice/outcome, source/fresh composite contract and ZIP closure |
@@ -27,5 +28,6 @@ status is still neither independent acceptance nor production readiness.
 
 The missing production Authority database, backup, official input, execution
 context, credentials, live authorizations and real replay receipts are expected
-external gates. Their absence is not an offline implementation failure, but no
-fixture, template, old PASS file or audit package can substitute for them.
+external gates. The separate runtime-coordination gap above is an implementation
+failure and must not be disguised as missing operator material. No fixture,
+template, old PASS file or audit package can substitute for either requirement.

@@ -16,6 +16,7 @@ from factory_core.paper_sources import (
     require_safe_latex_dependencies,
     resolve_latex_dependency_graph,
 )
+from scripts.json_evidence_view import SUFFIX as EVIDENCE_VIEW_SUFFIX, verify_view
 
 try:
     from scripts.claim_graph import (
@@ -549,6 +550,13 @@ def _render_context(
             item.update({"status": "omitted", "reason": "unsupported_non_text"})
             files.append(item)
             continue
+        if relative.endswith(EVIDENCE_VIEW_SUFFIX):
+            try:
+                item["structured_evidence"] = verify_view(project, resolved.read_bytes())
+            except (OSError, ValueError, TypeError, KeyError):
+                item.update({"status": "omitted", "reason": "invalid_structured_evidence"})
+                files.append(item)
+                continue
         original = resolved.read_text(encoding="utf-8", errors="replace")
         original_size = len(original.encode("utf-8"))
         header = f"\n----- FILE: {relative} -----\n"

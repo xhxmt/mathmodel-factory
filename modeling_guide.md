@@ -449,6 +449,16 @@ update discipline:
   `scripts/create_derived_manifest.py`; verify it with
   `scripts/verify_derived_artifacts.py`, which regenerates in isolation and
   rejects current-output edits or undeclared/missing outputs.
+- Large scientific JSON may have a declared `.evidence-view.json` derivative
+  using `scripts/json_evidence_view.py` (`json-evidence-view-v1`). It retains
+  every key, scalar and undeclared array and replaces only explicitly named
+  numeric arrays with source-pointer/count/hash references and visible
+  limitations. The original file stays intact. `judge_packet.py` reconstructs
+  the view from that complete file; any mismatch makes the view unavailable.
+  Register the view as the claim artifact only when all evidence needed for
+  that claim remains inline. A reference never proves that the judge read or
+  validated the array. Required array-level claims still need complete inline
+  evidence or a separate review; never use a view to weaken their requirements.
 - `.factory/audits/profiles/{model,results,paper}/latest.json` — machine-owned
   stage feedback. On retry, read `evidence.checks` and its reports before
   editing. Fix the source artifact; do not hand-edit `AUDIT-*` ledger rows or

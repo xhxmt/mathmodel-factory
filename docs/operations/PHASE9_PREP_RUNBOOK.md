@@ -131,6 +131,33 @@ produces one-root, fixed-time, normalized-mode manifest/checksum closure.
 
 ## Formal entry prerequisites
 
+### Isolated Step13 preparation and component execution
+
+`scripts/phase9_runtime.py prepare --project-copy <absolute-copy> --records
+<new-absolute-directory>` runs the real objective-evidence/packet builders and
+preflight without model calls. `review` runs the applicable existing JudgeStep
+path; `--mode NORMAL_STEP13` is math-only and `--mode FORENSIC_THREE_ROLE` runs
+the prepared three-role review. The default requested model/effort is
+`gpt-6-astra` / `medium`, without model fallback. Explicit per-call and total
+timeouts bound the existing role and infrastructure retry budgets.
+
+The records retain source bytes/identity, packet fingerprints, each transport
+attempt, raw output/log bytes, requested configuration, and terminal status.
+An independent provider response model identity is `unavailable` when the CLI
+does not expose it. These records are `ISOLATED_COMPONENT_RUN`, not formal
+Authority receipts; `COMPONENT_PASS` and `PREPARED` do not establish Phase9-A
+completion. Step14–16 and delivery are never invoked by this entry point.
+
+The formal runtime remains a separate implementation gap: the existing
+`record_formal_phase9_runtime_receipt` requires an Authority completion graph,
+and the evidence producer/finalizer consume that graph after execution. Their
+entry/start grants explicitly exclude provider/network dispatch. Neither an
+isolated component observation nor a caller-populated completion graph can be
+promoted to that domain. A real executor must own the distinct pre-dispatch
+authorization/nonce, actual invocation/attempt/scope lifecycle, completion hook,
+and final typed evidence production. Missing this wiring is an implementation
+gap in addition to the external material requirements below.
+
 After the new candidate ZIP passes an independent audit, formal entry still
 requires all of the following real material:
 

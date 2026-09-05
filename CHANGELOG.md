@@ -1,5 +1,15 @@
 # Changelog
 
+- Added an explicit isolated Step13 component coordinator with distinct normal
+  math-only and forensic three-role routes, pinned model/effort, bounded calls,
+  immutable attempt logs, input/source rechecks and an honest component terminal.
+  This is not the formal Authority runtime executor or finalizer.
+- Judge packets can consume `.evidence-view.json` scientific JSON views. Every
+  key and scalar is retained; explicitly declared numeric arrays carry their
+  original pointer, length, hash and a visible not-reviewed limitation. The
+  packet builder reconstructs each view from the complete original source and
+  omits invalid or stale views, preserving required-claim blocking semantics.
+
 - Phase9 follow-up repair: final analysis and approval fingerprints now read
   contest-core requirements and current approval receipts from one private
   main/WAL snapshot. They do not upgrade an existing workflow schema, switch
