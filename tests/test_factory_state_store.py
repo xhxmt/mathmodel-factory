@@ -475,7 +475,7 @@ def _dirty_change(flag, owner, artifact, classifier):
 
 
 def test_future_classifier_change_rebases_active_obligation_and_emits_receipt(tmp_path):
-    from factory_core.dirty import classifier_contract_sha256
+    from factory_core.current_dirty import classifier_contract_sha256
 
     store = SQLiteStateStore(tmp_path)
     state = store.initialize(project_id="rebase", project_type="modeling")
@@ -509,7 +509,7 @@ def test_future_classifier_change_rebases_active_obligation_and_emits_receipt(tm
 
 
 def test_classifier_rebase_moves_obligation_to_current_artifact_owner(tmp_path):
-    from factory_core.dirty import classifier_contract_sha256
+    from factory_core.current_dirty import classifier_contract_sha256
 
     store = SQLiteStateStore(tmp_path)
     state = store.initialize(project_id="owner-move", project_type="modeling")
@@ -585,7 +585,7 @@ def test_classifier_rebase_routes_solver_receipt_to_durable_job_owner(tmp_path):
 
 
 def test_lost_multi_owner_dirty_obligations_reconstruct_from_causes(tmp_path):
-    from factory_core.dirty import classifier_contract_sha256
+    from factory_core.current_dirty import classifier_contract_sha256
     from factory_core.workflow_events import canonical_hash
 
     store = SQLiteStateStore(tmp_path)
@@ -701,7 +701,7 @@ def test_dirty_classifier_rebase_receipt_is_append_only(tmp_path):
 
 
 def test_rebased_v8_dirty_obligation_can_clear_with_current_owner_checkpoint(tmp_path):
-    from factory_core.dirty import (
+    from factory_core.current_dirty import (
         capture_artifact_manifest,
         classifier_contract_sha256,
         manifest_fingerprint,

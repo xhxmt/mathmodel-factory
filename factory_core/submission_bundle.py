@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from .artifact_ownership import (
+from .current_artifact_ownership import (
     ARTIFACT_OWNERSHIP_SCHEMA,
     artifact_ownership,
     iter_owned_artifacts,

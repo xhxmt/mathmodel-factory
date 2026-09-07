@@ -17,7 +17,7 @@ from scripts.workflow_state import (
     gate2_verdict,
     step16_ready,
 )
-from ..artifact_ownership import reopen_after_step_for_artifact
+from ..current_artifact_ownership import reopen_after_step_for_artifact
 
 
 def _text(path: Path) -> str:

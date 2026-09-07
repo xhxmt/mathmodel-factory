@@ -23,7 +23,7 @@ from ..domain import (
     StepError,
     ValidationResult,
 )
-from ..dirty import (
+from ..current_dirty import (
     DIRTY_CLASSIFIER_SCHEMA,
     capture_artifact_manifest,
     classifier_contract_sha256,

@@ -1,4 +1,8 @@
 # Changelog
+- Keep frozen M0.2/M0.3 ownership/classifier identities unchanged while adding
+  the native v2 ownership and v10 dirty-classifier extension for root evidence.
+  Native input manifests and receipts explicitly bind the current contracts;
+  unknown artifacts remain fail closed and historical dirty evidence is kept.
 - Addressed the 2026-09-06 rerun contracts: root evidence ownership; generated
   claim path/field validation; bounded version-bound repair retries; explicit
   event-bound Step13 technical continuation; actual Step/Stage judge identity;

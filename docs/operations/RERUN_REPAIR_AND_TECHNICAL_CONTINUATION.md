@@ -130,7 +130,21 @@ audited project-file opens, not arbitrary native-library I/O; other runtimes
 remain declaration-only. NumPy producers use `factory_core.json_values.dumps`
 for strict bool/int/float/array normalization and precise field errors.
 
-## Status and evidence
+## Current ownership versus frozen compatibility contracts
+
+Native execution uses `current_artifact_ownership.py` (native v2) and
+`current_dirty.py` (native v10). The two exact root evidence rules are additive;
+unknown paths still fail closed. Final/submission manifests record the new
+ownership schema and new native dirty receipts carry a distinct source-bound
+classifier identity. Normal rebase preserves historical causes/clear receipts.
+`artifact_ownership.py` and `dirty.py` remain byte-frozen v1/v9 compatibility
+sources for the M0.2/M0.3 prototype; their registry indices and identity goldens
+are not updated or represented as approval for the new native contracts.
+Existing native tests use the current classifier for new receipts; historical
+identity tests still verify the frozen sources. Additive engine recovery hooks
+are below the frozen owner-policy symbol spans, retaining their bytes/anchors.
+
+## Status projection
 
 Status refreshes from the authoritative workflow revision and reports execution
 state, workflow error, evidence validity, scientific verdict, diagnostic score

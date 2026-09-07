@@ -77,6 +77,7 @@ def test_compiler_first_match_equals_runtime_for_every_current_registry_pattern(
 
 
 def test_normal_root_evidence_has_explicit_ownership() -> None:
+    from factory_core.current_artifact_ownership import artifact_ownership
     assert artifact_ownership("method_fit_suggestions.json").owner_stage == 1
     assert artifact_ownership("STEP5_RECEIPT.json").owner_stage == 4
 

@@ -587,7 +587,7 @@ def claim_binding_issues(project: Path, *, through_stage: int = 10) -> list[dict
     Future-stage declarations are plans, not bindings. Once their owner stage
     runs, the actual file and optional JSON field must exist.
     """
-    from factory_core.artifact_ownership import artifact_ownership, reopen_after_step_for_artifact
+    from factory_core.current_artifact_ownership import artifact_ownership, reopen_after_step_for_artifact
     from scripts.verify_numbers import _resolve_dotted_json_path
 
     registry = load_declared_registry(project)

@@ -10,8 +10,8 @@ from factory_core.audit.domain import (
     AuditSnapshot,
     AuditStatus,
 )
-from factory_core.artifact_ownership import artifact_owner_stage
-from factory_core.dirty import (
+from factory_core.current_artifact_ownership import artifact_owner_stage
+from factory_core.current_dirty import (
     DirtyFlag,
     capture_artifact_manifest,
     classify_manifest_changes,

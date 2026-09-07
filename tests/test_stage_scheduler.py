@@ -16,7 +16,7 @@ from factory_core.domain import (
     ValidationResult,
     WorkflowStatus,
 )
-from factory_core.dirty import (
+from factory_core.current_dirty import (
     capture_artifact_manifest,
     classifier_contract_sha256,
     manifest_fingerprint,

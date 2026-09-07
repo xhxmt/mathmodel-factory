@@ -64,7 +64,7 @@ def rebase_dirty_classifier_state(
     ensure_dirty_rebase_schema(connection)
     if not _table_exists(connection, "dirty_flags"):
         return None
-    from .dirty import classifier_contract_sha256, solver_receipt_job_id
+    from .current_dirty import classifier_contract_sha256, solver_receipt_job_id
 
     current_classifier = classifier_contract_sha256()
     active_rows = {
@@ -102,7 +102,7 @@ def rebase_dirty_classifier_state(
         if current is None or int(current["cause_revision"]) < int(record["cause_revision"]):
             source_obligations[key] = record
 
-    from .artifact_ownership import artifact_ownership
+    from .current_artifact_ownership import artifact_ownership
 
     semantic_paper_flags = {
         "MATH_DIRTY",
