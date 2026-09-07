@@ -535,6 +535,15 @@ class FakeCommandRunner:
             output = project / "judge_outputs/judgment_receipt.json"
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text('{"status":"VALID"}\n', encoding="utf-8")
+        elif script.endswith("judgment_receipt.py") and args[0] == "annotate-role":
+            from scripts.judgment_receipt import annotate_role_metadata
+            options = dict(zip(args[2::2], args[3::2]))
+            annotate_role_metadata(project, options["--role"],
+                registry_model_id=options["--registry-model-id"], backend=options["--backend"],
+                model=options["--model"], transport=options["--transport"],
+                prompt_file=options["--prompt-file"],
+                execution_step_id=int(options["--execution-step-id"]),
+                template_step_id=int(options["--template-step-id"]))
         elif script.endswith("package_submission.py"):
             from factory_core.submission_bundle import submission_bundle_manifest
 
@@ -602,6 +611,8 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
     )
 
     provisional = StepContext(project, project.name, 13, 1, 3600, 0)
+    step.runner.python(root, project, "scripts/build_objective_evidence.py", [], label="objective")
+    step.runner.python(root, project, "scripts/judge_packet.py", [], label="packets")
     stale_output = project / "judge_outputs/paper.md"
     stale_output.parent.mkdir(parents=True, exist_ok=True)
     stale_output.write_text("VERDICT: PASS\nold\n", encoding="utf-8")

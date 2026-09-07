@@ -386,6 +386,20 @@ def _role_receipt(project: Path, role: str) -> tuple[dict[str, Any], list[str]]:
     metadata_path = _safe_path(project, f"judge_outputs/{role}.md.llm-result.json")
     metadata = _read_json(metadata_path)
     errors: list[str] = []
+    binding = metadata.get("audit_binding")
+    if binding is not None:
+        from factory_core.judge_batch import verify, JudgeBatchError
+        try:
+            response, frozen_metadata = verify(project, binding)
+            mutable = {"audit_binding", "configuration_group", "configuration_group_schema"}
+            if (response != output_path.read_bytes()
+                    or {k: v for k, v in metadata.items() if k not in mutable}
+                    != {k: v for k, v in frozen_metadata.items() if k not in mutable}):
+                errors.append(f"{role}: frozen call response/metadata mismatch")
+        except JudgeBatchError as exc:
+            errors.append(f"{role}: {exc}")
+    elif metadata.get("transport") == "native_model_backend":
+        errors.append(f"{role}: native call is missing immutable audit binding")
     if metadata.get("receipt_schema") != ROLE_METADATA_SCHEMA:
         errors.append(f"{role}: metadata schema is not {ROLE_METADATA_SCHEMA}")
     if metadata.get("configuration_schema") != ROLE_CONFIGURATION_SCHEMA:

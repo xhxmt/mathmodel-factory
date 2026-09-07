@@ -1149,6 +1149,23 @@ class JudgeStep:
         )
 
     def _run_role(
+        self, context, role: str, template: str, *, retry_instructions: str = "",
+    ) -> ExecutionResult:
+        import fcntl
+        from ..judge_batch import JudgeBatchError
+
+        folder = context.project_dir / "judge_outputs"
+        folder.mkdir(parents=True, exist_ok=True)
+        with (folder / f".{role}.call.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                return self._run_role_locked(context, role, template,
+                                             retry_instructions=retry_instructions)
+            except (JudgeBatchError, OSError, ValueError) as exc:
+                return ExecutionResult.failed("PERMANENT_JUDGE_EVIDENCE_BINDING", returncode=2,
+                                              role=role, reason=str(exc), evidence_valid=False)
+
+    def _run_role_locked(
         self,
         context,
         role: str,
@@ -1163,6 +1180,24 @@ class JudgeStep:
         prompt = self.renderer.render(template, project, step_key=f"{context.step_id}_{role}")
         prompt += self._phase_instructions(context.step_id, role)
         prompt += retry_instructions
+        from .. import judge_batch
+        expected = judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt)
+        metadata_path = output.with_suffix(output.suffix + ".llm-result.json")
+        if metadata_path.is_file():
+            prior = json.loads(metadata_path.read_text())
+            binding = prior.get("audit_binding")
+            if binding and binding.get("batch_id") == judge_batch.digest(expected):
+                response, frozen_metadata = judge_batch.verify(project, binding, expected)
+                mutable = {"audit_binding", "configuration_group", "configuration_group_schema"}
+                if ({k: v for k, v in prior.items() if k not in mutable}
+                        != {k: v for k, v in frozen_metadata.items() if k not in mutable}):
+                    raise judge_batch.JudgeBatchError("current metadata differs from frozen call")
+                if output.read_bytes() != response:
+                    raise judge_batch.JudgeBatchError("current response differs from frozen call")
+                return ExecutionResult.succeeded(role=role, reused=True,
+                    execution_step_id=context.step_id, template_step_id=13,
+                    call_id=binding["call_id"], audit_binding=binding)
+        binding = judge_batch.begin(project, expected)
         snapshot.write_text(prompt, encoding="utf-8")
         scratch_root = Path(os.environ.get("TMPDIR", str(project / "tmp"))).resolve()
         scratch_root.mkdir(parents=True, exist_ok=True)
@@ -1242,8 +1277,19 @@ class JudgeStep:
             return ExecutionResult.failed(
                 "TRANSIENT_JUDGE_PROVENANCE", returncode=annotated.returncode, role=role
             )
+        # Freeze only after the actual annotation succeeded and every input is
+        # still identical. A failed/partial call leaves an uncommitted archive.
+        if judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt) != expected:
+            raise judge_batch.JudgeBatchError("evaluator or input changed during call")
+        sealed = judge_batch.commit(project, binding, expected, exit_code=result.returncode,
+            prompt_path=snapshot, response_path=output, metadata_path=metadata_path)
+        from scripts.judgment_receipt import _atomic_write_json
+        metadata = json.loads(metadata_path.read_text())
+        metadata["audit_binding"] = sealed
+        _atomic_write_json(metadata_path, metadata)
         return ExecutionResult.succeeded(role=role, model_id=model_id, backend=backend,
-                                         execution_step_id=context.step_id, template_step_id=13)
+                                         execution_step_id=context.step_id, template_step_id=13,
+                                         call_id=sealed["call_id"], audit_binding=sealed)
 
     @staticmethod
     def _phase_instructions(step_id: int, role: str) -> str:
