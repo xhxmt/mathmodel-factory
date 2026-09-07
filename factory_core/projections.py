@@ -168,7 +168,7 @@ def runtime_payload(
 
 
 AUDIT_FIELDS = (
-    "execution_state", "workflow_error", "evidence_validity", "evidence_errors",
+    "execution_state", "recorded_workflow_state", "workflow_error", "evidence_validity", "evidence_errors",
     "scientific_verdict", "raw_scientific_verdict", "review_mode",
     "score_available", "official_score", "diagnostic_score", "delivery_allowed",
 )
@@ -185,6 +185,10 @@ def authoritative_status(project: Path, snapshot: dict | None = None) -> dict:
     for key in ("current_action", "reason_code", "reason_summary", "suggested_actions", "evidence"):
         payload[key] = projected[key]
     payload.update(audit_status_fields(project, state, events))
+    if payload["execution_state"] != state.status.value:
+        payload.update(state=payload["execution_state"], display_status="已中断", pid=None,
+                       reason_code="RUNNER_EXIT_UNVERIFIED",
+                       reason_summary="Recorded worker is no longer live; descendant exit is unverified")
     return payload
 
 
@@ -204,8 +208,13 @@ def write_compatibility_projections(project_dir: str | Path, state: WorkflowStat
         else:
             payload = runtime_payload(state) | audit_status_fields(project, state, [])
         _checkpoint(project, state)
-        _heartbeat(project, state)
-        _markers(project, state)
+        if payload["state"] == "interrupted" and state.status.value != "interrupted":
+            from dataclasses import replace
+            view_state = replace(state, status=WorkflowStatus.INTERRUPTED, runner_pid=None)
+        else:
+            view_state = state
+        _heartbeat(project, view_state)
+        _markers(project, view_state)
         files = {}
         for name in ("checkpoint.md", ".heartbeat", ".paused", ".killed", ".runner.pid"):
             path = project / name
@@ -239,7 +248,8 @@ def read_compatibility_projection(project_dir: str | Path) -> dict | None:
 def audit_status_fields(project: Path, state: WorkflowState, events) -> dict:
     """Current execution, evidence, scientific judgment and delivery are separate."""
     events = [event for event in events if event.revision <= state.revision]
-    fields = {"execution_state": state.status.value, "evidence_validity": "UNAVAILABLE",
+    fields = {"execution_state": state.status.value, "recorded_workflow_state": state.status.value,
+              "evidence_validity": "UNAVAILABLE",
               "evidence_errors": [], "review_mode": None,
               "scientific_verdict": "UNAVAILABLE", "raw_scientific_verdict": None,
               "workflow_error": None, "score_available": False, "official_score": None,
@@ -251,6 +261,14 @@ def audit_status_fields(project: Path, state: WorkflowState, events) -> dict:
             if event.payload.get("error_class"):
                 fields["workflow_error"] = event.payload["error_class"]
                 break
+    if state.runner_pid and state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}:
+        from .adapters.infrastructure.process import _process_identity
+        current_identity = _process_identity(state.runner_pid)
+        launch = next((e for e in reversed(events) if e.type == "WORKER_LAUNCHED"
+                       and e.payload.get("worker_pid") == state.runner_pid), None)
+        expected_identity = launch.payload.get("worker_identity") if launch else None
+        if current_identity is None or (expected_identity and current_identity != expected_identity):
+            fields.update(execution_state="interrupted", workflow_error="RUNNER_EXIT_UNVERIFIED")
     aggregate = project / "judge_outputs/aggregate.json"
     precheck = project / "judge_outputs/precheck.json"
     if not aggregate.is_file() and not precheck.is_file():
@@ -308,7 +326,8 @@ def audit_status_fields(project: Path, state: WorkflowState, events) -> dict:
             if mode == "final":
                 from .phase9_delivery_fence import legacy_delivery_projection_allowed
                 from scripts.submission_fingerprint import final_judge_is_current
-                fields["delivery_allowed"] = (legacy_delivery_projection_allowed(project)
+                fields["delivery_allowed"] = (fields["execution_state"] != "interrupted"
+                                               and legacy_delivery_projection_allowed(project)
                                                and final_judge_is_current(project))
     except (OSError, ValueError, TypeError, KeyError) as exc:
         fields.update(evidence_validity="INVALID", evidence_errors=[str(exc)])

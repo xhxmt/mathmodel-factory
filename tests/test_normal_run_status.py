@@ -25,6 +25,7 @@ def test_failure_and_normal_recovery_match_all_status_surfaces(tmp_path):
         payload={'error_class': 'TRANSIENT_JUDGE_PROVENANCE'})
     (project / 'judge_outputs').mkdir()
     (project / 'judge_outputs/aggregate.json').write_text('{"verdict":"PASS","overall_score":99,"score_available":true}')
+    (project / 'judge_outputs/precheck.json').write_text('{"verdict":"PRECHECK_PASS"}')
     for state in (failed, None):
         if state is None:
             current = store.load()
@@ -118,7 +119,38 @@ def test_precheck_has_its_own_bound_verdict_and_never_a_score(tmp_path, monkeypa
     store.transition(expected_revision=state.revision, event_type='STEP_STARTED', event_step=13,
                      changes={'status': WorkflowStatus.RUNNING, 'active_step': 13})
     assert authoritative_status(tmp_path)['scientific_verdict'] == 'UNAVAILABLE'
+    current = run('math', 13)  # real sealed reuse, followed by this attempt's result
+    JudgeStep._write_precheck(tmp_path, 'PRECHECK_PASS', 'PASS', current.metadata)
+    store.transition(expected_revision=store.load().revision, event_type='STEP_SUCCEEDED',
+        event_step=13, changes={'status': WorkflowStatus.READY, 'active_step': None},
+        payload=current.metadata)
+    (tmp_path / 'judge_outputs/aggregate.json').write_text('{"verdict":"PASS","overall_score":99}')
+    current_status = authoritative_status(tmp_path)
+    assert current_status['scientific_verdict'] == 'PRECHECK_PASS'
+    assert current_status['review_mode'] == 'math_only'
+    assert current_status['diagnostic_score'] is None
     # A stale result cannot be used for a new attempt, even with unchanged files.
     p = tmp_path / 'judge_outputs/precheck.json'
     value = json.loads(p.read_text()); value['verdict'] = 'PASS'; p.write_text(json.dumps(value))
     assert authoritative_status(tmp_path)['evidence_validity'] == 'INVALID'
+
+
+def test_dead_recorded_worker_is_interrupted_on_cli_web_and_files(tmp_path):
+    project = tmp_path / 'ongoing/demo'; project.mkdir(parents=True)
+    store = SQLiteStateStore(project)
+    state = store.initialize(project_id='demo', project_type='modeling')
+    state = store.transition(expected_revision=state.revision, event_type='WORKER_LAUNCHED',
+        changes={'status': WorkflowStatus.RUNNING, 'runner_pid': 999999999},
+        payload={'worker_pid': 999999999, 'worker_identity': 'missing'})
+    cli = FactoryService(tmp_path).status('demo')
+    web = _runtime_to_project_status(read_runtime_status(project, 'demo'), project).model_dump()
+    files = read_compatibility_projection(project)
+    for payload in (cli, web, files):
+        assert payload['execution_state'] == 'interrupted'
+        assert payload['recorded_workflow_state'] == 'running'
+        assert payload['workflow_error'] == 'RUNNER_EXIT_UNVERIFIED'
+        assert payload['delivery_allowed'] is False
+    assert web['status'] == cli['state'] == files['state'] == 'interrupted'
+    assert store.load().revision == state.revision
+    assert store.load().status is WorkflowStatus.RUNNING
+    assert not (project / '.heartbeat').exists()

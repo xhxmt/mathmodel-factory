@@ -122,3 +122,17 @@ def test_missing_monitor_is_interrupted_and_never_verified(tmp_path):
     value = persistent_launcher.status(tmp_path)
     assert value['status'] == 'INTERRUPTED'
     assert value['process_tree_exited'] is False
+
+
+def test_cancel_failure_persists_unverified_interruption(tmp_path, monkeypatch):
+    service = FactoryService(tmp_path)
+    state, _ = service.create_project('demo', 'controlled fixture')
+    def failed_stop(_pid):
+        raise RuntimeError('controlled exit verification failure')
+    monkeypatch.setattr(service, '_terminate_runner', failed_stop)
+    with pytest.raises(RuntimeError, match='controlled exit verification failure'):
+        service.kill('demo', expected_revision=state.revision)
+    store = SQLiteStateStore(tmp_path / 'ongoing/demo')
+    assert store.load().status is WorkflowStatus.INTERRUPTED
+    assert store.events()[-1].payload['process_tree_exited'] is False
+    assert service.status('demo')['workflow_error'] == 'RUNNER_EXIT_UNVERIFIED'

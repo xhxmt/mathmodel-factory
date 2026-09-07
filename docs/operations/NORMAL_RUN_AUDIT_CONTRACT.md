@@ -72,7 +72,9 @@ the recorded runner and observed descendants; inability to verify is persisted a
 
 The separate `persistent_launcher` helper persists STARTING before launch,
 records initialization exceptions and recognizes a missing monitor as INTERRUPTED
-with process-tree exit unverified. SIGKILL cannot guarantee that a dead monitor
+with process-tree exit unverified. A missing or reused normal worker PID also
+projects interrupted execution; `recorded_workflow_state` retains the database
+state for diagnosis, without mutating workflow history on read. SIGKILL cannot guarantee that a dead monitor
 continues discovering or cleaning descendants. These bounded lifecycle checks do
 not claim that arbitrary unobserved detached processes were found.
 

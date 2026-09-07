@@ -131,6 +131,7 @@ class WorkerLauncher:
         state = store.load()
         revision = state.revision if expected_revision is None else expected_revision
         try:
+            from .adapters.infrastructure.process import _process_identity
             updated = _workflow_coordinator(store).transition(
                 expected_revision=revision,
                 event_type="WORKER_LAUNCHED",
@@ -140,7 +141,8 @@ class WorkerLauncher:
                     "runner_lease_id": f"launch:{process.pid}",
                     "heartbeat_at": int(time.time()),
                 },
-                payload={"worker_pid": process.pid, "log": str(log_path.relative_to(project))},
+                payload={"worker_pid": process.pid, "worker_identity": _process_identity(process.pid),
+                         "log": str(log_path.relative_to(project))},
             )
             ready.write_text(str(process.pid) + "\n", encoding="ascii")
             acknowledged = ready.with_suffix(".ack")

@@ -83,6 +83,7 @@ function normalizeSolverTypes(value) {
 export function normalizeProjectStatus(raw = {}) {
   return {
     execution_state: stringOrNull(raw.execution_state),
+    recorded_workflow_state: stringOrNull(raw.recorded_workflow_state),
     workflow_error: stringOrNull(raw.workflow_error),
     evidence_validity: String(raw.evidence_validity || 'UNAVAILABLE'),
     evidence_errors: Array.isArray(raw.evidence_errors) ? raw.evidence_errors.map(String) : [],

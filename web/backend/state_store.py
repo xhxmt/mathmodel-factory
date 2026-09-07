@@ -258,7 +258,7 @@ def read_runtime_status(project_path: str | Path, base_name: str) -> dict:
         snapshot = authoritative_status(project, read)
         payload = _from_snapshot(project, base_name, snapshot)
         action = state.pending_action or {}
-        payload["status"] = state.status.value
+        payload["status"] = snapshot["state"]
         payload["consultation_pending"] = state.status.value == "awaiting_consultation"
         payload["consultation_gate"] = (
             action.get("gate") if payload["consultation_pending"] else None

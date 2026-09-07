@@ -207,6 +207,7 @@ class ProjectRequestResponse(BaseModel):
 
 
 class ProjectStatus(BaseModel):
+    recorded_workflow_state: str | None = None
     execution_state: str | None = None
     workflow_error: str | None = None
     evidence_validity: str = "UNAVAILABLE"
