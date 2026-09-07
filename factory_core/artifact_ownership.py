@@ -26,6 +26,15 @@ class ArtifactOwnership:
 # routing, finalization recovery, Judge missing-evidence routing, diagnostics,
 # and final/submission input collection.
 ARTIFACT_OWNERSHIP_REGISTRY: tuple[ArtifactOwnership, ...] = (
+    # Root-level evidence emitted by the normal research and solver paths.
+    # These files are ordinary authored inputs to final packet construction;
+    # omitting them makes the ownership-coverage gate fail closed.
+    ArtifactOwnership(
+        "method_fit_suggestions.json", 1, "method_fit_reference", "MODEL_DIRTY"
+    ),
+    ArtifactOwnership(
+        "STEP5_RECEIPT.json", 4, "solver_evidence_projection", "RESULT_DIRTY"
+    ),
     # Stage 1: problem understanding and viability.
     ArtifactOwnership("problem/**", 1, "problem_contract", "MODEL_DIRTY"),
     ArtifactOwnership("data/raw/**", 1, "problem_input", "MODEL_DIRTY"),

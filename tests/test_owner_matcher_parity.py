@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
         ("literal[ab].txt", "literal[ab].txt", False),
         ("results/a+b.json", "results/a+b.json", True),
         ("results/a+b.json", "results/ab.json", False),
+        ("method_fit_suggestions.json", "method_fit_suggestions.json", True),
+        ("STEP5_RECEIPT.json", "STEP5_RECEIPT.json", True),
     ),
 )
 def test_public_owner_matcher_preserves_v1_path_and_fnmatch_semantics(
@@ -72,6 +74,11 @@ def test_compiler_first_match_equals_runtime_for_every_current_registry_pattern(
             assert compiled.all_matches, (source_rule.pattern, path)
             assert compiled.all_matches[0].pattern == legacy.pattern
             assert compiled.resolved_owner_stage == legacy.owner_stage
+
+
+def test_normal_root_evidence_has_explicit_ownership() -> None:
+    assert artifact_ownership("method_fit_suggestions.json").owner_stage == 1
+    assert artifact_ownership("STEP5_RECEIPT.json").owner_stage == 4
 
 
 def test_owner_compiler_contains_no_independent_fnmatch_or_globstar_implementation() -> None:
