@@ -200,7 +200,10 @@ def _validate_claim(item: object, index: int, kind: str) -> dict[str, Any]:
         if key in seen:
             raise ValueError(f"duplicate artifact registration at {artifact_where}")
         seen.add(key)
-        normalized_artifacts.append({"path": path, "roles": artifact_roles})
+        normalized = {"path": path, "roles": artifact_roles}
+        if "field" in artifact:
+            normalized["field"] = _nonempty_string(artifact["field"], artifact_where + ".field")
+        normalized_artifacts.append(normalized)
     return {
         "id": claim_id,
         "kind": (
@@ -576,6 +579,38 @@ def build_claim_registry(project: Path, base_name: str | None = None) -> dict[st
         if declared is not None
         else derive_registry(project, base_name or project.name)
     )
+
+
+def claim_binding_issues(project: Path, *, through_stage: int = 10) -> list[dict]:
+    """Validate generated claims at their owner's checkpoint, before packet use.
+
+    Future-stage declarations are plans, not bindings. Once their owner stage
+    runs, the actual file and optional JSON field must exist.
+    """
+    from factory_core.artifact_ownership import artifact_ownership, reopen_after_step_for_artifact
+    from scripts.verify_numbers import _resolve_dotted_json_path
+
+    registry = load_declared_registry(project)
+    issues = []
+    if registry is None:
+        return issues
+    for claim in registry["claims"]:
+        for artifact in claim["artifacts"]:
+            relative = artifact["path"]
+            owner = artifact_ownership(relative)
+            if owner is not None and owner.owner_stage > through_stage:
+                continue
+            try:
+                path = _safe_existing_file(project.resolve(), relative)
+                if path is None:
+                    raise ValueError("required artifact missing")
+                if "field" in artifact:
+                    _resolve_dotted_json_path(json.loads(path.read_text()), artifact["field"])
+            except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+                issues.append({"claim_id": claim["id"], "path": relative,
+                    "field": artifact.get("field"), "reason": str(exc),
+                    "resume_after_step": reopen_after_step_for_artifact(relative)})
+    return issues
 
 
 def artifact_paths_for_role(registry: dict[str, Any], role: str) -> list[str]:

@@ -198,6 +198,19 @@ class NativeArtifactValidator:
         project = context.project_dir
         check = getattr(self, f"_step_{self.step_id}")
         try:
+            if context.step_id >= 4 and (project / "claim_registry.json").is_file():
+                from scripts.claim_graph import claim_binding_issues
+                from ..stages import stage_for_step
+                issues = claim_binding_issues(project, through_stage=stage_for_step(context.step_id).id)
+                if issues:
+                    targets = [i["resume_after_step"] for i in issues
+                               if type(i["resume_after_step"]) is int and i["resume_after_step"] < context.step_id]
+                    metadata = {"error_class": "PERMANENT_CLAIM_BINDING", "claim_binding_issues": issues,
+                                "missing_artifacts": [i["path"] for i in issues]}
+                    if targets:
+                        metadata["resume_after_step"] = min(targets)
+                    return ValidationResult.invalid("claim artifact binding invalid: " + str(issues),
+                                                    metadata=metadata)
             valid, reason, evidence, metadata = check(project)
         except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError) as exc:
             return ValidationResult.invalid(f"native validator error: {exc}")
