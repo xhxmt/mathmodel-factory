@@ -143,6 +143,14 @@ quality-contract schema, writes the snapshot under
 
 ### Step 5: Full Solve
 
+Numeric claims additionally bind an explicitly accepted run and JSON field in
+`results/canonical_claims.json`. `scripts/canonical_claims.py` verifies the full
+solver receipt chain and creates immutable versions plus deterministic LaTeX
+values. Derived key results carry the claim ID and version; raw competing runs
+remain evidence, not interchangeable canonical answers. Changes invalidate
+dependent values and final audit snapshots. See
+`docs/operations/RERUN_REPAIR_AND_TECHNICAL_CONTINUATION.md`.
+
 Produce:
 - `results/<subproblem>/{values.json,plots.pdf,solver.log}` — one subdirectory per sub-problem identified in `problem/problem_brief.md`. Each `values.json` must carry a final status such as `CONVERGED` / `OPTIMAL`, the adopted objective or key result values, and enough decision variables for paper tables and `result*.xlsx` regeneration. `RUNNING`, `PARTIAL`, or side-channel-only results are not canonical. Interval/duration objectives must be refined at interval endpoints before adoption; a value exactly aligned with the search grid is an anomaly to investigate, not automatic proof of failure. Multi-resource sub-problems should record per-resource marginal contributions; zero marginal contribution is advisory unless the problem-specific quality contract proves it must be positive.
 - `results/canonical_results.json` — required consolidated truth source for current native projects. It must declare the project and selected `primary_method`; every subproblem must name its actual `source` / `source_file`, and the source method and solver provenance must agree with both `chosen_method.md` and the consolidated entry. Paper tables, abstract numbers, and `result*.xlsx` must be generated from this source.
@@ -266,6 +274,13 @@ Produce:
 - archive of pre-revision draft at `paper/archive/pre_step12/`
 
 ### Step 13: Preliminary Mathematical Audit
+
+For an explicitly requested technical evaluation after an unsuccessful Step13,
+the bounded operator route in `factory_core.repair_operations` records an
+authorization and the actual failure/reopen event, then executes Steps14–16
+with their own Stage/Step identities. It leaves Step13 unsuccessful and the
+workflow paused. Step16 in this route is analysis-only; no release/acceptance
+permission or production-completion event is issued. Normal gates are unchanged.
 
 Formal Phase9-A is a separate, delivery-disabled forensic route using
 `scripts/phase9_authorized_runtime.py` and the authorization sequence in

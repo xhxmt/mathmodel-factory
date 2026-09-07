@@ -63,6 +63,8 @@ class LocalSolverBackend:
                 "stdout": str(stdout.relative_to(request.project_dir)),
                 "stderr": str(stderr.relative_to(request.project_dir)),
                 "exit": str(exit_file.relative_to(request.project_dir)),
+                **({"input_closure": f".factory/solver_jobs/{request.job_id}.inputs.json"}
+                   if request.runtime == "python" else {}),
             },
         )
 
@@ -103,7 +105,14 @@ class LocalSolverBackend:
     def _command(request: SolverRequest) -> list[str]:
         script = str(request.script)
         if request.runtime == "python":
-            return [sys.executable, script, *request.args]
+            command = [sys.executable, "-m", "factory_core.solver_dependency_guard",
+                       "--project", str(request.project_dir), "--script", script,
+                       "--report", str(request.project_dir / ".factory/solver_jobs" / f"{request.job_id}.inputs.json")]
+            for path in request.input_paths:
+                command.extend(["--input", str(path)])
+            for path in request.output_paths:
+                command.extend(["--output", path])
+            return [*command, "--", *request.args]
         if request.runtime == "julia":
             return ["julia", script, *request.args]
         if request.runtime in {"R", "r", "rscript", "Rscript"}:

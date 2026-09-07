@@ -498,6 +498,9 @@ def bind_configuration_group(project: Path) -> str:
         metadata_by_role[role] = (metadata_path, _read_json(metadata_path))
     if errors:
         raise ReceiptError("cannot bind configuration group: " + "; ".join(errors))
+    errors.extend(_native_batch_group_errors(project))
+    if errors:
+        raise ReceiptError("cannot bind configuration group: " + "; ".join(errors))
     group = _configuration_group_fingerprint(roles)
     for role in ROLE_NAMES:
         metadata_path, metadata = metadata_by_role[role]
@@ -505,6 +508,27 @@ def bind_configuration_group(project: Path) -> str:
         metadata["configuration_group"] = group
         _atomic_write_json(metadata_path, metadata)
     return group
+
+
+def _native_batch_group_errors(project: Path) -> list[str]:
+    from factory_core.judge_batch import digest, verify, JudgeBatchError
+    shared = []
+    try:
+        for role in ROLE_NAMES:
+            metadata = _read_json(_safe_path(project, f"judge_outputs/{role}.md.llm-result.json"))
+            binding = metadata.get("audit_binding")
+            if binding is None:
+                shared.append(None)
+                continue
+            verify(project, binding)
+            seal = _read_json(_safe_path(project, binding["archive"] + "/committed.json"))
+            shared.append(digest({k: v for k, v in seal["request"].items()
+                                  if k not in {"role", "prompt_sha256"}}))
+        if any(shared) and (not all(shared) or len(set(shared)) != 1):
+            return ["native roles belong to different execution/input/configuration batches"]
+    except (ReceiptError, JudgeBatchError, OSError, KeyError, TypeError) as exc:
+        return [f"native batch group invalid: {exc}"]
+    return []
 
 
 def _configuration_binding(
@@ -826,6 +850,7 @@ def build_receipt(
 
     roles: list[dict[str, Any]] = []
     errors: list[str] = []
+    errors.extend(_native_batch_group_errors(project))
     for role in ROLE_NAMES:
         try:
             role_record, role_errors = _role_receipt(project, role)
@@ -925,6 +950,7 @@ def verify_receipt(
     except ReceiptError as exc:
         return False, [str(exc)]
     errors: list[str] = []
+    errors.extend(_native_batch_group_errors(project))
     errors.extend(_exact_keys(receipt, RECEIPT_KEYS, "judgment receipt"))
     if receipt.get("schema") != RECEIPT_SCHEMA:
         errors.append("judgment receipt schema mismatch")

@@ -342,6 +342,17 @@ Every solver script (.py / .jl / .m / .R) starts with a header comment:
 
 ### Reproducibility
 
+- Numerical JSON producers use `factory_core.json_values.dumps` to normalize
+  NumPy scalars/arrays into actual JSON bool/int/float/list values. Unsupported
+  types and non-finite numbers fail with a field path; Python bool is supported.
+- Local native Python jobs enforce their declared project-file reads through
+  `python-audit-open-v1`. Declare indirect attachments and imported project code
+  as inputs. This names Python audited file I/O, not arbitrary native-library
+  I/O or an OS sandbox. Other runtime receipts remain declaration-only.
+- Accepted numeric claims use the versioned contract in
+  `docs/operations/RERUN_REPAIR_AND_TECHNICAL_CONTINUATION.md`. Summaries and
+  tables must be regenerated when the explicitly accepted source/run changes.
+
 - Fix random seeds at the top of every script.
 - Pin solver versions where they affect numerical output (e.g.
   Gurobi 11 vs 12). Note the version in the script header.

@@ -292,6 +292,10 @@ class IncrementalAuditService:
         self, project: Path, checkpoint_step: int
     ) -> list[StageCheck]:
         checks = [self._canonical_results_check(project)]
+        from scripts.canonical_claims import verify as verify_canonical_claims
+        errors = verify_canonical_claims(project)
+        checks.append(StageCheck("canonical_claim_versions", not errors, "hard",
+                                 "; ".join(errors) or "accepted numeric versions are current"))
         values = (
             list((project / "results").rglob("values.json"))
             if (project / "results").is_dir()
@@ -651,7 +655,9 @@ class IncrementalAuditService:
         roots: set[str] = {"models"}
         if profile in {AuditProfile.RESULTS, AuditProfile.PAPER}:
             exact.update({"solve_log.md", "sensitivity_report.md"})
+            exact.add("tables/canonical_claim_values.tex")
             roots.update({"models", "results", "run_state/solver_jobs"})
+            roots.add(".factory/solver_receipts")
         if profile is AuditProfile.PAPER:
             exact.update(
                 {
@@ -707,6 +713,9 @@ class IncrementalAuditService:
             "factory_core/audit/domain.py",
             "factory_core/audit/incremental.py",
             "factory_core/audit/ledger.py",
+            "scripts/canonical_claims.py",
+            "scripts/solver_job_receipt.py",
+            "scripts/claim_graph.py",
         ]
         if profile is AuditProfile.MODEL:
             selected = [

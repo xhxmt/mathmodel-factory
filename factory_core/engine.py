@@ -208,7 +208,11 @@ class FactoryEngine:
                     payload={"reason": "max_steps"},
                 )
             attempt = state.attempt + 1 if state.active_step == definition.id else 1
+            repair_revision = None
             if stage_mode and state.attempt >= definition.max_attempts:
+                from .repair_recovery import usable
+                repair_revision = usable(self, state)
+            if stage_mode and state.attempt >= definition.max_attempts and repair_revision is None:
                 assert stage_task is not None
                 return self._fail_stage_task(
                     state,
@@ -311,6 +315,13 @@ class FactoryEngine:
                         "reason": prepared.reason,
                     },
                 )
+            from .repair_recovery import implementation_version
+            if repair_revision is not None:
+                from .repair_recovery import usable
+                if usable(self, state) != repair_revision:
+                    return self._fail_stage_task(state, lease, stage_task, event_type="STEP_FAILED",
+                        payload={"error_class": "PERMANENT_REPAIR_INPUT_DRIFT",
+                                 "repair_authorization_revision": repair_revision})
             state = self._owned_transition(
                 state,
                 lease,
@@ -323,6 +334,9 @@ class FactoryEngine:
                 },
                 payload={
                     "step_name": definition.name,
+                    "repair_authorization_revision": repair_revision,
+                    "implementation_version": implementation_version(),
+                    "input_fingerprint": manifest_fingerprint(capture_artifact_manifest(self.project_dir)),
                     "configured_timeout_seconds": definition.timeout_seconds,
                     "effective_timeout_seconds": timeout_seconds,
                     **(
@@ -383,6 +397,10 @@ class FactoryEngine:
                     payload=result.metadata,
                 )
             resume_after = result.metadata.get("resume_after_step")
+            from .technical_continuation import stop_at_gate2
+            continuation = stop_at_gate2(self, state, lease, result, outcome.validation)
+            if continuation is not None:
+                return continuation
             if resume_after is not None:
                 policy_payload = self.store.contest_policy()
                 if (
@@ -1707,6 +1725,10 @@ class FactoryEngine:
             event_type="RESUMED",
             changes=changes,
         )
+
+    def authorize_repair_retry(self, *, expected_revision: int, reason: str) -> WorkflowState:
+        from .repair_recovery import authorize
+        return authorize(self, expected_revision=expected_revision, reason=reason)
 
     def kill(self, *, expected_revision: int) -> WorkflowState:
         return self._control_transition(expected_revision, "KILLED", WorkflowStatus.KILLED)

@@ -142,6 +142,9 @@ def evaluator_contract_payload(
         "scripts/latex_dependency_guard.py",
         "scripts/package_submission.py",
         "scripts/claim_graph.py",
+        "scripts/canonical_claims.py",
+        "factory_core/judge_batch.py",
+        "factory_core/solver_dependency_guard.py",
         "scripts/verify_numbers.py",
         "scripts/verify_symbols.py",
         "scripts/verify_deliverables.py",
@@ -315,6 +318,10 @@ def submission_fingerprint_payload(
     project = project.resolve()
     resolved_base = base or project.name
     from factory_core.decision_receipts import verified_approval_receipts
+    from scripts.canonical_claims import verify as verify_canonical_claims
+    canonical_errors = verify_canonical_claims(project, resolved_base)
+    if canonical_errors:
+        raise ValueError("final numeric version binding failed: " + "; ".join(canonical_errors))
 
     return {
         "version": FINGERPRINT_VERSION,

@@ -85,6 +85,11 @@ VERDICT: PASS | BLOCKED
 ═══════════════════════════════════════════════════════════════
 ### 0.4 `__PROJECT_PATH__/claim_registry.json`（逐问题、逐主张覆盖契约）
 
+结果主张的 artifact 除真实 `path` 外，应登记精确 JSON `field`（例如 `metrics.rmse[0]`）。
+当前已产生的文件必须立即核对存在及字段可解析；未来 Stage 的声明仅是计划，必须在
+对应 owner checkpoint 绑定实际产物。禁止猜测未生成的文件名。
+同一数值主张的多次 run 候选登记在同一 claim ID 下，并标记 `kind: numeric`。
+
 先把 `problem/problem_brief.md` 中的每个子问题和
 `problem/deliverables.json` 中的每项交付要求注册为可机检图。不得只写一个“全文已覆盖”的
 笼统主张。路径必须是项目根目录内的相对 POSIX 路径，禁止绝对路径、`..`、反斜杠和

@@ -95,3 +95,13 @@ def test_input_mutation_during_call_is_evidence_error(tmp_path):
     dispatcher.mutate = True
     assert run().error_class == "PERMANENT_JUDGE_EVIDENCE_BINDING"
     assert not list((tmp_path / "judge_outputs/batches").rglob("committed.json"))
+
+
+def test_concurrent_exact_calls_commit_once(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    run, dispatcher = fixture(tmp_path)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: run(), range(2)))
+    assert all(result.returncode == 0 for result in results)
+    assert dispatcher.calls == 1
+    assert len({result.metadata["call_id"] for result in results}) == 1

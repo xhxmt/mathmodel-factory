@@ -167,6 +167,10 @@ def runtime_payload(
 
 def write_compatibility_projections(project_dir: str | Path, state: WorkflowState) -> None:
     project = Path(project_dir)
+    from .storage import SQLiteStateStore
+    store = SQLiteStateStore(project)
+    if store.exists:
+        state = store.load()  # callers may hold an older revision after a side event
     _checkpoint(project, state)
     _heartbeat(project, state)
     _markers(project, state)
@@ -187,8 +191,46 @@ def write_compatibility_projections(project_dir: str | Path, state: WorkflowStat
                 state,
                 contest_policy=contest_policy,
                 now_epoch=now_epoch,
-            ),
+            ) | audit_status_fields(project, state, store.events() if store.exists else []),
             ensure_ascii=False,
             indent=2,
         ) + "\n",
     )
+
+
+def audit_status_fields(project: Path, state: WorkflowState, events) -> dict:
+    """Keep workflow execution, evidence and scientific judgment independent."""
+    fields = {"execution_state": state.status.value, "evidence_validity": "UNAVAILABLE",
+              "scientific_verdict": "UNAVAILABLE", "raw_scientific_verdict": None,
+              "workflow_error": None, "score_available": False, "official_score": None,
+              "diagnostic_score": None, "delivery_allowed": False}
+    for event in reversed(list(events)):
+        if event.payload.get("error_class"):
+            fields["workflow_error"] = event.payload["error_class"]
+            break
+    aggregate = project / "judge_outputs/aggregate.json"
+    if not aggregate.is_file():
+        return fields
+    try:
+        value = json.loads(aggregate.read_text())
+        fields["raw_scientific_verdict"] = value.get("verdict")
+        from scripts.judgment_receipt import verify_receipt
+        from scripts.submission_fingerprint import submission_fingerprint
+        valid, errors = verify_receipt(project, expected_input_fingerprint=submission_fingerprint(project))
+        fields["evidence_validity"] = "VALID" if valid else "INVALID"
+        fields["evidence_errors"] = errors
+        if valid:
+            fields["scientific_verdict"] = value.get("verdict", "UNAVAILABLE")
+            if value.get("score_available") is True:
+                fields["score_available"] = True
+                fields["diagnostic_score"] = value.get("overall_score")
+            from .phase9_delivery_fence import legacy_delivery_projection_allowed
+            from scripts.submission_fingerprint import final_judge_is_current
+            fields["delivery_allowed"] = (legacy_delivery_projection_allowed(project)
+                                           and final_judge_is_current(project))
+        else:
+            fields["workflow_error"] = "JUDGE_EVIDENCE_BINDING_INVALID"
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        fields.update(evidence_validity="INVALID", evidence_errors=[str(exc)],
+                      workflow_error="JUDGE_EVIDENCE_BINDING_INVALID")
+    return fields

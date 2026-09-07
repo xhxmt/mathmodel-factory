@@ -46,3 +46,23 @@ def test_final_evaluator_uses_step16_configuration(tmp_path):
     assert contract["model_dispatch"]["selection"]["primary_id"] == "final"
     precheck = evaluator_contract_payload("demo", tmp_path, execution_step_id=13)
     assert precheck["model_dispatch"]["selection"]["primary_id"] == "precheck"
+
+
+@pytest.mark.parametrize("step_id", [14, 15])
+def test_paused_upstream_cursor_cannot_stamp_downstream_prompt_identity(tmp_path, step_id):
+    from factory_core.storage import SQLiteStateStore
+    from factory_core.domain import WorkflowStatus
+    from factory_core.steps import build_native_registry
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id=tmp_path.name, project_type="math_modeling",
+        last_completed_step=5, active_step=6, status=WorkflowStatus.PAUSED,
+        scheduler_generation="stage_v1")
+    class NoDispatch:
+        def execute(self, *_args, **_kwargs):
+            pytest.fail("identity mismatch must precede dispatch")
+    root = Path(__file__).resolve().parents[1]
+    registry = build_native_registry(root, dispatcher=NoDispatch())
+    before = store.path.read_bytes()
+    result = registry.get(step_id).lifecycle.execute(StepContext(tmp_path, tmp_path.name, step_id, 1, 60, state.revision))
+    assert result.error_class == "PERMANENT_EXECUTION_IDENTITY_MISMATCH"
+    assert store.path.read_bytes() == before

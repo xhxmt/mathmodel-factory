@@ -277,12 +277,15 @@ class FactoryService:
         resolved = self.resolve_project(project)
         store = SQLiteStateStore(resolved)
         state = store.load()
+        write_compatibility_projections(resolved, state)
+        state = store.load()
         payload = runtime_payload(
             state,
             contest_policy=store.contest_policy(),
             now_epoch=store.now_epoch(),
         )
-        projected = project_runtime_diagnostics(store.events(), state)["status"]
+        events = [event for event in store.events() if event.revision <= state.revision]
+        projected = project_runtime_diagnostics(events, state)["status"]
         for key in (
             "current_action",
             "reason_code",
@@ -291,6 +294,8 @@ class FactoryService:
             "evidence",
         ):
             payload[key] = projected[key]
+        from .projections import audit_status_fields
+        payload.update(audit_status_fields(resolved, state, events))
         return payload
 
     def start(
@@ -945,6 +950,8 @@ class FactoryService:
                 argv=args,
                 max_time_seconds=max_time_seconds,
                 requested_at=int(created_job["requested_at"]),
+                dependency_enforcement=("python-audit-open-v1"
+                    if backend_name == "local" and runtime == "python" else "DECLARATION_ONLY"),
                 input_paths=input_paths,
                 output_paths=output_paths,
                 seeds=seeds,
@@ -1076,6 +1083,9 @@ class FactoryService:
             "outputs": [output_record(value) for value in output_paths],
             "seeds": [str(seed) for seed in seeds],
         }
+        if backend == "local" and runtime == "python":
+            body["schema"] = "factory-solver-idempotency-v2"
+            body["dependency_enforcement"] = "python-audit-open-v1"
         return canonical_hash(body)
 
     def solver_status(self, project: str | Path, job_id: str) -> dict[str, Any]:

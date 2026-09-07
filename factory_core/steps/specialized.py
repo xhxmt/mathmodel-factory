@@ -859,6 +859,8 @@ class JudgeStep:
                 return ExecutionResult.succeeded(
                     **last.metadata, role_attempts=role_attempt
                 )
+            if last.error_class == "PERMANENT_JUDGE_EVIDENCE_BINDING":
+                return last
         return ExecutionResult.failed(
             "PERMANENT_JUDGE_INFRASTRUCTURE",
             returncode=last.returncode,
@@ -1347,6 +1349,14 @@ class DeliveryStep:
 
     def prepare(self, context):
         return prepare_human_gates(context.project_dir, context.step_id)
+
+    def execute_analysis(self, context) -> ExecutionResult:
+        """Technical continuation: compilation and audit without publication."""
+        from ..audit.service import FinalAuditService
+        service = self.audit_service or FinalAuditService(self.factory_root, self.judge_step,
+            getattr(self.judge_step, "validator", self.validator), self.runner,
+            self.fingerprinter, self.override_provider)
+        return service.run(context, analysis_only=True, reuse_pass=True).execution
 
     def execute(self, context) -> ExecutionResult:
         project = context.project_dir

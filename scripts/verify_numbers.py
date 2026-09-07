@@ -547,6 +547,9 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
     current_sources = scan_results_directory(project_dir)
     source_mismatches = []
     key_result_source_issues = validate_key_result_sources(project_dir)
+    from scripts.canonical_claims import verify as verify_canonical_claims
+    key_result_source_issues.extend(("canonical_version", "results/canonical_claims.json", error)
+        for error in verify_canonical_claims(project_dir, base_name))
 
     # Build reverse lookup entries.  Do not collapse duplicate values: common
     # integers such as 0/1/2 may legitimately appear in multiple result files

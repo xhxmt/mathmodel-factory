@@ -633,7 +633,7 @@ def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> d
                     and by_path.get(by_path[path]["alias_of"], {}).get("status") == "included"))
         ]
         item["satisfied_paths"] = satisfied_paths
-        item["satisfied"] = bool(paths) and len(satisfied_paths) == len(paths)
+        item["satisfied"] = bool(paths) and len(satisfied_paths) == len(paths) and not item.get("binding_error")
         if not paths:
             item["failure_reason"] = "required_artifact_missing"
         elif not item["satisfied"]:
@@ -780,6 +780,8 @@ def packet_payloads(
         raise FileNotFoundError(f"project directory not found: {project}")
     base_name = base_name or project.name
     registry = build_claim_registry(project, base_name)
+    from scripts.claim_graph import claim_binding_issues
+    binding_issues = claim_binding_issues(project)
     selected = _selected_paths(project, base_name, registry)
     bundle_identity = None
     if (project / f"{base_name}_paper.pdf").is_file():
@@ -796,6 +798,13 @@ def packet_payloads(
     result: dict[str, dict] = {}
     for role, paths in selected.items():
         requirements = _role_requirements(project, role, paths, base_name, registry)
+        applicable = {claim["id"] for claim in registry.get("claims", [])
+                      if role in claim.get("required_roles", [])}
+        for issue in binding_issues:
+            if issue["claim_id"] in applicable and issue.get("field") is not None:
+                requirements.append({"id": "claim_field:" + issue["claim_id"],
+                    "paths": [issue["path"]], "binding_error": issue["reason"],
+                    "field": issue["field"], "required_status": "included"})
         context, files = _render_context(project, role, paths, requirements)
         result[role] = {
             "context": context,

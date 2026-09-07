@@ -124,10 +124,15 @@ def build_submission_receipt(
     input_paths: Iterable[str | Path] = (),
     output_paths: Iterable[str | Path] = (),
     seeds: Iterable[str | int] = (),
+    dependency_enforcement: str = "DECLARATION_ONLY",
 ) -> dict[str, Any]:
     project = Path(project_dir).resolve()
     if not job_id or not backend or not runtime:
         raise ReceiptError("job_id, backend, and runtime must be nonempty")
+    if dependency_enforcement not in {"DECLARATION_ONLY", "python-audit-open-v1"}:
+        raise ReceiptError("unsupported solver dependency enforcement contract")
+    if dependency_enforcement == "python-audit-open-v1" and (runtime != "python" or backend != "local"):
+        raise ReceiptError("Python file-open enforcement requires the local Python backend")
     script_record = _file_record(project, script)
     workdir_path, workdir_relative = _project_path(project, workdir, must_exist=True)
     if not workdir_path.is_dir():
@@ -154,6 +159,7 @@ def build_submission_receipt(
         "max_time_seconds": int(max_time_seconds),
         "requested_at": int(requested_at),
         "inputs": input_records,
+        "dependency_enforcement": dependency_enforcement,
         "declared_outputs": declared_outputs,
         "seeds": [str(seed) for seed in seeds],
         "seed_claim_limit": "DECLARATION_ONLY_EXECUTION_CONSUMPTION_NOT_ATTESTED",
@@ -232,11 +238,24 @@ def build_completion_receipt(
     inputs_unchanged = _records_unchanged(project, submitted["inputs"])
     outputs = [_output_record(project, path) for path in submitted["declared_outputs"]]
     outputs_complete = bool(outputs) and all(item["exists"] for item in outputs)
+    closure_valid = None
+    if submitted.get("dependency_enforcement") == "python-audit-open-v1":
+        try:
+            closure_path, _ = _project_path(project, result_refs["input_closure"], must_exist=True)
+            closure = json.loads(closure_path.read_text())
+            expected_inputs = {r["path"]: r["sha256"] for r in [submitted["script"], *submitted["inputs"]]}
+            closure_valid = (closure.get("schema") == "python-audit-open-v1"
+                and closure.get("status") == "COMPLETE" and closure.get("exit_code") == 0
+                and closure.get("declared_sha256") == expected_inputs
+                and closure.get("undeclared_inputs") == [] and closure.get("changed_inputs") == [])
+        except (OSError, KeyError, ValueError, TypeError):
+            closure_valid = False
     successful_outputs = (
         normalized_status == "COMPLETED"
         and script_unchanged
         and inputs_unchanged
         and outputs_complete
+        and closure_valid is not False
     )
     base = {
         "schema": COMPLETION_SCHEMA,
@@ -249,6 +268,7 @@ def build_completion_receipt(
         "finished_at": int(finished_at),
         "script_unchanged": script_unchanged,
         "inputs_unchanged": inputs_unchanged,
+        "input_closure_valid": closure_valid,
         "outputs_complete": outputs_complete,
         "successful_outputs": successful_outputs,
         "outputs": outputs,

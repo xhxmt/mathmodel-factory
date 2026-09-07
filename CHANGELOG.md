@@ -1,4 +1,12 @@
 # Changelog
+- Addressed the 2026-09-06 rerun contracts: root evidence ownership; generated
+  claim path/field validation; bounded version-bound repair retries; explicit
+  event-bound Step13 technical continuation; actual Step/Stage judge identity;
+  immutable judge batches and verified reuse; Python solver input closure;
+  deduplicated packet coverage; explicit accepted numeric versions; current,
+  evidence-aware status projections; and strict NumPy JSON producer conversion.
+  Added a persistent local launcher and documented the bounded operator route
+  in `docs/operations/RERUN_REPAIR_AND_TECHNICAL_CONTINUATION.md`.
 - Corrected the Phase9 generation runbook to the existing `authority_operator.py run-generation` command and its separate dry-run/confirmed boundary.
 - Synchronized the expanded Phase9 focused targets with the independent summary/package policy and added a direct repository-contract acceptance check; exact policy comparisons remain enforced.
 - Closed full-audit findings: registered only the exact new Phase9 canonical/schema consumers, refreshed two storage symbol offsets without changing trusted symbol bytes, and bounded provider namespace argv. Unrelated sibling directories in project/runtime ancestors are omitted while complete project/source inputs and configuration proof remain intact.
