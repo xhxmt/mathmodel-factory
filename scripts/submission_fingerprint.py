@@ -21,7 +21,7 @@ from factory_core.bibliography import bibliography_evidence_record
 
 
 FINGERPRINT_VERSION = 10
-EVALUATOR_CONTRACT_VERSION = 7
+EVALUATOR_CONTRACT_VERSION = 8
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -96,8 +96,9 @@ def evaluator_contract_payload(
     factory_root: Path | None = None,
     *,
     policy_mode: str | None = None,
+    execution_step_id: int = 16,
 ) -> dict[str, object]:
-    """Return the exact Step-13 evaluator implementation and model selection.
+    """Return the actual evaluator implementation and model selection.
 
     Final-judge cache validity depends on more than paper inputs: changing a
     role prompt, aggregation rule, packet builder, caller, or registry routing
@@ -107,7 +108,9 @@ def evaluator_contract_payload(
     root = (factory_root or FACTORY_ROOT).resolve()
     config_path = root / "web/model_config.json"
     registry_path = root / "web/model_registry.json"
-    assignment = get_step_model_ids(config_path, base, 13)
+    if execution_step_id not in (13, 16):
+        raise ValueError("judge execution_step_id must be 13 or 16")
+    assignment = get_step_model_ids(config_path, base, execution_step_id)
     selection_source = "model_config" if assignment else "builtin_default"
     primary, fallback = assignment or ("deepseek-chat", "")
     selected: dict[str, object] = {
@@ -201,6 +204,8 @@ def evaluator_contract_payload(
         }
     return {
         "version": EVALUATOR_CONTRACT_VERSION,
+        "execution_step_id": execution_step_id,
+        "template_step_id": 13,
         "role_schemas": {
             "math": "judge-hard-role-v2",
             "execution": "judge-hard-role-v2",

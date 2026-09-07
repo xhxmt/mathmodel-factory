@@ -277,6 +277,8 @@ def annotate_role_metadata(
     call_parameters: dict[str, Any] | None = None,
     evaluator_configuration_fingerprint: str | None = None,
     configuration_group: str | None = None,
+    execution_step_id: int | None = None,
+    template_step_id: int | None = None,
 ) -> dict[str, Any]:
     """Normalize actual-call metadata and bind it to the current role output."""
 
@@ -328,6 +330,11 @@ def annotate_role_metadata(
             }
         )
     metadata["backend_configuration_fingerprint"] = backend_configuration
+    if execution_step_id is not None:
+        if execution_step_id not in (13, 16) or template_step_id != 13:
+            raise ReceiptError("invalid judge execution/template identity")
+        metadata["execution_step_id"] = execution_step_id
+        metadata["template_step_id"] = template_step_id
     context_sha256 = _sha256(context)
     manifest_sha256 = _sha256(manifest)
     role_configuration = _role_configuration_fingerprint(
@@ -1152,6 +1159,8 @@ def main() -> int:
     annotate.add_argument("--timeout-seconds", type=int)
     annotate.add_argument("--evaluator-configuration-fingerprint")
     annotate.add_argument("--configuration-group")
+    annotate.add_argument("--execution-step-id", type=int)
+    annotate.add_argument("--template-step-id", type=int)
 
     bind_group = subparsers.add_parser("bind-group")
     bind_group.add_argument("project")
@@ -1190,6 +1199,8 @@ def main() -> int:
                 },
                 evaluator_configuration_fingerprint=args.evaluator_configuration_fingerprint,
                 configuration_group=args.configuration_group,
+                execution_step_id=args.execution_step_id,
+                template_step_id=args.template_step_id,
             )
             print(json.dumps(value, ensure_ascii=False, indent=2))
             return 0

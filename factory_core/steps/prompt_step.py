@@ -295,6 +295,17 @@ class PromptStep:
                 prompt_input_mode="non_engine_state",
                 prompt_input_receipt_durable=False,
             )
+        state = store.load()
+        from ..stages import stage_for_step
+
+        if (state.active_step != context.step_id
+                or (state.active_stage is not None
+                    and state.active_stage != stage_for_step(context.step_id).id)):
+            return ExecutionResult.failed(
+                "PERMANENT_EXECUTION_IDENTITY_MISMATCH", returncode=2,
+                requested_step=context.step_id, active_step=state.active_step,
+                active_stage=state.active_stage,
+            )
         prompt, _researcher_note, proposed = self._build_inputs(context)
         _bound_state, stored = store.bind_prompt_attempt_input(
             expected_revision=context.revision,

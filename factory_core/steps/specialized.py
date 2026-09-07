@@ -1160,7 +1160,7 @@ class JudgeStep:
         output = project / "judge_outputs" / f"{role}.md"
         snapshot = project / "judge_outputs" / f"{role}.rendered_prompt.txt"
         output.parent.mkdir(parents=True, exist_ok=True)
-        prompt = self.renderer.render(template, project, step_key=f"13_{role}")
+        prompt = self.renderer.render(template, project, step_key=f"{context.step_id}_{role}")
         prompt += self._phase_instructions(context.step_id, role)
         prompt += retry_instructions
         snapshot.write_text(prompt, encoding="utf-8")
@@ -1178,7 +1178,7 @@ class JudgeStep:
         result = self.dispatcher.execute(
             ModelRequest(
                 project_dir=project,
-                step_id=13,
+                step_id=context.step_id,
                 attempt=context.attempt,
                 prompt=prompt,
                 timeout_seconds=min(context.timeout_seconds, 3_600),
@@ -1194,7 +1194,7 @@ class JudgeStep:
                 final_response_file=final_response,
                 deadline_epoch=context.deadline_epoch,
             ),
-            step_key=13,
+            step_key=context.step_id,
             defaults=self.contract.default_models,
         )
         if not _verdict(output) and _verdict(final_response):
@@ -1232,6 +1232,8 @@ class JudgeStep:
                 "--transport", "native_model_backend",
                 "--prompt-file", snapshot,
                 "--timeout-seconds", "3600",
+                "--execution-step-id", str(context.step_id),
+                "--template-step-id", "13",
             ],
             label=f"judge_annotate_{role}",
             timeout_seconds=120,
@@ -1240,7 +1242,8 @@ class JudgeStep:
             return ExecutionResult.failed(
                 "TRANSIENT_JUDGE_PROVENANCE", returncode=annotated.returncode, role=role
             )
-        return ExecutionResult.succeeded(role=role, model_id=model_id, backend=backend)
+        return ExecutionResult.succeeded(role=role, model_id=model_id, backend=backend,
+                                         execution_step_id=context.step_id, template_step_id=13)
 
     @staticmethod
     def _phase_instructions(step_id: int, role: str) -> str:
