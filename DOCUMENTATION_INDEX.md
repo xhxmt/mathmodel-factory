@@ -7,6 +7,7 @@
 | 目标 | 文档 |
 |---|---|
 | 了解项目与快速开始 | [README.md](README.md) |
+| 查看正常运行审计合同和支持边界 | [docs/operations/NORMAL_RUN_AUDIT_CONTRACT.md](docs/operations/NORMAL_RUN_AUDIT_CONTRACT.md) |
 | 查看当前工作流契约 | [STEPS.md](STEPS.md) |
 | 查看编排状态、迁移与恢复契约 | [docs/architecture/ORCHESTRATION_ENGINE.md](docs/architecture/ORCHESTRATION_ENGINE.md) |
 | 查看当前 10-Stage 编排合同与实施状态 | [docs/architecture/STAGE_SIMPLIFICATION_PLAN.md](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md) |

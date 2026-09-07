@@ -112,6 +112,8 @@ class LocalSolverBackend:
                 command.extend(["--input", str(path)])
             for path in request.output_paths:
                 command.extend(["--output", path])
+            if request.submission_receipt is not None:
+                command.extend(["--submission-receipt", str(request.submission_receipt)])
             return [*command, "--", *request.args]
         if request.runtime == "julia":
             return ["julia", script, *request.args]

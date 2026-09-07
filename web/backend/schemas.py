@@ -207,6 +207,17 @@ class ProjectRequestResponse(BaseModel):
 
 
 class ProjectStatus(BaseModel):
+    execution_state: str | None = None
+    workflow_error: str | None = None
+    evidence_validity: str = "UNAVAILABLE"
+    evidence_errors: list[str] = Field(default_factory=list)
+    scientific_verdict: str = "UNAVAILABLE"
+    raw_scientific_verdict: str | None = None
+    review_mode: str | None = None
+    score_available: bool = False
+    official_score: float | None = None
+    diagnostic_score: float | None = None
+    delivery_allowed: bool = False
     base_name: str
     run_id: str = ""
     problem_key: str = ""

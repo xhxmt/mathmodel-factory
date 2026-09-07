@@ -26,7 +26,7 @@ def test_native_root_evidence_is_included_and_routes_to_its_owner(tmp_path, rela
 
 def test_native_extension_does_not_rewrite_frozen_trust_roots():
     assert verify_legacy_classifier_contract_sha256_v9() == dirty.classifier_contract_sha256()
-    assert current.ARTIFACT_OWNERSHIP_REGISTRY[:-2] == frozen.ARTIFACT_OWNERSHIP_REGISTRY
+    assert current.ARTIFACT_OWNERSHIP_REGISTRY[:-3] == frozen.ARTIFACT_OWNERSHIP_REGISTRY
     assert current_dirty.classifier_contract_sha256() != dirty.classifier_contract_sha256()
     assert current.ARTIFACT_OWNERSHIP_SCHEMA != frozen.ARTIFACT_OWNERSHIP_SCHEMA
 

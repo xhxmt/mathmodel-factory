@@ -30,7 +30,7 @@ def classify_manifest_changes(before, after):
         if owner is not None:
             additions[path] = DirtyChange(DirtyFlag(owner.dirty_flag), owner.owner_stage,
                                          path, before.get(path, "MISSING"), after.get(path, "MISSING"))
-    # Strip the frozen unknown-path fallback only for the two exact new rules.
+    # Strip the frozen unknown-path fallback only for the explicitly added native rules.
     changes = [change for change in frozen.classify_manifest_changes(before, after)
                if change.cause_artifact not in additions]
     return changes + list(additions.values())

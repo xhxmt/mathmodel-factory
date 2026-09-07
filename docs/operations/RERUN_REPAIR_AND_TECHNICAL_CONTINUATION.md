@@ -5,28 +5,22 @@ not authorize Phase9-A, Run4, migration, deployment, delivery or Phase10-B.
 All examples require an explicitly selected disposable/test project. Never
 run them against the frozen historical experiment.
 
-## Repairing an exhausted attempt
+## Normal retry budget
 
-After fixing an input or implementation, use the exact current revision:
-
-```sh
-python -m factory_core.repair_operations repair-retry PROJECT \
-  --expected-revision REVISION --reason 'describe the actual repair'
-```
-
-The workflow records one additional attempt bound to the failed attempt,
-authored input fingerprint and implementation bytes. Historical attempts and
-the normal maximum remain unchanged. Unchanged inputs/code, a repeated repair
-version, live runners, missing baselines and missing upstream claim artifacts
-are rejected. The next normal runner consumes this opportunity through its
-monotonically increasing attempt number. A changed upstream owner can still
-trigger normal semantic invalidation; repair authorization does not disable it.
-The failed input baseline must match the exact current stage/subtask/source
-step, and only that failed attempt's start event attests its implementation.
-Claim checks cover the current owner's stage and earlier dependencies; future
-owner declarations are not mistaken for missing inputs of the repair target.
+Each step retains its configured attempt limit. Exhausting that budget stops
+the step; changing inputs or implementation does not grant an extra attempt.
+The former `repair-retry` command has been removed. Existing attempt/event
+history remains intact, and historical repair grants do not extend the budget.
+Normal retries within the configured limit and ordinary recovery remain in
+place. The explicit Step13 technical continuation below is a separate route.
 
 ## Step13 unsuccessful, then evaluate Steps14–16
+
+This separate manual route is outside the accepted normal-run repair scope.
+New normal runs must not create or inherit these grants. Its previously reported
+success/recovery limitations remain unresolved; the commands below document the
+existing operator interface, not a claim that the route was repaired. See
+[NORMAL_RUN_AUDIT_CONTRACT.md](NORMAL_RUN_AUDIT_CONTRACT.md).
 
 Before the selected Step13 attempt, record the explicit local operator intent:
 

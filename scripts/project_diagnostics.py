@@ -79,7 +79,11 @@ def load_status(project_dir: str | Path) -> dict | None:
     path = _status_path(project_dir)
     if not path.is_file():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if "projection_files" in value:
+        from factory_core.projections import read_compatibility_projection
+        return read_compatibility_projection(project_dir)
+    return value
 
 
 def append_event(

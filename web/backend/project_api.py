@@ -450,7 +450,9 @@ def _runtime_to_project_status(runtime: dict[str, Any], project: Path | None = N
     diag_summary = summarize_project_diagnostics({"status": runtime})
     problem_key, problem_title = _problem_identity(project, runtime["base_name"])
     storage_scope = project.parent.name if project is not None and project.parent.name in {"ongoing", "complete"} else ""
+    from factory_core.projections import AUDIT_FIELDS
     return ProjectStatus(
+        **{key: runtime[key] for key in AUDIT_FIELDS if key in runtime},
         base_name=runtime["base_name"],
         run_id=runtime["base_name"],
         problem_key=problem_key,

@@ -523,7 +523,8 @@ def _native_batch_group_errors(project: Path) -> list[str]:
             verify(project, binding)
             seal = _read_json(_safe_path(project, binding["archive"] + "/committed.json"))
             shared.append(digest({k: v for k, v in seal["request"].items()
-                                  if k not in {"role", "prompt_sha256"}}))
+                                  if k not in {"role", "prompt_sha256", "template_prompt_sha256",
+                                               "prompt_format"}}))
         if any(shared) and (not all(shared) or len(set(shared)) != 1):
             return ["native roles belong to different execution/input/configuration batches"]
     except (ReceiptError, JudgeBatchError, OSError, KeyError, TypeError) as exc:

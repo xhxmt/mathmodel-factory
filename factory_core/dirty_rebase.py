@@ -11,7 +11,9 @@ DIRTY_REBASE_SCHEMA = "factory-dirty-classifier-rebase-v1"
 
 
 def ensure_dirty_rebase_schema(connection) -> None:
-    connection.executescript(
+    # Individual statements preserve the caller's migration transaction.  In
+    # sqlite3 legacy transaction mode executescript would commit it first.
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS dirty_classifier_rebases (
             rebase_id TEXT PRIMARY KEY,
@@ -22,12 +24,20 @@ def ensure_dirty_rebase_schema(connection) -> None:
             obligation_count INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
             receipt_json TEXT NOT NULL
-        );
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TRIGGER IF NOT EXISTS dirty_classifier_rebases_append_only_update
         BEFORE UPDATE ON dirty_classifier_rebases
         BEGIN
             SELECT RAISE(ABORT, 'dirty classifier rebases are append-only');
         END;
+        """
+    )
+    connection.execute(
+        """
         CREATE TRIGGER IF NOT EXISTS dirty_classifier_rebases_append_only_delete
         BEFORE DELETE ON dirty_classifier_rebases
         BEGIN
@@ -61,7 +71,8 @@ def rebase_dirty_classifier_state(
     historical.
     """
 
-    ensure_dirty_rebase_schema(connection)
+    # Schema is installed before the business transaction by SQLiteStateStore.
+    # Rebinding here is part of the same revision as its checkpoint and event.
     if not _table_exists(connection, "dirty_flags"):
         return None
     from .current_dirty import classifier_contract_sha256, solver_receipt_job_id

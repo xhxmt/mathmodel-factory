@@ -17,6 +17,7 @@ from factory_core.paper_sources import (
     resolve_latex_dependency_graph,
 )
 from scripts.json_evidence_view import SUFFIX as EVIDENCE_VIEW_SUFFIX, verify_view
+from scripts.packet_evidence import ALIAS_CONTRACT, PacketEvidence
 
 try:
     from scripts.claim_graph import (
@@ -67,7 +68,7 @@ TEXT_SUFFIXES = {
 MAX_CONTEXT_BYTES = 180_000
 EXECUTION_CONTEXT_BYTES = 360_000
 MAX_FILE_BYTES = 55_000
-PACKET_VERSION = 4
+PACKET_VERSION = 5
 COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v1"
 
 
@@ -124,6 +125,8 @@ def _is_model_code(relative: str) -> bool:
 
 def _is_execution_evidence(relative: str) -> bool:
     name = Path(relative).name
+    if relative.startswith(".factory/solver_receipts/") and name.endswith((".submitted.json", ".completed.json")):
+        return True
     if relative.startswith("logs/"):
         return (
             Path(relative).suffix.lower() == ".log"
@@ -152,7 +155,7 @@ def _execution_priority(project: Path, path: Path) -> tuple[int, str]:
     suffix = path.suffix.lower()
     if relative.endswith("_paper.tex") or relative == "paper/paper.tex":
         priority = 0
-    elif "receipt" in name.lower() and suffix == ".json":
+    elif ("receipt" in name.lower() or relative.startswith(".factory/solver_receipts/")) and suffix == ".json":
         priority = 1
     elif relative.startswith("logs/") and any(word in name.lower() for word in ("stderr", "fail", "error")):
         priority = 4
@@ -472,6 +475,10 @@ def _role_requirements(
         project, paths, lambda relative: relative.startswith("logs/")
     )
     execution_trace = execution_trace or _first_path(
+        project, paths, lambda relative: relative.startswith(".factory/solver_receipts/")
+        and relative.endswith(".completed.json"),
+    )
+    execution_trace = execution_trace or _first_path(
         project,
         paths,
         lambda relative: relative.startswith("models/")
@@ -621,16 +628,14 @@ def _render_context(
 
 
 def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> dict:
-    by_path = {str(item["path"]): item for item in files}
+    evidence = PacketEvidence(files)
     evaluated: list[dict[str, object]] = []
     for declared in requirements:
         item = dict(declared)
         paths = [str(path) for path in item["paths"]]
         satisfied_paths = [
             path for path in paths
-            if (by_path.get(path, {}).get("status") == "included"
-                or (by_path.get(path, {}).get("status") == "alias"
-                    and by_path.get(by_path[path]["alias_of"], {}).get("status") == "included"))
+            if evidence.complete(path)
         ]
         item["satisfied_paths"] = satisfied_paths
         item["satisfied"] = bool(paths) and len(satisfied_paths) == len(paths) and not item.get("binding_error")
@@ -666,8 +671,7 @@ def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> d
             "truncated_paths": sum(item["status"] == "truncated" for item in files),
             "omitted_paths": sum(item["status"] == "omitted" for item in files),
             "all_selected_content_complete": all(
-                item["status"] == "included" or (item["status"] == "alias"
-                    and by_path.get(item["alias_of"], {}).get("status") == "included")
+                evidence.complete(item["path"])
                 for item in files),
         },
         "requirements": evaluated,
@@ -726,10 +730,11 @@ def _manifest(
     context_limit = EXECUTION_CONTEXT_BYTES if role == "execution" else MAX_CONTEXT_BYTES
     status_counts = {
         status: sum(item["status"] == status for item in files)
-        for status in ("included", "truncated", "omitted")
+        for status in ("included", "alias", "truncated", "omitted")
     }
     manifest = {
         "version": PACKET_VERSION,
+        "alias_contract": ALIAS_CONTRACT,
         "role": role,
         "project": project.name,
         "status_counts": status_counts,
@@ -783,6 +788,15 @@ def packet_payloads(
     from scripts.claim_graph import claim_binding_issues
     binding_issues = claim_binding_issues(project)
     selected = _selected_paths(project, base_name, registry)
+    from scripts.solver_evidence_selection import required_solver_evidence
+    solver_requirements = required_solver_evidence(project, registry)
+    known = {_relative(project, path) for path in selected["execution"]}
+    for requirement in solver_requirements:
+        for relative in requirement["paths"]:
+            if relative not in known and (project / relative).is_file():
+                selected["execution"].append(project / relative)
+                known.add(relative)
+    selected["execution"].sort(key=lambda path: _execution_priority(project, path))
     bundle_identity = None
     if (project / f"{base_name}_paper.pdf").is_file():
         from factory_core.submission_bundle import submission_bundle_manifest
@@ -798,6 +812,8 @@ def packet_payloads(
     result: dict[str, dict] = {}
     for role, paths in selected.items():
         requirements = _role_requirements(project, role, paths, base_name, registry)
+        if role == "execution":
+            requirements.extend(solver_requirements)
         applicable = {claim["id"] for claim in registry.get("claims", [])
                       if role in claim.get("required_roles", [])}
         for issue in binding_issues:

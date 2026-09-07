@@ -190,6 +190,58 @@ def interrupt_stage_task(store, project, *, stage, subtask, source_step):
     )
 
 
+@pytest.mark.parametrize("has_attempt_remaining", [True, False])
+def test_changed_inputs_keep_the_normal_stage_attempt_limit(tmp_path, has_attempt_remaining):
+    (tmp_path / "model.md").write_text("original model", encoding="utf-8")
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(
+        project_id=tmp_path.name,
+        project_type="math_modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+        last_completed_step=3,
+    )
+    registry, lifecycles = stage_registry()
+    limit = registry.get(4).max_attempts
+    manifest = capture_artifact_manifest(tmp_path)
+    store.transition(
+        expected_revision=state.revision,
+        event_type="STEP_FAILED",
+        event_step=4,
+        changes={
+            "status": WorkflowStatus.READY,
+            "active_step": 4,
+            "active_stage": 3,
+            "active_subtask": "model_construction",
+            "source_step_id": 4,
+            "attempt": limit - int(has_attempt_remaining),
+        },
+        subtask_baseline={
+            "stage_id": 3,
+            "subtask": "model_construction",
+            "source_step_id": 4,
+            "input_fingerprint": manifest_fingerprint(manifest),
+            "manifest": manifest,
+        },
+    )
+    prior_events = store.events()
+    (tmp_path / "model.md").write_text("corrected model", encoding="utf-8")
+
+    result = FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    assert store.events()[:len(prior_events)] == prior_events
+    started = [event for event in store.events() if event.type == "STEP_STARTED"]
+    if has_attempt_remaining:
+        assert lifecycles[4].calls == [limit]
+        assert [event.attempt for event in started] == [limit]
+        assert result.last_completed_step == 4
+    else:
+        assert result.status is WorkflowStatus.FAILED
+        assert result.attempt == limit
+        assert lifecycles[4].calls == []
+        assert started == []
+        assert store.events()[-1].payload["error_class"] == "PERMANENT_ATTEMPT_BUDGET_EXHAUSTED"
+
+
 def test_stage_catalog_covers_every_step_exactly_once_and_preserves_budgets():
     payload = stage_catalog_payload()
 

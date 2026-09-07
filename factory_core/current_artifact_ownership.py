@@ -12,8 +12,13 @@ from .artifact_ownership import (
     normalize_artifact_path,
 )
 
-ARTIFACT_OWNERSHIP_SCHEMA = "factory-native-artifact-ownership-v2"
+ARTIFACT_OWNERSHIP_SCHEMA = "factory-native-artifact-ownership-v3"
 ADDITIONAL_OWNERSHIP = (
+    # Receipt-validated coverage includes exact initial versions individually.
+    ArtifactOwnership(
+        ".factory/solver_inputs/**", 4, "solver_input_snapshot", "RESULT_DIRTY",
+        final_input=False, submission_member=False,
+    ),
     ArtifactOwnership("method_fit_suggestions.json", 1, "method_fit_reference", "MODEL_DIRTY"),
     ArtifactOwnership("STEP5_RECEIPT.json", 4, "solver_evidence_projection", "RESULT_DIRTY"),
 )

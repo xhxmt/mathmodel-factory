@@ -185,7 +185,7 @@ def _validate_claim(item: object, index: int, kind: str) -> dict[str, Any]:
     if not isinstance(artifacts, list):
         raise ValueError(f"{where}.artifacts must be an array")
     normalized_artifacts: list[dict[str, Any]] = []
-    seen: set[tuple[str, tuple[str, ...]]] = set()
+    seen: set[tuple[str, str | None, tuple[str, ...]]] = set()
     for artifact_index, artifact in enumerate(artifacts):
         artifact_where = f"{where}.artifacts[{artifact_index}]"
         if not isinstance(artifact, dict):
@@ -196,13 +196,15 @@ def _validate_claim(item: object, index: int, kind: str) -> dict[str, Any]:
         )
         if not set(artifact_roles) <= set(required_roles):
             raise ValueError(f"{artifact_where}.roles must be a subset of required_roles")
-        key = (path, tuple(artifact_roles))
+        field = (_nonempty_string(artifact["field"], artifact_where + ".field")
+                 if "field" in artifact else None)
+        key = (path, field, tuple(artifact_roles))
         if key in seen:
             raise ValueError(f"duplicate artifact registration at {artifact_where}")
         seen.add(key)
         normalized = {"path": path, "roles": artifact_roles}
-        if "field" in artifact:
-            normalized["field"] = _nonempty_string(artifact["field"], artifact_where + ".field")
+        if field is not None:
+            normalized["field"] = field
         normalized_artifacts.append(normalized)
     return {
         "id": claim_id,
@@ -713,13 +715,17 @@ def coverage_requirements(registry: dict[str, Any], role: str) -> list[dict[str,
 def evaluate_claim_coverage(
     registry: dict[str, Any], role: str, files: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    by_path = {str(item.get("path")): item for item in files}
+    try:
+        from scripts.packet_evidence import PacketEvidence
+    except ModuleNotFoundError:  # direct script execution
+        from packet_evidence import PacketEvidence
+    evidence = PacketEvidence(files)
     requirements = coverage_requirements(registry, role)
     requirement_state: dict[str, dict[str, Any]] = {}
     for requirement in requirements:
         paths = [str(path) for path in requirement["paths"]]
         satisfied = [
-            path for path in paths if by_path.get(path, {}).get("status") == "included"
+            path for path in paths if evidence.complete(path)
         ]
         requirement_state[requirement["id"]] = {
             "paths": paths,
@@ -747,7 +753,7 @@ def evaluate_claim_coverage(
                 if role in artifact.get("roles", [])
             ]
             satisfied_paths = [
-                path for path in paths if by_path.get(path, {}).get("status") == "included"
+                path for path in paths if evidence.complete(path)
             ]
             state = {
                 "paths": paths,

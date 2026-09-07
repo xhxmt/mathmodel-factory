@@ -379,3 +379,54 @@ test('production-compiled Vue panel exercises real keyboard, ARIA, error, and re
     await site.close()
   }
 })
+
+test('normal status preserves independent failure recovery evidence and score fields in the browser', async () => {
+  const output = await mkdtemp(join(tmpdir(), 'normal-status-browser-'))
+  await build({
+    root: FRONTEND_ROOT, configFile: false, plugins: [vue()], base: '/', logLevel: 'silent',
+    build: { outDir: output, emptyOutDir: true,
+      rollupOptions: { input: join(TEST_DIR, 'normal-status.harness.html') } },
+  })
+  const site = await serveDirectory(output)
+  let browser
+  try {
+    browser = await launchChromium()
+    const page = await browser.newPage({ viewport: { width: 900, height: 700 } })
+    const errors = []
+    page.on('pageerror', error => errors.push(error.message))
+    await page.goto(`${site.origin}/tests/normal-status.harness.html`)
+    const panel = page.getByTestId('audit-status')
+    await panel.waitFor()
+    await page.evaluate(() => globalThis.setStatusFixture({
+      status: 'failed', execution_state: 'failed', revision: 2,
+      workflow_error: 'TRANSIENT_JUDGE_PROVENANCE', evidence_validity: 'INVALID',
+      evidence_errors: ['current call evidence missing'], scientific_verdict: 'UNAVAILABLE',
+      score_available: false, diagnostic_score: null, official_score: null, delivery_allowed: false,
+    }))
+    assert.match(await panel.textContent(), /TRANSIENT_JUDGE_PROVENANCE/)
+    assert.match(await panel.textContent(), /current call evidence missing/)
+    assert.match(await panel.textContent(), /正式分数：不可用/)
+    await page.evaluate(() => globalThis.setStatusFixture({
+      status: 'ready', execution_state: 'ready', revision: 3, workflow_error: null,
+      evidence_validity: 'VALID', scientific_verdict: 'PRECHECK_PASS', review_mode: 'math_only',
+      score_available: false, official_score: null, delivery_allowed: false,
+    }))
+    assert.doesNotMatch(await panel.textContent(), /TRANSIENT_JUDGE_PROVENANCE|current call evidence missing/)
+    assert.match(await panel.textContent(), /数学预审/)
+    assert.match(await panel.textContent(), /交付：未获准/)
+    await page.evaluate(() => globalThis.setStatusFixture({
+      status: 'completed', revision: 4, evidence_validity: 'VALID', scientific_verdict: 'PASS',
+      review_mode: 'final', score_available: true, diagnostic_score: 82,
+      official_score: null, delivery_allowed: true,
+    }))
+    assert.match(await panel.textContent(), /诊断分数：82/)
+    assert.match(await panel.textContent(), /正式分数：不可用/)
+    assert.match(await panel.textContent(), /交付：允许/)
+    assert.deepEqual(errors, [])
+    await page.screenshot({ path: join(output, 'normal-status.png') })
+    console.log(`normal status screenshot: ${join(output, 'normal-status.png')}`)
+  } finally {
+    if (browser) await browser.close()
+    await site.close()
+  }
+})

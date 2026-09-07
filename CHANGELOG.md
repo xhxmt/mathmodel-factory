@@ -1,4 +1,24 @@
 # Changelog
+- Normal-run audit repairs keep state/checkpoint/event writes atomic, bind API
+  judges to final sent input, resolve packet aliases consistently, and derive
+  required execution evidence from adopted solver jobs.
+- Python closure v2 preserves initial versions of declared input/output overlaps.
+  Native ownership v3 adds receipt-validated snapshots individually, preserving
+  frozen ownership/classifier contracts. Required numeric claims and key results
+  are verified per field and accepted source version.
+- Native CLI/Web/file status shares a coherent snapshot, separates current
+  workflow/evidence/scientific/score/delivery dimensions, and rejects partial
+  compatibility projections. Worker startup waits for initialization, cancellation
+  verifies observed exits, and monitor initialization failures are durable.
+- The current normal-run boundary and test entry points are documented in
+  `docs/operations/NORMAL_RUN_AUDIT_CONTRACT.md`. Real-provider/full-problem
+  scientific acceptance and the unresolved manual technical-continuation route
+  remain outside this normal-run engineering acceptance.
+- Removed the extra repair-retry attempt at the user's request. Restored the
+  original per-step attempt-budget check and removed its authorization API,
+  CLI operation, implementation-version snapshots, and feature-specific tests.
+  Existing attempt history, normal recovery, and the separate Step13 technical
+  continuation remain intact. This supersedes the repair-retry entries below.
 - Explicitly identify `gate2_delivery_override.json` as non-authoritative for
   Step14 technical continuation; only the native authorization event applies,
   and neither grants Gate2 PASS or acceptance/release/delivery permission.

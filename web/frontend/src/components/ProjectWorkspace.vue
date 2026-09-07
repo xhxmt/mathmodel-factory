@@ -103,6 +103,7 @@
             <span class="ov-v mono">{{ schedulerLabel }}</span>
           </button>
         </div>
+        <AuditStatusPanel :project="project" />
         <ContestTimingPanel :timing="contestDashboard?.timing || {}" />
         <DiagnosticsCard
           v-if="diagnostics && diagnostics.status && diagnostics.status.reason_code"
@@ -275,6 +276,7 @@ import { stepByIndex, stepConfigKey } from '../lib/steps.js'
 import { buildWorkspaceActions, workspaceTabs } from '../lib/workspaceUi.js'
 import { useToasts } from '../composables/useToasts.js'
 import { useModels } from '../composables/useModels.js'
+import AuditStatusPanel from './AuditStatusPanel.vue'
 import { statusLabel as mapStatusLabel } from '../lib/status.js'
 import { useProjectCloudConfig } from '../composables/useProjectCloudConfig.js'
 import { useProjectDiagnostics } from '../composables/useProjectDiagnostics.js'
@@ -317,7 +319,7 @@ const OptionalWorkspaceExtensionPanel = optionalWorkspaceExtensionLoader
 
 export default {
   name: 'ProjectWorkspace',
-  components: { Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel, OptionalWorkspaceExtensionPanel },
+  components: { AuditStatusPanel, Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel, OptionalWorkspaceExtensionPanel },
   props: {
     project: { type: Object, required: true },
     isAdmin: { type: Boolean, default: false },

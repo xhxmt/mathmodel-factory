@@ -409,6 +409,11 @@ def _validate_grounding_payloads(
             ) from exc
 
         chunks_by_path, chunks = _active_chunks(files)
+        try:
+            from scripts.packet_evidence import PacketEvidence
+        except ModuleNotFoundError:  # direct script execution
+            from packet_evidence import PacketEvidence
+        PacketEvidence(files)  # Validate aliases without inventing context chunks.
         sections = _context_sections(context_text, chunks_by_path)
         if role_output_bytes is None:
             if role_output_loader is None:

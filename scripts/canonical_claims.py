@@ -111,7 +111,7 @@ def verify(project, base=None):
             registry = load_declared_registry(project)
             if registry:
                 for claim in registry["claims"]:
-                    if claim["kind"] == "numeric" or any("field" in a for a in claim["artifacts"]):
+                    if claim.get("required", True) and (claim["kind"] == "numeric" or any("field" in a for a in claim["artifacts"])):
                         return ["CANONICAL_CLAIM_VERSION_MISSING: " + claim["id"]]
         except (OSError, ValueError, TypeError) as exc:
             return ["canonical claim registry invalid: " + str(exc)]
@@ -136,39 +136,64 @@ def verify(project, base=None):
         registry = load_declared_registry(project)
         if registry:
             for declared in registry["claims"]:
+                if not declared.get("required", True):
+                    continue
                 locators = []
+                numeric = declared["kind"] == "numeric"
                 for artifact in declared["artifacts"]:
-                    if "field" in artifact:
-                        locator = artifact["path"] + "::" + artifact["field"]
-                        try:
-                            source_record(project, locator)
-                            locators.append(locator)
-                        except (ValueError, TypeError):
-                            if declared["kind"] == "numeric":
-                                raise
-                if locators:
+                    if "field" not in artifact:
+                        if numeric and artifact["path"].endswith(".json"):
+                            errors.append(f"{declared['id']}: NUMERIC_CLAIM_LOCATOR_MISSING ({artifact['path']})")
+                        continue
+                    locator = artifact["path"] + "::" + artifact["field"]
+                    try:
+                        source_record(project, locator)
+                        locators.append(locator)
+                    except (OSError, KeyError, IndexError, ValueError, TypeError) as exc:
+                        if numeric:
+                            errors.append(f"{declared['id']}: NUMERIC_CLAIM_LOCATOR_INVALID ({locator}): {exc}")
+                if numeric and not locators:
+                    errors.append(f"{declared['id']}: NUMERIC_CLAIM_LOCATOR_MISSING")
+                if numeric or locators:
                     binding = ledger["claims"].get(declared["id"])
                     if binding is None or set(locators) != {c["locator"] for c in binding["candidates"]}:
                         errors.append(f"{declared['id']}: numeric claim candidates are not completely version-bound")
-        source_files = {c["locator"].split("::", 1)[0] for claim in ledger["claims"].values()
-                        for c in claim["candidates"]}
-        for result in (project / "results").rglob("*.json"):
-            if result.relative_to(project).as_posix() in source_files or "canonical_claim_versions" in result.parts:
+        # Every explicit key result has its own field identity. An accepted
+        # source may bind its own exact field through the external ledger;
+        # embedding that ledger version in the source would be self-referential.
+        # Derived fields instead name an accepted claim/source and its version.
+        for result in sorted((project / "results").rglob("*.json")):
+            if "canonical_claim_versions" in result.parts:
                 continue
             value = json.loads(result.read_text())
-            if not isinstance(value, dict):
+            if not isinstance(value, dict) or "key_results" not in value:
                 continue
-            for item in value.get("key_results", []):
-                if not isinstance(item, dict) or "value" not in item:
-                    raise ValueError("invalid derived key result")
-                binding = ledger["claims"].get(item.get("claim_id"))
-                if binding is None:
-                    matches = [c for c in ledger["claims"].values()
-                               if c["accepted"]["locator"] == item.get("canonical_source")]
+            if not isinstance(value["key_results"], list):
+                raise ValueError("key_results must be an array")
+            relative = result.relative_to(project).as_posix()
+            for index, item in enumerate(value["key_results"]):
+                locator = f"{relative}::key_results[{index}].value"
+                if (not isinstance(item, dict) or type(item.get("value")) not in (int, float)
+                        or not math.isfinite(item["value"])):
+                    errors.append("INVALID_KEY_RESULT: " + locator)
+                    continue
+                binding = None
+                if "claim_id" in item:
+                    binding = ledger["claims"].get(item["claim_id"])
+                else:
+                    source = item.get("canonical_source", locator)
+                    matches = [c for c in ledger["claims"].values() if c["accepted"]["locator"] == source]
                     binding = matches[0] if len(matches) == 1 else None
-                if (binding is None or item["value"] != binding["accepted"]["value"]
-                        or item.get("canonical_version") != binding["version"]):
-                    errors.append("UNBOUND_DERIVED_KEY_RESULT: " + result.relative_to(project).as_posix())
+                valid = binding is not None
+                if binding is not None:
+                    accepted = binding["accepted"]
+                    direct_source = locator == accepted["locator"]
+                    valid = (item["value"] == accepted["value"]
+                             and ("canonical_source" not in item or item["canonical_source"] == accepted["locator"])
+                             and ((direct_source and "canonical_version" not in item)
+                                  or item.get("canonical_version") == binding["version"]))
+                if not valid:
+                    errors.append("UNBOUND_DERIVED_KEY_RESULT: " + locator)
         if (project / DERIVED).read_text() != render(ledger):
             errors.append("CANONICAL_DERIVED_VALUES_STALE")
         from factory_core.paper_sources import discover_paper_dependencies
@@ -177,6 +202,9 @@ def verify(project, base=None):
                             if p.suffix == ".tex" and p != project / DERIVED)
         numbers = [float(n) for n in re.findall(r"(?<![A-Za-z0-9_])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", content)]
         for claim_id, claim in ledger["claims"].items():
+            if (claim["accepted"] not in claim["candidates"]
+                    or len({c["locator"] for c in claim["candidates"]}) != len(claim["candidates"])):
+                errors.append(f"{claim_id}: accepted source or candidate identity set is invalid")
             unsigned = {k: v for k, v in claim.items() if k != "version"}
             if canonical_hash(unsigned) != claim["version"]:
                 errors.append(f"{claim_id}: canonical version hash mismatch")

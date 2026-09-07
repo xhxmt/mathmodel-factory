@@ -99,6 +99,8 @@ class SQLiteStateStore:
 
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
+        if connection.in_transaction:
+            raise RuntimeError("schema initialization cannot run inside a business transaction")
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS schema_info (
@@ -385,6 +387,8 @@ class SQLiteStateStore:
             raise RuntimeError(f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}")
 
     def _upgrade_schema(self, connection: sqlite3.Connection) -> None:
+        if connection.in_transaction:
+            raise RuntimeError("schema migration must precede the business transaction")
         try:
             row = connection.execute(
                 "SELECT schema_version FROM schema_info WHERE singleton = 1"
@@ -1226,31 +1230,7 @@ class SQLiteStateStore:
         }
 
     def verify_aggregate_domain_root(self) -> bool:
-        events = self.events()
-        expected = None
-        expected_effects: dict[str, str] | None = None
-        for event in reversed(events):
-            envelope = event.payload.get(ENVELOPE_KEY)
-            if isinstance(envelope, dict) and envelope.get("aggregate_root_hash_after"):
-                expected = str(envelope["aggregate_root_hash_after"])
-                raw_effects = envelope.get("effect_hashes_after")
-                if isinstance(raw_effects, dict):
-                    expected_effects = {
-                        str(key): str(value) for key, value in raw_effects.items()
-                    }
-                break
-        if expected is None:
-            return True
-        current = self.aggregate_domain_root()
-        current_effects = current["effect_hashes"]
-        if expected_effects is not None and set(expected_effects) != set(current_effects):
-            # Schema-v8 events created before policy/config entered the aggregate
-            # root remain verifiable for every domain they originally covered.
-            return all(
-                current_effects.get(key) == value
-                for key, value in expected_effects.items()
-            )
-        return current["aggregate_root_hash"] == expected
+        return bool(self.status_snapshot()["aggregate_valid"])
 
     def initialize(
         self,
@@ -1439,6 +1419,38 @@ class SQLiteStateStore:
 
     def now_epoch(self) -> int:
         return int(self._clock())
+
+    def status_snapshot(self) -> dict[str, Any]:
+        """Read state, events, policy and domain hashes in one SQLite snapshot."""
+        if not self.exists:
+            raise StateNotInitialized(f"workflow state does not exist: {self.path}")
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            self._validate_schema(connection)
+            connection.commit()  # migration completes before the read transaction
+            connection.execute("BEGIN")
+            row = connection.execute("SELECT * FROM project_state WHERE singleton = 1").fetchone()
+            if row is None:
+                raise StateNotInitialized(f"workflow state is not initialized: {self.path}")
+            state = self._state_from_row(row)
+            events = [WorkflowEvent(
+                revision=r["revision"], type=r["type"], created_at=r["created_at"],
+                step=r["step"], attempt=r["attempt"], payload=json.loads(r["payload_json"]),
+            ) for r in connection.execute("SELECT * FROM events ORDER BY revision")]
+            policy = connection.execute("SELECT * FROM contest_policy WHERE singleton = 1").fetchone()
+            effects = self._domain_effect_hashes(connection)
+        expected = next((e.payload[ENVELOPE_KEY] for e in reversed(events)
+                         if isinstance(e.payload.get(ENVELOPE_KEY), dict)
+                         and e.payload[ENVELOPE_KEY].get("aggregate_root_hash_after")), None)
+        valid = True
+        if expected is not None:
+            prior = expected.get("effect_hashes_after")
+            valid = (all(effects.get(k) == v for k, v in prior.items())
+                     if isinstance(prior, dict) and set(prior) != set(effects)
+                     else canonical_hash(effects) == expected["aggregate_root_hash_after"])
+        return {"state": state, "events": events,
+                "contest_policy": dict(policy) if policy is not None else None,
+                "aggregate_valid": valid, "now_epoch": self.now_epoch()}
 
     def contest_policy(self) -> dict[str, Any] | None:
         if not self.path.is_file():

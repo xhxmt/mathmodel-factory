@@ -506,7 +506,8 @@ class FakeCommandRunner:
         if script.endswith("build_objective_evidence.py"):
             output = project / "judge_packets/objective_evidence.json"
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text("{}\n", encoding="utf-8")
+            output.write_text(json.dumps({"schema_version": "objective-evidence-v1",
+                "bundle_sha256": "a" * 64, "input_fingerprint": "b" * 64}), encoding="utf-8")
         elif script.endswith("judge_packet.py"):
             for role in ("math", "execution", "paper"):
                 packet = project / "judge_packets" / role

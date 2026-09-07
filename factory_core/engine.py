@@ -114,6 +114,7 @@ class FactoryEngine:
             WorkflowStatus.FAILED,
         }:
             return state
+
         # An already exhausted step schedule must not write RUN_STARTED before
         # the production-state completion boundary is classified.  This path
         # is also used by service.run() for a migrated Step-16 project.
@@ -124,6 +125,7 @@ class FactoryEngine:
             and self.registry.next_after(state.last_completed_step) is None
         ):
             return self._commit_project_completed(state, stage_mode=False)
+
         if state.runner_pid is not None and not runner_is_live:
             state = self._transition(
                 expected_revision=state.revision,
@@ -203,8 +205,8 @@ class FactoryEngine:
                     },
                     payload={"reason": "max_steps"},
                 )
-            attempt, repair_revision = (state.attempt + 1 if state.active_step == definition.id else 1), None
-            if stage_mode and state.attempt >= definition.max_attempts and (repair_revision := self._repair_revision(state)) is None:
+            attempt = state.attempt + 1 if state.active_step == definition.id else 1
+            if stage_mode and state.attempt >= definition.max_attempts:
                 assert stage_task is not None
                 return self._fail_stage_task(
                     state,
@@ -307,8 +309,6 @@ class FactoryEngine:
                         "reason": prepared.reason,
                     },
                 )
-            if repair_revision is not None and self._repair_revision(state) != repair_revision:
-                return self._repair_input_drift(state, lease, stage_task, repair_revision)
             state = self._owned_transition(
                 state,
                 lease,
@@ -320,7 +320,7 @@ class FactoryEngine:
                     "heartbeat_at": int(time.time()),
                 },
                 payload={
-                    "step_name": definition.name, **self._repair_attempt_payload(repair_revision),
+                    "step_name": definition.name,
                     "configured_timeout_seconds": definition.timeout_seconds,
                     "effective_timeout_seconds": timeout_seconds,
                     **(
@@ -1707,28 +1707,6 @@ class FactoryEngine:
             event_type="RESUMED",
             changes=changes,
         )
-
-    def authorize_repair_retry(self, *, expected_revision: int, reason: str) -> WorkflowState:
-        from .repair_recovery import authorize
-        return authorize(self, expected_revision=expected_revision, reason=reason)
-
-    # Keep additive recovery hooks below the frozen M0.3 source-span anchors.
-    def _repair_revision(self, state):
-        from .repair_recovery import usable
-        return usable(self, state)
-
-    def _repair_input_drift(self, state, lease, stage_task, revision):
-        return self._fail_stage_task(
-            state, lease, stage_task, event_type="STEP_FAILED",
-            payload={"error_class": "PERMANENT_REPAIR_INPUT_DRIFT",
-                     "repair_authorization_revision": revision},
-        )
-
-    def _repair_attempt_payload(self, revision):
-        from .repair_recovery import implementation_version
-        return {"repair_authorization_revision": revision,
-                "implementation_version": implementation_version(),
-                "input_fingerprint": manifest_fingerprint(capture_artifact_manifest(self.project_dir))}
 
     def _stop_at_gate2(self, state, lease, result, validation):
         from .technical_continuation import stop_at_gate2

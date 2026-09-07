@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -592,8 +593,11 @@ class JudgeStep:
     ) -> None:
         outputs = project / "judge_outputs"
         outputs.mkdir(parents=True, exist_ok=True)
+        from ..judge_batch import precheck_input_fingerprint
         payload = {
-            "schema_version": "judge-precheck-v1",
+            "schema_version": "judge-precheck-v2",
+            "audit_binding": metadata.get("audit_binding"),
+            "input_fingerprint": precheck_input_fingerprint(project),
             "review_mode": "math_only",
             "verdict": verdict,
             "source_role": "math",
@@ -1188,6 +1192,13 @@ class JudgeStep:
         if metadata_path.is_file():
             prior = json.loads(metadata_path.read_text())
             binding = prior.get("audit_binding")
+            if binding:
+                archive = f"judge_outputs/batches/{binding.get('batch_id')}/{binding.get('call_id')}"
+                if binding.get("archive") != archive or not (project / archive).resolve().is_relative_to(project.resolve()):
+                    raise judge_batch.JudgeBatchError("invalid call archive identity")
+                prior_request = json.loads((project / archive / "request.json").read_text())
+                expected = judge_batch.descriptor(project, self.factory_root, context.step_id,
+                    role, prompt, prompt_format=prior_request.get("prompt_format", "raw"))
             if binding and binding.get("batch_id") == judge_batch.digest(expected):
                 response, frozen_metadata = judge_batch.verify(project, binding, expected)
                 mutable = {"audit_binding", "configuration_group", "configuration_group_schema"}
@@ -1199,8 +1210,23 @@ class JudgeStep:
                 return ExecutionResult.succeeded(role=role, reused=True,
                     execution_step_id=context.step_id, template_step_id=13,
                     call_id=binding["call_id"], audit_binding=binding)
-        binding = judge_batch.begin(project, expected)
+        # Freeze the raw input first for custom dispatchers. Process backends
+        # bind their exact transport input immediately before launch; fallbacks
+        # get separate uncommitted calls until one succeeds.
+        expected = judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt)
+        binding = judge_batch.begin(project, expected, template_prompt=prompt, prompt=prompt)
         snapshot.write_text(prompt, encoding="utf-8")
+
+        def freeze_input(effective, prompt_format):
+            nonlocal expected, binding
+            prepared = judge_batch.descriptor(project, self.factory_root, context.step_id,
+                role, prompt, prompt_format=prompt_format)
+            if hashlib.sha256(effective.encode("utf-8")).hexdigest() != prepared["prompt_sha256"]:
+                raise judge_batch.JudgeBatchError("transport input differs from frozen descriptor")
+            if prepared != expected:
+                expected = prepared
+                binding = judge_batch.begin(project, expected, template_prompt=prompt, prompt=effective)
+            snapshot.write_text(effective, encoding="utf-8")
         scratch_root = Path(os.environ.get("TMPDIR", str(project / "tmp"))).resolve()
         scratch_root.mkdir(parents=True, exist_ok=True)
         response_root = Path(tempfile.mkdtemp(prefix=f"paper-factory-{role}-", dir=scratch_root))
@@ -1230,6 +1256,7 @@ class JudgeStep:
                 isolated=True,
                 final_response_file=final_response,
                 deadline_epoch=context.deadline_epoch,
+                input_observer=freeze_input,
             ),
             step_key=context.step_id,
             defaults=self.contract.default_models,
@@ -1281,7 +1308,8 @@ class JudgeStep:
             )
         # Freeze only after the actual annotation succeeded and every input is
         # still identical. A failed/partial call leaves an uncommitted archive.
-        if judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt) != expected:
+        if judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt,
+                                  prompt_format=expected["prompt_format"]) != expected:
             raise judge_batch.JudgeBatchError("evaluator or input changed during call")
         sealed = judge_batch.commit(project, binding, expected, exit_code=result.returncode,
             prompt_path=snapshot, response_path=output, metadata_path=metadata_path)

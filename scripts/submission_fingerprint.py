@@ -166,6 +166,8 @@ def evaluator_contract_payload(
         "scripts/shadow_cutover.py",
         "scripts/llm_judge_call.py",
         "scripts/api_agent_run.py",
+        "scripts/packet_evidence.py",
+        "scripts/solver_evidence_selection.py",
         "scripts/run_codex_tui_judge.py",
         "scripts/model_dispatch_config.py",
     )

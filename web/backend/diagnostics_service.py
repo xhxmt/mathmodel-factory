@@ -121,9 +121,10 @@ def build_project_diagnostics(
     store = SQLiteStateStore(project)
     if store.exists:
         try:
-            native_state = store.load()
+            native_snapshot = store.status_snapshot()
+            native_state = native_snapshot["state"]
             if native_state.control_mode == "engine":
-                native_events = store.events()
+                native_events = native_snapshot["events"]
                 if any(
                     isinstance(event.payload.get(ENVELOPE_KEY), dict)
                     for event in native_events
@@ -134,7 +135,7 @@ def build_project_diagnostics(
                             raise ReplayIntegrityError(
                                 "replayed state differs from authoritative state"
                             )
-                        if not store.verify_aggregate_domain_root():
+                        if not native_snapshot["aggregate_valid"]:
                             raise ReplayIntegrityError(
                                 "workflow domain tables differ from the recorded aggregate root"
                             )
@@ -172,6 +173,8 @@ def build_project_diagnostics(
                             "orphaned_artifacts": [],
                         }
                 projected = project_runtime_diagnostics(native_events, native_state)
+                from factory_core.projections import authoritative_status
+                projected["status"].update(authoritative_status(project, native_snapshot))
                 receipt_mismatches = []
                 for decision in store.decision_history():
                     verification = decision.get("receipt_verification") or {}

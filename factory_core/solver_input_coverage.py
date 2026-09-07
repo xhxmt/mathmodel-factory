@@ -14,6 +14,7 @@ from scripts.solver_job_receipt import (
     SUBMISSION_SCHEMA,
     file_sha256,
     read_receipt,
+    initial_input_records,
 )
 
 SOLVER_INPUT_EXCLUSION_SCHEMA = "factory-solver-input-exclusion-v1"
@@ -503,9 +504,23 @@ def solver_declared_input_coverage(project_dir: str | Path) -> SolverInputCovera
             latest_current_job_by_script,
         ):
             continue
-        inputs = receipt.get("inputs")
+        inputs = initial_input_records(receipt)
         if not isinstance(inputs, list):
             raise ValueError(f"solver submission receipt inputs are invalid: {relative_receipt}")
+        completed = completed_jobs.get(str(receipt.get("job_id") or ""))
+        if receipt.get("dependency_enforcement") == "python-audit-open-v2" and completed is not None:
+            completion = read_receipt(completed.completion_path, COMPLETION_SCHEMA)
+            closures = [r for r in completion.get("result_artifacts", [])
+                        if r.get("name") == "input_closure" and r.get("local")]
+            if len(closures) != 1:
+                raise ValueError("completed Python job has no unique input closure")
+            record = closures[0]
+            closure_path = _regular_project_file(project, record["path"], label="solver input closure")
+            if closure_path.stat().st_size != record["size"] or file_sha256(closure_path) != record["sha256"]:
+                raise ValueError("completed Python input closure changed")
+            evidence[record["path"]] = closure_path
+            evidence[relative_receipt] = safe_receipt
+            evidence[completed.completion_path.relative_to(project).as_posix()] = completed.completion_path
         matched_records: list[tuple[dict[str, Any], Path]] = []
         for index, record in enumerate(inputs):
             if not isinstance(record, dict):

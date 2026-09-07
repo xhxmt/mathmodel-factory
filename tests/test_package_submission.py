@@ -127,7 +127,7 @@ def test_shared_registry_drives_submission_members_and_owner_metadata(tmp_path):
     members = {item["archive_path"]: item for item in manifest["members"]}
 
     assert manifest["schema_version"] == "submission-bundle-manifest-v2"
-    assert manifest["artifact_ownership_schema"] == "factory-native-artifact-ownership-v2"
+    assert manifest["artifact_ownership_schema"] == "factory-native-artifact-ownership-v3"
     assert members["entry_gate.md"]["owner_stage"] == 6
     assert members["data/final/adopted.csv"]["owner_stage"] == 4
     assert members["results/values.json"]["owner_stage"] == 4

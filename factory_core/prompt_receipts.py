@@ -2,7 +2,8 @@ from __future__ import annotations
 
 
 def ensure_prompt_receipt_schema(connection) -> None:
-    connection.executescript(
+    # Never implicitly commit a migration or an enclosing state transition.
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS prompt_attempt_inputs (
             receipt_id TEXT PRIMARY KEY,
@@ -21,12 +22,20 @@ def ensure_prompt_receipt_schema(connection) -> None:
             prompt_template_sha256 TEXT NOT NULL,
             model_config_sha256 TEXT NOT NULL,
             receipt_json TEXT NOT NULL
-        );
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TRIGGER IF NOT EXISTS prompt_attempt_inputs_append_only_update
         BEFORE UPDATE ON prompt_attempt_inputs
         BEGIN
             SELECT RAISE(ABORT, 'prompt attempt inputs are append-only');
         END;
+        """
+    )
+    connection.execute(
+        """
         CREATE TRIGGER IF NOT EXISTS prompt_attempt_inputs_append_only_delete
         BEFORE DELETE ON prompt_attempt_inputs
         BEGIN

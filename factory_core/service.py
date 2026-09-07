@@ -83,9 +83,10 @@ class WorkerHandle:
 class WorkerLauncher:
     """Launch the single engine worker entry point in its own process group."""
 
-    def __init__(self, factory_root: Path, code_root: Path | None = None) -> None:
+    def __init__(self, factory_root: Path, code_root: Path | None = None, *, ready_timeout: float = 30) -> None:
         self.factory_root = factory_root.resolve()
         self.code_root = (code_root or factory_root).resolve()
+        self.ready_timeout = ready_timeout
 
     def spawn(
         self, project: Path, *, expected_revision: int | None = None
@@ -142,13 +143,36 @@ class WorkerLauncher:
                 payload={"worker_pid": process.pid, "log": str(log_path.relative_to(project))},
             )
             ready.write_text(str(process.pid) + "\n", encoding="ascii")
-        except Exception:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except (PermissionError, ProcessLookupError):
-                pass
+            acknowledged = ready.with_suffix(".ack")
+            deadline = time.monotonic() + self.ready_timeout
+            while not acknowledged.is_file():
+                if process.poll() is not None:
+                    raise RuntimeError(f"worker exited before initialization (exit {process.returncode})")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("worker initialization timed out")
+                time.sleep(0.02)
+            if acknowledged.read_text().strip() != str(process.pid):
+                raise RuntimeError("worker readiness identity mismatch")
+            acknowledged.unlink()
+        except BaseException as exc:
+            from .adapters.infrastructure.process import ProcessSupervisor, _process_identity
+            descendants = {}
+            ProcessSupervisor._terminate_tree(process, descendants, 0.5)
+            exited = (_process_identity(process.pid) is None and
+                      all(_process_identity(pid) != token for pid, token in descendants.items()))
+            current = store.load()
+            if current.runner_pid == process.pid:
+                _workflow_coordinator(store).transition(
+                    expected_revision=current.revision, event_type="WORKER_START_FAILED",
+                    changes={"status": WorkflowStatus.FAILED if exited else WorkflowStatus.INTERRUPTED,
+                             "runner_pid": None, "runner_lease_id": None, "heartbeat_at": None},
+                    payload={"error_class": "WORKER_INITIALIZATION_FAILED" if exited else "WORKER_EXIT_UNVERIFIED",
+                             "exception_type": type(exc).__name__, "exit_code": process.poll(),
+                             "process_tree_exited": exited},
+                )
+            ready.unlink(missing_ok=True)
             raise
-        return WorkerHandle(process.pid, log_path, updated)
+        return WorkerHandle(process.pid, log_path, store.load())
 
 
 class FactoryService:
@@ -276,27 +300,7 @@ class FactoryService:
     def status(self, project: str | Path) -> dict[str, Any]:
         resolved = self.resolve_project(project)
         store = SQLiteStateStore(resolved)
-        state = store.load()
-        write_compatibility_projections(resolved, state)
-        state = store.load()
-        payload = runtime_payload(
-            state,
-            contest_policy=store.contest_policy(),
-            now_epoch=store.now_epoch(),
-        )
-        events = [event for event in store.events() if event.revision <= state.revision]
-        projected = project_runtime_diagnostics(events, state)["status"]
-        for key in (
-            "current_action",
-            "reason_code",
-            "reason_summary",
-            "suggested_actions",
-            "evidence",
-        ):
-            payload[key] = projected[key]
-        from .projections import audit_status_fields
-        payload.update(audit_status_fields(resolved, state, events))
-        return payload
+        return write_compatibility_projections(resolved, store.load())
 
     def start(
         self,
@@ -371,8 +375,12 @@ class FactoryService:
         *,
         max_steps: int | None = None,
         archive: bool = False,
+        ready_file: Path | None = None,
     ) -> WorkflowState:
         engine = self.engine(project)
+        if ready_file is not None:
+            from .projections import _atomic_text
+            _atomic_text(ready_file.with_suffix(".ack"), str(os.getpid()) + "\n")
         state = engine.run(max_steps=max_steps)
         if state.status is WorkflowStatus.COMPLETED:
             self._write_delivery_manifest(engine.project_dir)
@@ -385,7 +393,7 @@ class FactoryService:
         state = engine.get_state()
         revision = state.revision if expected_revision is None else expected_revision
         updated = engine.pause(expected_revision=revision)
-        self._terminate_runner(state.runner_pid)
+        self._verify_runner_stop(engine.project_dir, state.runner_pid)
         return updated
 
     def resume(
@@ -421,7 +429,7 @@ class FactoryService:
         state = engine.get_state()
         revision = state.revision if expected_revision is None else expected_revision
         updated = engine.kill(expected_revision=revision)
-        self._terminate_runner(state.runner_pid)
+        self._verify_runner_stop(engine.project_dir, state.runner_pid)
         return updated
 
     @staticmethod
@@ -950,7 +958,7 @@ class FactoryService:
                 argv=args,
                 max_time_seconds=max_time_seconds,
                 requested_at=int(created_job["requested_at"]),
-                dependency_enforcement=("python-audit-open-v1"
+                dependency_enforcement=("python-audit-open-v2"
                     if backend_name == "local" and runtime == "python" else "DECLARATION_ONLY"),
                 input_paths=input_paths,
                 output_paths=output_paths,
@@ -1001,6 +1009,7 @@ class FactoryService:
                 for value in output_paths
             ),
             seeds=tuple(str(seed) for seed in seeds),
+            submission_receipt=submitted_path,
         )
         try:
             submission = backend.submit(request)
@@ -1084,8 +1093,8 @@ class FactoryService:
             "seeds": [str(seed) for seed in seeds],
         }
         if backend == "local" and runtime == "python":
-            body["schema"] = "factory-solver-idempotency-v2"
-            body["dependency_enforcement"] = "python-audit-open-v1"
+            body["schema"] = "factory-solver-idempotency-v3"
+            body["dependency_enforcement"] = "python-audit-open-v2"
         return canonical_hash(body)
 
     def solver_status(self, project: str | Path, job_id: str) -> dict[str, Any]:
@@ -1405,17 +1414,44 @@ class FactoryService:
         except (PermissionError, ProcessLookupError):
             return False
 
+    def _verify_runner_stop(self, project: Path, pid: int | None) -> None:
+        try:
+            self._terminate_runner(pid)
+        except (OSError, RuntimeError) as exc:
+            store = SQLiteStateStore(project)
+            state = store.load()
+            _workflow_coordinator(store).transition(
+                expected_revision=state.revision, event_type="RUNNER_EXIT_UNVERIFIED",
+                changes={"status": WorkflowStatus.INTERRUPTED},
+                payload={"error_class": "RUNNER_EXIT_UNVERIFIED", "worker_pid": pid,
+                         "exception_type": type(exc).__name__, "process_tree_exited": False},
+            )
+            raise
+
     @staticmethod
     def _terminate_runner(pid: int | None) -> None:
         if not pid or pid == os.getpid():
             return
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except (PermissionError, ProcessLookupError):
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except (PermissionError, ProcessLookupError):
-                pass
+        from .adapters.infrastructure.process import _descendants, _process_identity
+        identity = _process_identity(pid)
+        if identity is None:
+            return
+        owned = {pid: identity, **_descendants(pid)}
+        for sig, grace in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 1.0)):
+            for child, token in list(owned.items()):
+                if _process_identity(child) != token:
+                    continue
+                owned.update(_descendants(child))
+                try:
+                    os.kill(child, sig)
+                except ProcessLookupError:
+                    pass
+            deadline = time.monotonic() + grace
+            while time.monotonic() < deadline:
+                if all(_process_identity(child) != token for child, token in owned.items()):
+                    return
+                time.sleep(0.02)
+        raise RuntimeError("runner exit not verified for all observed processes")
 
 
 def wait_for_worker_ready(path: Path, *, timeout_seconds: float = 30.0) -> None:

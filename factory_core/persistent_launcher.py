@@ -16,10 +16,21 @@ from .projections import _atomic_text
 
 
 def status(root):
+    root = Path(root)
     path = root / "status.json"
     value = json.loads(path.read_text()) if path.is_file() else {"status": "NOT_STARTED"}
-    if value.get("status") == "RUNNING" and _process_identity(value["monitor_pid"]) != value["monitor_identity"]:
-        value = {**value, "status": "INTERRUPTED", "process_tree_exited": False}
+    if value.get("status") in {"STARTING", "RUNNING"}:
+        owner = value
+        monitor_path = root / "monitor.json"
+        if monitor_path.is_file():
+            owner = json.loads(monitor_path.read_text())
+        pid = owner.get("monitor_pid", value.get("parent_pid"))
+        identity = owner.get("monitor_identity", value.get("parent_identity"))
+        if pid is None or identity is None or _process_identity(pid) != identity:
+            value = {**value, "status": "INTERRUPTED", "process_tree_exited": False,
+                     "error_class": "MONITOR_EXIT_UNVERIFIED"}
+        else:
+            value = {**value, **{k: owner[k] for k in ("monitor_pid", "monitor_identity") if k in owner}}
     return value
 
 
@@ -28,6 +39,7 @@ def start(root, cwd, command, *, key, timeout=3600, ready_timeout=10):
     root.mkdir(parents=True, exist_ok=True)
     request = {"cwd": str(cwd), "command": list(command), "key": key, "timeout": timeout}
     lock = (root / "writer.lock").open("a")
+    created_request = False
     try:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -41,7 +53,7 @@ def start(root, cwd, command, *, key, timeout=3600, ready_timeout=10):
             deadline = time.monotonic() + ready_timeout
             while time.monotonic() < deadline:
                 current = status(root)
-                if current.get("status") in {"RUNNING", "EXITED"}:
+                if current.get("status") in {"RUNNING", "EXITED", "FAILED", "INTERRUPTED"}:
                     return current
                 time.sleep(0.02)
             raise TimeoutError("existing launcher did not produce a ready receipt")
@@ -50,17 +62,29 @@ def start(root, cwd, command, *, key, timeout=3600, ready_timeout=10):
                 raise ValueError("launcher root is immutable; use a new root for a new request")
             return status(root)
         _atomic_text(root / "request.json", json.dumps(request, sort_keys=True))
+        created_request = True
+        _atomic_text(root / "status.json", json.dumps({
+            "status": "STARTING", "ready": False, "key": key,
+            "parent_pid": os.getpid(), "parent_identity": _process_identity(os.getpid()),
+            "process_tree_exited": False}))
         with (root / "monitor.log").open("ab") as log:
-            subprocess.Popen([sys.executable, "-m", "factory_core.persistent_launcher", "monitor",
+            process = subprocess.Popen([sys.executable, "-m", "factory_core.persistent_launcher", "monitor",
                 str(root), "--lock-fd", str(lock.fileno())], cwd=Path(__file__).resolve().parents[1],
                 stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
                 pass_fds=(lock.fileno(),), env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        _atomic_text(root / "monitor.json", json.dumps({"monitor_pid": process.pid,
+                      "monitor_identity": _process_identity(process.pid)}))
+    except BaseException as exc:
+        if created_request and not (root / "monitor.json").is_file():
+            _atomic_text(root / "status.json", json.dumps({"status": "FAILED", "ready": False,
+                "error_class": type(exc).__name__, "process_tree_exited": True}))
+        raise
     finally:
         lock.close()  # inherited descriptor keeps the lock for the monitor lifetime
     deadline = time.monotonic() + ready_timeout
     while time.monotonic() < deadline:
         current = status(root)
-        if current.get("status") in {"RUNNING", "EXITED"}:
+        if current.get("status") in {"RUNNING", "EXITED", "FAILED", "INTERRUPTED"}:
             return current
         time.sleep(0.02)
     raise TimeoutError("launcher readiness timed out; inspect monitor.log before retrying")
@@ -68,8 +92,10 @@ def start(root, cwd, command, *, key, timeout=3600, ready_timeout=10):
 
 def cancel(root, *, wait_seconds=15):
     current = status(root)
-    if current.get("status") != "RUNNING":
+    if current.get("status") not in {"RUNNING", "STARTING"}:
         return current
+    if not current.get("monitor_pid"):
+        raise RuntimeError("launcher initialization has not published a monitor identity")
     if _process_identity(current["monitor_pid"]) == current["monitor_identity"]:
         os.kill(current["monitor_pid"], signal.SIGTERM)
     deadline = time.monotonic() + wait_seconds
@@ -84,25 +110,32 @@ def cancel(root, *, wait_seconds=15):
 
 
 def monitor(root, lock_fd):
-    # Only this dedicated monitor adopts orphans. The shared engine process
-    # does not become a global subreaper for unrelated application children.
-    import ctypes
-    if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
-        raise OSError(ctypes.get_errno(), "cannot enable Linux child subreaper")
-    request = json.loads((root / "request.json").read_text())
+    command_started = False
     started = {"monitor_pid": os.getpid(), "monitor_identity": _process_identity(os.getpid()),
-               "key": request["key"], "status": "RUNNING", "ready": True}
+               "status": "RUNNING", "ready": True}
     def ready(pid):
+        nonlocal command_started
+        command_started = True
         _atomic_text(root / "status.json", json.dumps({**started, "command_pid": pid}))
     try:
+        # Only this dedicated monitor adopts orphans, never the shared engine.
+        import ctypes
+        if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "cannot enable Linux child subreaper")
+        request = json.loads((root / "request.json").read_text())
+        started["key"] = request["key"]
         result = ProcessSupervisor().run(ProcessRequest(argv=request["command"],
             cwd=Path(request["cwd"]), timeout_seconds=request["timeout"],
             stdout_path=root / "stdout.log", stderr_path=root / "stderr.log",
             on_started=ready, poll_seconds=0.05, kill_grace_seconds=0.2, adopt_orphans=True))
         _atomic_text(root / "status.json", json.dumps({**started, "status": "EXITED",
-            "exit_code": result.returncode, "timed_out": result.timed_out,
+            "ready": command_started, "exit_code": result.returncode, "timed_out": result.timed_out,
             "process_tree_exited": result.metadata.get("process_tree_exited", result.pid == 0),
             "stop_requested": result.metadata.get("stop_requested", False)}))
+    except BaseException as exc:
+        _atomic_text(root / "status.json", json.dumps({**started, "status": "FAILED",
+            "ready": command_started, "error_class": type(exc).__name__,
+            "process_tree_exited": not command_started}))
     finally:
         os.close(lock_fd)
 

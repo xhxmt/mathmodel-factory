@@ -81,10 +81,12 @@ def test_packet_manifest_has_stable_hashes_and_context(tmp_path):
     context_path = project / "judge_packets/paper/context.txt"
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == first_manifest
     assert "same paper" in context_path.read_text(encoding="utf-8")
-    assert first_manifest["version"] == 4
+    assert first_manifest["version"] == 5
+    assert first_manifest["alias_contract"] == "judge-packet-alias-v1"
     assert first_manifest["files"][0]["status"] == "included"
     assert first_manifest["status_counts"] == {
         "included": 1,
+        "alias": 0,
         "truncated": 0,
         "omitted": 0,
     }
@@ -338,12 +340,12 @@ def test_execution_packet_reserves_budget_for_registered_question_evidence(tmp_p
     project.mkdir()
     _write(project, "problem/problem_brief.md", "Question 1\nQuestion 2\nQuestion 3\nQuestion 4")
     _write(project, "demo_paper.tex", "P" * 50_000)
-    _write(project, "results/canonical_results.json", "C" * 70_000)
+    _write(project, "results/canonical_results.json", json.dumps({"notes": "C" * 70_000}))
     _write(project, "models/a/02_model.py", "M" * 20_000)
     _write(project, "models/a/03_solve.py", "S" * 30_000)
     _write(project, "solve_log.md", "L" * 17_000)
     for index in range(1, 5):
-        _write(project, f"results/problem{index}/values.json", f"Q{index}" * 20_000)
+        _write(project, f"results/problem{index}/values.json", json.dumps({"notes": f"Q{index}" * 20_000}))
         _write(project, f"results/problem{index}/solver.log", f"solver {index}")
     _write(project, "results/secondary.json", "X" * 200_000)
     registry = {

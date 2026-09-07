@@ -497,11 +497,11 @@ def _packet_completeness(
         files = payload.get("files")
         if not isinstance(files, list):
             raise ValueError("manifest files must be an array")
-        by_path: dict[str, dict[str, Any]] = {}
-        for index, file_item in enumerate(files):
-            if not isinstance(file_item, dict) or not isinstance(file_item.get("path"), str):
-                raise ValueError(f"invalid manifest file at index {index}")
-            by_path[file_item["path"]] = file_item
+        try:
+            from scripts.packet_evidence import PacketEvidence
+        except ModuleNotFoundError:  # direct script execution
+            from packet_evidence import PacketEvidence
+        evidence = PacketEvidence(files)
         requirements = completeness.get("requirements")
         if not isinstance(requirements, list) or not requirements:
             raise ValueError("packet completeness requirements are missing")
@@ -513,9 +513,10 @@ def _packet_completeness(
             if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
                 raise ValueError(f"invalid completeness paths at index {index}")
             actual_satisfied = [
-                path for path in paths if by_path.get(path, {}).get("status") == "included"
+                path for path in paths if evidence.complete(path)
             ]
-            actual_complete = bool(paths) and len(actual_satisfied) == len(paths)
+            actual_complete = (bool(paths) and len(actual_satisfied) == len(paths)
+                               and not requirement.get("binding_error"))
             if requirement.get("satisfied_paths") != actual_satisfied:
                 raise ValueError(f"completeness requirement {requirement['id']} paths conflict")
             if requirement.get("satisfied") is not actual_complete:

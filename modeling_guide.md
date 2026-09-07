@@ -346,7 +346,11 @@ Every solver script (.py / .jl / .m / .R) starts with a header comment:
   NumPy scalars/arrays into actual JSON bool/int/float/list values. Unsupported
   types and non-finite numbers fail with a field path; Python bool is supported.
 - Local native Python jobs enforce their declared project-file reads through
-  `python-audit-open-v1`. Declare indirect attachments and imported project code
+  `python-audit-open-v2` for new local jobs (legacy v1 receipts remain readable).
+  Reading or appending to a preexisting output requires declaring it as an input;
+  the submission preserves its initial bytes and hash separately from the final
+  output. Newly created or truncating-replaced outputs may be read back as this
+  run's generated data. Declare indirect attachments and imported project code
   as inputs. This names Python audited file I/O, not arbitrary native-library
   I/O or an OS sandbox. Other runtime receipts remain declaration-only.
 - Accepted numeric claims use the versioned contract in
@@ -502,3 +506,6 @@ update discipline:
 - Do not skip the sensitivity analysis section even when the model is
   deterministic — at minimum, vary input data within plausible bounds.
 - Do not use emoji or informal voice anywhere in the paper.
+
+Normal-run evidence, numeric field binding and status contracts are documented in
+[docs/operations/NORMAL_RUN_AUDIT_CONTRACT.md](docs/operations/NORMAL_RUN_AUDIT_CONTRACT.md).

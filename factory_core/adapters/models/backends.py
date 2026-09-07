@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import sys
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Callable
 
 from ...domain import ExecutionResult
 from ...deadline import cap_timeout, deadline_scope
@@ -32,6 +34,8 @@ class ModelRequest:
     isolated: bool = False
     final_response_file: Path | None = None
     deadline_epoch: int | None = None
+    input_observer: Callable[[str, str], None] | None = None
+    prompt_format: str = "raw"
 
 
 class _ProcessModelBackend:
@@ -45,6 +49,8 @@ class _ProcessModelBackend:
         with deadline_scope(request.deadline_epoch):
             timeout_seconds = cap_timeout(request.timeout_seconds)
         request = replace(request, timeout_seconds=timeout_seconds)
+        if request.input_observer is not None:
+            request.input_observer(request.prompt, request.prompt_format)
         logs = request.project_dir / "logs"
         stamp = time.strftime("%Y%m%d_%H%M%S")
         log = logs / f"step_{request.step_id}_{label}_{stamp}_{os.getpid()}.log"
@@ -239,6 +245,16 @@ class ApiAgentBackend(_ProcessModelBackend):
             argv.extend(["--effective-prompt-file", effective_prompt_file])
         for context_file in request.context_files:
             argv.extend(["--context-file", context_file])
+        if request.input_observer is not None:
+            from scripts.api_agent_run import build_effective_prompt
+
+            effective, _ = build_effective_prompt(
+                request.project_dir.resolve(), request.prompt,
+                list(request.context_files), output_file,
+            )
+            argv.extend(["--expected-effective-prompt-sha256",
+                         hashlib.sha256(effective.encode("utf-8")).hexdigest()])
+            request = replace(request, prompt=effective, prompt_format="api-inline-v1")
         return self._run(request, argv, "api")
 
 
