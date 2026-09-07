@@ -173,6 +173,8 @@ def test_step14_prompt_does_not_fabricate_gate2_pass():
     assert "Step 13 Gate 2 已经 PASS" not in prompt
     assert "不得假定 Gate 2 PASS" in prompt
     assert "gate2_delivery_override.json" in prompt
+    assert "`gate2_delivery_override.json` 不是技术续跑授权凭据" in prompt
+    assert "GATE2_CONTINUATION_AUTHORIZED" in prompt
 
 
 def test_verify_step_output_rejects_step9_without_step8_5_pass(tmp_path):

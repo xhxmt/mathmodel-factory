@@ -2,6 +2,8 @@
 
 [阶段审计反馈 — 必读]
 
+- `gate2_delivery_override.json` 不是技术续跑授权凭据；不得根据该文件推断 Gate 2 PASS、
+  代替原生 `GATE2_CONTINUATION_AUTHORIZED` 事件，或获得 acceptance/release/delivery 权限。
 - 数字只能读取 `results/canonical_claims.json` 中明确接受的 claim 版本；正文、摘要和表格
   共用 `tables/canonical_claim_values.tex` 的 `\csname FactoryClaim<ID>\endcsname`。
   采信版本缺失或变更时停止修复来源链，不能从其他成功 run 中挑一个数字补进摘要。

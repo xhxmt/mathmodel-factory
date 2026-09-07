@@ -1,4 +1,7 @@
 # Changelog
+- Explicitly identify `gate2_delivery_override.json` as non-authoritative for
+  Step14 technical continuation; only the native authorization event applies,
+  and neither grants Gate2 PASS or acceptance/release/delivery permission.
 - Bind repair input baselines to the exact failed cursor and implementation
   evidence to the same failed attempt; preserve future-owner declarations while
   reporting missing upstream inputs distinctly. Correct the native submission
