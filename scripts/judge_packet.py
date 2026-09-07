@@ -152,6 +152,10 @@ def _execution_priority(project: Path, path: Path) -> tuple[int, str]:
     suffix = path.suffix.lower()
     if relative.endswith("_paper.tex") or relative == "paper/paper.tex":
         priority = 0
+    elif "receipt" in name.lower() and suffix == ".json":
+        priority = 1
+    elif relative.startswith("logs/") and any(word in name.lower() for word in ("stderr", "fail", "error")):
+        priority = 4
     elif relative == "results/canonical_results.json":
         priority = 1
     elif relative.startswith("models/") and path.stem.lower() == "03_solve":
@@ -524,6 +528,7 @@ def _render_context(
     chunks: list[str] = []
     files: list[dict] = []
     used = 0
+    by_content: dict[str, dict] = {}
     critical_for: dict[str, list[str]] = {}
     for requirement in requirements:
         for relative in requirement["paths"]:
@@ -558,6 +563,14 @@ def _render_context(
                 files.append(item)
                 continue
         original = resolved.read_text(encoding="utf-8", errors="replace")
+        canonical = by_content.get(item["sha256"])
+        if canonical is not None:
+            canonical.setdefault("aliases", []).append(relative)
+            item.update(status="alias", alias_of=canonical["path"],
+                        alias_chunk_id=canonical["chunk_id"],
+                        reason="identical_source_content", included_bytes=0)
+            files.append(item)
+            continue
         original_size = len(original.encode("utf-8"))
         header = f"\n----- FILE: {relative} -----\n"
         # A role's primary evidence is all-or-nothing.  It may use the whole
@@ -597,6 +610,7 @@ def _render_context(
                 else "remaining_context_byte_limit"
             )
         files.append(item)
+        by_content[item["sha256"]] = item
     if any(item["status"] == "omitted" for item in files):
         omitted_marker = "\n----- SOME SELECTED FILES OMITTED; SEE PACKET MANIFEST -----\n"
     else:
@@ -613,7 +627,10 @@ def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> d
         item = dict(declared)
         paths = [str(path) for path in item["paths"]]
         satisfied_paths = [
-            path for path in paths if by_path.get(path, {}).get("status") == "included"
+            path for path in paths
+            if (by_path.get(path, {}).get("status") == "included"
+                or (by_path.get(path, {}).get("status") == "alias"
+                    and by_path.get(by_path[path]["alias_of"], {}).get("status") == "included"))
         ]
         item["satisfied_paths"] = satisfied_paths
         item["satisfied"] = bool(paths) and len(satisfied_paths) == len(paths)
@@ -641,6 +658,18 @@ def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> d
         "contract_version": COMPLETENESS_CONTRACT_VERSION,
         "status": "COMPLETE" if complete else "INCOMPLETE",
         "eligible": complete,
+        "meaning": "REQUIRED_ARTIFACTS_ONLY",
+        "overall_coverage": {
+            "selected_paths": len(files),
+            "included_paths": sum(item["status"] == "included" for item in files),
+            "deduplicated_paths": sum(item["status"] == "alias" for item in files),
+            "truncated_paths": sum(item["status"] == "truncated" for item in files),
+            "omitted_paths": sum(item["status"] == "omitted" for item in files),
+            "all_selected_content_complete": all(
+                item["status"] == "included" or (item["status"] == "alias"
+                    and by_path.get(item["alias_of"], {}).get("status") == "included")
+                for item in files),
+        },
         "requirements": evaluated,
         "limitations": limitations,
     }
