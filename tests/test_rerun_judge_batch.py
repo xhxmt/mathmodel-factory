@@ -32,8 +32,11 @@ def fixture(tmp_path):
     dispatcher = Dispatcher()
     step = JudgeStep(next(c for c in STEP_CONTRACTS if c.id == 13), root,
                      PromptRenderer(root), dispatcher, AlwaysValidValidator(), runner)
-    context = StepContext(tmp_path, tmp_path.name, 16, 1, 60, 0)
-    return lambda **kw: step._run_role(context, "math", "judges/math_auditor.txt", **kw), dispatcher
+    def run(*, role="math", step_id=16, **kw):
+        context = StepContext(tmp_path, tmp_path.name, step_id, 1, 60, 0)
+        template = "paper_reviewer" if role == "paper" else role + "_auditor"
+        return step._run_role(context, role, f"judges/{template}.txt", **kw)
+    return run, dispatcher
 
 
 def test_exact_committed_call_reuses_verified_result(tmp_path):
@@ -105,3 +108,35 @@ def test_concurrent_exact_calls_commit_once(tmp_path):
     assert all(result.returncode == 0 for result in results)
     assert dispatcher.calls == 1
     assert len({result.metadata["call_id"] for result in results}) == 1
+
+
+def test_three_native_roles_bind_and_reverify_one_current_batch(tmp_path):
+    from scripts.judgment_receipt import bind_configuration_group, _native_batch_group_errors
+    run, dispatcher = fixture(tmp_path)
+    for role in ("math", "paper", "execution"):
+        assert run(role=role).returncode == 0
+    assert bind_configuration_group(tmp_path)
+    assert _native_batch_group_errors(tmp_path) == []
+    for role in ("math", "paper", "execution"):
+        assert run(role=role).metadata["reused"] is True
+    assert dispatcher.calls == 3
+
+
+@pytest.mark.parametrize("fault", ["step13", "packet", "unbound"])
+def test_three_role_binding_refuses_mixed_execution_or_input_batches(tmp_path, fault):
+    from scripts.judgment_receipt import bind_configuration_group, ReceiptError
+    run, dispatcher = fixture(tmp_path)
+    for role in ("math", "paper", "execution"):
+        assert run(role=role, step_id=13 if fault == "step13" and role == "math" else 16).returncode == 0
+    if fault == "packet":
+        (tmp_path / "judge_packets/math/context.txt").write_text("new packet")
+        assert run(role="math").returncode == 0
+    elif fault == "unbound":
+        path = tmp_path / "judge_outputs/math.md.llm-result.json"
+        metadata = json.loads(path.read_text())
+        metadata.pop("audit_binding")
+        path.write_text(json.dumps(metadata))
+    before = {p: p.read_bytes() for p in (tmp_path / "judge_outputs").glob("*.json")}
+    with pytest.raises(ReceiptError):
+        bind_configuration_group(tmp_path)
+    assert all(p.read_bytes() == data for p, data in before.items())
