@@ -21,6 +21,10 @@ version, live runners, missing baselines and missing upstream claim artifacts
 are rejected. The next normal runner consumes this opportunity through its
 monotonically increasing attempt number. A changed upstream owner can still
 trigger normal semantic invalidation; repair authorization does not disable it.
+The failed input baseline must match the exact current stage/subtask/source
+step, and only that failed attempt's start event attests its implementation.
+Claim checks cover the current owner's stage and earlier dependencies; future
+owner declarations are not mistaken for missing inputs of the repair target.
 
 ## Step13 unsuccessful, then evaluate Steps14–16
 

@@ -1647,7 +1647,11 @@ def test_actual_cli_service_worker_pipeline_then_authenticated_web_read(
         text=True,
         capture_output=True,
         check=False,
-        timeout=45,
+        # The outer harness must allow the already-configured 120 s business
+        # deadline to settle and report its result; it must not kill valid work
+        # at 45 s under a read-only full-suite sandbox. Production limits stay
+        # unchanged, and return-code/evidence assertions below still apply.
+        timeout=settings.deadline_ms / 1000 + 15,
     )
     assert executed.returncode == 0, executed.stderr
     executed_wire = json.loads(executed.stdout)

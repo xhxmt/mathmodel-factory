@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .dirty import capture_artifact_manifest, manifest_fingerprint
 from .domain import InvalidTransition, WorkflowStatus
+from .stages import stage_for_step
 
 
 def implementation_version():
@@ -25,8 +26,14 @@ def authorize(engine, *, expected_revision, reason):
         raise InvalidTransition("explicit repair reason is required")
     current = manifest_fingerprint(capture_artifact_manifest(engine.project_dir))
     baseline = engine.store.stage_cursor_input()
+    if baseline is not None and (
+            baseline.get("stage_id") != state.active_stage
+            or baseline.get("subtask") != state.active_subtask
+            or baseline.get("source_step_id") != state.active_step):
+        raise InvalidTransition("repair input baseline does not bind the current failed cursor")
     prior_start = next((e for e in reversed(engine.store.events())
-                        if e.type == "STEP_STARTED" and e.step == state.active_step), None)
+                        if e.type == "STEP_STARTED" and e.step == state.active_step
+                        and e.attempt == state.attempt), None)
     old_input = baseline.get("input_fingerprint") if baseline else (
         prior_start.payload.get("input_fingerprint") if prior_start else None)
     old_code = prior_start.payload.get("implementation_version") if prior_start else None
@@ -36,7 +43,8 @@ def authorize(engine, *, expected_revision, reason):
     if current == old_input and (old_code is None or old_code == code):
         raise InvalidTransition("unchanged input and implementation cannot renew an exhausted budget")
     from scripts.claim_graph import claim_binding_issues
-    issues = claim_binding_issues(engine.project_dir)
+    issues = claim_binding_issues(engine.project_dir,
+                                 through_stage=stage_for_step(state.active_step).id)
     if issues:
         raise InvalidTransition("REPAIR_UPSTREAM_MISSING: " + str(issues))
     for event in engine.store.events():

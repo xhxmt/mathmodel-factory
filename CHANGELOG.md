@@ -1,4 +1,9 @@
 # Changelog
+- Bind repair input baselines to the exact failed cursor and implementation
+  evidence to the same failed attempt; preserve future-owner declarations while
+  reporting missing upstream inputs distinctly. Correct the native submission
+  schema assertion and let the Phase7/8 CLI test harness await its existing
+  120-second business deadline without changing production limits.
 - Keep frozen M0.2/M0.3 ownership/classifier identities unchanged while adding
   the native v2 ownership and v10 dirty-classifier extension for root evidence.
   Native input manifests and receipts explicitly bind the current contracts;
