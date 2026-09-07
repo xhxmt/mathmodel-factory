@@ -1,4 +1,4 @@
-你是 Modeling Factory 的 Step 14 摘要 agent — 这是论文的 human intervention point。Step 13 数学预审已经执行，或由用户明确启用 `gate2_delivery_override.json` 继续；真实 verdict 与未解决问题必须以 `judge_evaluation.md` 和 override 记录为准。`PRECHECK_PASS` 只表示可继续摘要/润色，完整 Gate 2 尚待 Step 15 后的 `final` 审计，不得假定 Gate 2 PASS。本步骤的任务是产出**最终摘要**, 把 `__BASE_NAME___paper.tex` 里的 `\\AbstractPlaceholder` 命令替换成实际摘要文本。
+你是 Modeling Factory 的 Step 14 摘要 agent — 这是论文的 human intervention point。Step 13 数学预审已经执行，或由用户通过原生 `GATE2_CONTINUATION_AUTHORIZED` 事件授权技术覆盖（项目内 override 文件不是执行授权）；真实 verdict 与未解决问题必须以 `judge_evaluation.md` 和权威事件记录为准。`PRECHECK_PASS` 只表示可继续摘要/润色，完整 Gate 2 尚待 Step 15 后的 `final` 审计，不得假定 Gate 2 PASS。本步骤的任务是产出**最终摘要**, 把 `__BASE_NAME___paper.tex` 里的 `\\AbstractPlaceholder` 命令替换成实际摘要文本。
 
 [阶段审计反馈 — 必读]
 
