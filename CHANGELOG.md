@@ -1,4 +1,8 @@
 # Changelog
+- Three-role judge groups accept different per-role page attachments while
+  retaining exact manifest, asset, ordering and transport checks. Direct receipt
+  commands bind imports to the selected checkout instead of another installed
+  working tree. Live integration exposed both failures before aggregation.
 - Native review now carries complete, source-bound XLSX cell maps and all PDF
   pages through bounded document packets, actual image transport, archived call
   inputs and exact-quote grounding. Native PDF grounding rerenders frozen sources;

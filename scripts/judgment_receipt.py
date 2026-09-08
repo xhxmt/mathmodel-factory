@@ -14,6 +14,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+if __package__ in {None, ""}:  # direct script execution must use this checkout
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 RECEIPT_SCHEMA = "judgment-receipt-v1"
 ROLE_METADATA_SCHEMA = "judge-role-call-v1"
@@ -522,9 +525,12 @@ def _native_batch_group_errors(project: Path) -> list[str]:
                 continue
             verify(project, binding)
             seal = _read_json(_safe_path(project, binding["archive"] + "/committed.json"))
+            # Each role's ordered image list is checked against its current
+            # manifest and sealed transport by verify(). The common inputs
+            # already bind every role's raw documents and image assets.
             shared.append(digest({k: v for k, v in seal["request"].items()
                                   if k not in {"role", "prompt_sha256", "template_prompt_sha256",
-                                               "prompt_format"}}))
+                                               "prompt_format", "image_inputs"}}))
         if any(shared) and (not all(shared) or len(set(shared)) != 1):
             return ["native roles belong to different execution/input/configuration batches"]
     except (ReceiptError, JudgeBatchError, OSError, KeyError, TypeError) as exc:
