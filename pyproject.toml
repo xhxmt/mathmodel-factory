@@ -42,6 +42,7 @@ cloud = [
 dev = [
   "httpx==0.28.1",
   "httpx2==2.9.1",
+  "numpy>=1.26,<3",
   "pytest>=8,<10",
 ]
 
