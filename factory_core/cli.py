@@ -163,7 +163,7 @@ def compat(arguments: list[str]) -> int:
     if state.status is WorkflowStatus.ARCHIVING:
         state = service.archive(project)
     else:
-        state = service.run(project, archive=True, ready_file=Path(args.ready_file))
+        state = service.run(project, archive=True)
     print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
     return 0 if state.status not in {WorkflowStatus.FAILED, WorkflowStatus.KILLED} else 1
 
@@ -413,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "worker":
             assert project is not None
             wait_for_worker_ready(Path(args.ready_file))
-            state = service.run(project, archive=True)
+            state = service.run(project, archive=True, ready_file=Path(args.ready_file))
             print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
             return 0 if state.status not in {WorkflowStatus.FAILED, WorkflowStatus.KILLED} else 1
         if args.command == "run":

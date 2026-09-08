@@ -1,4 +1,12 @@
 # Changelog
+- Follow-up normal-run repairs correct compat/worker readiness argument routing,
+  verify cancellation against the persisted worker identity and lease, and add
+  bounded, lossless NumPy evidence capsules across selection, aliases, coverage
+  and exact-quote grounding. Parquet direct review remains explicitly unsupported.
+- Step13 documentation now names `judge-precheck-v2`, `audit_binding` and
+  `input_fingerprint` without changing workflow gates. Actual user CLI diagnostics
+  and compatibility --status remain a known deferred gap (N03); the earlier
+  shared-status statement applies to service/Web/verified projection consumers.
 - Refreshed the two persisted-owner source-span coordinates after storage changes
   and regenerated their derived identity goldens. Symbol bytes, owner semantics,
   and the frozen classifier remain unchanged; exact comparisons stay enabled.

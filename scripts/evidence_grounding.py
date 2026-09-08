@@ -415,6 +415,16 @@ def _validate_grounding_payloads(
             from packet_evidence import PacketEvidence
         PacketEvidence(files)  # Validate aliases without inventing context chunks.
         sections = _context_sections(context_text, chunks_by_path)
+        try:
+            from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, verify_capsule
+        except ModuleNotFoundError:  # direct script execution
+            from numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, verify_capsule
+        for path, item in chunks_by_path.items():
+            if "binary_review" in item or path.lower().endswith(tuple(NUMPY_SUFFIXES)):
+                try:
+                    verify_capsule(sections[path]["text"], item)
+                except ValueError as exc:
+                    raise GroundingError("BINARY_REVIEW_INVALID", f"{path}: {exc}") from exc
         if role_output_bytes is None:
             if role_output_loader is None:
                 raise GroundingError(

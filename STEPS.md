@@ -296,8 +296,9 @@ then invokes only the isolated math role against `judge_packets/math/`. It
 produces:
 
 - `judge_outputs/math.md` — strict math role envelope;
-- `judge_outputs/precheck.json` — `judge-precheck-v1` metadata declaring
-  `review_mode: math_only` and `delivery_allowed: false`;
+- `judge_outputs/precheck.json` — `judge-precheck-v2` metadata with
+  `audit_binding` and `input_fingerprint`, declaring `review_mode: math_only`
+  and `delivery_allowed: false`;
 - `judge_evaluation.md` with one of:
   - `VERDICT: PRECHECK_PASS` — continue to Step 14, but do not interpret this as
     final Gate-2 PASS;

@@ -142,6 +142,7 @@ class WorkerLauncher:
                     "heartbeat_at": int(time.time()),
                 },
                 payload={"worker_pid": process.pid, "worker_identity": _process_identity(process.pid),
+                         "lease_id": f"launch:{process.pid}",
                          "log": str(log_path.relative_to(project))},
             )
             ready.write_text(str(process.pid) + "\n", encoding="ascii")
@@ -392,10 +393,11 @@ class FactoryService:
 
     def pause(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
         engine = self.engine(project)
-        state = engine.get_state()
+        snapshot = engine.store.status_snapshot()
+        state = snapshot["state"]
         revision = state.revision if expected_revision is None else expected_revision
         updated = engine.pause(expected_revision=revision)
-        self._verify_runner_stop(engine.project_dir, state.runner_pid)
+        self._verify_runner_stop(engine.project_dir, snapshot)
         return updated
 
     def resume(
@@ -428,10 +430,11 @@ class FactoryService:
 
     def kill(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
         engine = self.engine(project)
-        state = engine.get_state()
+        snapshot = engine.store.status_snapshot()
+        state = snapshot["state"]
         revision = state.revision if expected_revision is None else expected_revision
         updated = engine.kill(expected_revision=revision)
-        self._verify_runner_stop(engine.project_dir, state.runner_pid)
+        self._verify_runner_stop(engine.project_dir, snapshot)
         return updated
 
     @staticmethod
@@ -1416,9 +1419,27 @@ class FactoryService:
         except (PermissionError, ProcessLookupError):
             return False
 
-    def _verify_runner_stop(self, project: Path, pid: int | None) -> None:
+    @staticmethod
+    def _recorded_runner_identity(snapshot: dict[str, Any]) -> str | None:
+        state = snapshot["state"]
+        if not snapshot["aggregate_valid"] or not state.runner_lease_id:
+            return None
+        for event in reversed(snapshot["events"]):
+            if event.type not in {"WORKER_LAUNCHED", "RUN_STARTED"}:
+                continue
+            payload = event.payload
+            identity = payload.get("worker_identity")
+            if (payload.get("worker_pid") == state.runner_pid
+                    and payload.get("lease_id") == state.runner_lease_id
+                    and isinstance(identity, str) and identity):
+                return identity
+            return None  # Never fall back to an earlier owner's identity.
+        return None
+
+    def _verify_runner_stop(self, project: Path, snapshot: dict[str, Any]) -> None:
+        pid = snapshot["state"].runner_pid
         try:
-            self._terminate_runner(pid)
+            self._terminate_runner(pid, self._recorded_runner_identity(snapshot))
         except (OSError, RuntimeError) as exc:
             store = SQLiteStateStore(project)
             state = store.load()
@@ -1431,14 +1452,20 @@ class FactoryService:
             raise
 
     @staticmethod
-    def _terminate_runner(pid: int | None) -> None:
-        if not pid or pid == os.getpid():
+    def _terminate_runner(pid: int | None, expected_identity: str | None) -> None:
+        if not pid:
             return
         from .adapters.infrastructure.process import _descendants, _process_identity
+        if not expected_identity:
+            raise RuntimeError("runner ownership has no persisted launch identity and lease")
         identity = _process_identity(pid)
         if identity is None:
             return
-        owned = {pid: identity, **_descendants(pid)}
+        if identity != expected_identity:
+            raise RuntimeError("runner identity differs from the persisted owner")
+        if pid == os.getpid():
+            raise RuntimeError("runner is the current controller; exit cannot be verified here")
+        owned = {pid: expected_identity, **_descendants(pid)}
         for sig, grace in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 1.0)):
             for child, token in list(owned.items()):
                 if _process_identity(child) != token:

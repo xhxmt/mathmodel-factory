@@ -187,6 +187,27 @@ ongoing/<base>/
 └── results/                     ← serialized numerical results (.json/.npz/.parquet)
 ```
 
+Storage format support and automatic judge review are separate contracts.
+Adopted jobs keep every declared input/output and initial snapshot in the
+required evidence chain. Small primitive numeric `.npy`/`.npz` files receive a
+lossless `numpy-review-capsule-v1` representation, including original bytes,
+SHA-256/size, member names, dtype, shape, storage order, and every element's
+index, byte offset and exact value. Grounding regenerates this representation
+before accepting a quote. Raw snapshots and decoded text both consume the packet
+budget; samples and unbound summaries cannot satisfy full evidence coverage.
+
+The current decoder supports NPY 1.0/2.0/3.0, boolean, signed/unsigned 8–64-bit
+integers, float16/32/64 and complex64/128, including endianness and C/F order.
+Limits per source: 128 KiB raw bytes, 128 KiB expanded NPZ members, 32 members,
+4 KiB NPY headers, 8 dimensions with each extent at most 4096, 4096 total
+elements, and 256 KiB rendered review bytes, subject also to the role budget.
+Object/pickle arrays, structured/string/date dtypes and other formats remain
+unsupported for automatic direct review. `.parquet` remains a permitted storage
+format, but there is currently no verified Parquet decoder in this review path;
+a required Parquet artifact therefore makes the packet incomplete. A companion
+JSON file does not waive the original required artifact. These limitations must
+be resolved before claiming a complete execution review.
+
 Hard rules:
 
 - Keep `data/raw/` immutable. Never overwrite raw source files.

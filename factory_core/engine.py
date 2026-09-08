@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-
+from .adapters.infrastructure.process import _process_identity
 from .contest import ContestDeadlineExceeded, ContestPolicy, effective_timeout
 from .deadline import deadline_scope, ensure_deadline
 from .current_dirty import (
@@ -174,7 +174,7 @@ class FactoryEngine:
                 "runner_lease_id": lease,
                 "heartbeat_at": int(time.time()),
             },
-            payload={"lease_id": lease},
+            payload={"lease_id": lease, "worker_pid": os.getpid(), "worker_identity": _process_identity(os.getpid())},
             expected_runner_pid=state.runner_pid,
             expected_runner_lease_id=state.runner_lease_id,
         )

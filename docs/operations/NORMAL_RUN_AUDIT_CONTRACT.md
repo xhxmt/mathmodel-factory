@@ -1,6 +1,6 @@
 # Normal-run audit contracts
 
-Current contract for new native runs after the 2026-09-07 normal-run repairs.
+Current contract for new native runs after the 2026-09-08 follow-up repairs.
 `STEPS.md` remains the workflow authority; `modeling_guide.md` owns modeling and
 solver rules, and `web/README.md` owns the Web control plane. Historical audit
 reports describe their dated candidates, not the current implementation.
@@ -32,6 +32,16 @@ repaired or accepted for this normal-run scope.
   submission/completion receipts, input closure and adopted outputs consume the
   packet budget. Missing or stale links produce explicit incomplete evidence;
   a small selected set cannot prove that all required evidence was selected.
+- Primitive numeric `.npy`/`.npz` evidence uses `numpy-review-capsule-v1`.
+  The original required path retains raw SHA-256/size; `binary_review` binds it
+  to a full deterministic decoding and its separate included hash/byte count.
+  The capsule contains the raw bytes and every member/index/value, so grounding
+  can regenerate and compare the entire decoding without host filesystem access.
+  Identical sources can share one verified capsule through the normal alias
+  resolver. Raw encoding and decoded values both consume the existing budget.
+  `modeling_guide.md` lists exact dtype/resource limits. Unsupported types,
+  Parquet and over-budget sources remain required and incomplete; the decoder
+  never calls pickle or executes array objects. Decoding is not scientific validation.
 - New local Python receipts use `python-audit-open-v2`. Reading or appending to
   a preexisting output requires explicitly declaring that path as an input.
   Submission preserves the initial bytes under `.factory/solver_inputs/`; the
@@ -47,12 +57,16 @@ repaired or accepted for this normal-run scope.
 
 ## Status and lifecycle
 
-CLI service status, Web project status and native diagnostics use a shared
-projection from one SQLite snapshot of state, events and policy. Current workflow
+`FactoryService.status`, Web project status and native Web diagnostics use a
+shared projection from one SQLite snapshot of state, events and policy. Actual
+user CLI `diagnostics` and compatibility `--status` still use older status paths;
+N03 is explicitly deferred and these commands do not satisfy the shared audit
+field contract. The worker CLI entry is covered separately below. Current workflow
 errors are separate from evidence errors. A recovered workflow does not retain a
 historical error as its current failure. `scientific_verdict` requires current
 verified evidence; `raw_scientific_verdict` is untrusted diagnostic context.
-Math precheck is shown as `review_mode=math_only`, without a score or delivery.
+Math precheck uses `judge-precheck-v2` with `audit_binding` and `input_fingerprint`
+and is shown as `review_mode=math_only`, without a score or delivery.
 `diagnostic_score` is not an official score; `official_score` remains null.
 `delivery_allowed` is still controlled by the existing verified delivery fence.
 
@@ -66,9 +80,15 @@ The database remains the status source for native Web/API reads.
 The normal background entry is `FactoryService.start` → `WorkerLauncher` →
 `factory_core.cli worker`. It uses an initialization acknowledgment and a bounded
 30-second wait; pre-ready exit, timeout or identity mismatch terminates observed
-processes and records `WORKER_START_FAILED`. Pause/kill verifies termination of
-the recorded runner and observed descendants; inability to verify is persisted as
-`RUNNER_EXIT_UNVERIFIED` with interrupted state.
+processes and records `WORKER_START_FAILED`. The actual worker CLI forwards its
+ready file after consuming the parent permit; ordinary compat execution has no
+ready-file argument. Pause/kill takes state and events from the same snapshot,
+matches the latest launch/run event's PID, lease and persisted process identity,
+then verifies termination of that owner and observed descendants. Missing or
+differing ownership is never replaced with a newly sampled identity: no process
+signals are sent and `RUNNER_EXIT_UNVERIFIED` with interrupted state is persisted.
+Old records lacking the identity/lease binding require explicit reconciliation;
+they do not grant cancellation authority.
 
 The separate `persistent_launcher` helper persists STARTING before launch,
 records initialization exceptions and recognizes a missing monitor as INTERRUPTED
@@ -83,7 +103,9 @@ not claim that arbitrary unobserved detached processes were found.
 `tests/test_normal_run_transactions.py`, `test_normal_run_api_batch.py`,
 `test_normal_run_packet_chain.py`, `test_normal_run_solver_lifecycle.py`,
 `test_normal_run_numeric_bindings.py`, `test_normal_run_status.py` and
-`test_normal_run_worker_lifecycle.py` exercise the repaired module combinations.
+`test_normal_run_worker_lifecycle.py`, `test_normal_run_cli_entry.py`,
+`test_normal_run_worker_ownership.py` and `test_normal_run_numpy_evidence.py`
+exercise the repaired module combinations.
 External provider transport is controlled; solver fixtures are small local
 producers including NumPy JSON conversion. Existing native orchestration,
 scheduler, package, Web and full-repository checks remain applicable.

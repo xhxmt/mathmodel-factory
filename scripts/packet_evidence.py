@@ -6,6 +6,10 @@ Grounding still verifies the actual canonical context bytes and exact quote.
 from __future__ import annotations
 
 import re
+try:
+    from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, complete_binding
+except ModuleNotFoundError:  # direct script execution
+    from numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, complete_binding
 
 ALIAS_CONTRACT = "judge-packet-alias-v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -43,11 +47,14 @@ class PacketEvidence:
             aliases = canonical.get("aliases")
             if not isinstance(aliases, list) or aliases.count(path) != 1:
                 raise ValueError(f"alias is not registered by its canonical file: {path}")
-            if canonical["status"] == "included" and (
-                canonical.get("included_sha256") != digest
-                or canonical.get("included_bytes") != item["size"]
-            ):
-                raise ValueError(f"alias canonical content is not complete: {path}")
+            if canonical["status"] == "included":
+                if "binary_review" in canonical:
+                    complete = complete_binding(canonical) and item.get("binary_review") == canonical["binary_review"]
+                else:
+                    complete = (canonical.get("included_sha256") == digest
+                                and canonical.get("included_bytes") == item["size"])
+                if not complete:
+                    raise ValueError(f"alias canonical content is not complete: {path}")
         for path, item in self.by_path.items():
             aliases = item.get("aliases", [])
             if not isinstance(aliases, list) or any(not isinstance(a, str) for a in aliases):
@@ -66,4 +73,6 @@ class PacketEvidence:
 
     def complete(self, path):
         item = self.resolve(path)
-        return item is not None and item.get("status") == "included"
+        return (item is not None and item.get("status") == "included"
+                and (("binary_review" not in item and not path.lower().endswith(tuple(NUMPY_SUFFIXES)))
+                     or complete_binding(item)))

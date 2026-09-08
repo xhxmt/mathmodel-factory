@@ -18,6 +18,7 @@ from factory_core.paper_sources import (
 )
 from scripts.json_evidence_view import SUFFIX as EVIDENCE_VIEW_SUFFIX, verify_view
 from scripts.packet_evidence import ALIAS_CONTRACT, PacketEvidence
+from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, MAX_RAW_BYTES, render_file as render_numpy
 
 try:
     from scripts.claim_graph import (
@@ -554,14 +555,28 @@ def _render_context(
             item.update({"status": "omitted", "reason": omission_reason})
             files.append(item)
             continue
-        item.update({
-            "sha256": _sha256(resolved),
-            "size": resolved.stat().st_size,
-        })
-        if path.suffix.lower() not in TEXT_SUFFIXES:
+        item["size"] = resolved.stat().st_size
+        if path.suffix.lower() in NUMPY_SUFFIXES and item["size"] > MAX_RAW_BYTES:
+            item.update(status="omitted", reason="numpy_source_byte_limit")
+            files.append(item)
+            continue
+        item["sha256"] = _sha256(resolved)
+        if path.suffix.lower() in NUMPY_SUFFIXES:
+            try:
+                original, item["binary_review"] = render_numpy(resolved)
+                if (item["binary_review"]["source_sha256"] != item["sha256"]
+                        or item["binary_review"]["source_size"] != item["size"]):
+                    raise ValueError("numpy_source_changed_during_read")
+            except (OSError, ValueError) as exc:
+                item.update(status="omitted", reason=str(exc) if isinstance(exc, ValueError) else "numpy_source_unreadable")
+                files.append(item)
+                continue
+        elif path.suffix.lower() not in TEXT_SUFFIXES:
             item.update({"status": "omitted", "reason": "unsupported_non_text"})
             files.append(item)
             continue
+        else:
+            original = resolved.read_text(encoding="utf-8", errors="replace")
         if relative.endswith(EVIDENCE_VIEW_SUFFIX):
             try:
                 item["structured_evidence"] = verify_view(project, resolved.read_bytes())
@@ -569,7 +584,6 @@ def _render_context(
                 item.update({"status": "omitted", "reason": "invalid_structured_evidence"})
                 files.append(item)
                 continue
-        original = resolved.read_text(encoding="utf-8", errors="replace")
         canonical = by_content.get(item["sha256"])
         if canonical is not None:
             canonical.setdefault("aliases", []).append(relative)
@@ -583,7 +597,7 @@ def _render_context(
         # A role's primary evidence is all-or-nothing.  It may use the whole
         # context budget, but is never silently middle-truncated.  Secondary
         # code and appendices retain the per-file cap and are disclosed below.
-        if relative in critical_for:
+        if relative in critical_for or "binary_review" in item:
             text = original
         else:
             framing_bytes = len((header + "\n").encode("utf-8"))
@@ -601,7 +615,7 @@ def _render_context(
         chunk_id = hashlib.sha256(
             f"{role}\0{relative}\0{included_sha256}".encode("utf-8")
         ).hexdigest()
-        was_truncated = relative not in critical_for and included_size < original_size
+        was_truncated = included_size < original_size
         item.update({
             "status": "truncated" if was_truncated else "included",
             "included_bytes": included_size,
