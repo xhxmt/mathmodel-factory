@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import json
 import sys
 import time
 from dataclasses import dataclass, field, replace
@@ -26,6 +27,7 @@ class ModelRequest:
     effort: str = ""
     output_file: Path | None = None
     context_files: tuple[str, ...] = ()
+    image_files: tuple[str, ...] = ()
     effective_prompt_file: Path | None = None
     base_url: str = ""
     key_env: str = ""
@@ -47,6 +49,11 @@ class _ProcessModelBackend:
         self.supervisor = supervisor or ProcessSupervisor()
 
     def _run(self, request: ModelRequest, argv: list[str], label: str) -> ExecutionResult:
+        from scripts.document_evidence_view import image_inputs
+        try:
+            images = image_inputs(request.project_dir, request.image_files)
+        except (OSError, ValueError) as exc:
+            return ExecutionResult.failed("PERMANENT_INPUT_CONTRACT", returncode=2, reason=str(exc))
         with deadline_scope(request.deadline_epoch):
             timeout_seconds = cap_timeout(request.timeout_seconds)
         request = replace(request, timeout_seconds=timeout_seconds)
@@ -74,6 +81,8 @@ class _ProcessModelBackend:
             "process_pid": result.pid,
             "process_timed_out": result.timed_out,
         }
+        if images:
+            metadata["image_inputs"] = images
         if result.returncode == 0:
             return ExecutionResult.succeeded(**metadata)
         if result.metadata.get("launch_error"):
@@ -148,7 +157,9 @@ class CodexCliBackend(_ProcessModelBackend):
         else:
             argv.append("--dangerously-bypass-approvals-and-sandbox")
         workdir = request.workdir or request.project_dir
-        argv.extend(["-C", str(workdir), "--skip-git-repo-check", request.prompt])
+        for image in request.image_files:
+            argv.extend(["--image", str(request.project_dir / image)])
+        argv.extend(["-C", str(workdir), "--skip-git-repo-check", "--", request.prompt])
         return replace(request, workdir=workdir), argv
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
@@ -163,6 +174,9 @@ class ClaudeCliBackend(_ProcessModelBackend):
     name = "claude"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
+        if request.image_files:
+            return ExecutionResult.failed("PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
+                reason="Claude CLI adapter has no verified image transport")
         argv = ["claude", "-p", request.prompt, "--dangerously-skip-permissions", "--effort", request.effort or "max"]
         if request.model:
             argv.extend(["--model", request.model])
@@ -173,6 +187,9 @@ class AgyBackend(_ProcessModelBackend):
     name = "agy"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
+        if request.image_files:
+            return ExecutionResult.failed("PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
+                reason="Agy adapter has no verified image transport")
         prompt_file = request.project_dir / "logs" / f"step_{request.step_id}_agy_{os.getpid()}.prompt.txt"
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.write_text(request.prompt, encoding="utf-8")
@@ -200,6 +217,9 @@ class ApiAgentBackend(_ProcessModelBackend):
     name = "api"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
+        if request.image_files and (request.model.startswith("deepseek") or request.env.get("FACTORY_API_BACKEND") == "claude"):
+            return ExecutionResult.failed("PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
+                reason="selected API model/backend cannot receive required page images")
         if request.output_file is None:
             return ExecutionResult.failed("PERMANENT_OUTPUT_CONTRACT", returncode=2)
         try:
@@ -247,13 +267,26 @@ class ApiAgentBackend(_ProcessModelBackend):
             argv.extend(["--effective-prompt-file", effective_prompt_file])
         for context_file in request.context_files:
             argv.extend(["--context-file", context_file])
+        from scripts.document_evidence_view import image_inputs
+        try:
+            images = image_inputs(request.project_dir, request.image_files)
+        except (OSError, ValueError) as exc:
+            return ExecutionResult.failed("PERMANENT_INPUT_CONTRACT", returncode=2, reason=str(exc))
+        for image in request.image_files:
+            argv.extend(["--image-file", image])
+        if images:
+            argv.extend(["--expected-image-inputs-sha256", hashlib.sha256(
+                json.dumps(images, sort_keys=True).encode()).hexdigest()])
         if request.input_observer is not None:
             from scripts.api_agent_run import build_effective_prompt
 
-            effective, _ = build_effective_prompt(
-                request.project_dir.resolve(), request.prompt,
-                list(request.context_files), output_file,
-            )
+            try:
+                effective, _ = build_effective_prompt(
+                    request.project_dir.resolve(), request.prompt,
+                    list(request.context_files), output_file,
+                )
+            except (OSError, ValueError) as exc:
+                return ExecutionResult.failed("PERMANENT_INPUT_CONTRACT", returncode=2, reason=str(exc))
             argv.extend(["--expected-effective-prompt-sha256",
                          hashlib.sha256(effective.encode("utf-8")).hexdigest()])
             request = replace(request, prompt=effective, prompt_format="api-inline-v1")

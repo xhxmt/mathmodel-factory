@@ -1,4 +1,4 @@
-export function statusLabel(status) {
+export function statusLabel(status, displayStatus = '') {
   return {
     running: '运行中',
     paused: '已暂停',
@@ -9,5 +9,9 @@ export function statusLabel(status) {
     setup: '初始化',
     failed: '失败',
     killed: '已终止',
-  }[status] || status
+    retrying: '重试中',
+    archiving: '归档中',
+    interrupted: '已中断',
+    unknown: '状态待确认',
+  }[status] || displayStatus || '状态待确认'
 }

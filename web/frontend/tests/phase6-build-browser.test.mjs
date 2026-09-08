@@ -397,6 +397,11 @@ test('normal status preserves independent failure recovery evidence and score fi
     await page.goto(`${site.origin}/tests/normal-status.harness.html`)
     const panel = page.getByTestId('audit-status')
     await panel.waitFor()
+    await panel.getByText('状态详情', { exact: true }).click()
+    const detailValue = (label) => panel.locator('dl > div')
+      .filter({ has: page.getByText(label, { exact: true }) }).locator('dd')
+    const deliveryValue = panel.locator('article')
+      .filter({ has: page.getByText('交付许可', { exact: true }) }).locator('strong')
     await page.evaluate(() => globalThis.setStatusFixture({
       status: 'failed', execution_state: 'failed', revision: 2,
       workflow_error: 'TRANSIENT_JUDGE_PROVENANCE', evidence_validity: 'INVALID',
@@ -405,7 +410,7 @@ test('normal status preserves independent failure recovery evidence and score fi
     }))
     assert.match(await panel.textContent(), /TRANSIENT_JUDGE_PROVENANCE/)
     assert.match(await panel.textContent(), /current call evidence missing/)
-    assert.match(await panel.textContent(), /正式分数：不可用/)
+    assert.equal(await detailValue('正式分数').innerText(), '不可用')
     await page.evaluate(() => globalThis.setStatusFixture({
       status: 'ready', execution_state: 'ready', revision: 3, workflow_error: null,
       evidence_validity: 'VALID', scientific_verdict: 'PRECHECK_PASS', review_mode: 'math_only',
@@ -413,15 +418,15 @@ test('normal status preserves independent failure recovery evidence and score fi
     }))
     assert.doesNotMatch(await panel.textContent(), /TRANSIENT_JUDGE_PROVENANCE|current call evidence missing/)
     assert.match(await panel.textContent(), /数学预审/)
-    assert.match(await panel.textContent(), /交付：未获准/)
+    assert.equal(await deliveryValue.innerText(), '未获交付许可')
     await page.evaluate(() => globalThis.setStatusFixture({
       status: 'completed', revision: 4, evidence_validity: 'VALID', scientific_verdict: 'PASS',
       review_mode: 'final', score_available: true, diagnostic_score: 82,
       official_score: null, delivery_allowed: true,
     }))
-    assert.match(await panel.textContent(), /诊断分数：82/)
-    assert.match(await panel.textContent(), /正式分数：不可用/)
-    assert.match(await panel.textContent(), /交付：允许/)
+    assert.equal(await detailValue('诊断分数').innerText(), '82（仅供诊断）')
+    assert.equal(await detailValue('正式分数').innerText(), '不可用')
+    assert.equal(await deliveryValue.innerText(), '允许交付')
     assert.deepEqual(errors, [])
     await page.screenshot({ path: join(output, 'normal-status.png') })
     console.log(`normal status screenshot: ${join(output, 'normal-status.png')}`)

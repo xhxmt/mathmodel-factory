@@ -81,7 +81,7 @@ def test_packet_manifest_has_stable_hashes_and_context(tmp_path):
     context_path = project / "judge_packets/paper/context.txt"
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == first_manifest
     assert "same paper" in context_path.read_text(encoding="utf-8")
-    assert first_manifest["version"] == 5
+    assert first_manifest["version"] == 6
     assert first_manifest["alias_contract"] == "judge-packet-alias-v1"
     assert first_manifest["files"][0]["status"] == "included"
     assert first_manifest["status_counts"] == {
@@ -378,7 +378,8 @@ def test_execution_packet_reserves_budget_for_registered_question_evidence(tmp_p
     manifest = build_packets(project, base_name="demo")["execution"]
     by_path = {item["path"]: item for item in manifest["files"]}
 
-    assert manifest["limits"]["context_bytes"] == 360_000
+    assert manifest["limits"]["text_context_bytes"] == 360_000
+    assert manifest["limits"]["document_context_bytes"] == 2_000_000
     assert manifest["context"]["size"] <= 360_000
     assert manifest["completeness"]["status"] == "COMPLETE"
     assert manifest["claim_coverage"]["status"] == "COMPLETE"

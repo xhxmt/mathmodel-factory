@@ -24,7 +24,8 @@
 - 管理员可直接创建项目，并管理用户、项目申请、完成论文展示权限、Secret Manager 元数据状态和审计日志。
 - Dashboard 将题目内容相同的多次运行按 canonical SHA-256 身份聚合为一个“题目归档”。这只是展示层分组，不移动或改名 `ongoing/`、`complete/` 中的目录。
 - 进行中的运行可暂停、恢复或终止；完成归档保持只读。
-- 项目工作区默认显示 8 个比赛阶段，可下钻到 Step 0–16，并在高级诊断区显示持久 Stage/subtask/source Step 调度位置；最近三步平均耗时用于预测内容完成时间和 content-freeze slack。Legacy 项目没有比赛 policy 时明确显示“未配置”，不虚构倒计时。
+- 项目概览显示 10 个持久调度 Stage，可下钻到 Step 0–16；当前步骤采用后端原生 Stage/subtask/source Step 位置，最终审计执行中不会提前显示完成。比赛时钟仍按 8 个比赛阶段组织。最近三步平均耗时用于预测内容完成时间和 content-freeze slack；Legacy 项目没有比赛 policy 时明确显示“未配置”，不虚构倒计时。
+- 人工选模与咨询均进入待办；中断、重试、暂停和失败分别显示状态与对应操作。证据有效性、科学结论及交付许可独立展示，证据变化即使没有 workflow revision 更新也会刷新。此视图尚不提供每一步历次执行的完整数据库时间线。
 - “任务图”页展示 Step 0 的 `problem-plan-v1` 问题专属 DAG；固定 Stage/Step 仍是调度权威，DAG 只表达题目内部的数据、参数、求解和验证依赖。
 - 建模方向与任务图 API 使用统一 `node-output-v1` / `ContentBlock` 协议，前端按注册的 `render_type` 渲染摘要、方法卡、DAG、提示和产物链接；后端不下发可执行 HTML。
 - 顶部行动中心持续聚合 Human Gate、deadline 风险、Solver 失败、未解决审计事项和交付阻塞。

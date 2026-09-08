@@ -146,7 +146,7 @@
           {{ stateLabel(state(sel)) }}
         </span>
 
-        <div v-if="selectedIndex === 13 && verdict" class="tag" :class="verdictClass">
+        <div v-if="verdict && (project ? (selectedIndex === 13 && project.review_mode === 'math_only') || (selectedIndex === 16 && project.review_mode === 'final') : selectedIndex === 13)" class="tag" :class="verdictClass">
           {{ verdictLabel }}
         </div>
 
@@ -205,11 +205,13 @@ import Icon from './Icon.vue'
 import { STEPS, EDITORIAL_GATE_STEP, stepStatus, VERDICT_LABEL, stepModelMeta, stepConfigKey } from '../lib/steps.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { CONTEST_PHASES, phaseForStep } from '../lib/workspaceUi.js'
+import { currentStepIndex, completedStepIndex, workflowStepState, verdictLabel as auditVerdictLabel } from '../lib/projectState.js'
 
 export default {
   name: 'PipelineTimeline',
   components: { Icon },
   props: {
+    project: { type: Object, default: null },
     currentStep: { type: Number, default: -1 },
     stepsData: { type: Object, default: null },
     awaiting: { type: Boolean, default: false },
@@ -228,10 +230,10 @@ export default {
     }
   },
   computed: {
-    displayStep() { return this.currentStep },
-    verdict() { return this.stepsData?.verdict || null },
-    verdictLabel() { return VERDICT_LABEL[this.verdict] || this.verdict },
-    verdictClass() { return this.verdict === 'PASS' ? 'tag-ok' : 'tag-amber' },
+    displayStep() { return this.project ? currentStepIndex(this.project) : this.currentStep },
+    verdict() { return this.project ? (this.project.evidence_validity === 'VALID' ? this.project.scientific_verdict : null) : this.stepsData?.verdict || null },
+    verdictLabel() { return this.project ? auditVerdictLabel(this.project) : VERDICT_LABEL[this.verdict] || this.verdict },
+    verdictClass() { return ['PASS', 'PRECHECK_PASS'].includes(this.verdict) ? 'tag-ok' : 'tag-amber' },
     openIssues() { return this.stepsData?.open_issues || 0 },
     openIssueItems() { return this.stepsData?.open_issue_items || [] },
     paperAvailable() { return !!this.stepsData?.paper_available },
@@ -286,10 +288,12 @@ export default {
     md(value) { return renderMarkdown(value) },
     stepId(s) { return s.key || s.index },
     isSegmentOn(s) {
+      if (this.project) return this.state(s) === 'done'
       if (s.key === '8_5') return this.currentStep >= 8
       return s.index <= this.currentStep && s.index > 0
     },
     defaultIndex() {
+      if (this.project) return this.project.active_subtask === 'reviewer_entry_gate' ? '8_5' : currentStepIndex(this.project)
       const c = this.currentStep
       const gate = this.stepsData?.editorial_gate
       if (c === 8 && gate && !gate.ready) return '8_5'
@@ -313,6 +317,13 @@ export default {
       this.$emit('assign', this.sel, cur)
     },
     state(s) {
+      if (this.project) {
+        if (s.key === '8_5') {
+          if (this.project.active_subtask === 'reviewer_entry_gate') return workflowStepState(8, this.project)
+          return Number(this.project.last_completed_stage) >= 6 ? 'done' : 'pending'
+        }
+        return workflowStepState(s.index, this.project)
+      }
       if (s.key === '8_5') {
         const gate = this.stepsData?.editorial_gate
         if (!gate) return 'pending'
@@ -325,19 +336,19 @@ export default {
       return st
     },
     stateLabel(st) {
-      return { done: '已完成', live: '进行中', attention: '等待你', pending: '待执行' }[st] || st
+      return { done: '已完成', live: '进行中', attention: '等待人工决策', pending: '待执行', blocked: '执行已中断或失败', paused: '已暂停', retrying: '重试中' }[st] || st
     },
     dotFor(st) {
-      return { done: 'ok', live: 'live', attention: 'amber', pending: '' }[st] || ''
+      return { done: 'ok', live: 'live', attention: 'amber', pending: '', blocked: 'bad', paused: 'paused', retrying: 'amber' }[st] || ''
     },
     capFor(s) {
       if (s.key === '8_5') return 'ENTRY'
       if (s.index === 10) return 'GATE 1'
-      if (s.index === 13) return 'GATE 2'
+      if (s.index === 13) return 'PRECHECK'
       if (s.index === 3) return '选型'
       if (s.index === 14) return '摘要'
       if (s.index === 0) return 'SETUP'
-      if (s.index === 16) return 'DONE'
+      if (s.index === 16) return 'FINAL AUDIT'
       return ''
     },
     tip(s) {
@@ -451,6 +462,9 @@ export default {
 .st-live   { --c: var(--live);  background: var(--live); color: #04161c; animation: lp 2s var(--ease) infinite; }
 .st-attention { --c: var(--amber); background: var(--amber); color: var(--amber-ink); animation: ap 1.3s var(--ease) infinite; }
 .st-pending { --c: var(--ink-3); background: var(--panel); }
+.st-blocked { --c: var(--bad); color: var(--bad); background: var(--bad-dim); }
+.st-paused { --c: var(--paused); color: var(--paused); background: var(--paused-dim); }
+.st-retrying { --c: var(--amber); color: var(--amber); background: var(--amber-dim); }
 
 .node.sel { outline: 2px solid var(--ink); outline-offset: 3px; }
 .kind-gate.sel { outline-offset: 3px; }

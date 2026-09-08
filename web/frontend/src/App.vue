@@ -168,7 +168,7 @@
 </template>
 
 <script>
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from './components/Icon.vue'
 import Toasts from './components/Toasts.vue'
@@ -190,12 +190,12 @@ import { runAuthenticatedStartup, runLoginFlow } from './lib/appStartup.js'
 // ProjectWorkspace subtree (and KaTeX, via markdown.js) out of the initial bundle.
 const ProjectWorkspace = defineAsyncComponent({
   loader: () => import('./components/ProjectWorkspace.vue'),
-  loadingComponent: { template: '<div class="ws-overlay-loading"><div class="spinner"></div></div>' },
+  loadingComponent: { render: () => h('div', { class: 'ws-overlay-loading' }, [h('div', { class: 'spinner' })]) },
   delay: 120,
 })
 
 const AsyncOverlayFallback = {
-  template: '<div class="overlay-loading panel"><div class="spinner"></div></div>',
+  render: () => h('div', { class: 'overlay-loading panel' }, [h('div', { class: 'spinner' })]),
 }
 
 const AsyncNewProjectModal = defineAsyncComponent({ loader: () => import('./components/NewProjectModal.vue'), loadingComponent: AsyncOverlayFallback, delay: 120 })
@@ -259,7 +259,7 @@ export default {
     })
 
     function notifyAwaiting(baseName) {
-      toasts.warn(`项目 ${baseName} 需要你的决策`, '人工咨询')
+      toasts.warn(`项目 ${baseName} 需要你的决策`, '人工待办')
       notifyDesktop('Paper Factory · 需要你决策', `${baseName} 已在关卡处暂停`)
     }
 
@@ -404,7 +404,10 @@ export default {
     }
 
     // ---- navigation / deep-link ----
-    function openProjectFromCard(project) { openProject(project) }
+    function openProjectFromCard(project, tab) {
+      openProject(project)
+      if (tab) router.replace({ name: 'project', params: { baseName: project.base_name }, query: { tab } }).catch(() => {})
+    }
     function openByBaseFromPalette(baseName) { openByBase(baseName); showPalette.value = false }
     function closeSelectedWorkspace() { closeWorkspace() }
     function openNew() { showNew.value = true; showPalette.value = false }
@@ -432,6 +435,7 @@ export default {
     )
     watch(selectedBase, (baseName) => {
       if (syncingRoute || !isAuthenticated.value) return
+      if ((route.params.baseName || null) === baseName) return
       const target = baseName ? { name: 'project', params: { baseName } } : { name: 'dashboard' }
       router.replace(target).catch(() => {})
     })
@@ -468,6 +472,7 @@ export default {
 <style scoped>
 .app-boot { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .console { min-height: 100vh; display: flex; flex-direction: column; }
+.lane .grid { grid-template-columns: repeat(auto-fit, minmax(min(360px,100%), 1fr)); }
 
 /* ---- status rail ---- */
 .rail {

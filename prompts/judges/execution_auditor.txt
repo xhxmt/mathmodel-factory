@@ -11,6 +11,8 @@
 
 NumPy 材料规则：manifest 的 `binary_review` 将原始 `.npy/.npz` 的 SHA-256/大小绑定到 `numpy-review-capsule-v1` 全量解码。包中保留原始字节供机器复核，逐项列出 member、dtype、shape、存储顺序及每个 index、byte_offset、value；浮点另有精确十六进制值和原始标量字节。引用包含 member/index/value 的具体解码行，并结合代码和回执核对计算含义。解码完整不等于计算主张正确；预算超限或不支持的类型仍属于缺失证据。
 
+文档材料规则：`document_review` 将 XLSX/PDF 原件、完整文本视图与页面图片绑定到同一 SHA-256 来源。XLSX 按工作表和 ROW 行号列出全部已存单元格；`A=...` 表示该行 A 列的原始数值，其他单元格保留类型、样式、公式和缓存值的 XML；共享字符串、隐藏状态、合并范围等见元数据。公式缓存未重新计算。引用带 ROW 和列标的精确行，结合回执及代码核对数据使用。PDF 的图片按 context 中 PAGE 顺序附在请求中；必须查看每页，图表证据引用对应的完整 `PAGE ... IMAGE ... SHA256 ...` 定位行，并在 finding 描述实际观察。缺少图片、无法读清或模型不支持图片时返回 INDETERMINATE；提取文字、哈希或“完整”标记本身不证明图表正确。
+
 将结果写入 `__PROJECT_PATH__/judge_outputs/execution.md`。文件必须严格满足以下协议：
 
 1. 第一行只能是 `VERDICT: PASS`、`VERDICT: FAIL` 或 `VERDICT: INDETERMINATE`。

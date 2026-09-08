@@ -1,4 +1,9 @@
 # Changelog
+- The Web dashboard follows native Stage/subtask/Step coordinates, distinguishes
+  running final audits from completion, and separates execution, evidence,
+  scientific judgment and delivery permission. Human selection and consultation
+  both appear in pending work; evidence-only changes refresh without a workflow
+  revision bump. Local preview data is not part of the production frontend.
 - Added manually selected, per-project Claude Fable + GPT Pro joint modeling,
   defaulting off. Claude is pinned to `claude-fable-5-1` without fallback; Pro
   consultation and Claude synthesis precede mandatory human model selection,
@@ -8,6 +13,17 @@
 - Refreshed two persisted-owner source coordinates and their derived identity
   fixtures after the joint decision hooks. Solver owner symbol bytes and
   workflow semantics remain unchanged; exact identity checks remain enabled.
+- Three-role judge groups accept different per-role page attachments while
+  retaining exact manifest, asset, ordering and transport checks. Direct receipt
+  commands bind imports to the selected checkout instead of another installed
+  working tree. Live integration exposed both failures before aggregation.
+- Native review now carries complete, source-bound XLSX cell maps and all PDF
+  pages through bounded document packets, actual image transport, archived call
+  inputs and exact-quote grounding. Native PDF grounding rerenders frozen sources;
+  the path-free shadow API remains fail-closed for this derivation. API judge
+  inputs no longer silently truncate at 200,000 bytes. Unsupported formats,
+  image transports and exceeded limits remain explicit failures. No model,
+  workflow gate, acceptance/release authority or deferred N03 behavior changes.
 - The project-control compatibility helper forwards the required cancellation
   identity; bare PID calls fail closed. Its control-order test also verifies
   that the persisted identity is forwarded after the pause commits.

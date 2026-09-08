@@ -14,10 +14,10 @@ export const STEPS = [
   { index: 10, kind: 'gate',   name: '关卡一·数值代码核验', en: 'Gate 1 · Consistency', icon: 'shield' },
   { index: 11, kind: 'normal', name: '建设性评审',       en: 'Review',               icon: 'message-square' },
   { index: 12, kind: 'normal', name: '修订',             en: 'Revision',             icon: 'edit' },
-  { index: 13, kind: 'gate',   name: '关卡二·评委模拟',   en: 'Gate 2 · Judge',       icon: 'scale' },
+  { index: 13, kind: 'gate',   name: '条件数学预审',     en: 'Math Precheck',        icon: 'scale' },
   { index: 14, kind: 'human',  name: '摘要',             en: 'Abstract',             icon: 'edit' },
   { index: 15, kind: 'normal', name: '引用审计·排版·去AI腔', en: 'Polish',            icon: 'sparkles' },
-  { index: 16, kind: 'normal', name: '编译·打包',        en: 'Compile',              icon: 'package' },
+  { index: 16, kind: 'gate',   name: '最终审计·编译交付', en: 'Final Audit & Delivery', icon: 'package' },
 ]
 
 export const EDITORIAL_GATE_STEP = {

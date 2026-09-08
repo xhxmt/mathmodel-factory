@@ -1,3 +1,5 @@
+import { needsHuman, humanLabel, executionStatus, stepText } from './projectState.js'
+
 export const LOG_LEVELS = [
   { key: 'all', label: '全部' },
   { key: 'err', label: '错误' },
@@ -106,12 +108,16 @@ export function timingPresentation(timing = {}) {
 
 const ACTION_PRIORITY = { expired: 0, critical: 1, warning: 2, guarded: 3, info: 4 }
 
-export function buildWorkspaceActions(dashboard = {}, stepsData = {}) {
+export function buildWorkspaceActions(dashboard = {}, stepsData = {}, project = {}) {
   const actions = (Array.isArray(dashboard?.actions) ? dashboard.actions : []).map((item) => ({
     ...item,
     severity: String(item?.severity || 'info'),
   }))
   const openIssues = Number(stepsData?.open_issues || 0)
+  if (needsHuman(project)) actions.push({ id: 'workflow-human', severity: 'warning', title: humanLabel(project), summary: stepText(project), tab: project.selection_pending ? 'selection' : 'consultation' })
+  if (executionStatus(project) === 'interrupted') actions.push({ id: 'workflow-interrupted', severity: 'critical', title: '运行中断，需核对恢复条件', summary: '先确认原进程与子进程的退出情况，再处理恢复。', tab: 'diagnostics' })
+  if (executionStatus(project) === 'failed') actions.push({ id: 'workflow-failed', severity: 'warning', title: '本次执行失败', summary: project.reason_summary || '查看错误原因与诊断证据。', tab: 'diagnostics' })
+  if (project.evidence_validity === 'INVALID') actions.push({ id: 'workflow-evidence', severity: 'critical', title: '当前证据需要重新核验', summary: '材料或审查绑定已变化，当前交付许可不可用。', tab: 'diagnostics' })
   if (openIssues > 0) {
     actions.push({
       id: 'audit-issues',

@@ -7,7 +7,7 @@
           <Icon name="arrow-left" :size="16" />
         </button>
         <div class="wh-id">
-          <div class="wh-name mono">{{ project.base_name }}</div>
+          <div class="wh-name">{{ project.problem_title || project.base_name }}<small class="run-name mono">{{ project.base_name }}</small></div>
           <div class="wh-sub">
             <span class="tag" :class="'st-' + project.status">
               <span class="dot" :class="dotClass"></span>{{ statusLabel }}
@@ -39,11 +39,8 @@
         <button v-if="isAdmin" class="btn btn-sm btn-ghost" @click="showModels = true" title="模型管理">
           <Icon name="cpu" :size="14" /> <span class="hide-xs">模型</span>
         </button>
-        <button v-if="project.is_running" class="btn btn-sm btn-ghost" @click="act('pause')">
-          <Icon name="pause" :size="14" /> 暂停
-        </button>
-        <button v-else-if="canResume" class="btn btn-sm btn-amber" @click="act('resume')">
-          <Icon name="play" :size="14" /> 恢复
+        <button v-if="primaryAction" class="btn btn-sm" :class="primaryAction.kind === 'navigate' ? 'btn-amber' : 'btn-ghost'" @click="performPrimary">
+          <Icon :name="primaryAction.icon" :size="14" /> {{ primaryAction.label }}
         </button>
         <template v-if="project.is_running || project.status === 'paused'">
           <button v-if="!killArm" class="btn btn-sm btn-danger" @click="killArm = true">
@@ -77,6 +74,8 @@
 
     <div class="ws-scroll">
       <div v-if="activeTab === 'overview'" class="overview rise">
+        <StageProgressPanel :project="project" />
+        <AuditStatusPanel :project="project" @navigate="activeTab = $event" />
         <div class="overview-grid">
           <button class="ov-card panel" @click="activeTab = 'pipeline'">
             <span class="ov-l label">当前阶段</span>
@@ -88,7 +87,7 @@
           </button>
           <button class="ov-card panel" @click="activeTab = project.selection_pending ? 'selection' : project.consultation_pending ? 'consultation' : 'diagnostics'">
             <span class="ov-l label">人工/诊断</span>
-            <span class="ov-v mono">{{ project.selection_pending ? '等待选方案' : project.consultation_pending ? '等待你处理' : diagnostics?.status?.reason_code || '无阻塞' }}</span>
+            <span class="ov-v">{{ project.selection_pending ? '等待选方案' : project.consultation_pending ? '等待你处理' : project.workflow_error ? '需核对执行诊断' : project.evidence_validity === 'INVALID' ? '需重新核验证据' : diagnostics?.status?.reason_code ? '查看诊断事项' : '无待办事项' }}</span>
           </button>
           <button class="ov-card panel" @click="activeTab = 'logs'">
             <span class="ov-l label">日志</span>
@@ -103,7 +102,6 @@
             <span class="ov-v mono">{{ schedulerLabel }}</span>
           </button>
         </div>
-        <AuditStatusPanel :project="project" />
         <JointModelingPanel :base="project.base_name" :revision="project.revision" @changed="refresh" />
         <ContestTimingPanel :timing="contestDashboard?.timing || {}" />
         <DiagnosticsCard
@@ -142,6 +140,7 @@
         v-else-if="activeTab === 'pipeline'"
         class="rise"
         :current-step="project.current_step"
+        :project="project"
         :steps-data="stepsData"
         :awaiting="project.consultation_pending || project.selection_pending"
         :registry="modelRegistry"
@@ -175,13 +174,14 @@
       />
 
       <div v-else-if="activeTab === 'diagnostics'" class="tab-stack">
+        <AuditStatusPanel v-if="project.evidence_validity === 'INVALID' || project.workflow_error" :project="project" @navigate="activeTab = $event" />
         <DiagnosticsCard
           v-if="diagnostics && diagnostics.status && diagnostics.status.reason_code"
           class="rise"
           :diagnostics="diagnostics"
           @action="onDiagnosticsAction"
         />
-        <div v-else class="empty-panel panel">
+        <div v-else-if="project.evidence_validity !== 'INVALID' && !project.workflow_error" class="empty-panel panel">
           <Icon name="check-circle" :size="28" />
           <span>当前没有阻塞诊断</span>
         </div>
@@ -220,6 +220,7 @@
         class="tab-panel rise"
         :base="project.base_name"
         :delivery="contestDashboard?.delivery || {}"
+        :delivery-allowed="project.delivery_allowed"
         @open-file="requestFile"
       />
 
@@ -278,6 +279,8 @@ import { buildWorkspaceActions, workspaceTabs } from '../lib/workspaceUi.js'
 import { useToasts } from '../composables/useToasts.js'
 import { useModels } from '../composables/useModels.js'
 import AuditStatusPanel from './AuditStatusPanel.vue'
+import StageProgressPanel from './StageProgressPanel.vue'
+import { primaryControl, executionLabel, statusTone, stepText } from '../lib/projectState.js'
 import { statusLabel as mapStatusLabel } from '../lib/status.js'
 import { useProjectCloudConfig } from '../composables/useProjectCloudConfig.js'
 import { useProjectDiagnostics } from '../composables/useProjectDiagnostics.js'
@@ -317,11 +320,11 @@ const DeliveryReadinessPanel = defineAsyncComponent({ loader: () => import('./De
 // is visible in the production manifest and browser resource tests.
 const OptionalWorkspaceExtensionPanel = optionalWorkspaceExtensionLoader
   ? defineAsyncComponent({ loader: optionalWorkspaceExtensionLoader, ...asyncOpts })
-  : null
+  : { render: () => null }
 
 export default {
   name: 'ProjectWorkspace',
-  components: { JointModelingPanel, AuditStatusPanel, Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel, OptionalWorkspaceExtensionPanel },
+  components: { StageProgressPanel, JointModelingPanel, AuditStatusPanel, Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel, OptionalWorkspaceExtensionPanel },
   props: {
     project: { type: Object, required: true },
     isAdmin: { type: Boolean, default: false },
@@ -358,19 +361,15 @@ export default {
     const lastStep = ref(null)
     const clockNow = ref(Math.floor(Date.now() / 1000))
 
-    const statusLabel = computed(() => mapStatusLabel(props.project.status))
+    const statusLabel = computed(() => executionLabel(props.project))
+    const primaryAction = computed(() => primaryControl(props.project))
+    function performPrimary() {
+      if (primaryAction.value?.kind === 'command') act(primaryAction.value.action)
+      else if (primaryAction.value?.tab) activeTab.value = primaryAction.value.tab
+    }
     const modelRegistry = computed(() => models.value?.registry || [])
     const projectAssignments = computed(() => models.value?.config?.[props.project.base_name] || {})
-    const dotClass = computed(() => ({
-      running: 'live',
-      awaiting_consultation: 'amber',
-      awaiting_selection: 'amber',
-      completed: 'ok',
-      paused: 'paused',
-      failed: 'bad',
-      killed: 'bad',
-    }[props.project.status] || ''))
-    const canResume = computed(() => ['paused', 'ready', 'awaiting_consultation', 'awaiting_selection'].includes(props.project.status))
+    const dotClass = computed(() => statusTone(props.project))
     const tabs = computed(() => {
       const currentTabs = workspaceTabs({
         consultationPending: props.project.consultation_pending,
@@ -383,15 +382,8 @@ export default {
       }
       return currentTabs
     })
-    const workspaceActions = computed(() => buildWorkspaceActions(contestDashboard.value, stepsData.value))
-    const stepLabel = computed(() => {
-      const current = props.project.current_step
-      const gate = stepsData.value?.editorial_gate
-      if (current >= 16) return 'STEP 16 / 16 · 已完成'
-      if (current === 8 && gate && !gate.ready) return 'STEP 8.5 / 16 · 阅卷入口设计'
-      const active = stepByIndex(Math.min(16, current + 1))
-      return `STEP ${Math.max(0, current + 1)} / 16 · ${active ? active.name : ''}`
-    })
+    const workspaceActions = computed(() => buildWorkspaceActions(contestDashboard.value, stepsData.value, props.project))
+    const stepLabel = computed(() => stepText(props.project))
     const phaseNames = {
       problem_understanding: '题意与数据',
       model_tournament: '模型竞赛',
@@ -720,7 +712,8 @@ export default {
       modelRegistry,
       projectAssignments,
       dotClass,
-      canResume,
+      primaryAction,
+      performPrimary,
       stepLabel,
       contestPhaseLabel,
       schedulerLabel,
@@ -761,6 +754,10 @@ export default {
   background-size: 34px 34px;
   animation: wsin 0.32s var(--ease-out);
 }
+.run-name { display: block; font-size: 11px; color: var(--ink-3); margin-top: 4px; font-weight: 400; }
+.st-interrupted { color: var(--bad); background: var(--bad-dim); }
+.st-retrying { color: var(--amber); background: var(--amber-dim); }
+.st-archiving { color: var(--live); background: var(--live-dim); }
 @keyframes wsin { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: scale(1); } }
 
 .ws-head {
@@ -895,14 +892,13 @@ export default {
   .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
-  .ws-head { padding: 10px 12px; gap: 8px; }
-  .wh-left { flex: 1; gap: 9px; }
+  .ws-head { padding: 12px; gap: 12px; flex-direction: column; align-items: stretch; }
+  .wh-left { flex: 1; gap: 10px; }
   .wh-id { overflow: hidden; }
   .wh-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wh-sub { gap: 6px; }
-  .wh-right { gap: 4px; }
-  .wh-right .btn span { display: none; }
-  .wh-right .btn { width: 32px; height: 32px; padding: 0; }
+  .wh-right { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .wh-right .btn { min-width: 32px; min-height: 32px; width: auto; height: auto; padding: 6px 9px; font-size: 12px; }
   .cloud-switch { padding-right: 5px; }
   .cloud-switch .hide-xs { display: none; }
   .ws-tabs { padding-inline: 12px; }

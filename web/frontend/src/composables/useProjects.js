@@ -1,20 +1,26 @@
 import { computed, ref } from 'vue'
 import { Projects } from '../lib/api.js'
 import { buildProblemArchives, filterProblemArchives } from '../lib/problemArchives.js'
+import { needsHuman } from '../lib/projectState.js'
+import { normalizeProjectStatus } from '../lib/contracts.js'
 
 const filterChips = [
   { key: 'all', label: '全部' },
   { key: 'running', label: '运行中' },
   { key: 'completed', label: '已完成' },
   { key: 'paused', label: '已暂停' },
+  { key: 'interrupted', label: '已中断' },
+  { key: 'failed', label: '失败' },
+  { key: 'retrying', label: '重试中' },
 ]
 
 function fp(p) {
-  return `${p.problem_key}|${p.problem_title}|${p.storage_scope}|${p.archived}|${p.status}|${p.current_step}|${p.active_stage}|${p.active_subtask}|${p.source_step_id}|${p.progress_percent}|${p.pid}|${p.consultation_pending}|${p.consultation_gate}|${p.revision}|${p.last_updated}`
+  // Evidence/currentness can change without a workflow revision. Compare the full view.
+  return JSON.stringify(p)
 }
 
 function notifyNewlyAwaiting(list, awaitingSeen, notify) {
-  const nowAwaiting = list.filter((p) => p.consultation_pending).map((p) => p.base_name)
+  const nowAwaiting = list.filter(needsHuman).map((p) => p.base_name)
   for (const baseName of nowAwaiting) {
     if (!awaitingSeen.has(baseName)) notify(baseName)
   }
@@ -30,8 +36,8 @@ export function createProjectStore({ projectsApi = Projects } = {}) {
   let lastListFp = ''
   let awaitingSeen = null
 
-  const needsYou = computed(() => projects.value.filter((p) => p.consultation_pending))
-  const others = computed(() => projects.value.filter((p) => !p.consultation_pending))
+  const needsYou = computed(() => projects.value.filter(needsHuman))
+  const others = computed(() => projects.value.filter((p) => !needsHuman(p)))
   const archives = computed(() => buildProblemArchives(others.value))
   const filteredOthers = computed(() => {
     const q = query.value.trim().toLowerCase()
@@ -56,6 +62,7 @@ export function createProjectStore({ projectsApi = Projects } = {}) {
   const selectedProject = computed(() => projects.value.find((p) => p.base_name === selectedBase.value) || null)
 
   function patchProject(newProject, notify = () => {}) {
+    newProject = normalizeProjectStatus(newProject)
     const arr = projects.value
     const idx = arr.findIndex((p) => p.base_name === newProject.base_name)
     if (idx === -1) {
@@ -65,22 +72,22 @@ export function createProjectStore({ projectsApi = Projects } = {}) {
     }
     lastListFp = projects.value.map(fp).join('\u0001')
     if (awaitingSeen !== null) {
-      if (newProject.consultation_pending && !awaitingSeen.has(newProject.base_name)) {
+      if (needsHuman(newProject) && !awaitingSeen.has(newProject.base_name)) {
         notify(newProject.base_name)
         awaitingSeen.add(newProject.base_name)
-      } else if (!newProject.consultation_pending) {
+      } else if (!needsHuman(newProject)) {
         awaitingSeen.delete(newProject.base_name)
       }
     }
   }
 
   function applyProjects(list, notify = () => {}) {
-    const safeList = Array.isArray(list) ? list : []
+    const safeList = Array.isArray(list) ? list.map(normalizeProjectStatus) : []
     const agg = safeList.map(fp).join('\u0001')
     if (awaitingSeen === null) {
       projects.value = safeList
       lastListFp = agg
-      awaitingSeen = new Set(safeList.filter((p) => p.consultation_pending).map((p) => p.base_name))
+      awaitingSeen = new Set(safeList.filter(needsHuman).map((p) => p.base_name))
       return
     }
     if (agg === lastListFp) return

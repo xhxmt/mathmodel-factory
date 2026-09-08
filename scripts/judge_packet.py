@@ -19,6 +19,7 @@ from factory_core.paper_sources import (
 from scripts.json_evidence_view import SUFFIX as EVIDENCE_VIEW_SUFFIX, verify_view
 from scripts.packet_evidence import ALIAS_CONTRACT, PacketEvidence
 from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, MAX_RAW_BYTES, render_file as render_numpy
+from scripts.document_evidence_view import SUFFIXES as DOCUMENT_SUFFIXES, render_file as render_document, MAX_ASSET_BYTES, MAX_IMAGES
 
 try:
     from scripts.claim_graph import (
@@ -69,7 +70,8 @@ TEXT_SUFFIXES = {
 MAX_CONTEXT_BYTES = 180_000
 EXECUTION_CONTEXT_BYTES = 360_000
 MAX_FILE_BYTES = 55_000
-PACKET_VERSION = 5
+PACKET_VERSION = 6
+DOCUMENT_CONTEXT_BYTES = 2_000_000
 COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v1"
 
 
@@ -532,10 +534,14 @@ def _render_context(
     role: str,
     paths: list[Path],
     requirements: list[dict[str, object]],
+    assets: dict[str, bytes] | None = None,
 ) -> tuple[str, list[dict]]:
     chunks: list[str] = []
     files: list[dict] = []
     used = 0
+    document_used = 0
+    image_count = 0
+    assets = {} if assets is None else assets
     by_content: dict[str, dict] = {}
     critical_for: dict[str, list[str]] = {}
     for requirement in requirements:
@@ -561,6 +567,7 @@ def _render_context(
             files.append(item)
             continue
         item["sha256"] = _sha256(resolved)
+        document_assets = {}
         if path.suffix.lower() in NUMPY_SUFFIXES:
             try:
                 original, item["binary_review"] = render_numpy(resolved)
@@ -569,6 +576,16 @@ def _render_context(
                     raise ValueError("numpy_source_changed_during_read")
             except (OSError, ValueError) as exc:
                 item.update(status="omitted", reason=str(exc) if isinstance(exc, ValueError) else "numpy_source_unreadable")
+                files.append(item)
+                continue
+        elif path.suffix.lower() in DOCUMENT_SUFFIXES:
+            try:
+                original, item["document_review"], document_assets = render_document(resolved)
+                if (item["document_review"]["source_sha256"] != item["sha256"]
+                        or item["document_review"]["source_size"] != item["size"]):
+                    raise ValueError("document_source_changed_during_read")
+            except (OSError, ValueError) as exc:
+                item.update(status="omitted", reason=str(exc) if isinstance(exc, ValueError) else "document_source_unreadable")
                 files.append(item)
                 continue
         elif path.suffix.lower() not in TEXT_SUFFIXES:
@@ -597,19 +614,35 @@ def _render_context(
         # A role's primary evidence is all-or-nothing.  It may use the whole
         # context budget, but is never silently middle-truncated.  Secondary
         # code and appendices retain the per-file cap and are disclosed below.
-        if relative in critical_for or "binary_review" in item:
+        if relative in critical_for or "binary_review" in item or "document_review" in item:
             text = original
         else:
             framing_bytes = len((header + "\n").encode("utf-8"))
             remaining = max(0, context_limit - used - framing_bytes)
             text = _truncate_text(original, min(MAX_FILE_BYTES, remaining))
         encoded_size = len((header + text + "\n").encode("utf-8"))
-        if not text or used + encoded_size > context_limit:
-            item.update({"status": "omitted", "reason": "context_byte_limit"})
+        is_document = "document_review" in item
+        pages = len(item.get("document_review", {}).get("pages", []))
+        if image_count + pages > MAX_IMAGES:
+            item.update(status="omitted", reason="document_image_count_limit")
             files.append(item)
             continue
+        remaining = DOCUMENT_CONTEXT_BYTES - document_used if is_document else context_limit - used
+        if not text or encoded_size > remaining:
+            item.update({"status": "omitted", "reason": "document_context_byte_limit" if is_document else "context_byte_limit"})
+            files.append(item)
+            continue
+        if sum(len(data) for data in (assets | document_assets).values()) > MAX_ASSET_BYTES:
+            item.update(status="omitted", reason="document_asset_byte_limit")
+            files.append(item)
+            continue
+        assets.update(document_assets)
+        image_count += pages
         chunks.extend((header, text, "\n"))
-        used += encoded_size
+        if is_document:
+            document_used += encoded_size
+        else:
+            used += encoded_size
         included_size = len(text.encode("utf-8"))
         included_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
         chunk_id = hashlib.sha256(
@@ -753,7 +786,10 @@ def _manifest(
         "project": project.name,
         "status_counts": status_counts,
         "limits": {
-            "context_bytes": context_limit,
+            "context_bytes": context_limit + DOCUMENT_CONTEXT_BYTES,
+            "text_context_bytes": context_limit,
+            "document_context_bytes": DOCUMENT_CONTEXT_BYTES,
+            "document_asset_bytes": MAX_ASSET_BYTES,
             "per_file_bytes": MAX_FILE_BYTES,
             "critical_file_policy": "include_in_full_or_mark_role_incomplete",
         },
@@ -835,9 +871,11 @@ def packet_payloads(
                 requirements.append({"id": "claim_field:" + issue["claim_id"],
                     "paths": [issue["path"]], "binding_error": issue["reason"],
                     "field": issue["field"], "required_status": "included"})
-        context, files = _render_context(project, role, paths, requirements)
+        assets = {}
+        context, files = _render_context(project, role, paths, requirements, assets)
         result[role] = {
             "context": context,
+            "assets": assets,
             "manifest": _manifest(
                 project,
                 role,
@@ -888,6 +926,16 @@ def build_packets(
     payloads = packet_payloads(project, base_name, objective_evidence)
     result: dict[str, dict] = {}
     for role, payload in payloads.items():
+        for relative, data in payload["assets"].items():
+            destination = project / relative
+            if not destination.resolve().is_relative_to(project) or destination.is_symlink():
+                raise ValueError("packet asset escapes project")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_suffix(destination.suffix + ".tmp")
+            if temporary.is_symlink():
+                raise ValueError("unsafe packet asset temporary path")
+            temporary.write_bytes(data)
+            temporary.replace(destination)
         packet_dir = project / "judge_packets" / role
         packet_dir.mkdir(parents=True, exist_ok=True)
         context = str(payload["context"])

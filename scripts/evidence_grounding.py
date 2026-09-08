@@ -325,6 +325,8 @@ def _validate_grounding_payloads(
     role_output_loader: Callable[[], bytes] | None = None,
     manifest_loader: Callable[[], bytes] | None = None,
     context_loader: Callable[[], bytes] | None = None,
+    asset_loader: Callable[[str], bytes] | None = None,
+    pdf_verifier: Callable[[bytes, dict], None] | None = None,
 ) -> dict[str, Any]:
     """Validate already-loaded packet bytes without filesystem access."""
 
@@ -420,6 +422,17 @@ def _validate_grounding_payloads(
         except ModuleNotFoundError:  # direct script execution
             from numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, verify_capsule
         for path, item in chunks_by_path.items():
+            if "document_review" in item or path.lower().endswith((".xlsx", ".pdf")):
+                try:
+                    from scripts.document_evidence_view import verify_view as verify_document
+                except ModuleNotFoundError:
+                    from document_evidence_view import verify_view as verify_document
+                if asset_loader is None:
+                    raise GroundingError("DOCUMENT_ASSETS_MISSING", "exact packet asset bytes are required")
+                try:
+                    verify_document(sections[path]["text"], item, asset_loader, pdf_verifier=pdf_verifier)
+                except (ValueError, KeyError, OSError) as exc:
+                    raise GroundingError("DOCUMENT_REVIEW_INVALID", f"{path}: {exc}") from exc
             if "binary_review" in item or path.lower().endswith(tuple(NUMPY_SUFFIXES)):
                 try:
                     verify_capsule(sections[path]["text"], item)
@@ -561,6 +574,7 @@ def validate_grounding_bytes(
     context_bytes: bytes,
     *,
     role: str,
+    assets: dict[str, bytes] | None = None,
 ) -> dict[str, Any]:
     """Validate exact in-memory packet bytes and return a path-free report.
 
@@ -596,6 +610,7 @@ def validate_grounding_bytes(
         requested_role=role,
         manifest_label="manifest",
         context_label="context",
+        asset_loader=assets.__getitem__ if assets is not None else None,
     )
 
 
@@ -612,6 +627,11 @@ def validate_grounding(
     context_path = (context_path or manifest_path.with_name("context.txt")).resolve()
     role_path = role_path.resolve()
     requested_role = role or role_path.stem
+    try:
+        from scripts.document_evidence_view import read_asset, verify_pdf_source
+    except ModuleNotFoundError:
+        from document_evidence_view import read_asset, verify_pdf_source
+    project = manifest_path.parents[2]
     return _validate_grounding_payloads(
         role_output_bytes=None,
         manifest_bytes=None,
@@ -619,6 +639,8 @@ def validate_grounding(
         requested_role=requested_role,
         manifest_label=str(manifest_path),
         context_label=str(context_path),
+        asset_loader=lambda relative: read_asset(project, relative),
+        pdf_verifier=verify_pdf_source,
         manifest_loader=lambda: _read_bytes(
             manifest_path, "MANIFEST_UNREADABLE", "packet manifest"
         ),

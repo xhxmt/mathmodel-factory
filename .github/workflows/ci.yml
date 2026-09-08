@@ -76,6 +76,8 @@ jobs:
       - run: npm ci
         working-directory: web/frontend
       - run: uv run pytest -q tests/test_web_control_plane_api.py tests/test_control_plane_uploads.py tests/test_web_frontend_runtime_helpers.py
+      - run: node --test tests/state-adaptation.test.mjs tests/joint-modeling.test.mjs tests/phase6-controller.test.mjs
+        working-directory: web/frontend
       - run: npm run build
         working-directory: web/frontend
 
