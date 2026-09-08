@@ -301,11 +301,28 @@ class ConsultationRequest(BaseModel):
     impact: str | None = None
     key_files: list[str] | None = None
     suggestions: str | None = None
+    joint_modeling: bool = False
+    prompt_text: str | None = None
+    request: dict | None = None
+    workflow_revision: int | None = None
+    upload_manifest: list[dict] | None = None
+    attestations_required: list[str] | None = None
+    identity_assurance: str | None = None
 
 
 class ConsultationAnswer(BaseModel):
     answer: str
     expected_revision: int | None = None
+    request_id: str | None = None
+    generation: int | None = None
+    subject_fingerprint: str | None = None
+    options_fingerprint: str | None = None
+    attestations: dict[str, bool] = Field(default_factory=dict)
+
+
+class JointModelingConfigPayload(BaseModel):
+    enabled: bool = Field(..., strict=True)
+    expected_revision: int = Field(..., strict=True, ge=0)
 
 
 class ModelingDirectionSelection(BaseModel):

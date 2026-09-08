@@ -455,6 +455,11 @@ class FactoryService:
 
         normalized = validate_resolution(pending_action, resolution)
         gate = str(normalized.get("gate") or pending_action.get("gate") or "")
+        if gate in {"joint_modeling_candidates", "joint_modeling_risk"}:
+            from .joint_modeling import validate_response
+
+            validate_response(project, (pending_action.get("metadata") or {}).get("human_decision") or {},
+                              str(normalized.get("answer") or ""), normalized.get("attestations") or {})
         request_id = str(normalized.get("request_id") or "")
         if not request_id:
             from .human_decisions import build_decision_request

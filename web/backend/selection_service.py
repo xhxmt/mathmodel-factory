@@ -212,6 +212,14 @@ def build_step3_options(project_path: Path, *, now_epoch: int | None = None) -> 
         "ranking_policy": "correctness_feasibility_first",
         "options": options,
     }
+    from factory_core.joint_modeling import policy, selection_evidence
+
+    if policy(project_path)["enabled"]:
+        joint = selection_evidence(project_path)
+        payload["joint_modeling"] = joint
+        payload["deadline_epoch"] = None
+        for option in options:
+            option["evidence_files"] += joint["evidence_files"]
     _write_json_atomic(project_path / "selection" / "step3_options.json", payload)
     _write_text_atomic(project_path / "selection" / "step3_request.md", render_step3_request(payload))
     return payload
@@ -313,6 +321,15 @@ def write_selection_decision(
         ),
         "confirmations": [str(item) for item in (confirmations or []) if str(item)],
     }
+    if gate == "step3":
+        from factory_core.joint_modeling import policy, selection_evidence
+
+        if policy(project_path)["enabled"]:
+            if source not in {"web", "manual-cli", "manual"}:
+                raise SelectionError("联合建模必须由人工选模")
+            joint = selection_evidence(project_path)
+            decision["joint_modeling_synthesis_sha256"] = joint["synthesis_sha256"]
+            decision["joint_modeling_response_decision_id"] = joint["response_decision_id"]
     if gate in {"content_freeze", "delivery_freeze_override"}:
         decision["kind"] = "approval"
         decision["approved"] = not selected_option_id.lower().startswith(

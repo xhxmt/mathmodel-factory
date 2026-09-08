@@ -1949,10 +1949,16 @@ class SQLiteStateStore:
                 raise InvalidTransition("a resolved decision request cannot be superseded")
             from .human_decisions import decision_fingerprints
 
+            fresh_evidence = tuple(old_request.get("evidence") or ())
+            if pending_gate in {"joint_modeling_candidates", "joint_modeling_risk"}:
+                from .joint_modeling import refreshed_consultation
+
+                action, fresh_evidence = refreshed_consultation(self.project_dir, pending_gate)
+                pending = action.to_dict()
             current_subject, current_options = decision_fingerprints(
                 self.project_dir,
                 pending_gate,
-                tuple(old_request.get("evidence") or ()),
+                fresh_evidence,
             )
             if (
                 current_subject == str(old_row["subject_fingerprint"])
@@ -1975,9 +1981,9 @@ class SQLiteStateStore:
                 reason={
                     "code": "request_superseded",
                     "message": str(reason),
-                    "evidence": list(old_request.get("evidence") or ()),
+                    "evidence": list(fresh_evidence),
                 },
-                evidence=tuple(old_request.get("evidence") or ()),
+                evidence=fresh_evidence,
             ).to_dict()
             self._insert_decision_request(connection, fresh, created_at=now)
             connection.execute(
@@ -2127,6 +2133,10 @@ class SQLiteStateStore:
             subject_fingerprint=str(request["subject_fingerprint"]),
             options_fingerprint=str(request["options_fingerprint"]),
         )
+        if str(request["gate_type"]) in {"joint_modeling_candidates", "joint_modeling_risk", "step3"}:
+            from .joint_modeling import validate_durable_decision
+
+            validate_durable_decision(self.project_dir, json.loads(request["request_json"]), safe)
         selected = (
             safe.get("selected_option_id")
             or safe.get("selected_primary")

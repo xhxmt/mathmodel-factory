@@ -30,6 +30,18 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 - Time budget for the entire workflow defaults to 74 hours, but an explicitly supplied official competition deadline is authoritative. SQLite records `contest_started_at`, `contest_deadline_at`, `content_freeze_at` (T−6h), `delivery_freeze_at` (T−2h), and a six-hour delivery reserve. The shared lifecycle deadline caps model, command, audit, recovery, packaging, and publication work; Steps 0–15 cannot complete after content freeze, and Step 16 cannot switch the current release after the final deadline. Retry delays fail closed when they no longer fit.
 - Never stop at a plan or scaffold if the step requires concrete outputs on disk.
 
+## Optional joint modeling
+
+The project-scoped Claude Fable + GPT Pro workflow defaults off. A human may
+enable it while the native project is stopped, before Step 2 has ever started.
+Enabled Step 2 proposal/critique calls pin `claude-fable-5-1` with no fallback.
+Step 3 pauses for a request-bound Pro response, runs Claude synthesis, then
+opens the existing manual selection gate. Step 5 checks the selected full
+specification and pauses for a second Pro review plus human approval when the
+recorded risk conditions require it. No timeout chooses a model. Pro responses
+are human-mediated, with unverified model identity. See the precise conditions
+and current operation in [JOINT_MODELING.md](docs/operations/JOINT_MODELING.md).
+
 ## Contest Core v1
 
 The 17 internal Step contracts remain stable for validators and recovery, while

@@ -5,6 +5,7 @@ import signal
 import subprocess
 import time
 import threading
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -25,6 +26,7 @@ class ProcessRequest:
     stop_requested: Callable[[], bool] | None = None
     pass_fds: tuple[int, ...] = ()
     adopt_orphans: bool = False
+    stdin_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -55,7 +57,9 @@ class ProcessSupervisor:
         stderr_path = request.stderr_path or request.stdout_path
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
         started = time.monotonic()
-        with request.stdout_path.open("ab") as stdout_handle:
+        with ExitStack() as input_handles, request.stdout_path.open("ab") as stdout_handle:
+            stdin_handle = (input_handles.enter_context(request.stdin_path.open("rb"))
+                            if request.stdin_path is not None else subprocess.DEVNULL)
             if stderr_path == request.stdout_path:
                 stderr_handle = stdout_handle
                 close_stderr = False
@@ -68,7 +72,7 @@ class ProcessSupervisor:
                         list(request.argv),
                         cwd=request.cwd,
                         env=dict(request.env) if request.env is not None else None,
-                        stdin=subprocess.DEVNULL,
+                        stdin=stdin_handle,
                         stdout=stdout_handle,
                         stderr=stderr_handle,
                         start_new_session=True,

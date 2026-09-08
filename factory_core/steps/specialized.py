@@ -129,7 +129,10 @@ class ParallelProposalStep:
         project = context.project_dir
         prefix = f"m{stream}"
         if _verdict(project / f"{prefix}_critique.md") in {"VALIDATED", "ABANDONED"}:
-            return True
+            from ..joint_modeling import policy, stream_execution_evidence
+
+            if not policy(project)["enabled"] or stream_execution_evidence(project, prefix):
+                return True
         for round_number in range(1, self.max_rounds + 1):
             proposal = self.renderer.render(
                 "step2_modeling_proposal.txt",

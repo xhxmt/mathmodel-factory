@@ -104,6 +104,7 @@
           </button>
         </div>
         <AuditStatusPanel :project="project" />
+        <JointModelingPanel :base="project.base_name" :revision="project.revision" @changed="refresh" />
         <ContestTimingPanel :timing="contestDashboard?.timing || {}" />
         <DiagnosticsCard
           v-if="diagnostics && diagnostics.status && diagnostics.status.reason_code"
@@ -303,6 +304,7 @@ const LogConsole = defineAsyncComponent({ loader: () => import('./LogConsole.vue
 const ArtifactBrowser = defineAsyncComponent({ loader: () => import('./ArtifactBrowser.vue'), ...asyncOpts })
 const SolverJobPanel = defineAsyncComponent({ loader: () => import('./SolverJobPanel.vue'), ...asyncOpts })
 const ConsultationPanel = defineAsyncComponent({ loader: () => import('./ConsultationPanel.vue'), ...asyncOpts })
+const JointModelingPanel = defineAsyncComponent({ loader: () => import('./JointModelingPanel.vue'), ...asyncOpts })
 const DiagnosticsCard = defineAsyncComponent({ loader: () => import('./DiagnosticsCard.vue'), ...asyncOpts })
 const ModelManager = defineAsyncComponent({ loader: () => import('./ModelManager.vue'), ...asyncOpts })
 const CloudAcceleratorDialog = defineAsyncComponent({ loader: () => import('./CloudAcceleratorDialog.vue'), ...asyncOpts })
@@ -319,7 +321,7 @@ const OptionalWorkspaceExtensionPanel = optionalWorkspaceExtensionLoader
 
 export default {
   name: 'ProjectWorkspace',
-  components: { AuditStatusPanel, Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel, OptionalWorkspaceExtensionPanel },
+  components: { JointModelingPanel, AuditStatusPanel, Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel, OptionalWorkspaceExtensionPanel },
   props: {
     project: { type: Object, required: true },
     isAdmin: { type: Boolean, default: false },

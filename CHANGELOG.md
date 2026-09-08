@@ -1,4 +1,13 @@
 # Changelog
+- Added manually selected, per-project Claude Fable + GPT Pro joint modeling,
+  defaulting off. Claude is pinned to `claude-fable-5-1` without fallback; Pro
+  consultation and Claude synthesis precede mandatory human model selection,
+  with conditional pre-solve risk review. Web and CLI share versioned decisions.
+  Existing projects are never enabled by deployment. Operation and limitations:
+  `docs/operations/JOINT_MODELING.md`.
+- Refreshed two persisted-owner source coordinates and their derived identity
+  fixtures after the joint decision hooks. Solver owner symbol bytes and
+  workflow semantics remain unchanged; exact identity checks remain enabled.
 - The project-control compatibility helper forwards the required cancellation
   identity; bare PID calls fail closed. Its control-order test also verifies
   that the persisted identity is forwarded after the pause commits.

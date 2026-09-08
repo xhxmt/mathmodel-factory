@@ -195,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics = sub.add_parser("diagnostics")
     diagnostics.add_argument("project_dir")
 
+    joint = sub.add_parser("joint-modeling", help="Read or explicitly select the optional Claude + Pro workflow")
+    joint.add_argument("project_dir")
+    joint.add_argument("action", choices=["status", "enable", "disable", "consultation"])
+    joint.add_argument("--expected-revision", type=int)
+
     run = sub.add_parser("run")
     run.add_argument("project_dir")
     run.add_argument("--max-steps", type=int)
@@ -335,6 +340,20 @@ def main(argv: list[str] | None = None) -> int:
     project = Path(project_value).resolve() if project_value is not None else None
     service = FactoryService(ROOT)
     try:
+        if args.command == "joint-modeling":
+            from .joint_modeling import configure, consultation_view, status_view
+
+            assert project is not None
+            if args.action in {"enable", "disable"}:
+                if args.expected_revision is None:
+                    raise FactoryCoreError("切换联合建模需要 --expected-revision")
+                import getpass
+
+                configure(project, enabled=args.action == "enable", expected_revision=args.expected_revision,
+                          actor=f"manual-cli:{getpass.getuser()}")
+            result = consultation_view(project) if args.action == "consultation" else status_view(project)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "init":
             assert project is not None
             state = SQLiteStateStore(project).initialize(

@@ -52,6 +52,15 @@ class ModelDispatcher:
         step_key: str | int,
         defaults: tuple[str, ...],
     ) -> ExecutionResult:
+        if step_key == 2:
+            from ...joint_modeling import policy
+
+            if policy(request.project_dir)["enabled"]:
+                from ...joint_modeling_executor import JointClaudeBackend
+
+                # Explicit opt-in pins both proposals and critics. Never enter
+                # the normal registry fallback loop for this modeling mode.
+                return JointClaudeBackend(self.root).execute(request)
         policy = self.policy_for(request.project_dir.name, step_key, defaults)
         candidates: list[str] = []
         for model_id in (policy.primary, policy.fallback, *defaults):

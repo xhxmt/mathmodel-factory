@@ -64,6 +64,15 @@ def render_consultation_projection(decision: Mapping[str, Any]) -> str:
         raise ValueError("consultation projection requires a gate and exact answer")
     start, end = _markers(gate)
     answer_sha256 = hashlib.sha256(answer.encode("utf-8")).hexdigest()
+    # General project readers (including independent judges) receive only a
+    # receipt pointer. Joint advisory text is consumed through its own bound
+    # modeling path, never injected into the shared human-review preamble.
+    joint = gate in {"joint_modeling_candidates", "joint_modeling_risk"}
+    projected_answer = (
+        "Joint modeling advisory is retained in its immutable decision receipt; "
+        "consult the dedicated modeling panel."
+        if joint else answer
+    )
     return "\n".join(
         (
             start,
@@ -77,7 +86,7 @@ def render_consultation_projection(decision: Mapping[str, Any]) -> str:
             "SOURCE_OF_TRUTH: .factory/state.db",
             "PROJECTION: REBUILDABLE_DO_NOT_EDIT",
             "ANSWER_BEGIN",
-            answer,
+            projected_answer,
             "ANSWER_END",
             end,
         )
@@ -591,6 +600,10 @@ def authoritative_consultation_prompt(project_dir: str | Path) -> str:
         "Use these exact answers; contradictory mutable prose is not authoritative.",
     ]
     for decision in verification.decisions:
+        if decision.get("gate") in {"joint_modeling_candidates", "joint_modeling_risk"}:
+            # Independent modeling advice is supplied only to the modeling
+            # lifecycle. It must never enter final judges' generic preamble.
+            continue
         lines.extend(
             (
                 f"GATE: {decision.get('gate')}",

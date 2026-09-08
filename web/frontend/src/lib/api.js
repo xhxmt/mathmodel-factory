@@ -121,10 +121,16 @@ export const Projects = {
   })),
   file: (b, path) => api.get(`/api/projects/${b}/file`, { params: { path } }).then((r) => r.data),
   consultation: (b) => api.get(`/api/projects/${b}/consultation`).then((r) => r.data),
-  answer: (b, answer, expectedRevision = null) => api.post(`/api/projects/${b}/consultation/answer`, {
+  answer: (b, answer, expectedRevision = null, binding = {}) => api.post(`/api/projects/${b}/consultation/answer`, {
+    ...binding,
     answer,
     expected_revision: expectedRevision,
   }).then((r) => r.data),
+  jointModeling: (b) => api.get(`/api/projects/${b}/joint-modeling`).then((r) => r.data),
+  setJointModeling: (b, enabled, expectedRevision) => api.put(`/api/projects/${b}/joint-modeling`, {
+    enabled, expected_revision: expectedRevision,
+  }).then((r) => r.data),
+  jointConsultationPackage: (b) => api.get(`/api/projects/${b}/joint-modeling/consultation-package`, { responseType: 'blob' }).then((r) => r.data),
   modelingDirections: (b) => api.get(`/api/projects/${b}/modeling-directions`).then((r) => r.data),
   selectModelingDirection: (b, directionId) => api.post(`/api/projects/${b}/modeling-directions/selection`, { direction_id: directionId }).then((r) => r.data),
   problemPlan: (b) => api.get(`/api/projects/${b}/problem-plan`).then((r) => r.data),

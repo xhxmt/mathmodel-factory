@@ -113,6 +113,7 @@ def load_main_module(factory_root=None, auth_db_file=None):
 
     responses = types.ModuleType("fastapi.responses")
     responses.FileResponse = type("FileResponse", (), {})
+    responses.Response = type("Response", (), {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)})
     sys.modules["fastapi.responses"] = responses
 
     security = types.ModuleType("fastapi.security")

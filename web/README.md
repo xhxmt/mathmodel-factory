@@ -13,6 +13,8 @@
 
 ## 当前能力
 
+项目概览提供默认关闭的“GPT Pro + Claude Fable 联合建模”开关。新建时选择“仅创建”，随后人工开启并启动项目。候选生成、Pro 回填、Claude 综合和人工选模沿用现有工作流；详见 [联合建模操作说明](../docs/operations/JOINT_MODELING.md)。
+
 正常运行的证据和状态合同见 [Normal-run audit contracts](../docs/operations/NORMAL_RUN_AUDIT_CONTRACT.md)。项目概览分别显示当前执行、工作流错误、证据有效性、科学结论、诊断分数与交付状态；数学预审没有正式分数或交付权。恢复后历史错误仅保留在审计时间线。后台启动等待 worker 初始化确认，初始化失败会留下失败状态。
 
 - 管理员可分别配置未登录访客和具体注册用户可阅读的完成论文；展示 ACL 与项目控制 ACL 独立。

@@ -57,6 +57,11 @@ def _resume(project: Path) -> None:
 def prepare_step3(
     project: Path, now_epoch: int | None, *, required: bool = False
 ) -> int:
+    from factory_core.joint_modeling import policy, selection_evidence
+
+    if policy(project)["enabled"]:
+        required = True
+        selection_evidence(project)
     if not required and not selection_service.selection_enabled(project, "step3"):
         return 0
     if _decision_exists(project, "step3"):
@@ -66,6 +71,10 @@ def prepare_step3(
 
 
 def default_step3(project: Path, now_epoch: int | None, no_resume: bool) -> int:
+    from factory_core.joint_modeling import policy
+
+    if policy(project)["enabled"]:
+        raise selection_service.SelectionError("联合建模必须由人工选模，不能超时自动选择")
     if _decision_exists(project, "step3"):
         return 0
     payload = selection_service.read_selection_request(project, "step3")

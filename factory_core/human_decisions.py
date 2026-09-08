@@ -419,6 +419,10 @@ def validate_resolution(
     normalized = dict(resolution)
     normalized["gate"] = resolution_gate
     normalized["kind"] = kind.value
+    if pending_gate in {"joint_modeling_candidates", "joint_modeling_risk"}:
+        for key in ("request_id", "generation", "subject_fingerprint", "options_fingerprint"):
+            if normalized.get(key) != request.get(key):
+                raise InvalidTransition("联合建模答复必须显式绑定当前请求身份")
     if kind is HumanDecisionKind.SELECTION:
         selected = (
             normalized.get("selected_option")

@@ -36,6 +36,7 @@ class ModelRequest:
     deadline_epoch: int | None = None
     input_observer: Callable[[str, str], None] | None = None
     prompt_format: str = "raw"
+    stdin_file: Path | None = None
 
 
 class _ProcessModelBackend:
@@ -61,6 +62,7 @@ class _ProcessModelBackend:
                 timeout_seconds=timeout_seconds,
                 stdout_path=log,
                 env={**os.environ, **request.env},
+                stdin_path=request.stdin_file,
             )
         )
         metadata = {

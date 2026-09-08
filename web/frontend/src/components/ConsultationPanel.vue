@@ -6,7 +6,7 @@
         <div>
           <div class="ch-title">{{ req ? req.title : '人工咨询' }}</div>
           <div class="ch-sub mono">
-            <span class="tag tag-amber">{{ gate }}</span>
+            <span class="tag tag-amber">{{ req?.joint_modeling ? (gate === 'joint_modeling_risk' ? '求解前复核' : '候选复核') : gate }}</span>
             <span v-if="req">STEP {{ req.step }}</span>
             <span v-if="req" class="dim">· {{ req.created }}</span>
           </div>
@@ -25,6 +25,9 @@
       <span>{{ loadError }}</span>
       <button class="btn btn-sm btn-ghost" @click="fetch">
         <Icon name="refresh" :size="13" /> 重试
+      </button>
+      <button v-if="gate.startsWith('joint_modeling_') && revision !== null" class="btn btn-sm btn-amber" :disabled="refreshing" @click="refreshRequest">
+        {{ refreshing ? '更新中…' : '按当前材料重新生成请求' }}
       </button>
     </div>
 
@@ -78,6 +81,11 @@
       <section class="sec highlight">
         <div class="sec-h label amber">需要决定的事项</div>
         <div class="md" v-html="md(req.content)"></div>
+        <div v-if="req.joint_modeling" class="joint-tools">
+          <button class="btn btn-sm btn-ghost" @click="copyPrompt">复制提示词</button>
+          <button class="btn btn-sm btn-amber" :disabled="downloading" @click="downloadPackage">{{ downloading ? '打包中…' : '下载完整咨询材料' }}</button>
+          <p class="dim">下载的文本已合并提示词和清单材料。请在新对话中选择 Pro，上传该文件并要求完整复核。</p>
+        </div>
       </section>
 
       <!-- AI工具快捷入口 -->
@@ -85,7 +93,7 @@
         <div class="sec-h label">AI 工具快捷入口</div>
         <div class="tools-grid">
           <a
-            href="https://chatgpt.com/?model=gpt-4o"
+            href="https://chatgpt.com/"
             target="_blank"
             rel="noopener noreferrer"
             class="tool-card"
@@ -93,11 +101,12 @@
             <div class="tool-icon gpt"><Icon name="cpu" :size="18" /></div>
             <div class="tool-info">
               <div class="tool-name">ChatGPT Pro</div>
-              <div class="tool-desc">GPT-4 with extended thinking</div>
+              <div class="tool-desc">在新对话中手动选择 Pro 模型</div>
             </div>
             <Icon name="external-link" :size="14" class="tool-ext" />
           </a>
           <a
+            v-if="!req.joint_modeling"
             href="https://gemini.google.com/app"
             target="_blank"
             rel="noopener noreferrer"
@@ -111,6 +120,7 @@
             <Icon name="external-link" :size="14" class="tool-ext" />
           </a>
           <a
+            v-if="!req.joint_modeling"
             href="https://claude.ai/new"
             target="_blank"
             rel="noopener noreferrer"
@@ -139,20 +149,28 @@
       <section class="form">
         <div class="form-top">
           <span class="sec-h label amber">提交结论</span>
-          <div class="tmpl">
+          <div v-if="!req.joint_modeling" class="tmpl">
             <span class="tmpl-lbl mono">模板</span>
             <button v-for="t in templates" :key="t.name" class="tmpl-btn" @click="insert(t.body)">{{ t.name }}</button>
           </div>
         </div>
-        <p class="form-hint">粘贴 GPT Pro / Gemini Deep Think 的结论。按 <kbd>⌘/Ctrl</kbd>+<kbd>↵</kbd> 提交。</p>
+        <p class="form-hint">{{ req.joint_modeling ? '粘贴 Pro 返回的完整 JSON，并确认下方人工声明。' : '粘贴 GPT Pro / Gemini Deep Think 的结论。' }} 按 <kbd>⌘/Ctrl</kbd>+<kbd>↵</kbd> 提交。</p>
         <textarea
           ref="ta"
           v-model="answer"
           class="field answer mono"
           rows="11"
-          placeholder="## 方案结论&#10;&#10;推荐采用 …，理由 …"
+          :placeholder="req.joint_modeling ? '粘贴 Pro 返回的完整 JSON 答复' : '## 方案结论\n\n推荐采用 …，理由 …'"
           @keydown="onKey"
         ></textarea>
+        <fieldset v-if="req.joint_modeling" class="joint-attestations">
+          <legend>人工确认</legend>
+          <label v-for="key in req.attestations_required" :key="key">
+            <input v-model="attestations[key]" type="checkbox" />
+            <span>{{ attestationLabels[key] || key }}</span>
+          </label>
+          <p class="dim">网页模型身份由你声明；系统会校验回填内容与本次材料的对应关系。</p>
+        </fieldset>
         <div class="form-foot">
           <span class="meta mono">
             {{ answer.length }} 字
@@ -175,6 +193,7 @@ import Icon from './Icon.vue'
 import { Projects } from '../lib/api.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { buildConsultationWorkflow } from '../lib/workspaceUi.js'
+import { buildJointConsultationWorkflow, jointResponseBinding, jointAttestationLabels } from '../lib/jointModeling.js'
 import { useToasts } from '../composables/useToasts.js'
 
 export default {
@@ -190,6 +209,7 @@ export default {
   data() {
     return {
       req: null, loading: true, loadState: 'loading', loadError: '', answer: '', submitting: false, draftSaved: false,
+      attestations: {}, attestationLabels: jointAttestationLabels, downloading: false, refreshing: false, requestGeneration: 0,
       templates: [
         { name: '方案', body: '## 方案结论\n\n推荐主模型：\n\n关键参数：\n\n理由：\n' },
         { name: '灵敏度', body: '\n## 灵敏度 / 鲁棒性\n\n- 扰动范围：±\n- 验证方式：\n' },
@@ -198,10 +218,13 @@ export default {
     }
   },
   computed: {
-    draftKey() { return `pf_draft_${this.base}_${this.gate}` },
-    workflow() { return buildConsultationWorkflow(this.req || {}, this.answer) },
+    draftKey() { return `pf_draft_${this.base}_${this.gate}${this.req?.joint_modeling ? '_' + this.req.request?.request_id : ''}` },
+    workflow() { return this.req?.joint_modeling ? buildJointConsultationWorkflow(this.req, this.answer, this.attestations) : buildConsultationWorkflow(this.req || {}, this.answer) },
   },
   watch: {
+    base() { this.req = null; this.answer = ''; this.attestations = {}; this.fetch() },
+    gate() { this.fetch() },
+    revision() { if (!this.submitting) this.fetch() },
     answer(v) {
       localStorage.setItem(this.draftKey, v)
       this.draftSaved = !!v
@@ -211,16 +234,52 @@ export default {
     this.answer = localStorage.getItem(this.draftKey) || ''
     this.fetch()
   },
+  beforeUnmount() { this.requestGeneration++ },
   methods: {
+    async refreshRequest() {
+      this.refreshing = true
+      try {
+        await Projects.refreshSelection(this.base, { expected_revision: this.revision, gate: this.gate, reason: '用户按当前联合建模材料重新生成咨询请求' })
+        this.$emit('answered')
+        await this.fetch()
+      } catch (error) { this.toasts.error(error.response?.data?.detail || '请求更新失败') }
+      finally { this.refreshing = false }
+    },
+    async copyPrompt() {
+      try { await navigator.clipboard.writeText(this.req.prompt_text); this.toasts.success('提示词已复制') }
+      catch { this.toasts.error('复制失败，请下载咨询材料') }
+    },
+    async downloadPackage() {
+      this.downloading = true
+      try {
+        const blob = await Projects.jointConsultationPackage(this.base)
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `${this.base}-pro-consultation.txt`
+        link.click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+      } catch { this.toasts.error('咨询材料下载失败，请刷新请求后重试') }
+      finally { this.downloading = false }
+    },
     md(t) { return renderMarkdown(t) },
     async fetch() {
+      const generation = ++this.requestGeneration
       this.loading = true
       this.loadState = 'loading'
       this.loadError = ''
       try {
-        this.req = await Projects.consultation(this.base)
+        const request = await Projects.consultation(this.base)
+        if (generation !== this.requestGeneration) return
+        const previousId = this.req?.request?.request_id
+        this.req = request
+        if (request.joint_modeling && request.request?.request_id !== previousId) {
+          this.attestations = {}
+          this.answer = localStorage.getItem(this.draftKey) || ''
+        }
         this.loadState = 'ready'
       } catch (e) {
+        if (generation !== this.requestGeneration) return
         this.req = null
         if (e.response?.status === 404) {
           this.loadState = 'empty'
@@ -229,7 +288,7 @@ export default {
           this.loadError = e.response?.data?.detail || '咨询请求加载失败'
         }
       }
-      finally { this.loading = false }
+      finally { if (generation === this.requestGeneration) this.loading = false }
     },
     guessType(f) {
       const e = f.split('.').pop().toLowerCase()
@@ -256,7 +315,9 @@ export default {
       if (!this.workflow.ready || this.submitting) return
       this.submitting = true
       try {
-        await Projects.answer(this.base, this.answer, this.revision)
+        await Projects.answer(this.base, this.answer,
+          this.req.joint_modeling ? this.req.workflow_revision : this.revision,
+          this.req.joint_modeling ? jointResponseBinding(this.req, this.attestations) : {})
         localStorage.removeItem(this.draftKey)
         this.toasts.success('结论已提交，项目将恢复运行', this.base)
         this.$emit('answered')
@@ -279,9 +340,10 @@ export default {
 .ch-left { display: flex; align-items: center; gap: 12px; }
 .ch-icon { width: 34px; height: 34px; border-radius: var(--r); display: flex; align-items: center; justify-content: center; background: var(--amber); color: var(--amber-ink); flex-shrink: 0; }
 .ch-title { font-size: 15px; font-weight: 700; }
-.ch-sub { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-2); margin-top: 3px; }
+.ch-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-2); margin-top: 3px; }
+.ch-sub > span { white-space: nowrap; }
 .ch-sub .dim { color: var(--ink-3); }
-.ch-flag { color: var(--amber); }
+.ch-flag { color: var(--amber); white-space: nowrap; }
 
 .cons-state { padding: 40px; text-align: center; color: var(--ink-3); display: flex; align-items: center; justify-content: center; gap: 10px; flex-direction: column; }
 .cons-state.is-error { color: var(--bad); }
@@ -353,4 +415,11 @@ export default {
 .tool-ext { color: var(--ink-3); flex-shrink: 0; }
 .tools-hint { display: flex; align-items: flex-start; gap: 8px; padding: 10px; background: var(--amber-dim); border: 1px solid var(--amber-line); border-radius: var(--r-sm); font-size: 12px; line-height: 1.5; color: var(--ink-2); }
 .tools-hint svg { flex-shrink: 0; margin-top: 2px; color: var(--amber); }
+.joint-tools { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.joint-tools p { flex-basis: 100%; font-size: 12px; line-height: 1.6; }
+.joint-attestations { margin: 14px 0; padding: 12px; border: 1px solid var(--amber-line); border-radius: var(--r-sm); }
+.joint-attestations legend { font-size: 12px; padding: 0 5px; }
+.joint-attestations label { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.6; margin: 8px 0; }
+.joint-attestations input { margin-top: 3px; accent-color: var(--amber); }
+.joint-attestations p { font-size: 11px; margin: 12px 0 0; }
 </style>

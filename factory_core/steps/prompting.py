@@ -59,6 +59,10 @@ class PromptRenderer:
             + authoritative_consultation_prompt(project)
             + self._dynamic_consultation_preamble(project)
         )
+        if str(step_key) in {"3", "4", "5"}:
+            from ..joint_modeling import modeling_prompt_context
+
+            preamble += modeling_prompt_context(project)
         return preamble + text if include_preamble else text
 
     @staticmethod
