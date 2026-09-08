@@ -12,6 +12,7 @@ from conftest import REPO_ROOT
 from project_diagnostics import write_status
 from factory_core.domain import RevisionConflict, WorkflowStatus
 from factory_core.storage import SQLiteStateStore
+from factory_core.adapters.infrastructure.process import _process_identity
 
 
 LAUNCH = os.path.join(REPO_ROOT, "launch_agents.sh")
@@ -45,15 +46,27 @@ def test_pid_liveness_and_process_group_termination():
         [sys.executable, "-c", "import time; time.sleep(30)"],
         start_new_session=True,
     )
+    identity = _process_identity(process.pid)
     try:
         assert mod._is_pid_live(process.pid) is True
-        mod._terminate_runner(process.pid)
+        mod._terminate_runner(process.pid, identity)
         process.wait(timeout=5)
         assert mod._is_pid_live(process.pid) is False
     finally:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
+
+
+def test_compat_termination_requires_recorded_identity(monkeypatch):
+    mod = load_project_ctl_module()
+    calls = []
+    monkeypatch.setattr('factory_core.adapters.infrastructure.process._process_identity',
+                        lambda pid: calls.append(('identity', pid)))
+    monkeypatch.setattr('factory_core.service.os.kill', lambda *args: calls.append(('signal', args)))
+    with pytest.raises(RuntimeError, match='persisted launch identity'):
+        mod._terminate_runner(123456789)
+    assert calls == []
 
 
 def test_pause_project_sets_marker_and_clears_runtime_state(tmp_path):
@@ -198,15 +211,17 @@ def test_engine_control_commits_state_before_terminating_runner(tmp_path, monkey
             "status": WorkflowStatus.RUNNING,
             "active_step": 3,
             "runner_pid": 424242,
+            "runner_lease_id": "controlled-lease",
         },
+        payload={"worker_pid": 424242, "lease_id": "controlled-lease", "worker_identity": "controlled-start"},
     )
     observed = []
     monkeypatch.setattr(
         mod.FactoryService,
         "_terminate_runner",
         staticmethod(
-            lambda pid: observed.append(
-                (pid, SQLiteStateStore(tmp_path).load().status)
+            lambda pid, identity: observed.append(
+                (pid, identity, SQLiteStateStore(tmp_path).load().status)
             )
         ),
     )
@@ -216,7 +231,7 @@ def test_engine_control_commits_state_before_terminating_runner(tmp_path, monkey
     )
 
     assert result["paused"] is True
-    assert observed == [(424242, WorkflowStatus.PAUSED)]
+    assert observed == [(424242, "controlled-start", WorkflowStatus.PAUSED)]
 
 
 def test_project_summary_reads_canonical_status(tmp_path):

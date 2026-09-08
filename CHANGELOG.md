@@ -1,4 +1,7 @@
 # Changelog
+- The project-control compatibility helper forwards the required cancellation
+  identity; bare PID calls fail closed. Its control-order test also verifies
+  that the persisted identity is forwarded after the pause commits.
 - Follow-up normal-run repairs correct compat/worker readiness argument routing,
   verify cancellation against the persisted worker identity and lease, and add
   bounded, lossless NumPy evidence capsules across selection, aliases, coverage
