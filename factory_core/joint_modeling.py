@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 from .domain import InvalidTransition, PendingAction, WorkflowStatus
 from .storage import SQLiteStateStore
+from .stages import GatePolicy, stage_for_step
 from .workflow_events import canonical_hash
 
 
@@ -25,6 +26,27 @@ SCHEMA = "joint-modeling-v1"
 CANDIDATE_GATE = "joint_modeling_candidates"
 RISK_GATE = "joint_modeling_risk"
 GATES = {CANDIDATE_GATE, RISK_GATE}
+JOINT_GATE_CATALOG_VERSION = "joint-modeling-gates-v1"
+# This opt-in extension does not rewrite the frozen M0.2/M0.3 Gate bundle.
+# The same inventory drives PendingAction owner/Step metadata below.
+JOINT_GATE_POLICIES = tuple(
+    GatePolicy(
+        gate=gate,
+        stage_id=stage_for_step(step).id,
+        subtask_key=None,
+        source_step_id=step,
+        kind="human_consultation",
+        authority="project_workflow_decision",
+        condition=condition,
+        producer="factory_core.joint_modeling.consultation_action",
+        binding="fixed_owner_stage_from_optional_native_producer",
+        projects_pending_action=False,
+    )
+    for gate, step, condition in (
+        (CANDIDATE_GATE, 3, "joint_modeling_enabled_and_candidate_review_required"),
+        (RISK_GATE, 5, "joint_modeling_enabled_and_risk_review_required"),
+    )
+)
 MAX_TEXT_BYTES = 2_000_000
 MAX_PACKAGE_BYTES = 8_000_000
 ATTESTATIONS = (
@@ -359,11 +381,11 @@ def package_from_request(project: Path, request: Mapping) -> dict:
 
 
 def consultation_action(package: dict) -> PendingAction:
-    from .stages import stage_for_step
-
-    step = 3 if package["gate"] == CANDIDATE_GATE else 5
+    policy = next((item for item in JOINT_GATE_POLICIES if item.gate == package["gate"]), None)
+    if policy is None:
+        raise JointModelingError("未知联合建模咨询阶段")
     return PendingAction(type="human_consultation", gate=package["gate"], metadata={
-        "step": step, "consultation_owner_stage": stage_for_step(step).id,
+        "step": policy.source_step_id, "consultation_owner_stage": policy.stage_id,
         "joint_package_path": package["path"], "joint_package_sha256": package["package_sha256"],
     })
 

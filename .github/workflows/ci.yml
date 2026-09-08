@@ -14,12 +14,31 @@ concurrency:
 
 jobs:
   core:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare an identical-tree audit source fixture
+        run: |
+          ci_source_commit="$(git rev-parse HEAD)"
+          ci_source_tree="$(git rev-parse 'HEAD^{tree}')"
+          ci_source_time="$(git show -s --format=%cI HEAD)"
+          ci_fixture_commit="$(printf 'CI source fixture for %s\n' "$ci_source_commit" |
+            GIT_AUTHOR_DATE="$ci_source_time" GIT_COMMITTER_DATE="$ci_source_time" \
+            git -c user.name='CI source fixture' -c user.email='ci@example.invalid' \
+              commit-tree "$ci_source_tree" -p "$ci_source_commit")"
+          git checkout --detach "$ci_fixture_commit"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$ci_source_tree"
+      - name: Install native evidence and sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap poppler-utils
+          bwrap --unshare-all --new-session --die-with-parent --ro-bind / / --proc /proc --dev /dev /bin/true
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # M0.3 golden pins explicitly include the interpreter patch version.
+          python-version: "3.13.5"
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true

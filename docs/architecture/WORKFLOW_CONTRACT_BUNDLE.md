@@ -150,8 +150,15 @@ a Stage-1 fallback. The frozen Legacy adapter accepts any non-whitespace value
 from `.awaiting_consultation` via `GATE:([^\s]+)`; the bundle records this as
 `gate-family:legacy_dynamic`, with no Stage/Step and an explicit
 `UNANALYZABLE` compatibility diagnostic. A conservative AST inventory test
-scans every Native `PendingAction` producer plus the Legacy adapter, so a new
-literal producer cannot silently fall outside the bundle.
+scans every Native `PendingAction` producer plus the Legacy adapter. Default
+producers belong to this frozen bundle; separately enabled native extensions
+must declare their own versioned inventory and participate in the same exact
+producer-parity check. The opt-in joint-modeling extension declares
+`joint-modeling-gates-v1` in `factory_core.joint_modeling.JOINT_GATE_POLICIES`:
+candidate consultation owns Stage 2 / Step 3 and risk consultation owns Stage 4 /
+Step 5. These policies also drive their PendingAction metadata. They do not
+rewrite the frozen M0.2/M0.3 bundle or grant those shadow contracts joint-modeling
+authority; unknown native producers and unregistered joint gates still fail.
 
 ## Purity and later integration
 

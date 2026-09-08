@@ -122,6 +122,7 @@ def load_main_module(factory_root=None):
     # Mock responses
     responses = types.ModuleType("fastapi.responses")
     responses.FileResponse = type("FileResponse", (), {})
+    responses.Response = type("Response", (), {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)})
     sys.modules["fastapi.responses"] = responses
 
     # Mock security

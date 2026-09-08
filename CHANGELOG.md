@@ -1,4 +1,9 @@
 # Changelog
+- Integration fixes inventory opt-in joint-modeling Gates without changing frozen
+  M0.2/M0.3 contracts, preserve exact owner/Step bindings, and isolate joint API
+  tests from process-global framework stubs. Core CI now pins the recorded Python
+  runtime, installs native evidence/sandbox tools, and tests an identical-tree
+  single-parent Git source fixture.
 - The Web dashboard follows native Stage/subtask/Step coordinates, distinguishes
   running final audits from completion, and separates execution, evidence,
   scientific judgment and delivery permission. Human selection and consultation

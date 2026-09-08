@@ -1,5 +1,7 @@
 import asyncio
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -7,7 +9,27 @@ from factory_core.joint_modeling import ATTESTATIONS, CANDIDATE_GATE, policy
 from factory_core.service import FactoryService
 from factory_core.storage import SQLiteStateStore
 from test_joint_modeling import pending_request, pro_answer, project
-from test_web_control_plane_api import load_main_module
+
+
+def load_main_module(factory_root, auth_db_file):
+    """Build real routes without replacing process-global framework modules."""
+    from fastapi import HTTPException
+    from web.backend import project_api
+    from web.backend.config import Settings
+    from web.backend.schemas import UserInfo
+
+    settings = Settings(
+        factory_root=factory_root,
+        auth_db_file=auth_db_file,
+        jwt_secret="j" * 32,
+        admin_password="joint-modeling-test-password",
+    )
+    router = project_api.create_project_router(
+        settings, ticket_store=None, manager=SimpleNamespace(broadcast=AsyncMock()),
+    )
+    return SimpleNamespace(
+        app=router, project_api=project_api, UserInfo=UserInfo, HTTPException=HTTPException,
+    )
 
 
 def endpoint(mod, path, method="GET"):

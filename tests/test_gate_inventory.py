@@ -6,6 +6,13 @@ from pathlib import Path
 import pytest
 
 from factory_core.stages import GATE_POLICIES, gate_policy
+from factory_core.joint_modeling import (
+    GATES as JOINT_GATES,
+    JOINT_GATE_CATALOG_VERSION,
+    JOINT_GATE_POLICIES,
+    JointModelingError,
+    consultation_action,
+)
 from factory_core.workflow_contract import compile_workflow_contract_bundle
 
 
@@ -67,10 +74,14 @@ def _pending_action_gate_arguments(path: Path):
     return tuple(records)
 
 
-def test_every_native_pending_action_gate_producer_is_in_the_bundle_inventory() -> None:
+def test_every_native_pending_action_gate_producer_is_in_a_versioned_inventory() -> None:
     bundle = compile_workflow_contract_bundle()
     exact = {gate.gate: gate for gate in bundle.gates if gate.gate_family == "exact"}
     producers = {gate.producer for gate in bundle.gates}
+    # Joint modeling is a separately enabled native extension. Keep the frozen
+    # default bundle intact while still inventorying every native producer.
+    producers.update(policy.producer for policy in JOINT_GATE_POLICIES)
+    exact.update({policy.gate: policy for policy in JOINT_GATE_POLICIES})
     records = tuple(
         record
         for path in NATIVE_PRODUCER_ROOTS
@@ -94,12 +105,15 @@ def test_native_pending_action_producers_have_exact_policy_parity() -> None:
 
     assert records == {
         ("factory_core.engine.FactoryEngine.run", "delivery_freeze_override"),
+        ("factory_core.joint_modeling.consultation_action", None),
         ("factory_core.steps.gates._consultation_gate", None),
         ("factory_core.steps.gates.prepare_human_gates", "content_freeze"),
         ("factory_core.steps.gates.prepare_human_gates", "step3"),
         ("factory_core.steps.validators.NativeArtifactValidator._step_9", "step8_5"),
     }
-    inventoried_producers = {policy.producer for policy in GATE_POLICIES}
+    inventoried_producers = {
+        policy.producer for policy in (*GATE_POLICIES, *JOINT_GATE_POLICIES)
+    }
     assert {producer for producer, _gate in records} <= inventoried_producers
 
 
@@ -113,6 +127,24 @@ def test_unknown_exact_gate_policy_fails_closed_without_a_default() -> None:
     assert len(legacy_families) == 1
     assert legacy_families[0].gate_family == "legacy_arbitrary"
     assert legacy_families[0].compatibility_diagnostic == "UNANALYZABLE"
+
+
+def test_optional_joint_gate_inventory_drives_exact_pending_action_bindings() -> None:
+    assert JOINT_GATE_CATALOG_VERSION == "joint-modeling-gates-v1"
+    assert {policy.gate for policy in JOINT_GATE_POLICIES} == JOINT_GATES
+    assert {
+        (policy.gate, policy.stage_id, policy.source_step_id)
+        for policy in JOINT_GATE_POLICIES
+    } == {("joint_modeling_candidates", 2, 3), ("joint_modeling_risk", 4, 5)}
+    for policy in JOINT_GATE_POLICIES:
+        action = consultation_action({
+            "gate": policy.gate, "path": "package.json", "package_sha256": "a" * 64,
+        })
+        assert action.gate == policy.gate
+        assert action.metadata["step"] == policy.source_step_id
+        assert action.metadata["consultation_owner_stage"] == policy.stage_id
+    with pytest.raises(JointModelingError, match="未知联合建模咨询阶段"):
+        consultation_action({"gate": "unregistered_joint_gate"})
 
 
 def test_dynamic_native_and_legacy_gate_families_are_explicit_not_fake_stages() -> None:
