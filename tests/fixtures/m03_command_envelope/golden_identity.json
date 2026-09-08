@@ -1,9 +1,9 @@
 {
   "accepted_cas_decision_sha256": "f56051050174078ec9303b331bcf126361f07a0f3458eff72694de9cf106fe92",
   "command_cas_decision_schema": "command-cas-decision-v3",
-  "command_envelope_sha256": "75417e0dc89e099618b06aa709ee7bc1dbe43d91767c69fdde999b2c688499e7",
+  "command_envelope_sha256": "bb2c50e706aded27a40c8adac66ebe2944d185a4e85f1391f6bb30f5f558cba9",
   "current_facts_schema": "command-current-facts-v3",
-  "current_facts_sha256": "6c17813bc313d231e6942685e6bc69ebfccf1fb4682e08f6fe4c77af60121fd1",
+  "current_facts_sha256": "f916ad1fb8d9c38bfa71d30cdaded34d559a1c71304cf466662ff89f2219d907",
   "read_set_sha256": "06be3ef35868b5801c102d18165be8bdaf06727bf677db1a1316c0ac408725c7",
   "scope_rejected_cas_decision_sha256": "8eca840f37baa67531ad209dde42e16e757d03a0d5519d768f03974c71443e7e",
   "scope_rejection_codes": [

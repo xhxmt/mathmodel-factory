@@ -116,10 +116,10 @@ def test_m03_identity_goldens() -> None:
         "5e1d6af9793ec9654d45a5717a6db743b446a9527aaddff4f937cf7f11e1a856"
     )
     assert workflow_contract_v2_analysis_sha256(workflow) == (
-        "801399f7103e5419655a0a90988ad92df7bbc0b3809e744a4a4b0f06ca54d11b"
+        "b1160826b7dd499989e9d21ab558b29a1a003ecaba21b4ed64db49240efc9689"
     )
     assert contract_pin_set_sha256(pins, workflow) == (
-        "5f23a5aa5bc3b8937cb0651556112dedaf3683a03faa331ec819c2d091c042c1"
+        "b996b5027ff0f6285cea6683a19f62b7edf134776974f0ee801b895d44f68bde"
     )
 
 

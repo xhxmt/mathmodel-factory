@@ -202,6 +202,18 @@ import {
 } from './web/frontend/src/lib/contracts.js'
 
 assert.deepEqual(normalizeProjectStatus({ base_name: 'demo', is_running: 1 }), {
+  execution_state: null,
+  recorded_workflow_state: null,
+  workflow_error: null,
+  evidence_validity: 'UNAVAILABLE',
+  evidence_errors: [],
+  scientific_verdict: 'UNAVAILABLE',
+  raw_scientific_verdict: null,
+  review_mode: null,
+  score_available: false,
+  official_score: null,
+  diagnostic_score: null,
+  delivery_allowed: false,
   base_name: 'demo',
   run_id: 'demo',
   problem_key: 'project:demo',

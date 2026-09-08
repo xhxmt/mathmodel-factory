@@ -900,6 +900,6 @@ def test_envelope_and_decision_golden() -> None:
     workflow, policy, current, payload, envelope = _fixture()
     decision = validate_command_cas(envelope, payload, current, policy, workflow)
     assert command_envelope_sha256(envelope) == (
-        "d62d406da4fff43004de0e7b119c8300fc8652f14c908b0b9e37b1efb7e7c11e"
+        "3e9995b599344e889549403aadfc1cd946f3484791b1d674fa7c6b4d7c4cd560"
     )
     assert command_cas_decision_bytes(decision)

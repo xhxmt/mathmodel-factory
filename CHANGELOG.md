@@ -1,4 +1,7 @@
 # Changelog
+- Refreshed the two persisted-owner source-span coordinates after storage changes
+  and regenerated their derived identity goldens. Symbol bytes, owner semantics,
+  and the frozen classifier remain unchanged; exact comparisons stay enabled.
 - Normal-run audit repairs keep state/checkpoint/event writes atomic, bind API
   judges to final sent input, resolve packet aliases consistently, and derive
   required execution evidence from adopted solver jobs.
