@@ -231,7 +231,8 @@ Document limits are 4 MiB per source, 32 MiB expanded XLSX content, 32 worksheet
 100,000 stored cells, 32 pages per PDF, 128 images and 32 MiB assets per role, and
 2,000,000 additional document-text bytes per role. The existing ordinary-text
 budgets (180,000 bytes; execution 360,000) remain separate. Native API judge
-context is included in full, with a 4,000,000-byte combined input cap; it is never
+context is included in full, with a 4,000,000-byte combined text input cap (including
+the task prompt and framing); it is never
 silently truncated at the generic API runner's 200,000-byte per-file limit.
 Oversized required evidence remains required and makes the role incomplete.
 

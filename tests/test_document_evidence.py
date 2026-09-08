@@ -184,6 +184,15 @@ def test_codex_attaches_every_page_and_other_cli_adapters_fail_closed(tmp_path):
     assert AgyBackend(tmp_path).execute(request).error_class == 'PERMANENT_MULTIMODAL_UNSUPPORTED'
 
 
+def test_api_capacity_includes_task_prompt_and_framing(tmp_path, monkeypatch):
+    from scripts import api_agent_run as api
+    document_project(tmp_path)
+    monkeypatch.setattr(api, '_MAX_JUDGE_INPUT_BYTES', 100_000)
+    with pytest.raises(ValueError, match='combined judge prompt and context'):
+        api.build_effective_prompt(tmp_path, 'x'*100_001,
+            ['judge_packets/execution/context.txt'], 'judge_outputs/execution.md')
+
+
 @pytest.mark.parametrize('backend', ['openai', 'gemini'])
 def test_http_request_contains_exact_png_bytes(monkeypatch, backend):
     from scripts import llm_judge_call as llm
