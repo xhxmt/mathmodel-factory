@@ -668,6 +668,13 @@ class JudgeStep:
             packet = project / "judge_packets" / role
             try:
                 manifest = json.loads((packet / "manifest.json").read_text(encoding="utf-8"))
+                from scripts.document_evidence_view import manifest_assets, read_asset, image_inputs, image_records
+                if isinstance(manifest, dict):
+                    for relative, info in manifest_assets(manifest).items():
+                        data = read_asset(project, relative)
+                        if len(data) != info["bytes"] or hashlib.sha256(data).hexdigest() != info["sha256"]:
+                            raise ValueError("packet document asset changed")
+                    image_inputs(project, [im["path"] for im in image_records(manifest)])
                 completeness = manifest.get("completeness") if isinstance(manifest, dict) else None
                 requirements = completeness.get("requirements") if isinstance(completeness, dict) else None
                 if not (
@@ -685,7 +692,7 @@ class JudgeStep:
                         for item in (requirements or []) if isinstance(item, dict)
                         and item.get("satisfied") is not True
                     ] if isinstance(requirements, list) else []
-            except (OSError, ValueError):
+            except (OSError, ValueError, KeyError, TypeError):
                 blocked_roles[role] = []
         if not blocked_roles:
             return None
@@ -1252,6 +1259,7 @@ class JudgeStep:
                     f"judge_packets/{role}/manifest.json",
                     "judge_packets/objective_evidence.json",
                 ),
+                image_files=tuple(image["path"] for image in expected["image_inputs"]),
                 effective_prompt_file=snapshot,
                 isolated=True,
                 final_response_file=final_response,
@@ -1306,6 +1314,13 @@ class JudgeStep:
             return ExecutionResult.failed(
                 "TRANSIENT_JUDGE_PROVENANCE", returncode=annotated.returncode, role=role
             )
+        if expected["image_inputs"]:
+            if result.metadata.get("image_inputs") != expected["image_inputs"]:
+                raise judge_batch.JudgeBatchError("backend did not deliver the required page images")
+            from scripts.judgment_receipt import _atomic_write_json
+            metadata = json.loads(metadata_path.read_text())
+            metadata["image_inputs"] = result.metadata["image_inputs"]
+            _atomic_write_json(metadata_path, metadata)
         # Freeze only after the actual annotation succeeded and every input is
         # still identical. A failed/partial call leaves an uncommitted archive.
         if judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt,
@@ -1331,6 +1346,10 @@ class JudgeStep:
             "- Do not read those general project files. The only permitted inputs are exactly "
             f"judge_packets/{role}/context.txt, judge_packets/{role}/manifest.json, and "
             "judge_packets/objective_evidence.json.",
+            "- The document page images attached to this request are also permitted inputs. "
+            "Match each image, in attachment order, to its PAGE locator and hash in context.txt. "
+            "Inspect every attached page; use its unique PAGE locator as the exact quote for visual findings. "
+            "If any page is unreadable, return INDETERMINATE and identify that page.",
             f"- The generic paths judge_packets/context.txt and judge_packets/manifest.json do "
             f"not exist. Never omit the {role}/ directory.",
             "- Write only the required judge output file.",

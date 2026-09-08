@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import re
 try:
+    from scripts.document_evidence_view import SUFFIXES as DOCUMENT_SUFFIXES, complete_binding as document_complete
+except ModuleNotFoundError:
+    from document_evidence_view import SUFFIXES as DOCUMENT_SUFFIXES, complete_binding as document_complete
+try:
     from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, complete_binding
 except ModuleNotFoundError:  # direct script execution
     from numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, complete_binding
@@ -50,6 +54,8 @@ class PacketEvidence:
             if canonical["status"] == "included":
                 if "binary_review" in canonical:
                     complete = complete_binding(canonical) and item.get("binary_review") == canonical["binary_review"]
+                elif "document_review" in canonical:
+                    complete = document_complete(canonical) and item.get("document_review") == canonical["document_review"]
                 else:
                     complete = (canonical.get("included_sha256") == digest
                                 and canonical.get("included_bytes") == item["size"])
@@ -73,6 +79,8 @@ class PacketEvidence:
 
     def complete(self, path):
         item = self.resolve(path)
+        if item is not None and ("document_review" in item or path.lower().endswith(tuple(DOCUMENT_SUFFIXES))):
+            return item.get("status") == "included" and document_complete(item)
         return (item is not None and item.get("status") == "included"
                 and (("binary_review" not in item and not path.lower().endswith(tuple(NUMPY_SUFFIXES)))
                      or complete_binding(item)))

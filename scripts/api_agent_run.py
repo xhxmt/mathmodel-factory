@@ -43,6 +43,7 @@ import llm_judge_call  # noqa: E402
 
 # Files whose content is too big / noisy to ever inline.
 _MAX_CTX_BYTES = 200_000
+_MAX_JUDGE_INPUT_BYTES = 4_000_000
 
 
 def _project_path(project: Path, relative: str) -> Path:
@@ -90,20 +91,28 @@ def _inline_context(project: Path, rel_paths: list[str]) -> tuple[str, list[dict
             candidates.append((manifest_label, manifest))
         candidates.append((rel, p))
         for label, candidate in candidates:
+            strict_packet = (candidate.parent.name in {"math", "execution", "paper"}
+                             and candidate.name in {"context.txt", "manifest.json"}) or label == "judge_packets/objective_evidence.json"
             resolved = candidate.resolve()
             if resolved in seen:
                 continue
             seen.add(resolved)
             try:
                 if not candidate.is_file():
+                    if strict_packet:
+                        raise ValueError("required judge input missing: " + label)
                     records.append({"path": label, "status": "missing"})
                     continue
-                data = candidate.read_text(errors="replace")
+                data = candidate.read_text(encoding="utf-8", errors="strict" if strict_packet else "replace")
             except OSError:
+                if strict_packet:
+                    raise ValueError("required judge input unreadable: " + label)
                 records.append({"path": label, "status": "unreadable"})
                 continue
             original = data.encode("utf-8")
-            if len(original) > _MAX_CTX_BYTES:
+            if strict_packet and len(original) > _MAX_JUDGE_INPUT_BYTES:
+                raise ValueError("judge input byte limit: " + label)
+            if len(original) > _MAX_CTX_BYTES and not strict_packet:
                 data = original[:_MAX_CTX_BYTES].decode("utf-8", errors="ignore") + "\n…(truncated)…\n"
                 status = "truncated"
             else:
@@ -234,6 +243,8 @@ def build_effective_prompt(project: Path, base_prompt: str, rel_paths: list[str]
                            out_rel: str) -> tuple[str, list[dict]]:
     """Build the exact HTTP user input before freezing or dispatching it."""
     context, context_records = _inline_context(project, rel_paths)
+    if any(p.startswith("judge_packets/") for p in rel_paths) and len(context.encode()) > _MAX_JUDGE_INPUT_BYTES:
+        raise ValueError("combined judge input byte limit")
     full_prompt = (
         base_prompt
         + "\n\n"
@@ -272,6 +283,8 @@ def main() -> int:
                     help="Require this frozen final-input hash before any model call.")
     ap.add_argument("--context-file", action="append", default=[],
                     help="Relative-to-project file to inline as context (repeatable).")
+    ap.add_argument("--image-file", action="append", default=[])
+    ap.add_argument("--expected-image-inputs-sha256")
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--max-tokens", type=int, default=8000)
     ap.add_argument("--overwrite", action="store_true",
@@ -301,6 +314,31 @@ def main() -> int:
         print("ERROR: effective prompt differs from frozen input", file=sys.stderr)
         return 2
     configuration = _configuration_record(args, base_prompt, context_records, full_prompt)
+    from document_evidence_view import image_inputs, read_asset, image_records
+    try:
+        images = image_inputs(project, args.image_file)
+        required_images = []
+        for relative in args.context_file:
+            if relative.endswith("/context.txt") and Path(relative).parent.name in {"math", "execution", "paper"}:
+                manifest = json.loads(_project_path(project, relative).with_name("manifest.json").read_text())
+                required_images.extend({k: im[k] for k in ("path", "sha256", "bytes")}
+                                       for im in image_records(manifest))
+        if required_images != images:
+            raise ValueError("required judge image attachments differ from manifest")
+        if (args.expected_image_inputs_sha256 is not None and
+                _sha256(json.dumps(images, sort_keys=True).encode()) != args.expected_image_inputs_sha256):
+            raise ValueError("image inputs differ from frozen input")
+        image_data = [read_asset(project, im["path"]) for im in images]
+        if any(_sha256(data) != im["sha256"] for data, im in zip(image_data, images)):
+            raise ValueError("image changed before transport")
+        if images:
+            configuration["image_inputs"] = images
+            configuration["configuration_fingerprint"] = _sha256(json.dumps(
+                {k: v for k, v in configuration.items() if k != "configuration_fingerprint"},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     if args.effective_prompt_file:
         try:
             effective_prompt_path = _project_path(project, args.effective_prompt_file)
@@ -314,6 +352,7 @@ def main() -> int:
         text = llm_judge_call.call(
             full_prompt, args.model, args.timeout, args.max_tokens,
             backend=args.backend, base_url=args.base_url, key_env=args.key_env,
+            **({"images": image_data} if images else {}),
         )
     except subprocess.TimeoutExpired:
         print(f"ERROR: model '{args.model}' timed out after {args.timeout}s", file=sys.stderr)

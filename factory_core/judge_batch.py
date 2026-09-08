@@ -41,13 +41,27 @@ def descriptor(project, root, step_id, role, template_prompt, *, prompt_format="
     paths = ["judge_packets/objective_evidence.json"]
     paths += [f"judge_packets/{r}/{name}" for r in ("math", "execution", "paper")
               for name in ("context.txt", "manifest.json")]
+    from scripts.document_evidence_view import manifest_assets, image_records, read_asset
+    images = []
+    for r in ("math", "execution", "paper"):
+        manifest = json.loads((project / f"judge_packets/{r}/manifest.json").read_text())
+        for path, info in manifest_assets(manifest).items():
+            data = read_asset(project, path)
+            if {"path": path, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()} != info:
+                raise JudgeBatchError("packet asset changed before batch")
+            if path not in paths:
+                paths.append(path)
+        if r == role:
+            images = [{k: image[k] for k in ("path", "sha256", "bytes")}
+                      for image in image_records(manifest)]
     prompt = effective_prompt(project, role, template_prompt, prompt_format)
-    return {"schema": "judge-batch-v2", "project": str(project.resolve()), "factory_root": str(root.resolve()),
+    return {"schema": "judge-batch-v3", "project": str(project.resolve()), "factory_root": str(root.resolve()),
             "execution_step_id": step_id, "template_step_id": 13, "role": role,
             "prompt_format": prompt_format,
             "template_prompt_sha256": hashlib.sha256(template_prompt.encode()).hexdigest(),
             "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
             "inputs": {p: record(project / p) for p in paths},
+            "image_inputs": images,
             "evaluator": evaluator_contract_payload(project.name, root, execution_step_id=step_id)}
 
 
@@ -80,6 +94,8 @@ def commit(project, binding, expected, *, exit_code, prompt_path, response_path,
     if record(prompt_path)["sha256"] != expected["prompt_sha256"]:
         raise JudgeBatchError("rendered prompt changed during call")
     metadata = json.loads(metadata_path.read_text())
+    if expected.get("image_inputs") and metadata.get("image_inputs") != expected["image_inputs"]:
+        raise JudgeBatchError("required page images were not bound to the transport receipt")
     if (metadata.get("response_sha256") != record(response_path)["sha256"]
             or metadata.get("execution_step_id") != expected["execution_step_id"]
             or metadata.get("template_step_id") != 13):
@@ -114,6 +130,8 @@ def verify(project, binding, expected=None):
             raise JudgeBatchError("call seal changed")
         seal = json.loads((folder / "committed.json").read_text())
         request = seal["request"]
+        if request.get("image_inputs") and json.loads((folder / "metadata").read_text()).get("image_inputs") != request["image_inputs"]:
+            raise JudgeBatchError("image transport receipt differs from frozen batch")
         if json.loads((folder / "request.json").read_text()) != request:
             raise JudgeBatchError("frozen request differs from call seal")
         if descriptor(project, Path(request["factory_root"]), request["execution_step_id"],

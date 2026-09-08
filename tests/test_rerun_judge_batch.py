@@ -73,7 +73,7 @@ def test_corrupt_or_partial_call_never_reused(tmp_path, fault):
 def test_changed_packet_and_grounding_retry_start_new_calls(tmp_path):
     run, dispatcher = fixture(tmp_path)
     first = run()
-    (tmp_path / "judge_packets/paper/manifest.json").write_text("changed")
+    (tmp_path / "judge_packets/paper/manifest.json").write_text('{"changed":true}')
     with pytest.raises(JudgeBatchError):
         verify(tmp_path, first.metadata["audit_binding"])
     second = run()

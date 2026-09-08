@@ -39,6 +39,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -60,7 +61,7 @@ UNTRUSTED_DATA_SYSTEM_PROMPT = (
 
 
 def _openai_compat_call(prompt: str, model: str, timeout: int, max_tokens: int,
-                        base_url: str, key_env: str) -> str:
+                        base_url: str, key_env: str, images=None) -> str:
     """Generic OpenAI-compatible /chat/completions backend.
 
     Works for DeepSeek, Qwen/DashScope (compatible-mode), Moonshot, OpenRouter,
@@ -76,7 +77,10 @@ def _openai_compat_call(prompt: str, model: str, timeout: int, max_tokens: int,
         "model": model,
         "messages": [
             {"role": "system", "content": UNTRUSTED_DATA_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": ([{"type": "text", "text": prompt}] + [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," +
+                    base64.b64encode(data).decode("ascii"), "detail": "high"}}
+                for data in images]) if images else prompt},
         ],
         "max_tokens": max_tokens,
         "temperature": 0.0,
@@ -97,7 +101,7 @@ def _deepseek_call(prompt: str, model: str, timeout: int, max_tokens: int) -> st
                                "https://api.deepseek.com", "DEEPSEEK_API_KEY")
 
 
-def _gemini_call(prompt: str, model: str, timeout: int, max_tokens: int) -> str:
+def _gemini_call(prompt: str, model: str, timeout: int, max_tokens: int, images=None) -> str:
     key = os.environ.get("GEMINI_API_KEY", "")
     if not key:
         raise RuntimeError("GEMINI_API_KEY not set")
@@ -114,7 +118,9 @@ def _gemini_call(prompt: str, model: str, timeout: int, max_tokens: int) -> str:
     for attempt, budget in enumerate(budgets):
         body = json.dumps({
             "systemInstruction": {"parts": [{"text": UNTRUSTED_DATA_SYSTEM_PROMPT}]},
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"parts": [{"text": prompt}] + [
+                {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(data).decode("ascii")}}
+                for data in (images or [])]}],
             "generationConfig": {"maxOutputTokens": budget, "temperature": 0.0},
         }).encode()
         req = urllib.request.Request(
@@ -228,27 +234,31 @@ def _anthropic_compat_call(
 
 def call(prompt: str, model: str, timeout: int, max_tokens: int,
          backend: str | None = None, base_url: str | None = None,
-         key_env: str | None = None) -> str:
+         key_env: str | None = None, images=None) -> str:
     """Dispatch a single-shot call.
 
     If `backend` is given, use it explicitly (registry-driven path).  Otherwise
     fall back to prefix dispatch on the model name (legacy harness path).
     """
+    image_kwargs = {"images": images} if images else {}
+    if images and (model.startswith("deepseek") or backend == "claude"
+                   or (backend is None and not model.startswith("gemini"))):
+        raise RuntimeError("selected backend/model has no supported image transport")
     if backend:
         backend = backend.lower()
         if backend in ("openai", "deepseek", "qwen", "openai_compat"):
             url = base_url or "https://api.deepseek.com"
             env = key_env or "DEEPSEEK_API_KEY"
-            return _openai_compat_call(prompt, model, timeout, max_tokens, url, env)
+            return _openai_compat_call(prompt, model, timeout, max_tokens, url, env, **image_kwargs)
         if backend == "gemini":
-            return _gemini_call(prompt, model, timeout, max_tokens)
+            return _gemini_call(prompt, model, timeout, max_tokens, **image_kwargs)
         if backend == "claude":
             return _claude_call(prompt, model, timeout, max_tokens)
         raise RuntimeError(f"unknown backend '{backend}'")
     if model.startswith("deepseek"):
         return _deepseek_call(prompt, model, timeout, max_tokens)
     if model.startswith("gemini"):
-        return _gemini_call(prompt, model, timeout, max_tokens)
+        return _gemini_call(prompt, model, timeout, max_tokens, **image_kwargs)
     return _claude_call(prompt, model, timeout, max_tokens)
 
 

@@ -1,4 +1,11 @@
 # Changelog
+- Native review now carries complete, source-bound XLSX cell maps and all PDF
+  pages through bounded document packets, actual image transport, archived call
+  inputs and exact-quote grounding. Native PDF grounding rerenders frozen sources;
+  the path-free shadow API remains fail-closed for this derivation. API judge
+  inputs no longer silently truncate at 200,000 bytes. Unsupported formats,
+  image transports and exceeded limits remain explicit failures. No model,
+  workflow gate, acceptance/release authority or deferred N03 behavior changes.
 - The project-control compatibility helper forwards the required cancellation
   identity; bare PID calls fail closed. Its control-order test also verifies
   that the persisted identity is forwarded after the pause commits.
