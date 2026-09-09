@@ -1130,7 +1130,10 @@ def _verify_execution_sandbox(
         raise RuntimeError(f"execution sandbox source-state mounts differ: {record_name}")
     expected = [
         "/usr/bin/bwrap", "--unshare-all", "--die-with-parent", "--new-session",
-        "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+        "--ro-bind", "/", "/",
+        "--bind", str(writable[2][1]), "/tmp",
+        "--ro-bind", str(audit_root), str(audit_root),
+        "--proc", "/proc", "--dev", "/dev",
         "--ro-bind", str(cwd), str(cwd),
         "--ro-bind", str(source_overlay), str(source_overlay),
         "--overlay-src", str(cwd), "--overlay-src", str(source_overlay),
@@ -1142,11 +1145,14 @@ def _verify_execution_sandbox(
         expected.extend(
             ["--ro-bind", str(git_mount["path"]), str(git_mount["path"])]
         )
+    if dependency is not None:
+        for option in ("--node", "--npm"):
+            executable = command[command.index(option) + 1]
+            expected.extend(["--ro-bind", executable, executable])
     for _label, item in writable:
         expected.extend(["--bind", str(item), str(item)])
     for mount in expected_state_mounts:
         expected.extend(["--bind", mount["source"], mount["target"]])
-    expected.extend(["--bind", str(writable[2][1]), "/tmp"])
     if dependency is not None:
         frontend = cwd / "web/frontend"
         expected.extend(

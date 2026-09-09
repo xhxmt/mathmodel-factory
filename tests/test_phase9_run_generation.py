@@ -53,7 +53,6 @@ from factory_core.workflow_contract_v2 import compile_workflow_contract_bundle_v
 from tests.support.authority_production import install_foundation
 
 
-DEFAULT_SOURCE_REPOSITORY = Path(__file__).resolve().parents[1]
 OFFICIAL_BYTES = b"verified official phase9 bytes\n"
 RUN_TABLES = (
     "authority_production_run_generations",
@@ -67,15 +66,18 @@ RUN_TABLES = (
 
 
 def _source_repository() -> Path:
-    """Use a real Git identity root when code runs from a no-.git extraction."""
+    """Share the candidate used by the real entry/P0 predecessor helpers."""
 
-    raw = os.environ.get("PHASE9_TEST_SOURCE_REPOSITORY")
-    if raw is None:
-        return DEFAULT_SOURCE_REPOSITORY
-    path = Path(raw)
-    if not path.is_absolute():
-        raise AssertionError("PHASE9_TEST_SOURCE_REPOSITORY must be absolute")
-    return path
+    from tests.test_phase9_entry_gate import _source_repository as entry_source
+
+    return entry_source()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _shared_formal_source(tmp_path_factory):
+    from tests.test_phase9_entry_gate import _formal_test_source_repository
+
+    _formal_test_source_repository(tmp_path_factory.mktemp("phase9-run-generation"))
 
 
 def test_regular_file_reader_rejects_final_pathname_replacement(

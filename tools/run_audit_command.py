@@ -1229,6 +1229,14 @@ def _sandbox_descriptor_and_argv(
         "--ro-bind",
         "/",
         "/",
+        # Mount private /tmp first so it cannot hide later candidate/evidence
+        # mounts when those paths also live below /tmp.
+        "--bind",
+        str(Path(child_env["TMPDIR"])),
+        "/tmp",
+        "--ro-bind",
+        str(audit_root),
+        str(audit_root),
         "--proc",
         "/proc",
         "--dev",
@@ -1258,14 +1266,16 @@ def _sandbox_descriptor_and_argv(
         sandbox_argv.extend(
             ["--ro-bind", str(external_git_mount), str(external_git_mount)]
         )
+    if dependency_root is not None:
+        # Composite runtimes may be explicitly supplied outside the source and
+        # dependency trees, including below the masked system /tmp directory.
+        for option in ("--node", "--npm"):
+            executable = command[command.index(option) + 1]
+            sandbox_argv.extend(["--ro-bind", executable, executable])
     for _label, path in writable:
         sandbox_argv.extend(["--bind", str(path), str(path)])
     for _label, source, target in state_mounts:
         sandbox_argv.extend(["--bind", str(source), str(target)])
-    # Some legacy modules use an absolute /tmp coordinate at import time.  Map
-    # it to this invocation's already-recorded private TMPDIR so those writes
-    # remain isolated from the host and from every other audit command.
-    sandbox_argv.extend(["--bind", str(Path(child_env["TMPDIR"])), "/tmp"])
     overlay_path: Path | None = None
     if dependency_root is not None:
         frontend = cwd / "web/frontend"

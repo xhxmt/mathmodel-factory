@@ -1,4 +1,9 @@
 # Changelog
+- Formal P0 and audit execution preserve read-only candidate sources, trusted
+  reporters and explicitly bound runtimes under `/tmp`, after mounting the
+  private temporary directory. Evidence validation enforces the exact layout. Phase9
+  predecessor tests now share one pristine candidate identity; CI provides
+  checksum-pinned Bubblewrap 0.11.2 and the native Node/npm audit paths.
 - Integration fixes inventory opt-in joint-modeling Gates without changing frozen
   M0.2/M0.3 contracts, preserve exact owner/Step bindings, and isolate joint API
   tests from process-global framework stubs. Core CI now pins the recorded Python

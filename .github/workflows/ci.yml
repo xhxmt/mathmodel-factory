@@ -33,8 +33,31 @@ jobs:
       - name: Install native evidence and sandbox tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap poppler-utils
-          bwrap --unshare-all --new-session --die-with-parent --ro-bind / / --proc /proc --dev /dev /bin/true
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config meson ninja-build libcap-dev poppler-utils
+          # Phase9 uses overlay mounts, which require Bubblewrap >= 0.11.
+          bwrap_archive="$RUNNER_TEMP/bubblewrap-0.11.2.tar.xz"
+          curl --fail --location --retry 3 \
+            https://github.com/containers/bubblewrap/releases/download/v0.11.2/bubblewrap-0.11.2.tar.xz \
+            --output "$bwrap_archive"
+          printf '69abc30005d2186baf7737feacd8da35633b93cf5af38838ecff17c5f8e924f6  %s\n' "$bwrap_archive" | sha256sum --check
+          tar -xf "$bwrap_archive" -C "$RUNNER_TEMP"
+          meson setup "$RUNNER_TEMP/bubblewrap-build" "$RUNNER_TEMP/bubblewrap-0.11.2" \
+            -Dsupport_setuid=false -Dtests=false -Dman=disabled \
+            -Dbash_completion=disabled -Dzsh_completion=disabled -Dselinux=disabled
+          ninja -C "$RUNNER_TEMP/bubblewrap-build"
+          sudo install -m 0755 "$RUNNER_TEMP/bubblewrap-build/bwrap" /usr/bin/bwrap
+          bwrap --version
+          bwrap --unshare-all --new-session --die-with-parent --overlay-src / --tmp-overlay / --proc /proc --dev /dev /bin/true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bind the native Node and npm paths used by audit fixtures
+        run: |
+          sudo ln -sf "$(command -v node)" /usr/bin/node
+          sudo ln -sf "$(command -v npm)" /usr/bin/npm
+          /usr/bin/node --version
+          /usr/bin/npm --version
       - uses: actions/setup-python@v5
         with:
           # M0.3 golden pins explicitly include the interpreter patch version.
