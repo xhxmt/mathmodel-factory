@@ -68,6 +68,14 @@ RUN_TABLES = (
 def _source_repository() -> Path:
     """Share the candidate used by the real entry/P0 predecessor helpers."""
 
+    # A test's explicit source override takes precedence over the shared cache.
+    raw = os.environ.get("PHASE9_TEST_SOURCE_REPOSITORY")
+    if raw is not None:
+        path = Path(raw)
+        if not path.is_absolute():
+            raise AssertionError("PHASE9_TEST_SOURCE_REPOSITORY must be absolute")
+        return path
+
     from tests.test_phase9_entry_gate import _source_repository as entry_source
 
     return entry_source()

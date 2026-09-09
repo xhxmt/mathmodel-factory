@@ -1,4 +1,6 @@
 # Changelog
+- CI uses relative runtime aliases that remain resolvable during sandbox setup;
+  explicit source overrides retain precedence over shared test fixture caches.
 - Formal P0 and audit execution preserve read-only candidate sources, trusted
   reporters and explicitly bound runtimes under `/tmp`, after mounting the
   private temporary directory. Evidence validation enforces the exact layout. Phase9
