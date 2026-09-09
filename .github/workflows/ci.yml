@@ -48,7 +48,14 @@ jobs:
           ninja -C "$RUNNER_TEMP/bubblewrap-build"
           sudo install -m 0755 "$RUNNER_TEMP/bubblewrap-build/bwrap" /usr/bin/bwrap
           bwrap --version
-          bwrap --unshare-all --new-session --die-with-parent --overlay-src / --tmp-overlay / --proc /proc --dev /dev /bin/true
+          overlay_probe="$RUNNER_TEMP/bwrap-overlay-probe"
+          mkdir -p "$overlay_probe/lower" "$overlay_probe/upper" "$overlay_probe/merged"
+          printf 'lower\n' > "$overlay_probe/lower/probe"
+          printf 'upper\n' > "$overlay_probe/upper/probe"
+          bwrap --unshare-all --new-session --die-with-parent --ro-bind / / \
+            --overlay-src "$overlay_probe/lower" --overlay-src "$overlay_probe/upper" \
+            --ro-overlay "$overlay_probe/merged" --proc /proc --dev /dev \
+            /bin/cat "$overlay_probe/merged/probe" | grep -x upper
       - uses: actions/setup-node@v4
         with:
           node-version: 22
