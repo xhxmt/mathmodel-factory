@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .access_control import filter_visible_projects, require_admin, require_project_access
 from .auth import get_current_user
@@ -34,6 +34,7 @@ from .selection_service import SelectionError, read_selection_request, write_sel
 from .schemas import (
     ConsultationAnswer,
     ConsultationRequest,
+    JointModelingConfigPayload,
     ModelingDirectionSelection,
     ModelConfigPayload,
     ModelRegistryPayload,
@@ -450,7 +451,9 @@ def _runtime_to_project_status(runtime: dict[str, Any], project: Path | None = N
     diag_summary = summarize_project_diagnostics({"status": runtime})
     problem_key, problem_title = _problem_identity(project, runtime["base_name"])
     storage_scope = project.parent.name if project is not None and project.parent.name in {"ongoing", "complete"} else ""
+    from factory_core.projections import AUDIT_FIELDS
     return ProjectStatus(
+        **{key: runtime[key] for key in AUDIT_FIELDS if key in runtime},
         base_name=runtime["base_name"],
         run_id=runtime["base_name"],
         problem_key=problem_key,
@@ -570,11 +573,17 @@ def _file_type(path: Path) -> str:
 
 
 def _meta(project: Path, path: Path, group: str) -> dict[str, Any]:
-    st = path.stat()
+    root = project.resolve(strict=True)
+    target = path.resolve(strict=True)
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("artifact path is outside the project root") from exc
+    st = target.stat()
     return {
-        "path": str(path.relative_to(project)),
-        "name": path.name,
-        "type": _file_type(path),
+        "path": relative.as_posix(),
+        "name": target.name,
+        "type": _file_type(target),
         "group": group,
         "size": st.st_size,
         "mtime": datetime.fromtimestamp(st.st_mtime, tz=BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S"),
@@ -620,9 +629,9 @@ def _uploaded_problem_path(settings: Settings, value: str) -> Path:
 def _find_paper(settings: Settings, project: Path, base_name: str) -> Path | None:
     from factory_core.paper_sources import discover_paper_pdfs
 
-    packaged = settings.papers_dir / f"{base_name}_paper.pdf"
-    if packaged.is_file():
-        return packaged
+    # The legacy papers alias is not authoritative and may name an older
+    # generation.  Authenticated users may preview current project bytes, but
+    # release downloads only come from ``resolve_current_release``.
     papers = discover_paper_pdfs(project, base_name)
     return papers[0] if papers else None
 
@@ -643,11 +652,20 @@ def list_artifacts(project: Path) -> list[dict[str, Any]]:
             return
         if any(part in SKIP_PARTS for part in path.parts):
             return
-        key = str(path)
+        try:
+            root = project.resolve(strict=True)
+            target = path.resolve(strict=True)
+            target.relative_to(root)
+        except (OSError, ValueError):
+            # LaTeX dependencies and project-local symlinks are canonicalized
+            # before publication.  Anything escaping the authorized project
+            # root is not an artifact of this project and must fail closed.
+            return
+        key = str(target)
         if key in seen:
             return
         seen.add(key)
-        items.append(_meta(project, path, group))
+        items.append(_meta(root, target, group))
 
     for group, rels in ARTIFACT_GROUPS.items():
         for rel in rels:
@@ -752,6 +770,11 @@ def _check_consultation_pending(project_path: Path) -> tuple[bool, str | None]:
 
 
 def get_consultation_request(project_path: Path) -> ConsultationRequest | None:
+    store = SQLiteStateStore(project_path)
+    if store.exists and (store.load().pending_action or {}).get("gate") in {"joint_modeling_candidates", "joint_modeling_risk"}:
+        from factory_core.joint_modeling import consultation_view
+
+        return ConsultationRequest(**consultation_view(project_path))
     pending, gate = _check_consultation_pending(project_path)
     if not pending or not gate:
         return None
@@ -1182,7 +1205,9 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
     ):
         require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
-        release = resolve_current_release(settings.papers_dir, base_name)
+        release = resolve_current_release(
+            settings.papers_dir, base_name, project=project
+        )
         paper = release.paper if release is not None else _find_paper(settings, project, base_name)
         if not paper:
             raise HTTPException(status_code=404, detail="Paper PDF not found")
@@ -1194,8 +1219,10 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         current_user: UserInfo = Depends(get_current_user(settings)),
     ):
         require_project_access(settings, current_user, base_name)
-        _resolve_project(settings, base_name)
-        release = resolve_current_release(settings.papers_dir, base_name)
+        project = _resolve_project(settings, base_name)
+        release = resolve_current_release(
+            settings.papers_dir, base_name, project=project
+        )
         if release is None:
             raise HTTPException(status_code=404, detail="Verified submission package not found")
         return FileResponse(
@@ -1204,10 +1231,51 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
             filename=f"{base_name}_submission.zip",
         )
 
+    @router.get("/api/projects/{base_name}/joint-modeling")
+    async def get_joint_modeling(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
+        require_project_access(settings, current_user, base_name)
+        from factory_core.joint_modeling import status_view
+
+        try:
+            return status_view(_resolve_project(settings, base_name))
+        except FactoryCoreError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.put("/api/projects/{base_name}/joint-modeling")
+    async def set_joint_modeling(base_name: str, payload: JointModelingConfigPayload, current_user: UserInfo = Depends(get_current_user(settings))):
+        require_project_access(settings, current_user, base_name)
+        from factory_core.joint_modeling import configure, status_view
+
+        project = _resolve_project(settings, base_name)
+        try:
+            configure(project, enabled=payload.enabled, expected_revision=payload.expected_revision, actor=current_user.username)
+            result = status_view(project)
+        except (FactoryCoreError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await manager.broadcast({"type": "project_updated", "project": base_name})
+        return result
+
+    @router.get("/api/projects/{base_name}/joint-modeling/consultation-package")
+    async def get_joint_consultation_package(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
+        require_project_access(settings, current_user, base_name)
+        from factory_core.joint_modeling import consultation_bundle
+
+        try:
+            body = consultation_bundle(_resolve_project(settings, base_name))
+        except (FactoryCoreError, OSError, UnicodeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return Response(content=body, media_type="text/plain; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="{base_name}-pro-consultation.txt"',
+            "Cache-Control": "no-store",
+        })
+
     @router.get("/api/projects/{base_name}/consultation")
     async def get_consultation(base_name: str, current_user: UserInfo = Depends(get_current_user(settings))):
         require_project_access(settings, current_user, base_name)
-        request = get_consultation_request(_resolve_project(settings, base_name))
+        try:
+            request = get_consultation_request(_resolve_project(settings, base_name))
+        except FactoryCoreError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not request:
             raise HTTPException(status_code=404, detail="No pending consultation request")
         return request
@@ -1220,9 +1288,28 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
     ):
         require_project_access(settings, current_user, base_name)
         project = _resolve_project(settings, base_name)
-        request = get_consultation_request(project)
+        try:
+            request = get_consultation_request(project)
+        except FactoryCoreError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not request:
             raise HTTPException(status_code=404, detail="No pending consultation request")
+
+        binding = {}
+        if getattr(request, "joint_modeling", False):
+            from factory_core.joint_modeling import validate_response
+            from factory_core.human_decisions import validate_resolution
+
+            binding = {key: getattr(answer, key) for key in ("request_id", "generation", "subject_fingerprint", "options_fingerprint", "attestations")}
+            binding["submitted_by"] = current_user.username
+            binding["answer"] = answer.answer
+            try:
+                if answer.expected_revision != request.workflow_revision:
+                    raise FactoryCoreError("项目已变化，请刷新当前咨询请求后提交")
+                validate_resolution(SQLiteStateStore(project).load().pending_action or {}, {**binding, "answer": answer.answer})
+                validate_response(project, request.request or {}, answer.answer, answer.attestations)
+            except FactoryCoreError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         def write_evidence() -> dict[str, Any]:
             from factory_core.artifacts import artifact_ref
@@ -1255,6 +1342,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
                 {
                     "source": "web",
                     "gate": request.gate,
+                    **binding,
                 },
                 evidence_writer=write_evidence,
                 expected_revision=answer.expected_revision,

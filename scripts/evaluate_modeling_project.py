@@ -438,15 +438,26 @@ def evaluate(project: Path, root: Path) -> Evaluation:
     project_pdfs = discover_paper_pdfs(project, base)
     paper_pdf = project_pdfs[0] if project_pdfs else project / f"{base}_paper.pdf"
     from factory_core.delivery.release import resolve_current_release
+    from factory_core.phase9_delivery_fence import legacy_delivery_projection_allowed
 
-    release = resolve_current_release(root / "papers", base)
+    release = resolve_current_release(root / "papers", base, project=project)
+    legacy_projection = legacy_delivery_projection_allowed(project)
+    unavailable_release = (
+        root / "papers"
+        if legacy_projection
+        else root / "papers" / base / "invalid-current-release"
+    )
     papers_pdf = (
-        release.paper if release is not None else root / "papers" / f"{base}_paper.pdf"
+        release.paper
+        if release is not None
+        else unavailable_release
+        / (f"{base}_paper.pdf" if legacy_projection else "paper.pdf")
     )
     submission_zip = (
         release.submission_zip
         if release is not None
-        else root / "papers" / f"{base}_submission.zip"
+        else unavailable_release
+        / (f"{base}_submission.zip" if legacy_projection else "submission.zip")
     )
     ev.add(
         "paper_tex",

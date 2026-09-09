@@ -3,6 +3,10 @@
 Step 12 同时也是**最终审计文字返修的着陆点**——如果 Step 16 消费的 `final` 审计给出 `VERDICT: REOPEN_REVISION_TEXT`，runner 会回到 Step 11/12 重跑一次；模型类判退则回到更早的建模/求解责任步骤。返修轮次中，本步骤要把 `judge_evaluation.md` 的新 issue 与 `review_comments.md` 合并处理。Step 13 的 `PRECHECK_PASS` 只是数学预审通过，不是最终 Gate 2 PASS。
 
 [阶段审计反馈 — 重试/修订时必读]
+
+- 独立复算只能先登记为同一 numeric claim 的候选；不得直接把它写入正文并保留旧摘要数字。
+  如决定变更采信 run，按 `scripts/canonical_claims.py` 的显式采信合同更新版本、理由、
+  全部候选来源，并重生成摘要/表格。旧 run 的成功 receipt 保留，不能用成功状态替代采信决策。
 - 若 `__PROJECT_PATH__/.factory/audits/profiles/paper/latest.json` 存在，读取 `evidence.checks`、`hard_failures`、`warnings` 和 `repair_step`，将仍适用的 checker 发现与 `review_comments.md` 合并处理。阶段 PASS 或 Step-13 `PRECHECK_PASS` 都不等于最终交付 PASS。
 - `audit_issue_ledger.md` 中人工审稿 issue 可按实际修复结果更新；`## Incremental audit findings` 下的 `AUDIT-*` 行由机器审计维护，不得手工关闭。修复产物后由对应 profile 重跑自动更新。
 

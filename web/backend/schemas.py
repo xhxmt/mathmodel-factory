@@ -207,6 +207,18 @@ class ProjectRequestResponse(BaseModel):
 
 
 class ProjectStatus(BaseModel):
+    recorded_workflow_state: str | None = None
+    execution_state: str | None = None
+    workflow_error: str | None = None
+    evidence_validity: str = "UNAVAILABLE"
+    evidence_errors: list[str] = Field(default_factory=list)
+    scientific_verdict: str = "UNAVAILABLE"
+    raw_scientific_verdict: str | None = None
+    review_mode: str | None = None
+    score_available: bool = False
+    official_score: float | None = None
+    diagnostic_score: float | None = None
+    delivery_allowed: bool = False
     base_name: str
     run_id: str = ""
     problem_key: str = ""
@@ -289,11 +301,28 @@ class ConsultationRequest(BaseModel):
     impact: str | None = None
     key_files: list[str] | None = None
     suggestions: str | None = None
+    joint_modeling: bool = False
+    prompt_text: str | None = None
+    request: dict | None = None
+    workflow_revision: int | None = None
+    upload_manifest: list[dict] | None = None
+    attestations_required: list[str] | None = None
+    identity_assurance: str | None = None
 
 
 class ConsultationAnswer(BaseModel):
     answer: str
     expected_revision: int | None = None
+    request_id: str | None = None
+    generation: int | None = None
+    subject_fingerprint: str | None = None
+    options_fingerprint: str | None = None
+    attestations: dict[str, bool] = Field(default_factory=dict)
+
+
+class JointModelingConfigPayload(BaseModel):
+    enabled: bool = Field(..., strict=True)
+    expected_revision: int = Field(..., strict=True, ge=0)
 
 
 class ModelingDirectionSelection(BaseModel):

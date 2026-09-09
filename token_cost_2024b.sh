@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 统计 2024B 完整 16 步运行的 token 消耗（按来源拆分）
-# 用法:  ! bash ~/paper_factory/token_cost_2024b.sh
-# 一次性脚本，看完可删:  rm ~/paper_factory/token_cost_2024b.sh
-P=/home/tfisher/paper_factory/complete/test_cumcm2024b
+# 用法: bash token_cost_2024b.sh [project_dir]
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+FACTORY_ROOT="${FACTORY:-$SCRIPT_DIR}"
+P="${1:-$FACTORY_ROOT/complete/test_cumcm2024b}"
 cd "$P" || { echo "no project $P"; exit 1; }
 
 echo "########## A. 各日志里的 Codex 'tokens used' 数值 ##########"

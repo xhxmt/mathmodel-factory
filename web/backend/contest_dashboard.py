@@ -277,7 +277,9 @@ def build_contest_dashboard(
     content_decision = store.decision("content_freeze") if state else None
     override_decision = store.decision("delivery_freeze_override") if state else None
     content_approved = bool(content_decision and content_decision.get("approved") is True)
-    release = resolve_current_release(papers_root, project.name)
+    release = resolve_current_release(
+        papers_root, project.name, project=project
+    )
     legacy_release_accepted = bool(
         not timing.get("configured")
         and release is not None

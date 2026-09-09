@@ -3990,7 +3990,7 @@ ISOLATED CODEX JUDGE MODE:
         codex exec \
           "${model_args[@]}" \
           -c "model_reasoning_effort=\"$effort\"" \
-          --full-auto \
+          --approve-for-me \
           --ephemeral \
           -C "$isolated_root" \
           --skip-git-repo-check \
@@ -4190,6 +4190,11 @@ run_step_13() {
 # cache miss we compile first, then judge and deliver those exact PDF bytes.
 run_final_submission_judge() {
     local current_hash recorded_hash verdict post_judge_hash routed_decision judge_input_hash
+    if ! python3 "$FACTORY/scripts/check_phase9_delivery_fence.py" "$PROJECT" \
+        >> "$PROJECT/logs/runner.log" 2>&1; then
+        log "   Final submission blocked by the current Phase9 delivery fence"
+        return 1
+    fi
     current_hash=$(final_submission_hash)
     recorded_hash=$(cat "$(final_judge_hash_file)" 2>/dev/null || true)
 
@@ -4323,11 +4328,20 @@ run_step_14() { dispatch_step step14_abstract.txt 7200 1800 run_claude_then_code
 run_step_15() { dispatch_step step15_polish.txt 10800 3600 run_codex_then_claude; }
 
 run_step_16() {
+    # The legacy runner has no typed Phase9 workflow/generation coordinate and
+    # therefore cannot be a delivery authority.  Refuse before cleanup, audit,
+    # provider work, or any release/final-submission side effect.
+    if ! python3 "$FACTORY/scripts/check_phase9_delivery_fence.py" "$PROJECT"; then
+        log "   Phase9 delivery fence BLOCKED before Step 16 side effects"
+        return 1
+    fi
     # Cleanup must precede packet construction.  Removing temp/intermediate
     # files after judging changes packet manifests and invalidates the PASS.
     if [[ -x "$FACTORY/scripts/cleanup_project_artifacts.py" ]]; then
         log "   Cleaning rebuildable intermediate data before final judging"
-        if "$FACTORY/scripts/cleanup_project_artifacts.py" "$PROJECT" >> "$PROJECT/logs/runner.log" 2>&1; then
+        if python3 "$FACTORY/scripts/check_phase9_delivery_fence.py" "$PROJECT" \
+                --exec "$FACTORY/scripts/cleanup_project_artifacts.py" "$PROJECT" \
+                >> "$PROJECT/logs/runner.log" 2>&1; then
             log "   Intermediate data cleanup OK"
         else
             log "   WARNING: intermediate data cleanup failed (exit $?)"
@@ -4337,7 +4351,7 @@ run_step_16() {
     fi
 
     log "   Running snapshot-bound Final Audit"
-    if ! python3 -m factory_core.cli audit "$PROJECT" \
+    if ! python3 -m factory_core.cli audit "$PROJECT" --accept-delivery \
         >> "$PROJECT/logs/runner.log" 2>&1; then
         local resume_after=""
         resume_after=$(python3 - "$PROJECT/.factory/audits/latest.json" <<'PY' 2>/dev/null || true

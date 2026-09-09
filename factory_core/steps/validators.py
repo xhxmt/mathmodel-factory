@@ -17,7 +17,7 @@ from scripts.workflow_state import (
     gate2_verdict,
     step16_ready,
 )
-from ..artifact_ownership import reopen_after_step_for_artifact
+from ..current_artifact_ownership import reopen_after_step_for_artifact
 
 
 def _text(path: Path) -> str:
@@ -198,6 +198,19 @@ class NativeArtifactValidator:
         project = context.project_dir
         check = getattr(self, f"_step_{self.step_id}")
         try:
+            if context.step_id >= 4 and (project / "claim_registry.json").is_file():
+                from scripts.claim_graph import claim_binding_issues
+                from ..stages import stage_for_step
+                issues = claim_binding_issues(project, through_stage=stage_for_step(context.step_id).id)
+                if issues:
+                    targets = [i["resume_after_step"] for i in issues
+                               if type(i["resume_after_step"]) is int and i["resume_after_step"] < context.step_id]
+                    metadata = {"error_class": "PERMANENT_CLAIM_BINDING", "claim_binding_issues": issues,
+                                "missing_artifacts": [i["path"] for i in issues]}
+                    if targets:
+                        metadata["resume_after_step"] = min(targets)
+                    return ValidationResult.invalid("claim artifact binding invalid: " + str(issues),
+                                                    metadata=metadata)
             valid, reason, evidence, metadata = check(project)
         except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError) as exc:
             return ValidationResult.invalid(f"native validator error: {exc}")
@@ -206,6 +219,20 @@ class NativeArtifactValidator:
         action = metadata.get("pending_action")
         if isinstance(action, PendingAction):
             return ValidationResult.awaiting(action, *evidence)
+        target = metadata.get("resume_after_step")
+        if target is not None and (
+            type(target) is not int or target < -1 or target >= context.step_id
+        ):
+            metadata = {
+                key: value for key, value in metadata.items()
+                if key != "resume_after_step"
+            }
+            metadata.update(
+                error_class="PERMANENT_RECOVERY_TARGET",
+                rejected_resume_after_step=target,
+                repair_required=True,
+            )
+            reason = f"{reason}; no earlier recovery boundary for step {context.step_id}"
         return ValidationResult.invalid(reason, *evidence, metadata=metadata)
 
     def _step_0(self, project: Path):
@@ -391,6 +418,8 @@ class NativeArtifactValidator:
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(manifest, dict):
                 continue
             completeness = manifest.get("completeness")
             if not isinstance(completeness, dict):

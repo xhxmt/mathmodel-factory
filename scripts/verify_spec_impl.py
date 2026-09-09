@@ -17,8 +17,9 @@ verify_numbers/invariants/provenance 都不查"承诺 vs 实现"，本脚本补�
       不是 canonical 复核)。
   S3  时间步承诺: model.md 声明 "(正式)优化...不大于 X s" 的 Δt 上限时,
       models/**/*.py 中出现的 time_step/dt 常量 > X -> BLOCKING。
-  S4  上界/gap 承诺: §8.1 声明松弛上界/gap 时, values.json 必须带非空
-      upper_bound 且 (gap_pct 或 mip_gap 或 gap) -> 缺失则 BLOCKING。
+  S4  方向感知界/gap 承诺: §8.1 声明松弛界/gap 时，values.json 必须带
+      与 objective_sense 一致的非空界（minimize 为 lower_bound，maximize
+      为 upper_bound）且带 gap_pct、mip_gap 或 gap -> 缺失则 BLOCKING。
 
 SKIP 条件 (legacy 安全): 无 model.md、model.md 无 §8.1 结构分析节、或无
 results/p*/values.json 树, 一律 SKIP (exit 0)。
@@ -77,10 +78,18 @@ def _section_8_1(model_text):
 def promised_budget(sec):
     """S1: 从 §8.1 抽预算阶梯承诺, 返回最高档 evals 基准 (int) 或 None。
 
-    识别 `particles×iterations = 40×80, 80×160, 120×240` 风格 (× 或 x/*)。"""
+    识别 `particles×iterations = 40×80, 80×160, 120×240` 风格 (× 或 x/*)，
+    以及 `1500/3000/6000 次目标评估` 这类直接预算阶梯。"""
     pairs = re.findall(r'(\d+)\s*[×x\*]\s*(\d+)', sec)
     products = [int(a) * int(b) for a, b in pairs if int(a) * int(b) >= 100]
-    return max(products) if products else None
+    direct = []
+    for line in sec.splitlines():
+        if not re.search(r'评估|\bevals?\b|\bn_eval\b', line, re.IGNORECASE):
+            continue
+        for ladder in re.findall(r'\d+(?:\s*/\s*\d+)+', line):
+            direct.extend(int(value) for value in re.findall(r'\d+', ladder))
+    budgets = products + [value for value in direct if value >= 100]
+    return max(budgets) if budgets else None
 
 
 def promised_problem_evals(sec):
@@ -121,8 +130,41 @@ def promised_dt_cap(model_text):
 
 
 def promises_gap(sec):
-    """S4: §8.1 是否承诺了松弛上界 / gap 自证。"""
-    return bool(re.search(r'松弛上界|LP\s*松弛|\bgap\b', sec, re.IGNORECASE))
+    """S4: §8.1 是否承诺了方向感知松弛界 / gap 自证。"""
+    return bool(re.search(
+        r'松弛(?:上|下)界|LP\s*松弛|\b(?:upper|lower)[_\s-]?bound\b|\bgap\b',
+        sec,
+        re.IGNORECASE,
+    ))
+
+
+def _expected_bound_kind(v, sec):
+    """Return the direction-correct relaxation-bound kind for one result.
+
+    Current projects declare ``objective_sense`` in values.json. Explicit
+    wording in §8.1 is retained as a compatibility fallback; otherwise the
+    legacy S4 behavior defaults to an upper bound.
+    """
+    sense = str(v.get('objective_sense', '')).strip().lower()
+    if sense == 'minimize':
+        return 'lower_bound'
+    if sense == 'maximize':
+        return 'upper_bound'
+
+    has_lower = bool(re.search(r'松弛下界|\blower[_\s-]?bound\b', sec, re.IGNORECASE))
+    has_upper = bool(re.search(r'松弛上界|\bupper[_\s-]?bound\b', sec, re.IGNORECASE))
+    if has_lower and not has_upper:
+        return 'lower_bound'
+    return 'upper_bound'
+
+
+def _has_bound(v, expected_kind):
+    """Accept the current structured bound or its legacy top-level field."""
+    structured = v.get('relaxation_bound')
+    if isinstance(structured, dict):
+        if structured.get('kind') == expected_kind and structured.get('value') is not None:
+            return True
+    return v.get(expected_kind) is not None
 
 
 def _values_files(project_dir):
@@ -278,19 +320,20 @@ def main():
                              f'S3: 代码时间步 {val} > 承诺上限 {dt_cap} @ {", ".join(locs[:3])}'
                              + (f' 等 {len(locs)} 处' if len(locs) > 3 else '')))
 
-    # ---- S4: 上界/gap 承诺 ----
+    # ---- S4: 方向感知松弛界/gap 承诺 ----
     if promises_gap(sec):
         for path in vfiles:
             v = _load_json(path) or {}
             if not _is_global_search(v):
                 continue
             rel = os.path.relpath(path, project_dir)
-            has_ub = v.get('upper_bound') is not None
+            expected_kind = _expected_bound_kind(v, sec)
+            has_bound = _has_bound(v, expected_kind)
             has_gap = any(v.get(k) is not None for k in ('gap_pct', 'mip_gap', 'gap'))
-            if not (has_ub and has_gap):
+            if not (has_bound and has_gap):
                 findings.append(('BLOCKING',
-                                 f'S4: {rel} 承诺了松弛上界/gap 自证但缺 '
-                                 f'{"upper_bound " if not has_ub else ""}'
+                                 f'S4: {rel} 承诺了方向感知松弛界/gap 自证但缺 '
+                                 f'{expected_kind + " " if not has_bound else ""}'
                                  f'{"gap 字段" if not has_gap else ""}'.strip()))
 
     # ---- 汇总 ----

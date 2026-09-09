@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,7 @@ from .auth_store import AuthStore, InvalidUsername, UserExists, UserNotFound
 from .cloud_api import create_cloud_router
 from .config import load_settings, validate_settings
 from .ops_status import build_secret_ops_status
+from .phase6_api import create_phase6_router
 from .project_api import (
     _valid_model_step_key,
     _resolve_project,
@@ -428,11 +430,21 @@ project_router = create_project_router(settings, ticket_store, manager)
 cloud_router = create_cloud_router(settings)
 ws_router = create_ws_router(settings, ticket_store, manager)
 showcase_router = create_showcase_router(settings, auth_store)
+phase6_router = create_phase6_router(settings)
 
 app.include_router(project_router)
 app.include_router(cloud_router)
 app.include_router(ws_router)
 app.include_router(showcase_router)
+app.include_router(phase6_router)
+
+# Phase 7+8 has no default route or import surface.  Its lightweight Web
+# adapter is imported only when the explicit process-level shadow gate is on;
+# the adapter itself defers path validation and core imports until after auth
+# and project ACL checks.
+if settings.phase78_shadow_enabled:
+    phase78_api = importlib.import_module("web.backend.phase78_api")
+    app.include_router(phase78_api.create_phase78_router(settings))
 
 def _router_endpoint(router, path: str, method: str | None = None):
     for route in getattr(router, "routes", []):

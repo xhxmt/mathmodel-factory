@@ -5,6 +5,8 @@ import time
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from factory_core.adapters.infrastructure.commands import CommandResult, CommandRunner
 from factory_core.adapters.infrastructure.process import ProcessRequest, ProcessResult, ProcessSupervisor
 from factory_core.adapters.models.backends import ApiAgentBackend, CodexCliBackend, ModelRequest
@@ -121,8 +123,139 @@ def test_native_codex_backend_honors_codex_model_for_builtin_fallback(monkeypatc
     assert result.returncode == 0
     assert result.metadata["model"] == "gpt-5.6-sol"
     assert list(supervisor.request.argv[:4]) == [
-        "codex", "exec", "--model", "gpt-5.6-sol"
+        "codex",
+        "exec",
+        "--model",
+        "gpt-5.6-sol",
     ]
+
+
+def test_native_codex_backend_allows_explicit_fast_service_tier(
+    monkeypatch, tmp_path
+):
+    class RecordingSupervisor:
+        request = None
+
+        def run(self, request):
+            self.request = request
+            return ProcessResult(0, False, 0.01, 123)
+
+    supervisor = RecordingSupervisor()
+    monkeypatch.setenv("CODEX_SERVICE_TIER", "fast")
+    backend = CodexCliBackend(tmp_path, supervisor=supervisor)
+
+    result = backend.execute(
+        ModelRequest(
+            project_dir=tmp_path,
+            step_id=2,
+            attempt=1,
+            prompt="work",
+            timeout_seconds=10,
+            hang_timeout_seconds=5,
+        )
+    )
+
+    assert result.returncode == 0
+    assert list(supervisor.request.argv[:4]) == [
+        "codex",
+        "-c",
+        'service_tier="fast"',
+        "exec",
+    ]
+
+
+def test_native_codex_backend_honors_explicit_cli_path(monkeypatch, tmp_path):
+    class RecordingSupervisor:
+        request = None
+
+        def run(self, request):
+            self.request = request
+            return ProcessResult(0, False, 0.01, 123)
+
+    supervisor = RecordingSupervisor()
+    monkeypatch.setenv("CODEX_CLI_PATH", "/opt/codex/latest/codex")
+    backend = CodexCliBackend(tmp_path, supervisor=supervisor)
+
+    result = backend.execute(
+        ModelRequest(
+            project_dir=tmp_path,
+            step_id=2,
+            attempt=1,
+            prompt="work",
+            timeout_seconds=10,
+            hang_timeout_seconds=5,
+        )
+    )
+
+    assert result.returncode == 0
+    assert supervisor.request.argv[0] == "/opt/codex/latest/codex"
+    assert "service_tier" not in " ".join(supervisor.request.argv)
+
+
+def test_native_codex_backend_isolated_uses_current_safe_exec_flags(
+    monkeypatch, tmp_path
+):
+    class RecordingSupervisor:
+        request = None
+
+        def run(self, request):
+            self.request = request
+            return ProcessResult(0, False, 0.01, 123)
+
+    supervisor = RecordingSupervisor()
+    monkeypatch.delenv("CODEX_SERVICE_TIER", raising=False)
+    backend = CodexCliBackend(tmp_path, supervisor=supervisor)
+    final_response = tmp_path / "judge_outputs" / "math.final.txt"
+
+    result = backend.execute(
+        ModelRequest(
+            project_dir=tmp_path,
+            step_id=13,
+            attempt=1,
+            prompt="judge",
+            timeout_seconds=10,
+            hang_timeout_seconds=5,
+            model="gpt-5.6-luna",
+            effort="xhigh",
+            isolated=True,
+            final_response_file=final_response,
+        )
+    )
+
+    assert result.returncode == 0
+    argv = list(supervisor.request.argv)
+    assert "--full-auto" not in argv
+    assert "--sandbox" not in argv
+    assert "--approve-for-me" in argv
+    assert "--ephemeral" in argv
+    assert argv[argv.index("--output-last-message") + 1] == str(final_response)
+    assert "service_tier" not in " ".join(argv)
+
+
+def test_native_codex_backend_rejects_unknown_service_tier(monkeypatch, tmp_path):
+    class UnexpectedSupervisor:
+        def run(self, request):
+            raise AssertionError(f"unexpected process launch: {request.argv}")
+
+    monkeypatch.setenv("CODEX_SERVICE_TIER", "default")
+    backend = CodexCliBackend(tmp_path, supervisor=UnexpectedSupervisor())
+
+    result = backend.execute(
+        ModelRequest(
+            project_dir=tmp_path,
+            step_id=2,
+            attempt=1,
+            prompt="work",
+            timeout_seconds=10,
+            hang_timeout_seconds=5,
+        )
+    )
+
+    assert result.returncode == 2
+    assert result.error_class == "PERMANENT_MODEL_CONFIG"
+    assert result.metadata["reason"] == (
+        "CODEX_SERVICE_TIER must be unset, fast, or flex"
+    )
 
 
 def test_process_backend_recognizes_unsupported_model_as_permanent(tmp_path):
@@ -373,13 +506,20 @@ class FakeCommandRunner:
         if script.endswith("build_objective_evidence.py"):
             output = project / "judge_packets/objective_evidence.json"
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text("{}\n", encoding="utf-8")
+            output.write_text(json.dumps({"schema_version": "objective-evidence-v1",
+                "bundle_sha256": "a" * 64, "input_fingerprint": "b" * 64}), encoding="utf-8")
         elif script.endswith("judge_packet.py"):
             for role in ("math", "execution", "paper"):
                 packet = project / "judge_packets" / role
                 packet.mkdir(parents=True, exist_ok=True)
                 (packet / "context.txt").write_text("context\n", encoding="utf-8")
-                (packet / "manifest.json").write_text("{}\n", encoding="utf-8")
+                (packet / "manifest.json").write_text(
+                    json.dumps({"completeness": {
+                        "contract_version": "judge-packet-completeness-v1",
+                        "status": "COMPLETE", "eligible": True,
+                        "requirements": [{"id": "fixture", "satisfied": True}],
+                    }}) + "\n", encoding="utf-8",
+                )
         elif script.endswith("aggregate_judges.py"):
             (project / "judge_evaluation.md").write_text("VERDICT: PASS\n", encoding="utf-8")
             output = project / "judge_outputs/aggregate.json"
@@ -396,10 +536,21 @@ class FakeCommandRunner:
             output = project / "judge_outputs/judgment_receipt.json"
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text('{"status":"VALID"}\n', encoding="utf-8")
+        elif script.endswith("judgment_receipt.py") and args[0] == "annotate-role":
+            from scripts.judgment_receipt import annotate_role_metadata
+            options = dict(zip(args[2::2], args[3::2]))
+            annotate_role_metadata(project, options["--role"],
+                registry_model_id=options["--registry-model-id"], backend=options["--backend"],
+                model=options["--model"], transport=options["--transport"],
+                prompt_file=options["--prompt-file"],
+                execution_step_id=int(options["--execution-step-id"]),
+                template_step_id=int(options["--template-step-id"]))
         elif script.endswith("package_submission.py"):
             from factory_core.submission_bundle import submission_bundle_manifest
 
-            output = Path(args[-1])
+            # Release staging must not persist a project submission manifest.
+            assert args[3:] == ["--stage-only"]
+            output = Path(args[2])
             output.parent.mkdir(parents=True, exist_ok=True)
             bundle = submission_bundle_manifest(project, project.name)
             with zipfile.ZipFile(output, "w") as archive:
@@ -416,13 +567,19 @@ class FakeCommandRunner:
         return self._ok(project, label)
 
 
-def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_path):
+def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[1]
     project = tmp_path / "judge_fixture"
     project.mkdir()
+    scratch = tmp_path / "explicit-scratch"
+    monkeypatch.setenv("TMPDIR", str(scratch))
 
     class FinalResponseWritingDispatcher:
         requests = []
+        accepted = []
+
+        def record_accepted_output(self, role, output):
+            self.accepted.append((role, output.read_bytes()))
 
         def execute(self, request, **_kwargs):
             self.requests.append(request)
@@ -435,6 +592,7 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
                 request.output_file.write_text("VERDICT: PASS\n{}\n", encoding="utf-8")
                 request.final_response_file.write_text("judge summary\n", encoding="utf-8")
             else:
+                request.output_file.write_text("nonempty invalid primary")
                 request.final_response_file.write_text(
                     "VERDICT: PASS\n{}\n", encoding="utf-8"
                 )
@@ -454,6 +612,8 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
     )
 
     provisional = StepContext(project, project.name, 13, 1, 3600, 0)
+    step.runner.python(root, project, "scripts/build_objective_evidence.py", [], label="objective")
+    step.runner.python(root, project, "scripts/judge_packet.py", [], label="packets")
     stale_output = project / "judge_outputs/paper.md"
     stale_output.parent.mkdir(parents=True, exist_ok=True)
     stale_output.write_text("VERDICT: PASS\nold\n", encoding="utf-8")
@@ -480,6 +640,11 @@ def test_native_judge_stages_codex_final_response_and_marks_review_phase(tmp_pat
         encoding="utf-8"
     ).startswith("VERDICT: PASS\n")
 
+    assert all(request.final_response_file.is_relative_to(scratch) for request in dispatcher.requests)
+    assert len({request.final_response_file for request in dispatcher.requests}) == 2
+    assert all(request.final_response_file.exists() for request in dispatcher.requests)
+    assert dispatcher.accepted == [("paper", b"VERDICT: PASS\n{}\n")] * 2
+
 
 def test_native_judge_grounding_retry_includes_failure_and_packet_excerpt(
     monkeypatch, tmp_path
@@ -490,6 +655,9 @@ def test_native_judge_grounding_retry_includes_failure_and_packet_excerpt(
     outputs = project / "judge_outputs"
     packet.mkdir(parents=True)
     outputs.mkdir(parents=True)
+    FakeCommandRunner().python(
+        root, project, "scripts/judge_packet.py", [], label="packet_fixture"
+    )
     chunk_id = "a" * 64
     source = (
         "unrelated line\n"
@@ -505,6 +673,9 @@ def test_native_judge_grounding_retry_includes_failure_and_packet_excerpt(
         json.dumps(
             {
                 "role": "math",
+                "completeness": json.loads(
+                    (packet / "manifest.json").read_text(encoding="utf-8")
+                )["completeness"],
                 "files": [
                     {
                         "path": "paper.tex",
@@ -1003,6 +1174,85 @@ def test_native_validator_routes_empty_claim_requirement_to_step4(tmp_path):
     assert valid is False
     assert metadata["resume_after_step"] == 3
     assert metadata["missing_artifacts"] == ["claim_registry.json"]
+
+
+@pytest.mark.parametrize("entry", ["execute", "execute_precheck", "execute_prepared"])
+@pytest.mark.parametrize("fault", ["missing", "incomplete", "inconsistent", "malformed", "empty_context"])
+def test_judge_blocks_all_dispatch_when_any_packet_is_ineligible(tmp_path, entry, fault):
+    root = Path(__file__).resolve().parents[1]
+    project = tmp_path / "demo"
+    project.mkdir()
+
+    class NoDispatch:
+        def execute(self, *_args, **_kwargs):
+            pytest.fail("ineligible packet must block every model call")
+
+    class IncompleteRunner(FakeCommandRunner):
+        def python(self, factory_root, project, script, args, **kwargs):
+            result = super().python(factory_root, project, script, args, **kwargs)
+            if script.endswith("judge_packet.py"):
+                packet = project / "judge_packets/execution"
+                path = packet / "manifest.json"
+                if fault == "missing":
+                    path.unlink()
+                elif fault == "malformed":
+                    path.write_text("[]", encoding="utf-8")
+                elif fault == "empty_context":
+                    (packet / "context.txt").write_text("", encoding="utf-8")
+                else:
+                    manifest = json.loads(path.read_text(encoding="utf-8"))
+                    completeness = manifest["completeness"]
+                    completeness["requirements"][0]["satisfied"] = False
+                    if fault == "incomplete":
+                        completeness.update(status="INCOMPLETE", eligible=False)
+                    path.write_text(json.dumps(manifest), encoding="utf-8")
+            return result
+
+    context = StepContext(project, project.name, 13, 1, 3600, 0)
+    runner = IncompleteRunner()
+    if entry != "execute":
+        runner.python(root, project, "scripts/judge_packet.py", [], label="packets")
+    step = JudgeStep(
+        next(item for item in STEP_CONTRACTS if item.id == 13), root,
+        PromptRenderer(root), NoDispatch(), NativeArtifactValidator(root, 13), runner,
+    )
+
+    result = getattr(step, entry)(context)
+
+    assert result.returncode != 0
+    assert result.metadata["model_dispatch_allowed"] is False
+    assert result.metadata["judge_completed"] is False
+    assert "execution" in result.metadata["blocked_roles"]
+    assert "INDETERMINATE_REVIEW" in (project / "judge_evaluation.md").read_text()
+
+
+@pytest.mark.parametrize("active_step", [13, 16])
+def test_missing_table_recovery_never_emits_same_or_future_step(tmp_path, active_step):
+    project = tmp_path / "demo"
+    project.mkdir()
+    (project / "judge_evaluation.md").write_text("VERDICT: INDETERMINATE_REVIEW\n")
+    packet = project / "judge_packets/execution"
+    packet.mkdir(parents=True)
+    (packet / "manifest.json").write_text(json.dumps({"completeness": {
+        "requirements": [{"id": "table", "paths": ["tables/m2_problem2_results.tex"],
+                          "satisfied": False}],
+    }}))
+    root = Path(__file__).resolve().parents[1]
+    validator = NativeArtifactValidator(root, 13)
+    context = StepContext(project, project.name, active_step, 1, 3600, 0)
+
+    result = validator.validate(context)
+
+    assert not result.is_valid
+    assert result.metadata["missing_artifacts"] == ["tables/m2_problem2_results.tex"]
+    if active_step == 13:
+        assert "resume_after_step" not in result.metadata
+        assert result.metadata["error_class"] == "PERMANENT_RECOVERY_TARGET"
+        assert result.metadata["rejected_resume_after_step"] == 13
+    else:
+        assert FactoryEngine._validated_resume_target(
+            result.metadata["resume_after_step"], active_step
+        ) == 13
 
 
 def test_native_step10_reports_the_exact_failed_incremental_check(monkeypatch, tmp_path):

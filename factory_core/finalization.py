@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .artifact_ownership import (
+from .current_artifact_ownership import (
     ARTIFACT_OWNERSHIP_SCHEMA,
     iter_owned_artifacts,
     reopen_after_step_for_artifact,

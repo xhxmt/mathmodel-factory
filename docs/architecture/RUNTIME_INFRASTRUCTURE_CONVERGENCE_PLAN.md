@@ -1,6 +1,6 @@
 # 横向运行时基础设施收敛方案
 
-> 状态：**R0–R4 核心合同及 schema-v9 审计加固已实现，运营验收待完成；R5 Capability/Profile 延后**
+> 状态：**schema-v9、事件、Pipeline、Human Decision 与 Job 核心合同已实现；应用 writer 唯一性尚未实现，运营验收待完成；R5 Capability/Profile 延后**
 > （2026-08-16）。
 >
 > 本文描述在当前 10-Stage `stage_v1` 编排之上引入类型化 WorkflowEvent、纯读取
@@ -40,9 +40,11 @@
    prepare/execute/validate、异常规范化和 workflow-event 提取；lease、input fingerprint、
    freeze、human decision、evidence 与 audit guards 仍分别由 Engine、Step 和 Storage 执行。
    把这些 guards 继续收敛到 Pipeline 是后续目标，现状不得表述为已经完成。
-3. **TransitionCoordinator 唯一修改 workflow durable state。** FactoryEngine 根据
-   StageOutcome 和 Recovery Planner 的领域决定调用它；其他组件不得直接推进 cursor、清除
-   dirty flag 或失效 checkpoint。
+3. **TransitionCoordinator 应成为唯一 application writer。** 这是目标约束，不是当前事实。
+   FactoryEngine 的主 transition/solver 路径已调用它，但 compatibility selection、request
+   supersede、prompt input binding 和 projection-failure bookkeeping 仍有直接 Store 调用；
+   bootstrap/migration 与 archive relocation 另有显式写面。完整现状与未来静态门禁见
+   [`application_writer_allowlist_v1.json`](application_writer_allowlist_v1.json)。
 4. **WorkflowEvent 唯一解释为什么发生某次 durable 状态变化。** Artifact、receipt 和
    fingerprint 仍是机器证据权威；事件保存其不可变引用和哈希，不复制或替代证据。
 5. **Projector 只读取事实，不产生领域决定。** Projector 不得重新选择 retry/reopen/await/fail，
@@ -231,7 +233,7 @@ freeze。Schema v9 的 `workflow_decision_requests` 保存每代请求，
 再次到达 Gate 后才创建绑定新 fingerprint 的下一代请求。仍停留在 Gate 的陈旧开放请求可通过
 原子 supersede/rebind 操作换代。旧 `workflow_decisions` 仅为冻结迁移来源。
 
-## 6. StageExecutionPipeline 调用边界与唯一状态写者
+## 6. StageExecutionPipeline 调用边界与目标状态写者
 
 以下是目标 guard 收敛边界，并非当前全部实现。当前 Pipeline 已覆盖 deadline scope、
 prepare、execute、validate、异常与事件提取；标注为 guard/capability/evidence/audit 的环节仍分布
@@ -270,8 +272,11 @@ StageOutcome(
 ```
 
 Pipeline 不执行 SQLite transition。FactoryEngine 保留 scheduler 和 budget 权威；Recovery
-Planner 根据领域合同确认 disposition/target；随后只有 `TransitionCoordinator` 可以在带
+Planner 根据领域合同确认 disposition/target；主路径随后由 `TransitionCoordinator` 在带
 expected revision、runner PID 和 lease fence 的 transaction 中修改 durable state 并追加事件。
+但是，基线提交 `357947948f034325ea6202694c20bf435910d011` 仍有前述旁路，因此这里只能写
+“目标唯一 writer”，不能写“已经唯一”。Phase 0 的只读 AST characterization 会在旁路清单
+发生未解释漂移时失败；它不重构或封禁现有 writer。
 
 每一次领域操作只更新它实际影响的行。例如普通 `SUBTASK_SUCCEEDED` 不更新 human decision，
 一次 approval 不更新 solver job。禁止为了“统一事务”无条件触碰所有状态表。
@@ -410,7 +415,8 @@ Step timeout、attempt、reopen 和 contest deadline 预算。
 
 - 固定 event envelope、reason/evidence/recovery 枚举和 replay-state hash allowlist。
 - 固定 Human Decision 的 selection/approval 子类型。
-- 固定 Pipeline、Recovery Planner、TransitionCoordinator 和 Projector 的写权限边界。
+- 固定 Pipeline、Recovery Planner、TransitionCoordinator 和 Projector 的目标写权限边界；
+  当前旁路由 Phase 0 allowlist 明示，不以文档措辞冒充收敛完成。
 
 ### R1：事件增强与 shadow projector（已实现）
 
@@ -425,10 +431,11 @@ Step timeout、attempt、reopen 和 contest deadline 预算。
 - Native Web/CLI 在 shadow parity 达标后切换到 Action Center/Audit Timeline projector。
 - Legacy 保留现有 diagnostics/heartbeat/log fallback。
 
-### R3：Pipeline 与唯一 TransitionCoordinator（已实现）
+### R3：Pipeline 已实现，TransitionCoordinator 唯一性未完成
 
 - 从 FactoryEngine 提取 guards/wrappers/validation orchestration，但 Pipeline 只返回 StageOutcome。
-- 所有 durable 写集中到 TransitionCoordinator，保持 revision/PID/lease fence。
+- Engine 主 transition 与 Solver durable 写由 TransitionCoordinator 保持
+  revision/PID/lease fence；allowlist 中的直接 Store 写仍待后续改造。
 
 ### R4：Job 幂等与 reconciliation（已实现）
 

@@ -215,7 +215,7 @@ def make_evaluator_factory(root: Path) -> None:
         write_file(root / relative, f"versioned {relative}\n")
     write_file(
         root / "web/model_config.json",
-        json.dumps({"_default": {"step_13": {"primary": "judge-a", "fallback": "judge-b"}}}),
+        json.dumps({"_default": {"step_16": {"primary": "judge-a", "fallback": "judge-b"}}}),
     )
     write_file(
         root / "web/model_registry.json",

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from factory_core.contest import ContestPolicy
 from factory_core.audit.acceptance import build_final_acceptance_receipt
 from factory_core.audit.domain import AuditSnapshot

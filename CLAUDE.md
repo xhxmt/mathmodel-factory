@@ -117,6 +117,161 @@ string. Current Approval decisions also require a verified immutable receipt;
 missing, symlinked, hash-mismatched, or identity-mismatched evidence fails
 closed.
 
+The additive Phase-2 authority schema is documented in
+`docs/architecture/AUTHORITY_SCHEMA_V2_PHASE2.md`. It uses separate
+`authority_*` tables and migration state, leaves legacy `schema_info` and all
+current writers unchanged, and keeps `AUTHORITY_SCHEMA_V2_WRITE_SHADOW` false
+by default. Migration/resume and repository access fail closed unless the
+legacy-source fingerprint, exact migration prefix/checksums, and actual SQLite
+table/index/trigger identities still match. The repository intentionally has
+no public generic transaction or revision allocator; use only its complete
+bundle or coordinate-bound snapshot methods in Phase 2 tests. This is a
+persistence boundary only: do not treat table presence as Scheduler cutover,
+outbox delivery, command authorization, or production DB migration.
+
+The Phase-2 production-capable but not traffic-connected suffix is documented
+in `docs/architecture/PHASE2_PRODUCTION_AUTHORITY_FOUNDATION.md`. It appends
+`A2_0010` through `A2_0014` in a separate verified migration history and keeps
+the published `A2_0001` through `A2_0009` bytes/checksums unchanged. Its only
+operator entrypoint is `scripts/authority_operator.py`, which requires an
+explicit regular SQLite path and is dry-run unless `--confirm` is supplied.
+The first confirmed migrate binds an immutable persistent database identity to
+the exact pre-Authority backup and its recorded lineage; backup health and
+restore reject evidence from another database even when its legacy source
+fence is equal. Confirmed migrate/restore reserve the explicit evidence output
+as a durable journal before mutation, so the exact operation can reuse its
+original backup, resume each committed suffix step, or complete evidence after
+an already-verified restore replacement.
+The future Authority writer has one fenced complete-bundle mutation, the read
+repository is query-only/revision-atomic, and outbox delivery requires a
+durable consumer fence plus injected provider/reconciliation callbacks. The
+persisted switch defaults to `V1_ONLY`; no active Scheduler, Service, current
+CLI, Web/API/frontend, launcher, model, Solver, provider, or Phase 3-8 path
+imports or calls the production foundation. The current v1 writer inventory
+and route remain active and are not dual-written.
+
+The default-off Phase9 control plane is documented in
+`docs/operations/PHASE9_ENTRY_GATE.md` and
+`docs/operations/PHASE9_IMPLEMENTATION_AND_ROLLBACK.md`. A2_0015 owns atomic
+candidate/input/context-bound run-generation create/rotate. A2_0016 owns the
+immutable replay/event/terminal/idempotency graph and guarded current pointer.
+`factory_core.phase9_forensic_replay` only validates and finalizes an already
+produced exact local evidence set; it does not launch roles, workers, Solver,
+models or providers, use a network, dispatch outbox, deliver, release, migrate,
+deploy or cut over. `PHASE9_ENABLED` defaults false, and delivery is fixed to
+`DISABLED` in request, schema and receipt. Test fixtures never establish
+production `READY` or authorization.
+
+The complete Phase-3 shadow foundation is documented in
+`docs/architecture/PHASE3_ARTIFACT_REGISTRATION_SHADOW.md`. Its canonical,
+packaged modules are `factory_core/phase3_artifacts.py` and the explicitly
+default-disabled `factory_core/phase3_shadow_runtime.py`; `shadow_contracts`
+contains compatibility imports only and remains excluded from packaging. The
+foundation provides frozen Artifact Record/Manifest, explicit ArtifactRemoval,
+typed ChangeSet and dirty decisions, read-set-CAS ReopenPlan, checkpoint
+transitions and re-attestation dry-run, and parity receipts. A manifest hashes
+its complete normalized tracked-path inventory; a previous record or unreadable
+blocker must close as a current record, current blocker, or explicit typed
+removal. Owner-policy drift is `MIGRATION_REQUIRED`, never an implicit rewrite.
+Optional persistence is permitted only through
+`AuthorityProductionWriter.persist_command_bundle` as a complete typed
+`phase3_mutation`. The mutation binds the exact previous/current manifests,
+recomputed ChangeSet, current values/removals, checkpoint input manifest, and
+ReopenPlan/read set; cross-round or partial graphs fail closed. No mutation
+retains exact v1 request/bundle identity, while an explicit mutation uses
+hash-bound v2 identity and atomically reuses the existing
+artifact/checkpoint/reopen tables. Persisted artifact/checkpoint occurrence IDs
+bind workflow, committed revision, command, mutation, and semantic identity so
+equal semantic states can recur across workflows or revisions. Removals are
+revision-bound tombstone occurrences and participate in presence/absence CAS
+and latest-state reconstruction. Supported reads remain
+`mode=ro`/`query_only`, validate all typed rows before return, and expose only
+`workflow_coordinate()`, `command_bundle()`, `phase3_artifact_state()`,
+`revision_snapshot()`, and `outbox_delivery_state()`. No active Scheduler,
+Service, CLI, Web, process, provider, model, or Solver route imports the
+runner; V1 remains the sole production authority and active route, and no
+cutover is authorized.
+
+The Phase-4 and Phase-5 durable full-shadow slices are documented in
+`docs/architecture/PHASE4_DURABLE_OPERATION_SHADOW.md` and
+`docs/architecture/PHASE5_PAUSE_POLICY_SHADOW.md`. Phase 4 keeps the pure
+operation transition contract and adds an explicit-path, standalone SQLite
+runtime for atomic launch intent/current state/receipt/idempotency, claim lease,
+retry, restart, exact replay, and synthetic reconciliation. Phase 5 keeps the
+pure two-mode/four-scope pause matrix and adds a separately isolated durable
+supervisor that binds workflow/invocation/attempt/process-scope/operation
+identity. Its only port records a synthetic `would_apply` observation after a
+durable checkpoint. Both runners return before SQLite or a port when disabled;
+neither imports production process/provider/outbox code, dispatches, signals,
+transfers authority, changes the Authority schema, or appears in production
+imports. Do not connect these stores to an active project database or treat
+their durable shadow evidence as an Execution Supervisor production cutover.
+Existing store files must pass an anchored immutable-read exact
+ownership/schema profile before any read-write connection, lock or transaction;
+new files use exclusive creation and remain bound to their requested path/inode.
+Phase 5 additionally binds the companion marker to the anchored parent
+directory device/inode and inventories every persistent SQLite table, index,
+view and trigger, including the exact automatic indexes. Failed uncommitted
+Phase 4/5 exclusive initialization quarantines and identity-checks the created
+entry before deletion and fsyncs the anchored parent; completed commits are
+preserved for restart verification.
+Phase 5 internal checkpoint/observation/recovery keys are bounded,
+domain-separated SHA-256 identities, never caller-key suffixes.
+
+The current Phase-7+8 durable full-shadow sidecar is documented in
+`docs/architecture/PHASE7_8_DURABLE_FULL_SHADOW.md`. It is synchronously and
+explicitly enabled by `PHASE78_ENABLED`; there is no background Scheduler,
+hidden worker, provider, network, production outbox, frontend panel, dispatch,
+or authority transfer. Disabled CLI, Web, service, Scheduler, and worker entry
+points return before request-file or path parsing, database/CAS access, heavy
+imports, threads, or process creation. Enabled work uses a private durable
+request/claim/lease/result ledger and one explicit local `run-one` worker.
+
+Phase 7 binds the complete current `AuthorityPhase3ArtifactState`, one exact
+revision-level `ArtifactLedgerOccurrence`, the full Phase-6 current access
+proof, and exact `math`/`execution`/`paper` role, manifest, and context bytes.
+An occurrence created before the aggregate head is eligible only when it is
+still the exact current path occurrence at that head; equal semantic bytes in
+an A→B→A cycle are not enough. `legacy_unknown` generations are ineligible:
+complete the normal production migration and record concrete project/run/
+runtime/Scheduler generations instead of editing imported Authority rows.
+Grounding history is immutable, while INVALID/INDETERMINATE or upstream drift
+makes the effective current head unavailable rather than exposing an old PASS.
+Replay uses persisted bytes and does not depend on the original absolute packet
+root.
+
+Phase 8 materializes the occurrence-bound PDF during a separate trusted local
+operator preflight, then fsyncs and re-reads raw PDF, PNG, text, chunk, package,
+and receipt facts in the private CAS before publishing SQLite current state.
+Ordinary CLI/Web/service callers can only reference the returned preflight hash;
+they cannot invoke `register_trusted_approval_preflight`, and a Phase-6
+`snapshot:view` proof is never egress authority. The preflight issuer must be
+the configured operator and differ from the Phase-6 subject. The subject and
+generation must match both that proof and the authenticated caller. Approval,
+revoke, supersede and decision history remains replayable, but every current
+read rejoins live Phase-3/6/7 heads, policy, lifecycle and service-owned time so
+expired or stale authorization is `DENIED`.
+
+`PHASE78_TRUSTED_OPERATOR_ID` and
+`PHASE78_TRUSTED_OPERATOR_GENERATION` are deployment labels, not authenticators
+or secrets. The trust boundary is the controlled OS account allowed to run
+`factory_core.phase78_operator` plus private `0700` runtime parents and `0600`
+persistent files. Do not expose that OS credential or command through Web,
+request JSON, a general service RPC, or an untrusted automation runner. A
+same-credential namespace attacker is an explicitly documented information-
+level limitation, not something these labels can prevent.
+
+One `TotalDeadline` is propagated across Authority/Phase-6 reads, SQLite busy,
+files/PDF tools, CAS, Phase 7, Phase 8, and the one deterministic replay. Work
+generation/owner/epoch/nonce and upstream-head fences prevent a cancelled,
+superseded or late worker from publishing current. After a possibly committed
+timeout, query or replay the same idempotency key; never generate a replacement
+key. Run `./bootstrap_phase78.sh` for the separate versioned five-group
+Phase-7+8 gate, and obtain its exact current counts from
+`python3 -m scripts.phase78_test_contract describe`. This gate does not change
+the frozen Phase-3–6 `./bootstrap.sh` contract of
+`100/274/146/29/108 = 657`.
+
 The Legacy Adapter still snapshots itself under `logs/runner_snapshots/` so an
 active Step is insulated from edits. Do not add new scheduling, retry, recovery,
 or state logic to the adapter.
@@ -127,6 +282,14 @@ For new and migrated projects, `.factory/state.db` is the workflow-state source
 of truth. A transaction appends an event and updates the snapshot with a
 monotonic `revision`. `checkpoint.md`, heartbeat, marker, PID, and diagnostics
 files are compatibility projections and must not be used to overwrite SQLite.
+
+`TransitionCoordinator` is the target application-writer boundary, not an
+achieved unique-writer guarantee. At the current baseline, compatibility
+decision recording, request supersede, prompt-attempt input binding, projection
+failure bookkeeping, bootstrap/migration, and archive relocation still include
+direct `SQLiteStateStore` writes. Do not add another bypass or claim exclusivity;
+use the characterized inventory and future gate specification in
+`docs/architecture/application_writer_allowlist_v1.json`.
 
 Artifacts defined by `STEPS.md` remain validation evidence. Recovery calls the
 registered Step validator: valid artifacts promote the interrupted Step;
@@ -189,22 +352,36 @@ decision routing, snapshot fingerprints, and judgment receipts. Final records
 are stored under `.factory/audits/<snapshot>/`; current `judge_outputs/` files
 remain compatibility projections.
 
-`python3 -m factory_core.cli audit <project>` runs that subsystem independently.
-It must not publish into `papers/`, package, clean, archive, or mutate SQLite
-workflow state. Step 16 is a compatibility adapter: it invokes or reuses the
-same snapshot-bound audit, then publishes and packages only a `PASS` or explicit
-`OVERRIDDEN` result. Final audit ordering is compile → full paper/provenance
-checks → visual/page gate → packets/fingerprint → enforce-mode three-role Judge
-→ snapshot recheck → judgment/final-acceptance receipts. Audit failures return
+`python3 -m factory_core.cli audit <project>` runs that subsystem independently
+in analysis-only mode. It may write audit/Judge evidence, but must not create
+`final_submission.sha256`, an override receipt, or a final acceptance receipt,
+publish into `papers/`, package, clean, archive, or mutate SQLite workflow state.
+Contest-policy and approval-fingerprint reads use a private main/WAL snapshot,
+without upgrading the source schema, changing journal mode, or writing source
+WAL/SHM files. Unsupported or incomplete approval state blocks analysis.
+Analysis results use `.factory/audits/analysis_latest.json`; rerunning analysis
+for an accepted snapshot does not replace its acceptance-authority `latest.json`.
+Step 16 is a compatibility adapter: Native explicitly selects acceptance mode;
+Legacy invokes `audit --accept-delivery`. Only after that boundary may a
+non-Phase9 `PASS` or explicit `OVERRIDDEN` result be published and packaged.
+Phase9 acceptance, release, submission, and delivery are permanently disabled.
+Final analysis ordering is compile → full paper/provenance checks → visual/page
+gate → packets/fingerprint → enforce-mode three-role Judge → snapshot recheck →
+judgment receipt; acceptance adds the final-submission marker and final acceptance receipt.
+Audit failures return
 structured repair hints to the engine; the audit subsystem does not directly
 rewind workflow state.
 
-Delivery governance authority lives only in `web/auth.db`. The scopes are
+Delivery override authority lives only in `web/auth.db`. The scopes are
 `continue_after_gate2` and `deliver_snapshot`; the latter must bind the exact
 64-character final snapshot and is consumed when the final acceptance is
 recorded. A project-local `gate2_delivery_override.json` never authorizes
 anything. This is an operational boundary for the single-operator deployment,
 not cryptographic isolation from another process running as the same Unix UID.
+The same control database owns identity and `project_acl`, but none of those
+records replaces project-local workflow decisions in `.factory/state.db` or
+advances its scheduler. Conversely, a project decision never grants Web access
+or an override. The two databases have different trust scopes and lifecycles.
 
 Step 16 publishes immutable releases under
 `papers/releases/<base>/<snapshot>/` and atomically replaces only
@@ -288,7 +465,7 @@ See `STEPS.md` for exact outputs and line/file gates. In short:
 - Step 13: isolated math-only precheck; `PRECHECK_PASS` allows progress but never delivery.
 - Step 14: abstract replacement.
 - Step 15: citation audit, table/prose polish, de-robotification; these edits make the Step-13 precheck non-final and produce the `CONTENT_READY` boundary.
-- Step 16: require Human Gate 2 (`content_freeze`) before execution, then consume the independent final-audit result. On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. The Step then copies, packages, cleans, and moves to `complete/`; audit alone performs none of those delivery mutations.
+- Step 16: require Human Gate 2 (`content_freeze`) before execution, then explicitly request acceptance for the independent final-audit result (Legacy uses `--accept-delivery`). On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. Only a non-Phase9 accepted result may then be copied, packaged, cleaned, and moved to `complete/`; default audit alone performs none of those delivery mutations or acceptance writes.
 
 Step 13 precheck verdict tokens are `PRECHECK_PASS`,
 `REOPEN_REVISION_MODEL`, and `INDETERMINATE_REVIEW`. Final-audit Gate 2 verdict
@@ -306,6 +483,10 @@ otherwise indeterminate review retry only the affected audit role and stop as
 `PERMANENT_JUDGE_INFRASTRUCTURE` when exhausted. A packet that
 names a genuinely absent upstream artifact reopens that artifact's earliest
 owning Step; packet truncation or judge uncertainty does not default to Step 4.
+All role packets must be eligible before the first model call, including direct
+prepared/precheck entry points. If an artifact's registered recovery boundary
+is not earlier than the active Step, report `PERMANENT_RECOVERY_TARGET` with the
+missing paths instead of emitting an invalid scheduler transition.
 
 The runner allows one repair cycle. If the reopened or final-submission judge still does not PASS, normal delivery is blocked. Legacy Markdown scorecards are `LEGACY_UNVERIFIED` and are never comparison-ready under the current contract.
 
@@ -426,3 +607,7 @@ prefix. `web/README.md` owns current usage and
 - Root `pyproject.toml`/`uv.lock`, hash-locked Web/Cloud exports, and frontend `package-lock.json` own dependency resolution. Runtime start scripts must not install packages.
 - Do not change `STEPS.md`, `modeling_guide.md`, or active prompts casually; they are agent contracts.
 - Keep historical prompt/data files unless deletion is explicitly approved. They are not an executable compatibility promise.
+
+### Phase9 runtime coordination
+
+`factory_core/phase9_runtime*.py` and `scripts/phase9_authorized_runtime.py` own the default-off A2_0020 dispatch lifecycle and actual completion receipt path. The existing forensic service remains a finalizer. Read `docs/operations/PHASE9_PREP_RUNBOOK.md` for distinct runtime-grant acquisition, bounded execution, fresh completion entry and independent finalizer-start contracts. Production schema version 8 requires separately authorized migration; delivery remains disabled.

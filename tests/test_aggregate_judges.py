@@ -2,7 +2,14 @@ import hashlib
 import json
 from pathlib import Path
 
-from scripts.aggregate_judges import _artifact_payload, aggregate_outputs, write_aggregate_report
+from scripts.aggregate_judges import (
+    _artifact_payload,
+    _validate_hard_evidence,
+    _validate_paper_evidence,
+    _validate_paper_issues,
+    aggregate_outputs,
+    write_aggregate_report,
+)
 
 
 DIMENSIONS = {
@@ -20,9 +27,32 @@ def _write(path: Path, text: str) -> Path:
     return path
 
 
-def _hard(path: Path, role: str, verdict: str = "PASS", fatal: int = 0) -> Path:
+def _quote_hash(quote: str) -> str:
+    return hashlib.sha256(quote.encode("utf-8")).hexdigest()
+
+
+def _hard_evidence(role: str, quote: str, *, ref_id: str | None = None) -> dict[str, str]:
+    return {
+        "ref_id": ref_id or f"{role}-exact-quote",
+        "claim": "exact quote claim",
+        "chunk_id": ("a" if role == "math" else "b") * 64,
+        "quote": quote,
+        "quote_sha256": _quote_hash(quote),
+        "finding": "exact quote finding",
+        "severity": "support",
+    }
+
+
+def _hard(
+    path: Path,
+    role: str,
+    verdict: str = "PASS",
+    fatal: int = 0,
+    *,
+    evidence: list[dict[str, str]] | None = None,
+) -> Path:
     severity = "fatal" if verdict == "FAIL" else "support"
-    evidence = [
+    selected_evidence = evidence if evidence is not None else [
         {
             "ref_id": f"{role}-e{index + 1}",
             "claim": f"{role} claim {index + 1}",
@@ -38,7 +68,7 @@ def _hard(path: Path, role: str, verdict: str = "PASS", fatal: int = 0) -> Path:
         "role": role,
         "verdict": verdict,
         "fatal_flaws": fatal,
-        "evidence": evidence,
+        "evidence": selected_evidence,
         "limitations": ["missing independent proof"] if verdict == "INDETERMINATE" else [],
         "conclusion": "audited conclusion",
     }
@@ -92,7 +122,13 @@ def _paper(
     return _write(path, f"VERDICT: {verdict}\n{json.dumps(payload)}\n")
 
 
-def _manifest(path: Path, role: str, *, complete: bool = True) -> Path:
+def _manifest(
+    path: Path,
+    role: str,
+    *,
+    complete: bool = True,
+    context_override: str | None = None,
+) -> Path:
     context_path = path.with_name("context.txt")
     context_lines = [
         f"{candidate} evidence quote {index}"
@@ -102,9 +138,11 @@ def _manifest(path: Path, role: str, *, complete: bool = True) -> Path:
     context_lines.extend(
         f"paper evidence quote {key}" for key in DIMENSIONS
     )
-    context_text = "\n".join(context_lines) + "\n"
+    context_text = context_override or "\n".join(context_lines) + "\n"
     context_path.write_text(
-        f"\n----- FILE: evidence.txt -----\n{context_text}\n", encoding="utf-8"
+        f"\n----- FILE: evidence.txt -----\n{context_text}\n",
+        encoding="utf-8",
+        newline="\n",
     )
     included_sha256 = hashlib.sha256(context_text.encode("utf-8")).hexdigest()
     context_sha256 = hashlib.sha256(context_path.read_bytes()).hexdigest()
@@ -405,3 +443,151 @@ def test_manifest_cannot_claim_complete_when_required_file_is_not_included(tmp_p
 
     assert result.roles[0].status == "INDETERMINATE"
     assert "paths conflict" in (result.roles[0].error or "")
+
+
+def test_hard_evidence_preserves_indented_exact_quote_and_role_passes(tmp_path):
+    quote = "    objective_value = 42  "
+    evidence = _hard_evidence("math", quote)
+
+    validated = _validate_hard_evidence([evidence])
+    result = aggregate_outputs(
+        math_path=_hard(tmp_path / "math.md", "math", evidence=[evidence]),
+        execution_path=_hard(tmp_path / "execution.md", "execution"),
+        paper_path=_paper(tmp_path / "paper.md"),
+    )
+
+    assert validated[0]["quote"] == quote
+    assert validated[0]["quote_sha256"] == _quote_hash(quote)
+    assert result.status == "PASS"
+    assert result.roles[0].status == "PASS"
+    assert result.roles[0].error is None
+
+
+def test_hard_evidence_preserves_exact_quote_ending_in_newline(tmp_path):
+    quote = "solver converged with optimal status\n"
+    evidence = _hard_evidence("math", quote)
+
+    validated = _validate_hard_evidence([evidence])
+    result = aggregate_outputs(
+        math_path=_hard(tmp_path / "math.md", "math", evidence=[evidence]),
+        execution_path=_hard(tmp_path / "execution.md", "execution"),
+        paper_path=_paper(tmp_path / "paper.md"),
+    )
+
+    assert validated[0]["quote"] == quote
+    assert validated[0]["quote_sha256"] == _quote_hash(quote)
+    assert result.roles[0].status == "PASS"
+
+
+def test_paper_dimension_evidence_preserves_surrounding_whitespace(tmp_path):
+    quote = "  paper evidence quote model_presentation  \n"
+    evidence = {
+        "ref_id": "paper-model_presentation",
+        "chunk_id": "c" * 64,
+        "quote": quote,
+        "quote_sha256": _quote_hash(quote),
+        "finding": "specific evidence",
+    }
+    paper_path = _paper(tmp_path / "paper.md")
+    lines = paper_path.read_text(encoding="utf-8").splitlines()
+    payload = json.loads(lines[1])
+    payload["dimensions"]["model_presentation"]["evidence"] = [evidence]
+    paper_path.write_text(
+        f"VERDICT: PASS\n{json.dumps(payload)}\n", encoding="utf-8"
+    )
+
+    validated = _validate_paper_evidence(
+        [evidence], "dimensions.model_presentation.evidence"
+    )
+    result = aggregate_outputs(
+        math_path=_hard(tmp_path / "math.md", "math"),
+        execution_path=_hard(tmp_path / "execution.md", "execution"),
+        paper_path=paper_path,
+    )
+
+    assert validated[0]["quote"] == quote
+    assert validated[0]["quote_sha256"] == _quote_hash(quote)
+    assert result.status == "PASS"
+    assert result.dimensions is not None
+    assert result.dimensions["model_presentation"]["evidence"][0]["quote"] == quote
+
+
+def test_paper_issue_preserves_leading_whitespace_in_revise_path(tmp_path):
+    quote = "    required result is absent"
+    issue = {
+        "ref_id": "paper-blocking-exact",
+        "severity": "blocking",
+        "chunk_id": "c" * 64,
+        "quote": quote,
+        "quote_sha256": _quote_hash(quote),
+        "finding": "required result is absent",
+        "recommendation": "add the required result",
+    }
+
+    validated = _validate_paper_issues([issue])
+    result = aggregate_outputs(
+        math_path=_hard(tmp_path / "math.md", "math"),
+        execution_path=_hard(tmp_path / "execution.md", "execution"),
+        paper_path=_paper(tmp_path / "paper.md", "REVISE", issues=[issue]),
+    )
+
+    assert validated[0]["quote"] == quote
+    assert validated[0]["quote_sha256"] == _quote_hash(quote)
+    assert result.status == "REVISE"
+    assert result.verdict == "REOPEN_REVISION_TEXT"
+    assert result.roles[2].status == "REVISE"
+
+
+def test_complete_manifest_aggregate_preserves_indented_grounded_quote(tmp_path):
+    quote = "    objective_value = 42"
+    context_lines = [
+        f"{candidate} evidence quote {index}"
+        for candidate in ("math", "execution")
+        for index in range(1, 4)
+    ]
+    context_lines.extend(f"paper evidence quote {key}" for key in DIMENSIONS)
+    context_lines.append(quote)
+    context_text = "\n".join(context_lines) + "\n"
+    evidence = _hard_evidence("math", quote)
+
+    result = aggregate_outputs(
+        math_path=_hard(tmp_path / "math.md", "math", evidence=[evidence]),
+        execution_path=_hard(tmp_path / "execution.md", "execution"),
+        paper_path=_paper(tmp_path / "paper.md"),
+        math_manifest=_manifest(
+            tmp_path / "math.manifest.json",
+            "math",
+            context_override=context_text,
+        ),
+        execution_manifest=_manifest(
+            tmp_path / "execution.manifest.json",
+            "execution",
+            context_override=context_text,
+        ),
+        paper_manifest=_manifest(
+            tmp_path / "paper.manifest.json",
+            "paper",
+            context_override=context_text,
+        ),
+    )
+
+    assert result.status == "PASS"
+    assert result.verdict == "PASS"
+    assert result.roles[0].status == "PASS"
+    assert result.evidence_grounding["math"]["valid"] is True
+    assert result.evidence_grounding["math"]["errors"] == []
+
+
+def test_whitespace_only_exact_quote_remains_indeterminate(tmp_path):
+    quote = " \t\n "
+    evidence = _hard_evidence("math", quote)
+
+    result = aggregate_outputs(
+        math_path=_hard(tmp_path / "math.md", "math", evidence=[evidence]),
+        execution_path=_hard(tmp_path / "execution.md", "execution"),
+        paper_path=_paper(tmp_path / "paper.md"),
+    )
+
+    assert result.status == "INDETERMINATE"
+    assert result.roles[0].status == "INDETERMINATE"
+    assert "quote must be a non-empty string" in (result.roles[0].error or "")

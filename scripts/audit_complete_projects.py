@@ -30,8 +30,7 @@ def project_entry(project: Path, root: Path, *, write_manifest: bool = False) ->
     failed = [check.__dict__ for check in ev.checks if not check.ok and check.severity != "warning"]
     manifest = project / "delivery_manifest.json"
     if write_manifest:
-        data = delivery_contract.build_delivery_manifest(project, root, ev)
-        manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        delivery_contract.write_delivery_manifest(project, root, manifest)
     return {
         "base": project.name,
         "path": str(project),

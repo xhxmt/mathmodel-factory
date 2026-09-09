@@ -1188,6 +1188,8 @@ web = [
 dev = [
     { name = "httpx" },
     { name = "httpx2" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pytest" },
 ]
 
@@ -1225,6 +1227,7 @@ provides-extras = ["models", "web", "cloud"]
 dev = [
     { name = "httpx", specifier = "==0.28.1" },
     { name = "httpx2", specifier = "==2.9.1" },
+    { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pytest", specifier = ">=8,<10" },
 ]
 

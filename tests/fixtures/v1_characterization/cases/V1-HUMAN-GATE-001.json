@@ -1,0 +1,55 @@
+{
+  "schema": "v1-characterization-case-v1",
+  "fixture_id": "V1-HUMAN-GATE-001",
+  "category": "human_gate",
+  "fixture_kind": "pytest_runtime_tmp_path_descriptor",
+  "source_paths": [
+    "factory_core/human_decisions.py",
+    "factory_core/storage.py",
+    "factory_core/workflow_events.py",
+    "tests/test_workflow_events.py"
+  ],
+  "pytest_nodes": [
+    "tests/test_workflow_events.py::test_reject_edit_reenter_gate_and_approve"
+  ],
+  "v1_expected": {
+    "gate": "content_freeze",
+    "rejection_status": "ready",
+    "rejection_pending_action": null,
+    "rejection_last_completed_step": 13,
+    "rejection_last_completed_stage": 8,
+    "recovery_target": {
+      "stage": 9,
+      "subtask": "content_freeze_guard"
+    },
+    "request_generations": 2,
+    "decision_history_count": 2,
+    "final_decision_approved": true,
+    "final_pending_action": null
+  },
+  "contracts": [
+    "INV-HUMAN-DECISION-REQUEST-GENERATION",
+    "INV-APPROVAL-EXPLICIT-TRUE",
+    "INV-GATE-REJECTION-REOPENS-OWNER",
+    "INV-DECISION-HISTORY-APPEND-ONLY"
+  ],
+  "machine_readable_fields": [
+    "gate",
+    "rejection_status",
+    "rejection_pending_action",
+    "rejection_last_completed_step",
+    "rejection_last_completed_stage",
+    "recovery_target",
+    "request_generations",
+    "decision_history_count",
+    "final_decision_approved",
+    "final_pending_action"
+  ],
+  "missing_evidence": [
+    {
+      "gap_id": "GAP-V1-GATE-ENTRYPOINT-PARITY",
+      "description": "The characterization invokes SQLiteStateStore directly rather than exercising both CLI and Web decision entrypoints.",
+      "impact": "It proves storage and projector semantics, not full application-writer or authentication routing."
+    }
+  ]
+}

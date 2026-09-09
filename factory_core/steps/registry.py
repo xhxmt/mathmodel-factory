@@ -78,6 +78,10 @@ def build_native_registry(
             if prompt_step is None:
                 raise RuntimeError(f"Step {contract.id} has no native implementation")
             step = prompt_step
+        if contract.id in {2, 3, 5}:
+            from .joint_modeling import JointModelingStep
+
+            step = JointModelingStep(step, contract.id, root)
         registry.register(
             StepDefinition(
                 id=contract.id,

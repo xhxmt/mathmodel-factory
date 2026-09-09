@@ -88,14 +88,12 @@ def gate2_delivery_override(
 
 def gate2_delivery_allowed(project: Path, root: Path | None = None) -> bool:
     record = final_audit_record(project)
+    if record.get("decision") == "ABLATE_NO_JUDGE":
+        return False
     return (
         gate2_passed(project)
         or gate2_delivery_override(project, root)
         or delivered_snapshot_override(project, root)
-        or (
-            record.get("decision") == "ABLATE_NO_JUDGE"
-            and final_audit_is_current(project, root)
-        )
     )
 
 
@@ -105,6 +103,9 @@ def delivered_snapshot_override(
     try:
         from factory_core.audit.acceptance import verify_final_acceptance_receipt
 
+        audit = final_audit_record(project)
+        if audit.get("decision") == "ABLATE_NO_JUDGE":
+            return False
         receipt = json.loads(
             read_text(project / "judge_outputs/final_acceptance_receipt.json")
         )
@@ -114,7 +115,6 @@ def delivered_snapshot_override(
             expected_snapshot_id=snapshot_id,
             expected_status="OVERRIDDEN",
         )
-        audit = final_audit_record(project)
         evidence = audit.get("evidence")
         override_id = (
             evidence.get("override_id") if isinstance(evidence, dict) else None
@@ -157,6 +157,8 @@ def final_audit_is_current(project: Path, root: Path | None = None) -> bool:
     status = record.get("status")
     if record.get("profile") != "final":
         return False
+    if record.get("decision") == "ABLATE_NO_JUDGE":
+        return False
     if status not in {"PASS", "OVERRIDDEN"}:
         return False
     if record.get("delivery_allowed") is not True:
@@ -188,18 +190,6 @@ def final_audit_is_current(project: Path, root: Path | None = None) -> bool:
     if not acceptance_valid:
         return False
     if status == "OVERRIDDEN":
-        ablation_path = project / "judge_outputs/final_submission.ablation.json"
-        try:
-            ablation = json.loads(read_text(ablation_path))
-        except (json.JSONDecodeError, OSError):
-            ablation = {}
-        if (
-            record.get("decision") == "ABLATE_NO_JUDGE"
-            and ablation.get("judge_executed") is False
-            and ablation.get("snapshot_id") == snapshot_id
-            and ablation.get("quality_pass_fabricated") is False
-        ):
-            return True
         try:
             route = json.loads(read_text(project / "judge_outputs/decision_route.json"))
         except (json.JSONDecodeError, OSError):
@@ -232,10 +222,13 @@ def zip_file_ok(path: Path) -> bool:
         return False
 
 
-def delivery_artifacts_ready(root: Path, base: str) -> bool:
+def delivery_artifacts_ready(root: Path, base: str, *, project: Path) -> bool:
     from factory_core.delivery.release import current_release_artifacts
+    from factory_core.phase9_delivery_fence import legacy_delivery_projection_allowed
 
-    current = current_release_artifacts(root / "papers", base)
+    current = current_release_artifacts(
+        root / "papers", base, project=project
+    )
     if current is not None:
         papers_pdf, submission_zip = current
         return (
@@ -243,9 +236,15 @@ def delivery_artifacts_ready(root: Path, base: str) -> bool:
             and papers_pdf.stat().st_size > 0
             and zip_file_ok(submission_zip)
         )
+    if not legacy_delivery_projection_allowed(project):
+        return False
     papers_pdf = root / "papers" / f"{base}_paper.pdf"
     submission_zip = root / "papers" / f"{base}_submission.zip"
-    return papers_pdf.is_file() and papers_pdf.stat().st_size > 0 and zip_file_ok(submission_zip)
+    return (
+        papers_pdf.is_file()
+        and papers_pdf.stat().st_size > 0
+        and zip_file_ok(submission_zip)
+    )
 
 
 def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:
@@ -253,7 +252,9 @@ def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:
 
     resolved_base = base or project.name
     return (
-        resolve_current_release(root / "papers", resolved_base) is not None
+        resolve_current_release(
+            root / "papers", resolved_base, project=project
+        ) is not None
         and gate2_delivery_allowed(project, root)
         and step8_5_passed(project)
         and final_audit_is_current(project, root)
@@ -274,7 +275,9 @@ def collect_state(project: Path, root: Path, base: str | None = None) -> dict[st
         "final_audit": final_audit_record(project),
         "final_audit_current": final_audit_is_current(project, root),
         "step8_5": collect_step8_5_state(project),
-        "delivery_artifacts_ready": delivery_artifacts_ready(root, resolved_base),
+        "delivery_artifacts_ready": delivery_artifacts_ready(
+            root, resolved_base, project=project
+        ),
         "final_submission_judge_current": final_judge_is_current(project, resolved_base),
         "step16_ready": step16_ready(project, root, resolved_base),
     }

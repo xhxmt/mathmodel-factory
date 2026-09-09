@@ -41,12 +41,13 @@ Fingerprinter = Callable[[Path, str], str]
 
 
 class FinalAuditService:
-    """Run final acceptance and judge checks without publishing the project.
+    """Run final analysis, with an explicit optional acceptance boundary.
 
     The service may write generated verification reports, compiled PDF output,
     compatibility judge artifacts, and its own ``.factory/audits`` records. It
     never copies into ``papers/``, packages a submission, archives a project,
-    or changes workflow state.
+    or changes workflow state.  ``analysis_only=True`` also forbids final
+    submission markers, delivery overrides, and acceptance receipts.
     """
 
     profile = AuditProfile.FINAL.value
@@ -59,6 +60,7 @@ class FinalAuditService:
         runner: CommandRunner,
         fingerprinter: Fingerprinter | None = None,
         override_provider: OverrideProvider | None = None,
+        technical_flow_validation: bool = False,
     ) -> None:
         self.factory_root = factory_root.resolve()
         self.judge = judge
@@ -68,6 +70,14 @@ class FinalAuditService:
         self.override_provider = override_provider or default_override_provider(
             self.factory_root
         )
+        self.technical_flow_validation = bool(technical_flow_validation)
+
+    def _technical_authorization(self, project: Path):
+        if not self.technical_flow_validation:
+            return None
+        from ..solver_input_coverage import technical_solver_drift_authorization
+
+        return technical_solver_drift_authorization(project)
 
     def run(
         self,
@@ -75,23 +85,55 @@ class FinalAuditService:
         *,
         compile_pdf: bool = True,
         reuse_pass: bool = True,
+        analysis_only: bool = True,
+        workflow_id: str | None = None,
+        run_generation: str | None = None,
     ) -> AuditOutcome:
         project = context.project_dir.resolve()
-        lock_path = project / ".factory" / "audits" / ".lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+", encoding="ascii") as lock:
-            try:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return self._busy(project)
-            try:
-                return self._run_unlocked(
-                    context,
-                    compile_pdf=compile_pdf,
-                    reuse_pass=reuse_pass,
+        if analysis_only:
+            if workflow_id is not None or run_generation is not None:
+                raise ValueError(
+                    "Phase9 coordinates are not valid for analysis-only final audit"
                 )
-            finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+        def run_with_audit_lock() -> AuditOutcome:
+            lock_path = project / ".factory" / "audits" / ".lock"
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with lock_path.open("a+", encoding="ascii") as lock:
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return self._busy(project)
+                try:
+                    return self._run_unlocked(
+                        context,
+                        compile_pdf=compile_pdf,
+                        reuse_pass=reuse_pass,
+                        analysis_only=analysis_only,
+                        workflow_id=workflow_id,
+                        run_generation=run_generation,
+                    )
+                finally:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+        if analysis_only:
+            return run_with_audit_lock()
+
+        # A non-analysis invocation asks this service to elevate a completed
+        # judgment into acceptance.  Hold the shared Authority/project lease
+        # from before the audit lock or judge writes through the acceptance
+        # commit.  A sanctioned Phase9 writer therefore linearizes wholly
+        # before this call (which refuses without creating the audit lock) or
+        # wholly after it.  The leaf acceptance lease is same-thread reentrant.
+        from ..phase9_delivery_fence import delivery_side_effect_commit_lease
+
+        with delivery_side_effect_commit_lease(
+            project,
+            operation="acceptance",
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        ):
+            return run_with_audit_lock()
 
     def _run_unlocked(
         self,
@@ -99,16 +141,43 @@ class FinalAuditService:
         *,
         compile_pdf: bool,
         reuse_pass: bool,
+        analysis_only: bool,
+        workflow_id: str | None,
+        run_generation: str | None,
     ) -> AuditOutcome:
         project = context.project_dir.resolve()
         base = project.name
+        technical_authorization = self._technical_authorization(project)
+        if self.technical_flow_validation and technical_authorization is None:
+            return self._failure(
+                project,
+                decision="TECHNICAL_FLOW_AUTHORIZATION_INVALID",
+                status=AuditStatus.FAIL,
+                error_class="PERMANENT_TECHNICAL_FLOW_AUTHORIZATION",
+                returncode=2,
+            )
+        if technical_authorization is not None:
+            # A technical penetration run must execute the live judges.  It
+            # may not consume a cached PASS bound to an earlier snapshot.
+            reuse_pass = False
 
         from ..storage import SQLiteStateStore
 
         decision_store = SQLiteStateStore(project)
-        if decision_store.exists and decision_store.contest_policy() is not None:
-            content_freeze = decision_store.decision("content_freeze")
-            if not (
+        try:
+            freeze_required, approvals = decision_store.read_finalization_approvals()
+        except ValueError as exc:
+            return self._failure(
+                project,
+                decision="CONTENT_FREEZE_EVIDENCE_INVALID",
+                status=AuditStatus.FAIL,
+                error_class="PERMANENT_CONTENT_FREEZE_RECEIPT",
+                returncode=2,
+                evidence={"approval_error": str(exc)},
+            )
+        if freeze_required:
+            content_freeze = approvals["content_freeze"]
+            if technical_authorization is None and not (
                 content_freeze is not None
                 and content_freeze.get("approved") is True
                 and (content_freeze.get("receipt_verification") or {}).get("valid")
@@ -122,7 +191,9 @@ class FinalAuditService:
                     returncode=2,
                 )
 
-        if self._has_stub(project) or self._unresolved_blocking(project):
+        if self._has_stub(project) or (
+            self._unresolved_blocking(project) and not self.technical_flow_validation
+        ):
             return self._failure(
                 project,
                 decision="CONTENT_NOT_READY",
@@ -139,6 +210,10 @@ class FinalAuditService:
             "yes",
             "on",
         }
+        if ablate_judge:
+            # A no-judge run is an auditable non-delivery terminal, never a
+            # request to consume a cached PASS or delivery override.
+            reuse_pass = False
         prepare_packets = (
             None if ablate_judge else getattr(self.judge, "prepare_packets", None)
         )
@@ -153,7 +228,14 @@ class FinalAuditService:
                 return None
             continued = self._judge_failure_override(project, prepared)
             if continued is not None:
-                return self._finish_judge_result(project, context, continued)
+                return self._finish_judge_result(
+                    project,
+                    context,
+                    continued,
+                    analysis_only=analysis_only,
+                    workflow_id=workflow_id,
+                    run_generation=run_generation,
+                )
             return self._failure(
                 project,
                 decision="INDETERMINATE_REVIEW",
@@ -174,12 +256,21 @@ class FinalAuditService:
             if packet_failure is not None:
                 return packet_failure
             candidate = self._snapshot(project)
-            cached = self._load_reusable(project, candidate)
+            cached = self._load_reusable(
+                project, candidate, analysis_only=analysis_only
+            )
             if cached is not None:
                 execution = ExecutionResult.succeeded(
                     audit_status=cached.status.value,
                     audit_snapshot=candidate.snapshot_id,
                     audit_reused=True,
+                    audit_result=str(
+                        (
+                            self._analysis_latest_path(project)
+                            if analysis_only
+                            else self._latest_path(project)
+                        ).relative_to(project)
+                    ),
                     final_decision=cached.decision,
                     gate2_delivery_override=cached.override,
                 )
@@ -228,7 +319,7 @@ class FinalAuditService:
                 )
 
         acceptance_checks, acceptance = self._run_acceptance_checks(project)
-        if acceptance is not None:
+        if acceptance is not None and not self.technical_flow_validation:
             return self._failure(
                 project,
                 decision="CONTENT_NOT_READY",
@@ -257,18 +348,36 @@ class FinalAuditService:
 
         snapshot = self._snapshot(project)
         if reuse_pass:
-            cached = self._load_reusable(project, snapshot)
+            cached = self._load_reusable(
+                project, snapshot, analysis_only=analysis_only
+            )
             if cached is not None:
                 execution = ExecutionResult.succeeded(
                     audit_status=cached.status.value,
                     audit_snapshot=snapshot.snapshot_id,
                     audit_reused=True,
+                    audit_result=str(
+                        (
+                            self._analysis_latest_path(project)
+                            if analysis_only
+                            else self._latest_path(project)
+                        ).relative_to(project)
+                    ),
                     final_decision=cached.decision,
                     gate2_delivery_override=cached.override,
                 )
                 return AuditOutcome(execution, cached, snapshot)
 
-        delivery_override = self._delivery_override(project, snapshot.snapshot_id)
+        if ablate_judge:
+            return self._finish_ablation(
+                project, snapshot, analysis_only=analysis_only
+            )
+
+        delivery_override = (
+            None
+            if analysis_only
+            else self._delivery_override(project, snapshot.snapshot_id)
+        )
         if delivery_override is not None:
             return self._finish_judge_result(
                 project,
@@ -280,13 +389,9 @@ class FinalAuditService:
                     gate2_override_id=delivery_override.override_id,
                 ),
                 snapshot=snapshot,
-            )
-
-        if ablate_judge:
-            return self._finish_ablation(
-                project,
-                self.judge.execute(context),
-                snapshot,
+                analysis_only=analysis_only,
+                workflow_id=workflow_id,
+                run_generation=run_generation,
             )
 
         execute_prepared = getattr(self.judge, "execute_prepared", None)
@@ -300,6 +405,9 @@ class FinalAuditService:
             context,
             judge_result,
             snapshot=snapshot,
+            analysis_only=analysis_only,
+            workflow_id=workflow_id,
+            run_generation=run_generation,
         )
 
     def run_project(
@@ -308,6 +416,9 @@ class FinalAuditService:
         *,
         compile_pdf: bool = True,
         reuse_pass: bool = True,
+        analysis_only: bool = True,
+        workflow_id: str | None = None,
+        run_generation: str | None = None,
     ) -> AuditOutcome:
         context = StepContext(
             project.resolve(),
@@ -317,7 +428,14 @@ class FinalAuditService:
             contract_for(16).timeout_seconds,
             0,
         )
-        return self.run(context, compile_pdf=compile_pdf, reuse_pass=reuse_pass)
+        return self.run(
+            context,
+            compile_pdf=compile_pdf,
+            reuse_pass=reuse_pass,
+            analysis_only=analysis_only,
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
 
     def _finish_judge_result(
         self,
@@ -326,9 +444,16 @@ class FinalAuditService:
         judge_result: ExecutionResult,
         *,
         snapshot: AuditSnapshot | None = None,
+        analysis_only: bool,
+        workflow_id: str | None,
+        run_generation: str | None,
     ) -> AuditOutcome:
         snapshot = snapshot or self._snapshot(project)
-        override_record = self._delivery_override(project, snapshot.snapshot_id)
+        override_record = (
+            None
+            if analysis_only
+            else self._delivery_override(project, snapshot.snapshot_id)
+        )
         if judge_result.returncode != 0 and override_record is None:
             return self._failure(
                 project,
@@ -409,6 +534,17 @@ class FinalAuditService:
                 judge_completed=judge_completed,
                 evidence=judge_result.metadata,
             )
+        elif decision == "PASS" and not judge_completed and not override:
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision="INDETERMINATE_REVIEW",
+                status=AuditStatus.INDETERMINATE,
+                error_class="TRANSIENT_JUDGE_INCOMPLETE",
+                returncode=judge_result.returncode or 75,
+                judge_completed=False,
+                evidence=judge_result.metadata,
+            )
 
         if override and (decision != "PASS" or not judge_completed):
             self._record_override_decision(project, decision, judge_result.metadata)
@@ -453,36 +589,219 @@ class FinalAuditService:
                     judge_completed=True,
                 )
 
-        (project / "judge_outputs").mkdir(parents=True, exist_ok=True)
-        (project / "judge_outputs/final_submission.sha256").write_text(
-            snapshot.snapshot_id + "\n", encoding="ascii"
-        )
+        if self.technical_flow_validation:
+            technical_authorization = self._technical_authorization(project)
+            if technical_authorization is None:
+                return self._failure(
+                    project,
+                    snapshot=snapshot,
+                    decision="TECHNICAL_FLOW_AUTHORIZATION_INVALID",
+                    status=AuditStatus.INDETERMINATE,
+                    error_class="PERMANENT_TECHNICAL_FLOW_AUTHORIZATION",
+                    returncode=2,
+                    judge_completed=judge_completed,
+                )
+            status = (
+                AuditStatus.PASS
+                if decision == "PASS" and judge_completed
+                else AuditStatus.OVERRIDDEN
+            )
+            record = AuditRecord(
+                snapshot_id=snapshot.snapshot_id,
+                base=project.name,
+                profile=self.profile,
+                status=status,
+                decision=decision,
+                judge_completed=judge_completed,
+                delivery_allowed=False,
+                created_at=_utc_now(),
+                error_class="PERMANENT_TECHNICAL_FLOW_NO_DELIVERY",
+                returncode=2,
+                override=False,
+                evidence={
+                    "judge": judge_result.metadata,
+                    "technical_flow_validation": True,
+                    "technical_authorization": str(
+                        technical_authorization.path.relative_to(project)
+                    ),
+                    "technical_authorization_sha256": (
+                        technical_authorization.sha256
+                    ),
+                    "content_freeze_approved": False,
+                    "quality_pass_fabricated": False,
+                    "delivery_allowed": False,
+                },
+            )
+            record = self._persist(project, snapshot, record)
+            execution = ExecutionResult.failed(
+                "PERMANENT_TECHNICAL_FLOW_NO_DELIVERY",
+                returncode=2,
+                audit_status=record.status.value,
+                audit_snapshot=snapshot.snapshot_id,
+                audit_result=str(
+                    self._analysis_latest_path(project).relative_to(project)
+                ),
+                final_decision=decision,
+                judge_completed=judge_completed,
+                technical_flow_validation=True,
+                quality_pass_fabricated=False,
+                delivery_allowed=False,
+            )
+            return AuditOutcome(execution, record, snapshot)
+
+        if analysis_only:
+            status = AuditStatus.PASS
+            record = AuditRecord(
+                snapshot_id=snapshot.snapshot_id,
+                base=project.name,
+                profile=self.profile,
+                status=status,
+                decision=decision,
+                judge_completed=judge_completed,
+                delivery_allowed=False,
+                created_at=_utc_now(),
+                override=False,
+                evidence={
+                    "judge": judge_result.metadata,
+                    "analysis_only": True,
+                    "delivery_allowed": False,
+                },
+            )
+            record = self._persist(project, snapshot, record)
+            execution = ExecutionResult.succeeded(
+                audit_status=record.status.value,
+                audit_snapshot=snapshot.snapshot_id,
+                audit_result=str(
+                    self._analysis_latest_path(project).relative_to(project)
+                ),
+                final_decision=decision,
+                gate2_delivery_override=False,
+                analysis_only=True,
+                delivery_allowed=False,
+            )
+            return AuditOutcome(execution, record, snapshot)
+
+        # A final judgment is not itself authority to create acceptance or
+        # final-submission artifacts.  Reclassify immediately before that
+        # boundary; the receipt builder independently repeats this check.
+        try:
+            from ..phase9_delivery_fence import (
+                Phase9DeliveryFenceError,
+                delivery_side_effect_commit_lease,
+                require_delivery_side_effect_authority,
+            )
+
+            require_delivery_side_effect_authority(
+                project,
+                operation="acceptance",
+                workflow_id=workflow_id,
+                run_generation=run_generation,
+            )
+        except (OSError, ValueError) as exc:
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision=decision,
+                status=AuditStatus.INDETERMINATE,
+                error_class="PERMANENT_PHASE9_DELIVERY_DISABLED",
+                returncode=2,
+                judge_completed=judge_completed,
+                evidence={"delivery_fence_error": str(exc)},
+            )
+
         status = (
             AuditStatus.PASS
             if decision == "PASS" and judge_completed
             else AuditStatus.OVERRIDDEN
         )
-        override_receipt = None
-        if status is AuditStatus.OVERRIDDEN:
-            if override_record is None:
-                return self._failure(
-                    project,
-                    snapshot=snapshot,
-                    decision=decision or "INDETERMINATE_REVIEW",
-                    status=AuditStatus.FAIL,
-                    error_class="PERMANENT_OVERRIDE_NOT_AUTHORIZED",
-                    returncode=2,
-                    judge_completed=judge_completed,
-                )
-            override_receipt = self._write_override_receipt(
-                project, snapshot, override_record, decision
+        if status is AuditStatus.OVERRIDDEN and override_record is None:
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision=decision or "INDETERMINATE_REVIEW",
+                status=AuditStatus.FAIL,
+                error_class="PERMANENT_OVERRIDE_NOT_AUTHORIZED",
+                returncode=2,
+                judge_completed=judge_completed,
             )
         try:
-            final_receipt = build_final_acceptance_receipt(
+            with delivery_side_effect_commit_lease(
                 project,
-                snapshot,
-                status=status.value,
-                override_receipt=override_receipt,
+                operation="acceptance",
+                workflow_id=workflow_id,
+                run_generation=run_generation,
+            ):
+                from ..artifacts import atomic_write_text
+
+                judge_outputs = project / "judge_outputs"
+                judge_outputs.mkdir(parents=True, exist_ok=True)
+                atomic_write_text(
+                    judge_outputs / "final_submission.sha256",
+                    snapshot.snapshot_id + "\n",
+                    encoding="ascii",
+                )
+                override_receipt = None
+                if override_record is not None:
+                    override_receipt = self._write_override_receipt(
+                        project, snapshot, override_record, decision
+                    )
+                final_receipt = build_final_acceptance_receipt(
+                    project,
+                    snapshot,
+                    status=status.value,
+                    override_receipt=override_receipt,
+                    workflow_id=workflow_id,
+                    run_generation=run_generation,
+                )
+                if override_record is not None and not self.override_provider.consume(
+                    override_record.override_id
+                ):
+                    return self._failure(
+                        project,
+                        snapshot=snapshot,
+                        decision=decision,
+                        status=AuditStatus.INDETERMINATE,
+                        error_class="PERMANENT_OVERRIDE_CONSUMPTION",
+                        returncode=2,
+                        judge_completed=judge_completed,
+                        evidence={"override_id": override_record.override_id},
+                    )
+                record = AuditRecord(
+                    snapshot_id=snapshot.snapshot_id,
+                    base=project.name,
+                    profile=self.profile,
+                    status=status,
+                    decision=decision,
+                    judge_completed=judge_completed,
+                    delivery_allowed=True,
+                    created_at=_utc_now(),
+                    override=override,
+                    evidence={
+                        "judge": judge_result.metadata,
+                        "final_acceptance_receipt": str(
+                            FINAL_ACCEPTANCE_RECEIPT_PATH
+                        ),
+                        "final_acceptance_content_sha256": final_receipt.get(
+                            "content_sha256"
+                        ),
+                        "override_id": (
+                            override_record.override_id
+                            if override_record is not None
+                            else None
+                        ),
+                    },
+                )
+                record = self._persist(project, snapshot, record)
+        except Phase9DeliveryFenceError as exc:
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision=decision,
+                status=AuditStatus.INDETERMINATE,
+                error_class="PERMANENT_PHASE9_DELIVERY_DISABLED",
+                returncode=2,
+                judge_completed=judge_completed,
+                evidence={"delivery_fence_error": str(exc)},
             )
         except (OSError, ValueError) as exc:
             return self._failure(
@@ -495,41 +814,6 @@ class FinalAuditService:
                 judge_completed=judge_completed,
                 evidence={"receipt_error": str(exc)},
             )
-        if override_record is not None and not self.override_provider.consume(
-            override_record.override_id
-        ):
-            return self._failure(
-                project,
-                snapshot=snapshot,
-                decision=decision,
-                status=AuditStatus.INDETERMINATE,
-                error_class="PERMANENT_OVERRIDE_CONSUMPTION",
-                returncode=2,
-                judge_completed=judge_completed,
-                evidence={"override_id": override_record.override_id},
-            )
-        record = AuditRecord(
-            snapshot_id=snapshot.snapshot_id,
-            base=project.name,
-            profile=self.profile,
-            status=status,
-            decision=decision,
-            judge_completed=judge_completed,
-            delivery_allowed=True,
-            created_at=_utc_now(),
-            override=override,
-            evidence={
-                "judge": judge_result.metadata,
-                "final_acceptance_receipt": str(FINAL_ACCEPTANCE_RECEIPT_PATH),
-                "final_acceptance_content_sha256": final_receipt.get(
-                    "content_sha256"
-                ),
-                "override_id": (
-                    override_record.override_id if override_record is not None else None
-                ),
-            },
-        )
-        record = self._persist(project, snapshot, record)
         execution = ExecutionResult.succeeded(
             audit_status=record.status.value,
             audit_snapshot=snapshot.snapshot_id,
@@ -542,55 +826,35 @@ class FinalAuditService:
     def _finish_ablation(
         self,
         project: Path,
-        judge_result: ExecutionResult,
         snapshot: AuditSnapshot,
+        *,
+        analysis_only: bool,
     ) -> AuditOutcome:
-        if judge_result.returncode != 0:
-            return self._failure(
-                project,
-                snapshot=snapshot,
-                decision="ABLATE_NO_JUDGE_FAILED",
-                status=AuditStatus.INDETERMINATE,
-                error_class=judge_result.error_class or "TRANSIENT_JUDGE_INFRASTRUCTURE",
-                returncode=judge_result.returncode,
-                evidence=judge_result.metadata,
-            )
         marker = project / "judge_outputs" / "final_submission.ablation.json"
-        _atomic_write_json(
-            marker,
-            {
-                "schema_version": "final-submission-ablation-v1",
-                "ablation": "ABLATE_NO_JUDGE",
-                "judge_executed": False,
-                "quality_pass_fabricated": False,
-                "snapshot_id": snapshot.snapshot_id,
-            },
-        )
-        self._record_override_decision(
-            project,
-            "ABLATE_NO_JUDGE",
-            {"judge_completed": False, "judge_failure_stage": "ablation"},
-        )
-        (project / "judge_outputs/final_submission.sha256").write_text(
-            snapshot.snapshot_id + "\n", encoding="ascii"
-        )
-        try:
-            final_receipt = build_final_acceptance_receipt(
-                project,
-                snapshot,
-                status=AuditStatus.OVERRIDDEN.value,
-                override_receipt=str(marker.relative_to(project)),
+        if not analysis_only:
+            _atomic_write_json(
+                marker,
+                {
+                    "schema_version": "final-submission-ablation-v1",
+                    "ablation": "ABLATE_NO_JUDGE",
+                    "judge_executed": False,
+                    "quality_pass_fabricated": False,
+                    "snapshot_id": snapshot.snapshot_id,
+                    "technical_flow_validation": self.technical_flow_validation,
+                    "delivery_allowed": False,
+                    "terminal_reason": "PERMANENT_ABLATION_NO_DELIVERY",
+                    "returncode": 2,
+                },
             )
-        except (OSError, ValueError) as exc:
-            return self._failure(
-                project,
-                snapshot=snapshot,
-                decision="ABLATE_NO_JUDGE",
-                status=AuditStatus.INDETERMINATE,
-                error_class="PERMANENT_FINAL_ACCEPTANCE_RECEIPT",
-                returncode=2,
-                evidence={"receipt_error": str(exc)},
-            )
+        evidence: dict[str, object] = {
+            "governance": "ABLATE_NO_JUDGE",
+            "technical_flow_validation": self.technical_flow_validation,
+            "quality_pass_fabricated": False,
+            "delivery_allowed": False,
+            "analysis_only": analysis_only,
+        }
+        if not analysis_only:
+            evidence["ablation_marker"] = str(marker.relative_to(project))
         record = AuditRecord(
             snapshot_id=snapshot.snapshot_id,
             base=project.name,
@@ -598,25 +862,32 @@ class FinalAuditService:
             status=AuditStatus.OVERRIDDEN,
             decision="ABLATE_NO_JUDGE",
             judge_completed=False,
-            delivery_allowed=True,
+            delivery_allowed=False,
             created_at=_utc_now(),
-            evidence={
-                "governance": "ABLATE_NO_JUDGE",
-                "final_acceptance_receipt": str(FINAL_ACCEPTANCE_RECEIPT_PATH),
-                "final_acceptance_content_sha256": final_receipt.get(
-                    "content_sha256"
-                ),
-            },
+            error_class="PERMANENT_ABLATION_NO_DELIVERY",
+            returncode=2,
+            evidence=evidence,
         )
         record = self._persist(project, snapshot, record)
         return AuditOutcome(
-            ExecutionResult.succeeded(
+            ExecutionResult.failed(
+                "PERMANENT_ABLATION_NO_DELIVERY",
+                returncode=2,
                 audit_status=record.status.value,
                 audit_snapshot=snapshot.snapshot_id,
-                audit_result=str(self._latest_path(project).relative_to(project)),
+                audit_result=str(
+                    (
+                        self._analysis_latest_path(project)
+                        if analysis_only
+                        else self._latest_path(project)
+                    ).relative_to(project)
+                ),
                 final_decision=record.decision,
                 gate2_delivery_override=False,
                 ablation="ABLATE_NO_JUDGE",
+                technical_flow_validation=self.technical_flow_validation,
+                quality_pass_fabricated=False,
+                delivery_allowed=False,
             ),
             record,
             snapshot,
@@ -862,7 +1133,32 @@ class FinalAuditService:
         judge_completed: bool = False,
         evidence: dict[str, object] | None = None,
     ) -> AuditOutcome:
-        snapshot = snapshot or self._snapshot(project)
+        failure_evidence = dict(evidence or {})
+        if snapshot is None:
+            try:
+                snapshot = self._snapshot(project)
+            except (OSError, ValueError) as exc:
+                identity = {
+                    "source": "audit_failure_before_snapshot",
+                    "base": project.name,
+                    "decision": decision,
+                    "error_class": error_class,
+                }
+                snapshot = AuditSnapshot(
+                    snapshot_id=hashlib.sha256(
+                        json.dumps(
+                            identity,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    base=project.name,
+                    profile=self.profile,
+                    created_at=_utc_now(),
+                    identity=identity,
+                )
+                failure_evidence["snapshot_error"] = str(exc)
         record = AuditRecord(
             snapshot_id=snapshot.snapshot_id,
             base=project.name,
@@ -875,7 +1171,7 @@ class FinalAuditService:
             error_class=error_class,
             returncode=returncode,
             resume_after_step=resume_after_step,
-            evidence=dict(evidence or {}),
+            evidence=failure_evidence,
         )
         record = self._persist(project, snapshot, record)
         metadata = {
@@ -949,41 +1245,104 @@ class FinalAuditService:
             / "attempts"
             / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S.%fZ')}.json"
         )
-        _atomic_write_json(attempt, record.to_dict())
-        _atomic_write_json(audit_dir / "latest.json", record.to_dict())
-        _atomic_write_json(self._latest_path(project), record.to_dict())
+        payload = record.to_dict()
+        _atomic_write_json(attempt, payload)
+        if not record.delivery_allowed:
+            _atomic_write_json(audit_dir / "analysis_latest.json", payload)
+            _atomic_write_json(
+                project / ".factory" / "audits" / "analysis_latest.json",
+                payload,
+            )
+        snapshot_latest = audit_dir / "latest.json"
+        global_latest = self._latest_path(project)
+        if not self._accepted_latest_for_snapshot(
+            project, snapshot_latest, snapshot.snapshot_id
+        ):
+            _atomic_write_json(snapshot_latest, payload)
+        if not self._accepted_latest_for_snapshot(
+            project, global_latest, snapshot.snapshot_id
+        ):
+            _atomic_write_json(global_latest, payload)
         return record
 
-    def _load_reusable(
-        self, project: Path, snapshot: AuditSnapshot
-    ) -> AuditRecord | None:
-        path = project / ".factory" / "audits" / snapshot.snapshot_id / "latest.json"
+    @staticmethod
+    def _accepted_latest_for_snapshot(
+        project: Path, path: Path, snapshot_id: str
+    ) -> bool:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-            status = AuditStatus(str(value["status"]))
+            status = str(value["status"])
         except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            return False
+        if (
+            value.get("profile") != AuditProfile.FINAL.value
+            or value.get("snapshot_id") != snapshot_id
+            or value.get("delivery_allowed") is not True
+            or status not in {AuditStatus.PASS.value, AuditStatus.OVERRIDDEN.value}
+        ):
+            return False
+        valid, _errors = verify_final_acceptance_receipt(
+            project,
+            expected_snapshot_id=snapshot_id,
+            expected_status=status,
+        )
+        return valid
+
+    def _load_reusable(
+        self,
+        project: Path,
+        snapshot: AuditSnapshot,
+        *,
+        analysis_only: bool,
+    ) -> AuditRecord | None:
+        audit_dir = project / ".factory" / "audits" / snapshot.snapshot_id
+        candidates = (
+            (audit_dir / "analysis_latest.json", audit_dir / "latest.json")
+            if analysis_only
+            else (audit_dir / "latest.json",)
+        )
+        value: dict[str, object] | None = None
+        status: AuditStatus | None = None
+        for path in candidates:
+            try:
+                candidate = json.loads(path.read_text(encoding="utf-8"))
+                candidate_status = AuditStatus(str(candidate["status"]))
+            except (OSError, KeyError, ValueError, json.JSONDecodeError):
+                continue
+            value = candidate
+            status = candidate_status
+            break
+        if value is None or status is None:
             return None
         if value.get("snapshot_id") != snapshot.snapshot_id or status not in {
             AuditStatus.PASS,
             AuditStatus.OVERRIDDEN,
         } or value.get("profile") != self.profile:
             return None
-        if value.get("delivery_allowed") is not True:
+        if value.get("decision") == "ABLATE_NO_JUDGE":
+            return None
+        expected_delivery_allowed = not analysis_only
+        if value.get("delivery_allowed") is not expected_delivery_allowed:
+            return None
+        if analysis_only and status is not AuditStatus.PASS:
             return None
         if status is AuditStatus.PASS and (
             value.get("decision") != "PASS"
             or value.get("judge_completed") is not True
         ):
             return None
-        try:
-            final_hash = (project / "judge_outputs/final_submission.sha256").read_text(
-                encoding="ascii"
-            ).strip()
-        except OSError:
-            return None
-        if final_hash != snapshot.snapshot_id:
-            return None
         override = bool(value.get("override"))
+        if analysis_only and override:
+            return None
+        if not analysis_only:
+            try:
+                final_hash = (
+                    project / "judge_outputs/final_submission.sha256"
+                ).read_text(encoding="ascii").strip()
+            except OSError:
+                return None
+            if final_hash != snapshot.snapshot_id:
+                return None
         if status is AuditStatus.PASS:
             from scripts.judgment_receipt import verify_receipt
 
@@ -995,49 +1354,33 @@ class FinalAuditService:
             )
             if not valid:
                 return None
-            acceptance_valid, _acceptance_errors = verify_final_acceptance_receipt(
-                project,
-                snapshot,
-                expected_snapshot_id=snapshot.snapshot_id,
-                expected_status=AuditStatus.PASS.value,
-            )
-            if not acceptance_valid:
-                return None
-        else:
-            ablation = value.get("decision") == "ABLATE_NO_JUDGE"
-            if ablation:
-                try:
-                    marker = json.loads(
-                        (
-                            project
-                            / "judge_outputs/final_submission.ablation.json"
-                        ).read_text(encoding="utf-8")
+            if not analysis_only:
+                acceptance_valid, _acceptance_errors = (
+                    verify_final_acceptance_receipt(
+                        project,
+                        snapshot,
+                        expected_snapshot_id=snapshot.snapshot_id,
+                        expected_status=AuditStatus.PASS.value,
                     )
-                except (OSError, json.JSONDecodeError):
+                )
+                if not acceptance_valid:
                     return None
-                if (
-                    os.getenv("ABLATE_NO_JUDGE", "0").lower()
-                    not in {"1", "true", "yes", "on"}
-                    or marker.get("judge_executed") is not False
-                    or marker.get("snapshot_id") != snapshot.snapshot_id
-                ):
-                    return None
-            elif not override or not self._consumed_delivery_override(
+        else:
+            if analysis_only:
+                return None
+            if not override or not self._consumed_delivery_override(
                 project, snapshot.snapshot_id, value
             ):
                 return None
-            if ablation:
-                route = None
-            else:
-                try:
-                    route = json.loads(
-                        (project / "judge_outputs/decision_route.json").read_text(
-                            encoding="utf-8"
-                        )
+            try:
+                route = json.loads(
+                    (project / "judge_outputs/decision_route.json").read_text(
+                        encoding="utf-8"
                     )
-                except (OSError, json.JSONDecodeError):
-                    return None
-            if route is not None and (
+                )
+            except (OSError, json.JSONDecodeError):
+                return None
+            if (
                 route.get("effective_decision") != "CONTINUE_TO_STEP16"
                 or route.get("quality_pass_fabricated") is not False
             ):
@@ -1057,7 +1400,7 @@ class FinalAuditService:
             status=status,
             decision=str(value.get("decision") or ""),
             judge_completed=bool(value.get("judge_completed")),
-            delivery_allowed=True,
+            delivery_allowed=not analysis_only,
             created_at=str(value.get("created_at") or _utc_now()),
             error_class=str(value.get("error_class") or ""),
             returncode=int(value.get("returncode") or 0),
@@ -1101,6 +1444,10 @@ class FinalAuditService:
     @staticmethod
     def _latest_path(project: Path) -> Path:
         return project / ".factory" / "audits" / "latest.json"
+
+    @staticmethod
+    def _analysis_latest_path(project: Path) -> Path:
+        return project / ".factory" / "audits" / "analysis_latest.json"
 
     @staticmethod
     def _has_stub(project: Path) -> bool:

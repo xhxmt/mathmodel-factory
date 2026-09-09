@@ -1,0 +1,38 @@
+{
+  "schema": "v1-characterization-case-v1",
+  "fixture_id": "V1-PACKET-REBUILD-001",
+  "category": "packet_rebuild",
+  "fixture_kind": "pytest_runtime_tmp_path_descriptor",
+  "source_paths": [
+    "scripts/judge_decision_router.py",
+    "tests/test_judge_decision_router.py"
+  ],
+  "pytest_nodes": [
+    "tests/test_judge_decision_router.py::test_packet_failure_routes_to_rebuild_instead_of_model_revision"
+  ],
+  "v1_expected": {
+    "policy_mode": "enforce",
+    "packet_eligible": false,
+    "new_decision": "PACKET_REBUILD",
+    "effective_decision": "PACKET_REBUILD",
+    "model_revision_selected": false
+  },
+  "contracts": [
+    "INV-PACKET-DEFECT-ROUTES-TO-PACKET-REBUILD",
+    "INV-PACKET-DEFECT-NOT-SCIENTIFIC-REOPEN"
+  ],
+  "machine_readable_fields": [
+    "policy_mode",
+    "packet_eligible",
+    "new_decision",
+    "effective_decision",
+    "model_revision_selected"
+  ],
+  "missing_evidence": [
+    {
+      "gap_id": "GAP-V1-PACKET-PREDISPATCH",
+      "description": "The pure router test does not build a packet or count external Judge dispatch attempts.",
+      "impact": "The routing decision is fixed, but pre-dispatch rejection and zero-provider-call behavior are not proven by this fixture."
+    }
+  ]
+}

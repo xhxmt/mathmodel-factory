@@ -49,8 +49,8 @@ def _is_pid_live(pid: int | None) -> bool:
     return FactoryService._pid_is_live(pid) if pid is not None else False
 
 
-def _terminate_runner(pid: int | None) -> None:
-    FactoryService._terminate_runner(pid)
+def _terminate_runner(pid: int | None, expected_identity: str | None = None) -> None:
+    FactoryService._terminate_runner(pid, expected_identity)
 
 
 def kill_project(

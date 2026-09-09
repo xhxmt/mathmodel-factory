@@ -21,7 +21,7 @@ from factory_core.bibliography import bibliography_evidence_record
 
 
 FINGERPRINT_VERSION = 10
-EVALUATOR_CONTRACT_VERSION = 7
+EVALUATOR_CONTRACT_VERSION = 8
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -96,8 +96,9 @@ def evaluator_contract_payload(
     factory_root: Path | None = None,
     *,
     policy_mode: str | None = None,
+    execution_step_id: int = 16,
 ) -> dict[str, object]:
-    """Return the exact Step-13 evaluator implementation and model selection.
+    """Return the actual evaluator implementation and model selection.
 
     Final-judge cache validity depends on more than paper inputs: changing a
     role prompt, aggregation rule, packet builder, caller, or registry routing
@@ -107,7 +108,9 @@ def evaluator_contract_payload(
     root = (factory_root or FACTORY_ROOT).resolve()
     config_path = root / "web/model_config.json"
     registry_path = root / "web/model_registry.json"
-    assignment = get_step_model_ids(config_path, base, 13)
+    if execution_step_id not in (13, 16):
+        raise ValueError("judge execution_step_id must be 13 or 16")
+    assignment = get_step_model_ids(config_path, base, execution_step_id)
     selection_source = "model_config" if assignment else "builtin_default"
     primary, fallback = assignment or ("deepseek-chat", "")
     selected: dict[str, object] = {
@@ -139,6 +142,9 @@ def evaluator_contract_payload(
         "scripts/latex_dependency_guard.py",
         "scripts/package_submission.py",
         "scripts/claim_graph.py",
+        "scripts/canonical_claims.py",
+        "factory_core/judge_batch.py",
+        "factory_core/solver_dependency_guard.py",
         "scripts/verify_numbers.py",
         "scripts/verify_symbols.py",
         "scripts/verify_deliverables.py",
@@ -160,6 +166,12 @@ def evaluator_contract_payload(
         "scripts/shadow_cutover.py",
         "scripts/llm_judge_call.py",
         "scripts/api_agent_run.py",
+        "scripts/packet_evidence.py",
+        "scripts/numpy_evidence_view.py",
+        "scripts/document_evidence_view.py",
+        "factory_core/adapters/models/backends.py",
+        "factory_core/adapters/models/dispatcher.py",
+        "scripts/solver_evidence_selection.py",
         "scripts/run_codex_tui_judge.py",
         "scripts/model_dispatch_config.py",
     )
@@ -201,6 +213,8 @@ def evaluator_contract_payload(
         }
     return {
         "version": EVALUATOR_CONTRACT_VERSION,
+        "execution_step_id": execution_step_id,
+        "template_step_id": 13,
         "role_schemas": {
             "math": "judge-hard-role-v2",
             "execution": "judge-hard-role-v2",
@@ -310,6 +324,10 @@ def submission_fingerprint_payload(
     project = project.resolve()
     resolved_base = base or project.name
     from factory_core.decision_receipts import verified_approval_receipts
+    from scripts.canonical_claims import verify as verify_canonical_claims
+    canonical_errors = verify_canonical_claims(project, resolved_base)
+    if canonical_errors:
+        raise ValueError("final numeric version binding failed: " + "; ".join(canonical_errors))
 
     return {
         "version": FINGERPRINT_VERSION,

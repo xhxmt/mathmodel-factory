@@ -14,6 +14,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+if __package__ in {None, ""}:  # direct script execution must use this checkout
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 RECEIPT_SCHEMA = "judgment-receipt-v1"
 ROLE_METADATA_SCHEMA = "judge-role-call-v1"
@@ -277,6 +280,8 @@ def annotate_role_metadata(
     call_parameters: dict[str, Any] | None = None,
     evaluator_configuration_fingerprint: str | None = None,
     configuration_group: str | None = None,
+    execution_step_id: int | None = None,
+    template_step_id: int | None = None,
 ) -> dict[str, Any]:
     """Normalize actual-call metadata and bind it to the current role output."""
 
@@ -328,6 +333,11 @@ def annotate_role_metadata(
             }
         )
     metadata["backend_configuration_fingerprint"] = backend_configuration
+    if execution_step_id is not None:
+        if execution_step_id not in (13, 16) or template_step_id != 13:
+            raise ReceiptError("invalid judge execution/template identity")
+        metadata["execution_step_id"] = execution_step_id
+        metadata["template_step_id"] = template_step_id
     context_sha256 = _sha256(context)
     manifest_sha256 = _sha256(manifest)
     role_configuration = _role_configuration_fingerprint(
@@ -379,6 +389,20 @@ def _role_receipt(project: Path, role: str) -> tuple[dict[str, Any], list[str]]:
     metadata_path = _safe_path(project, f"judge_outputs/{role}.md.llm-result.json")
     metadata = _read_json(metadata_path)
     errors: list[str] = []
+    binding = metadata.get("audit_binding")
+    if binding is not None:
+        from factory_core.judge_batch import verify, JudgeBatchError
+        try:
+            response, frozen_metadata = verify(project, binding)
+            mutable = {"audit_binding", "configuration_group", "configuration_group_schema"}
+            if (response != output_path.read_bytes()
+                    or {k: v for k, v in metadata.items() if k not in mutable}
+                    != {k: v for k, v in frozen_metadata.items() if k not in mutable}):
+                errors.append(f"{role}: frozen call response/metadata mismatch")
+        except JudgeBatchError as exc:
+            errors.append(f"{role}: {exc}")
+    elif metadata.get("transport") == "native_model_backend":
+        errors.append(f"{role}: native call is missing immutable audit binding")
     if metadata.get("receipt_schema") != ROLE_METADATA_SCHEMA:
         errors.append(f"{role}: metadata schema is not {ROLE_METADATA_SCHEMA}")
     if metadata.get("configuration_schema") != ROLE_CONFIGURATION_SCHEMA:
@@ -477,6 +501,9 @@ def bind_configuration_group(project: Path) -> str:
         metadata_by_role[role] = (metadata_path, _read_json(metadata_path))
     if errors:
         raise ReceiptError("cannot bind configuration group: " + "; ".join(errors))
+    errors.extend(_native_batch_group_errors(project))
+    if errors:
+        raise ReceiptError("cannot bind configuration group: " + "; ".join(errors))
     group = _configuration_group_fingerprint(roles)
     for role in ROLE_NAMES:
         metadata_path, metadata = metadata_by_role[role]
@@ -484,6 +511,31 @@ def bind_configuration_group(project: Path) -> str:
         metadata["configuration_group"] = group
         _atomic_write_json(metadata_path, metadata)
     return group
+
+
+def _native_batch_group_errors(project: Path) -> list[str]:
+    from factory_core.judge_batch import digest, verify, JudgeBatchError
+    shared = []
+    try:
+        for role in ROLE_NAMES:
+            metadata = _read_json(_safe_path(project, f"judge_outputs/{role}.md.llm-result.json"))
+            binding = metadata.get("audit_binding")
+            if binding is None:
+                shared.append(None)
+                continue
+            verify(project, binding)
+            seal = _read_json(_safe_path(project, binding["archive"] + "/committed.json"))
+            # Each role's ordered image list is checked against its current
+            # manifest and sealed transport by verify(). The common inputs
+            # already bind every role's raw documents and image assets.
+            shared.append(digest({k: v for k, v in seal["request"].items()
+                                  if k not in {"role", "prompt_sha256", "template_prompt_sha256",
+                                               "prompt_format", "image_inputs"}}))
+        if any(shared) and (not all(shared) or len(set(shared)) != 1):
+            return ["native roles belong to different execution/input/configuration batches"]
+    except (ReceiptError, JudgeBatchError, OSError, KeyError, TypeError) as exc:
+        return [f"native batch group invalid: {exc}"]
+    return []
 
 
 def _configuration_binding(
@@ -805,6 +857,7 @@ def build_receipt(
 
     roles: list[dict[str, Any]] = []
     errors: list[str] = []
+    errors.extend(_native_batch_group_errors(project))
     for role in ROLE_NAMES:
         try:
             role_record, role_errors = _role_receipt(project, role)
@@ -904,6 +957,7 @@ def verify_receipt(
     except ReceiptError as exc:
         return False, [str(exc)]
     errors: list[str] = []
+    errors.extend(_native_batch_group_errors(project))
     errors.extend(_exact_keys(receipt, RECEIPT_KEYS, "judgment receipt"))
     if receipt.get("schema") != RECEIPT_SCHEMA:
         errors.append("judgment receipt schema mismatch")
@@ -1152,6 +1206,8 @@ def main() -> int:
     annotate.add_argument("--timeout-seconds", type=int)
     annotate.add_argument("--evaluator-configuration-fingerprint")
     annotate.add_argument("--configuration-group")
+    annotate.add_argument("--execution-step-id", type=int)
+    annotate.add_argument("--template-step-id", type=int)
 
     bind_group = subparsers.add_parser("bind-group")
     bind_group.add_argument("project")
@@ -1190,6 +1246,8 @@ def main() -> int:
                 },
                 evaluator_configuration_fingerprint=args.evaluator_configuration_fingerprint,
                 configuration_group=args.configuration_group,
+                execution_step_id=args.execution_step_id,
+                template_step_id=args.template_step_id,
             )
             print(json.dumps(value, ensure_ascii=False, indent=2))
             return 0

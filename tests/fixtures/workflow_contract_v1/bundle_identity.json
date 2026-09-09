@@ -1,0 +1,30 @@
+{
+  "schema_version": "workflow-contract-bundle-golden-v1",
+  "bundle_schema_version": "workflow-contract-bundle-v1",
+  "canonicalization_schema_version": "factory-canonical-json-utf8-v1",
+  "canonical_bytes_scope": "semantic",
+  "canonical_bytes_size": 55178,
+  "canonical_sha256": "2e2f3b9cb48788db5e7a28d0f0343518c3d1cd5969a57e045ef2fc946df5455d",
+  "analysis_bytes_size": 137810,
+  "analysis_sha256": "a9d7aa2a134075ba53b9f2c09b94c8182d209a683639609a27caa4c1e535c92b",
+  "semantic_hash_excludes": [
+    "owner compiler schema",
+    "owner diagnostic codes, paths, witnesses, issue references, rationale and explanation",
+    "Step prompt source locations",
+    "Gate producer source locations"
+  ],
+  "stage_contract_count": 10,
+  "step_contract_count": 17,
+  "gate_contract_count": 9,
+  "owner_rule_count": 83,
+  "owner_priority_authorization_count": 29,
+  "owner_rule_identity_sha256": "4b51c6edc7cebb4a3b94216fe709e83f0b8ba8c17c6b8899563f7748ecbae05c",
+  "compatibility_diagnostic_counts": {
+    "INTENTIONAL_PRIORITY": 29,
+    "MULTIPLE_MATCH": 115,
+    "OVERLAP": 60,
+    "SHADOWED": 1,
+    "UNREACHABLE": 1
+  },
+  "strict_compilation": "reject: MULTIPLE_MATCH, SHADOWED, UNREACHABLE"
+}

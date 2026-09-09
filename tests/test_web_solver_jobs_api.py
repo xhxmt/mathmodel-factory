@@ -24,6 +24,7 @@ def load_main_module(factory_root=None):
         "web.backend.auth",
         "web.backend.access_control",
         "web.backend.schemas",
+        "web.backend.phase6_api",
     ]:
         sys.modules.pop(module_name, None)
     sys.modules.pop("fastapi", None)
@@ -97,6 +98,7 @@ def load_main_module(factory_root=None):
     fastapi.APIRouter = DummyFastAPI
     fastapi.HTTPException = HTTPException
     fastapi.Depends = lambda dep=None: dep
+    fastapi.Query = lambda default=None, **_kwargs: default
     fastapi.WebSocket = type("WebSocket", (), {})
     fastapi.WebSocketDisconnect = type("WebSocketDisconnect", (Exception,), {})
     fastapi.UploadFile = type("UploadFile", (), {})
@@ -120,6 +122,7 @@ def load_main_module(factory_root=None):
     # Mock responses
     responses = types.ModuleType("fastapi.responses")
     responses.FileResponse = type("FileResponse", (), {})
+    responses.Response = type("Response", (), {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)})
     sys.modules["fastapi.responses"] = responses
 
     # Mock security

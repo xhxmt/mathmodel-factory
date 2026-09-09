@@ -38,15 +38,21 @@ def _showcase_pdf(settings: Settings, base_name: str) -> Path | None:
 
     from factory_core.delivery.release import resolve_current_release
 
-    current = resolve_current_release(settings.papers_dir, base_name)
+    current = resolve_current_release(
+        settings.papers_dir, base_name, project=project
+    )
     if current is not None:
         return current.paper
-
-    packaged = settings.papers_dir / f"{base_name}_paper.pdf"
-    candidates = [packaged, *sorted(project.glob("*_paper.pdf"))]
-    for candidate in candidates:
-        allowed_root = settings.papers_dir if candidate == packaged else project
-        if candidate.is_file() and candidate.suffix.lower() == ".pdf" and _is_within(candidate, allowed_root):
+    # Completed-project previews are a separate, ACL-controlled showcase
+    # source.  Never fall back to the legacy ``papers/<base>_paper.pdf`` alias:
+    # that alias may belong to a stale release whose Authority fence no longer
+    # matches the current generation.
+    for candidate in sorted(project.glob("*_paper.pdf")):
+        if (
+            candidate.is_file()
+            and candidate.suffix.lower() == ".pdf"
+            and _is_within(candidate, project)
+        ):
             return candidate
     return None
 

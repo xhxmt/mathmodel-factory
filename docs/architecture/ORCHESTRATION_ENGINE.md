@@ -24,7 +24,7 @@ Stage/subtask/Step coordinates, and an aggregate side-table root. A first event
 or an older-schema cutover event is a full replay snapshot; later events are
 merge patches. Event v1 remains replay-compatible; new writes use event v2.
 
-Schema v8 also stores current and append-only historical Stage checkpoints,
+Schema v9 also stores current and append-only historical Stage checkpoints,
 machine-owned semantic dirty causes/flags and classifier-bound clear receipts,
 an optional `contest_policy`, immutable Human Decision requests by generation,
 and append-only decision instances. Rejection opens a new request generation;
@@ -35,6 +35,14 @@ Solver job idempotency/request/Stage ownership columns. New projects receive `co
 delivery reserve. Existing projects upgraded without a policy remain
 unbounded. Step 3, content freeze, and post-freeze reopen decisions are
 authoritative in SQLite; their JSON/Markdown forms are projections.
+
+The project database does not grant Web access. `web/auth.db` is a separate
+control-plane database: `project_acl` grants project access, `showcase_acl`
+grants read-only display visibility, and `delivery_overrides` grants one scoped
+operational exception. Conversely, those grants do not choose a method,
+resolve a Human Gate, advance a scheduler cursor, or replace the immutable
+decision request/instance in the project database. See
+[`decisions/ADR-0001-phase0-source-truth.md`](decisions/ADR-0001-phase0-source-truth.md).
 
 Step outputs remain validation evidence. `checkpoint.md`, `.heartbeat`,
 `.paused`, `.killed`, `.runner.pid`, and `diagnostics/status.json` are generated
@@ -65,8 +73,15 @@ pending-action transitions, and archiving. Steps return structured outcomes and
 cannot mutate scheduler state. `StageExecutionPipeline` runs prepare, execution,
 deadline checking and validation from an immutable request and returns a
 `StageOutcome`; even Step 16 returns audit events as outcome effects rather than
-writing SQLite. `TransitionCoordinator` is the only orchestration/application
-writer of workflow state. The Stage catalog maps every Step 0-16 contract
+writing SQLite. `TransitionCoordinator` is the target orchestration/application
+writer of workflow state, but writer exclusivity is not implemented at this
+baseline. Current bypasses include direct `record_decision`, pending-request
+supersede, prompt-attempt input binding, and projection-failure bookkeeping;
+bootstrap/migration initialization and archive relocation are separate write
+surfaces. The characterized inventory and future static-gate specification are
+[`application_writer_allowlist_v1.json`](application_writer_allowlist_v1.json).
+No caller may infer from this target that the current code has a unique writer.
+The Stage catalog maps every Step 0-16 contract
 exactly once and adds non-integer reviewer-entry and content-freeze subtasks;
 specialized implementations own parallel proposals, the Step 6 precheck, the
 Step 8.5 gate, conditional Step 13, isolated judging, and final
@@ -115,8 +130,11 @@ Pending human selections, approvals and consultations share a versioned
 `HumanDecisionRequest`, while Selection and Approval retain distinct validation
 contracts. Structured decisions are stored in SQLite; JSON/Markdown files are
 rebuildable projections. Web writes evidence by atomic rename and fingerprints it
-before one SQLite transaction records the decision, appends `ACTION_RESOLVED`, and
-clears the pending action. Published evidence left by a failed database commit is
+before the normal engine/service path resolves the decision, appends the
+resolution event, and clears the pending action. The compatibility selection
+writer still calls `SQLiteStateStore.record_decision` directly and is a
+characterized application-writer bypass, not evidence of coordinator
+exclusivity. Published evidence left by a failed database commit is
 reported as an orphan for retry/reconciliation. Resume is rejected until the decision
 resolves the pending action through an engine transaction. The CLI, Web API,
 and compatibility launchers all call `FactoryService`; Web authentication and
@@ -272,7 +290,8 @@ providers implement `ModelBackend`; new solver transports implement
 `SolverBackend`. None of these changes may add a branch to the engine scheduler,
 CLI/Web routing, or the public `run_paper.sh` launcher.
 
-The database schema is version 7. Versions 1-6 upgrade in place; the current
+The workflow database schema is version 9 (`factory_core.domain.SCHEMA_VERSION`).
+Versions 1-8 upgrade in place; the current
 schema includes runtime and scheduler generation, Stage cursors/checkpoints,
 semantic dirty evidence, independent Solver job revision and idempotent identity,
 contest policy, append-only workflow decisions, replay envelopes and projector

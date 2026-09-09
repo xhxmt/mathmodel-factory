@@ -1,0 +1,63 @@
+{
+  "schema_version": "phase9-prep-manifest-v1",
+  "identity": {
+    "frozen_base_commit": "fb58241077ce6874bdfe2df6c23322d431930d38",
+    "frozen_base_tree": "b1e2e1d0f1232f4ad7ce19f074709db5525d3f3f",
+    "expected_branch": "codex/phase9-prep-20260831",
+    "expected_worktree_root": "/home/tfisher/.codex/worktrees/phase9_prep_20260831/paper_factory"
+  },
+  "pro_review": {
+    "status": "PENDING",
+    "scope": "NORMAL_LINUX_DEFAULT_OFF_NON_AUTHORITATIVE_NO_DISPATCH",
+    "slim_package_sha256": "43940239ddca775254fb93b794fc35d44e60f7532780ce16524a0df9c2dfc26d"
+  },
+  "formal_boundary": {
+    "phase_label": "PHASE9_PREP",
+    "formal_phase9_authorized": false,
+    "proposed_run_generation": "run4-forensic-proposed-20260831-01",
+    "run_generation_state": "NOT_CREATED",
+    "run_mode": "FORENSIC_REPLAY",
+    "modeling_consultation_contract": "LEGACY_NOT_APPLICABLE",
+    "delivery_capability": "DISABLED",
+    "old_generation_access": "READ_ONLY",
+    "initial_resume_target": "STEP13_PACKET_REBUILD"
+  },
+  "capabilities": {
+    "opens_sqlite": false,
+    "creates_run_generation": false,
+    "starts_runtime_process": false,
+    "network_access": false,
+    "provider_call": false,
+    "outbox_dispatch": false,
+    "migration": false,
+    "delivery": false,
+    "release": false,
+    "cutover": false,
+    "writes_runtime_paths": false
+  },
+  "deferred_checks": {
+    "database_state": "DEFERRED",
+    "migration_state": "DEFERRED",
+    "outbox_state": "DEFERRED",
+    "process_quiescence": "DEFERRED",
+    "recorded_contract_pins": "DEFERRED",
+    "official_input_freeze": "DEFERRED",
+    "workflow_replay": "DEFERRED",
+    "three_role_calls": "DEFERRED",
+    "clean_room_acceptance": "DEFERRED"
+  },
+  "planned_paths": {
+    "database_dir": "/home/tfisher/.codex/phase9_runtime/run4-forensic-proposed-20260831-01/database",
+    "cas_dir": "/home/tfisher/.codex/phase9_runtime/run4-forensic-proposed-20260831-01/cas",
+    "spool_dir": "/home/tfisher/.codex/phase9_runtime/run4-forensic-proposed-20260831-01/spool",
+    "logs_dir": "/home/tfisher/.codex/phase9_runtime/run4-forensic-proposed-20260831-01/logs",
+    "evidence_dir": "/home/tfisher/.codex/phase9_runtime/run4-forensic-proposed-20260831-01/evidence",
+    "project_copy_dir": "/home/tfisher/.codex/phase9_runtime/run4-forensic-proposed-20260831-01/project-copy"
+  },
+  "protected_roots": {
+    "main_checkout": "/home/tfisher/paper_factory",
+    "phase78_frozen_worktree": "/home/tfisher/.codex/worktrees/phase78_20260830/paper_factory",
+    "phase78_audit_artifacts": "/home/tfisher/.codex/worktrees/phase78_20260830/paper_factory/audit_artifacts",
+    "phase9_source_worktree": "/home/tfisher/.codex/worktrees/phase9_prep_20260831/paper_factory"
+  }
+}

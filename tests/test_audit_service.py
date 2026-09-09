@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import fcntl
 import json
+import sqlite3
+import subprocess
+import sys
+import threading
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from factory_core.adapters.infrastructure.commands import CommandResult
 from factory_core.audit import AuditStatus, FinalAuditService
 from factory_core.cli import build_parser
 from factory_core.domain import ExecutionResult, StepContext
+from factory_core.decision_receipts import verified_approval_receipts
 from factory_core.governance.overrides import SQLiteOverrideProvider
 from factory_core.contest import ContestPolicy
+from factory_core.phase9_authority_lease import authority_state_commit_lease
+from factory_core.phase9_delivery_fence import Phase9DeliveryFenceError
 from factory_core.storage import SQLiteStateStore
 from web.backend.auth_store import AuthStore
 
@@ -99,6 +109,47 @@ def make_context(project: Path) -> StepContext:
     return StepContext(project, project.name, 16, 1, 3_600, 0)
 
 
+def _install_minimal_current_phase9(project: Path) -> Path:
+    database = project / ".factory" / "state.db"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(database)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE authority_production_run_generations (
+                project_id TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                run_generation TEXT NOT NULL,
+                run_mode TEXT NOT NULL,
+                PRIMARY KEY (workflow_id, run_generation)
+            );
+            CREATE TABLE authority_production_run_generation_current (
+                workflow_id TEXT PRIMARY KEY,
+                run_generation TEXT NOT NULL
+            );
+            INSERT INTO authority_production_run_generations VALUES (
+                'demo', 'workflow:demo', 'run-generation:current',
+                'FORENSIC_REPLAY'
+            );
+            INSERT INTO authority_production_run_generation_current VALUES (
+                'workflow:demo', 'run-generation:current'
+            );
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return database
+
+
+def _project_file_bytes(project: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(project).as_posix(): path.read_bytes()
+        for path in sorted(project.rglob("*"))
+        if path.is_file()
+    }
+
+
 def test_final_audit_writes_snapshot_without_publishing(tmp_path: Path) -> None:
     root = tmp_path / "factory"
     project = root / "ongoing" / "demo"
@@ -113,7 +164,7 @@ def test_final_audit_writes_snapshot_without_publishing(tmp_path: Path) -> None:
         fingerprinter=lambda _project, _base: "a" * 64,
     )
 
-    outcome = service.run(make_context(project))
+    outcome = service.run(make_context(project), analysis_only=False)
 
     assert outcome.record.status is AuditStatus.PASS
     assert outcome.record.profile == "final"
@@ -155,6 +206,434 @@ def test_final_audit_writes_snapshot_without_publishing(tmp_path: Path) -> None:
     assert router_args[router_args.index("--policy-mode") + 1] == "enforce"
 
 
+def test_analysis_only_final_audit_passes_without_acceptance_side_effects(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    service = FinalAuditService(
+        root,
+        PassingJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "8" * 64,
+    )
+
+    outcome = service.run(make_context(project), reuse_pass=False)
+
+    assert outcome.record.status is AuditStatus.PASS
+    assert outcome.record.delivery_allowed is False
+    assert outcome.execution.returncode == 0
+    assert outcome.execution.metadata["analysis_only"] is True
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/delivery_override_receipt.json").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
+    assert not (root / "papers").exists()
+
+
+def _workflow_database_bytes(project: Path):
+    return {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in (project / ".factory").glob("state.db*")
+        if path.is_file()
+    }
+
+
+def _audit_database(project: Path, schema_version: int, journal_mode: str):
+    store = SQLiteStateStore(project)
+    store.initialize(project_id=project.name, project_type="modeling")
+    connection = sqlite3.connect(store.path)
+    if schema_version == 8:
+        connection.executescript(
+            """
+            ALTER TABLE dirty_flags RENAME TO dirty_flags_v9;
+            CREATE TABLE dirty_flags (
+                flag TEXT PRIMARY KEY, owner_stage INTEGER NOT NULL,
+                cause_revision INTEGER NOT NULL, cause_artifact TEXT NOT NULL,
+                baseline_fingerprint TEXT NOT NULL, current_fingerprint TEXT NOT NULL,
+                classifier_contract_sha256 TEXT NOT NULL
+            );
+            DROP TABLE dirty_flags_v9;
+            UPDATE schema_info SET schema_version=8;
+            UPDATE project_state SET schema_version=8;
+            """
+        )
+        connection.commit()
+    connection.execute(f"PRAGMA journal_mode={journal_mode}")
+    connection.close()
+    return store
+
+
+@pytest.mark.parametrize("schema_version", [8, 9])
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+@pytest.mark.parametrize("compile_pdf", [False, True])
+def test_analysis_preserves_existing_database_on_success_and_failure(
+    tmp_path, schema_version, journal_mode, compile_pdf
+):
+    project = tmp_path / "demo"
+    project.mkdir()
+    context = make_context(project)
+    _audit_database(project, schema_version, journal_mode)
+    judge = PassingJudge()
+
+    def fingerprint(project, _base):
+        # Exercise the approval lookup also used by the real snapshot builder.
+        assert verified_approval_receipts(project) == []
+        return "9" * 64
+
+    service = FinalAuditService(
+        tmp_path, judge, FakeValidator(), RecordingRunner(), fingerprinter=fingerprint
+    )
+    before = _workflow_database_bytes(project)
+    outcome = service.run(context, compile_pdf=compile_pdf, reuse_pass=False)
+
+    assert _workflow_database_bytes(project) == before
+    assert outcome.record.status is (AuditStatus.PASS if compile_pdf else AuditStatus.FAIL)
+    assert judge.judge_calls == int(compile_pdf)
+    assert outcome.record.delivery_allowed is False
+
+
+@pytest.mark.parametrize("schema_version", [8, 9])
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_real_analysis_cli_preserves_existing_database(
+    tmp_path, schema_version, journal_mode
+):
+    project = tmp_path / "demo"
+    project.mkdir()
+    make_context(project)
+    _audit_database(project, schema_version, journal_mode)
+    before = _workflow_database_bytes(project)
+    result = subprocess.run(
+        [sys.executable, "-m", "factory_core.cli", "audit", str(project), "--no-compile"],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    assert "MISSING_COMPILED_PDF" in result.stdout
+    assert _workflow_database_bytes(project) == before
+
+
+def test_analysis_reads_uncheckpointed_contest_policy_without_touching_wal(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    context = make_context(project)
+    store = _audit_database(project, 9, "WAL")
+    judge = PassingJudge()
+    service = FinalAuditService(
+        tmp_path, judge, FakeValidator(), RecordingRunner(),
+        fingerprinter=lambda *_args: "9" * 64,
+    )
+    writer = sqlite3.connect(store.path)
+    try:
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        policy = ContestPolicy.default(started_at=1_000).to_dict()
+        writer.execute(
+            "INSERT INTO contest_policy VALUES (1, ?, ?, ?, ?, ?, ?)",
+            tuple(policy[key] for key in (
+                "profile", "contest_started_at", "contest_deadline_at",
+                "content_freeze_at", "delivery_freeze_at", "delivery_reserve_seconds",
+            )),
+        )
+        writer.commit()
+        before = _workflow_database_bytes(project)
+        assert before["state.db-wal"][0]
+
+        outcome = service.run(context, reuse_pass=False)
+
+        assert outcome.record.decision == "CONTENT_FREEZE_EVIDENCE_INVALID"
+        assert judge.judge_calls == 0
+        assert _workflow_database_bytes(project) == before
+    finally:
+        writer.close()
+
+
+def test_analysis_rejects_incomplete_current_schema_without_repairing_it(tmp_path):
+    project = tmp_path / "demo"
+    project.mkdir()
+    context = make_context(project)
+    store = _audit_database(project, 9, "DELETE")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE contest_policy")
+    before = _workflow_database_bytes(project)
+    judge = PassingJudge()
+    service = FinalAuditService(
+        tmp_path, judge, FakeValidator(), RecordingRunner(),
+        fingerprinter=lambda *_args: "9" * 64,
+    )
+
+    outcome = service.run(context, reuse_pass=False)
+
+    assert outcome.record.decision == "CONTENT_FREEZE_EVIDENCE_INVALID"
+    assert judge.judge_calls == 0
+    assert _workflow_database_bytes(project) == before
+
+
+def test_phase9_transition_at_acceptance_commit_leaves_no_acceptance_artifact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    service = FinalAuditService(
+        root,
+        PassingJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "1" * 64,
+    )
+    import contextlib
+    import factory_core.phase9_delivery_fence as fence_module
+
+    original_lease = fence_module.delivery_side_effect_commit_lease
+    switched: dict[str, object] = {}
+
+    @contextlib.contextmanager
+    def switch_before_acceptance_commit(*args, **kwargs):
+        if not switched and kwargs.get("operation") == "acceptance":
+            with authority_state_commit_lease(project):
+                switched["database"] = _install_minimal_current_phase9(project)
+            switched["files"] = _project_file_bytes(project)
+        with original_lease(*args, **kwargs):
+            yield
+
+    monkeypatch.setattr(
+        fence_module,
+        "delivery_side_effect_commit_lease",
+        switch_before_acceptance_commit,
+    )
+
+    context = make_context(project)
+    with pytest.raises(
+        Phase9DeliveryFenceError,
+        match="Phase9 acceptance requires explicit workflow_id and run_generation",
+    ):
+        service.run(context, reuse_pass=False, analysis_only=False)
+
+    assert switched
+    assert _project_file_bytes(project) == switched["files"]
+    assert service.judge.packet_calls == 0
+    assert service.judge.judge_calls == 0
+    assert service.runner.labels == []
+    assert not (project / ".factory/audits").exists()
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/delivery_override_receipt.json").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
+
+
+def test_non_analysis_audit_serializes_absent_db_phase9_writer_through_acceptance(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    judge_entered = threading.Event()
+    allow_judge = threading.Event()
+    writer_started = threading.Event()
+    writer_finished = threading.Event()
+
+    class BlockingJudge(PassingJudge):
+        def execute_prepared(self, context):
+            judge_entered.set()
+            assert allow_judge.wait(5), "test did not release the judge"
+            return super().execute_prepared(context)
+
+    service = FinalAuditService(
+        root,
+        BlockingJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "6" * 64,
+    )
+    context = make_context(project)
+    outcomes: list[object] = []
+    errors: list[BaseException] = []
+
+    def run_audit() -> None:
+        try:
+            outcomes.append(
+                service.run(context, reuse_pass=False, analysis_only=False)
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def install_phase9() -> None:
+        writer_started.set()
+        with authority_state_commit_lease(project):
+            _install_minimal_current_phase9(project)
+        writer_finished.set()
+
+    audit_thread = threading.Thread(target=run_audit)
+    audit_thread.start()
+    assert judge_entered.wait(5), "audit never entered the judge"
+    writer_thread = threading.Thread(target=install_phase9)
+    writer_thread.start()
+    assert writer_started.wait(5)
+    assert not writer_finished.wait(0.2), (
+        "Phase9 writer crossed the non-analysis acceptance lease"
+    )
+    allow_judge.set()
+    audit_thread.join(10)
+    writer_thread.join(10)
+
+    assert not audit_thread.is_alive()
+    assert not writer_thread.is_alive()
+    assert errors == []
+    assert len(outcomes) == 1
+    assert outcomes[0].record.delivery_allowed is True
+    assert writer_finished.is_set()
+    assert (project / "judge_outputs/final_acceptance_receipt.json").is_file()
+    assert (project / ".factory/state.db").is_file()
+
+
+def test_analysis_only_rerun_preserves_same_snapshot_acceptance_authority(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    judge = PassingJudge()
+    service = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "2" * 64,
+    )
+    first = service.run(
+        make_context(project), reuse_pass=False, analysis_only=False
+    )
+    assert first.record.delivery_allowed is True
+    monkeypatch.setattr(
+        "scripts.judgment_receipt.verify_receipt",
+        lambda *_args, **_kwargs: (True, []),
+    )
+    global_latest = project / ".factory/audits/latest.json"
+    snapshot_latest = project / ".factory/audits" / ("2" * 64) / "latest.json"
+    accepted_global = global_latest.read_bytes()
+    accepted_snapshot = snapshot_latest.read_bytes()
+
+    analysis = service.run(
+        make_context(project),
+        compile_pdf=False,
+        reuse_pass=False,
+        analysis_only=True,
+    )
+    reused = service.run(
+        make_context(project),
+        compile_pdf=False,
+        reuse_pass=True,
+        analysis_only=True,
+    )
+
+    assert analysis.record.delivery_allowed is False
+    assert reused.record.delivery_allowed is False
+    assert reused.execution.metadata["audit_reused"] is True
+    assert global_latest.read_bytes() == accepted_global
+    assert snapshot_latest.read_bytes() == accepted_snapshot
+    analysis_latest = json.loads(
+        (project / ".factory/audits/analysis_latest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert analysis_latest["snapshot_id"] == "2" * 64
+    assert analysis_latest["delivery_allowed"] is False
+    assert analysis_latest == analysis.record.to_dict()
+    assert analysis.execution.metadata["audit_result"] == (
+        ".factory/audits/analysis_latest.json"
+    )
+    assert reused.execution.metadata["audit_result"] == (
+        ".factory/audits/analysis_latest.json"
+    )
+    from scripts.workflow_state import final_audit_is_current
+
+    assert final_audit_is_current(project) is True
+
+
+def test_technical_flow_runs_real_judge_but_never_allows_delivery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    authorization = project / ".factory/technical_flow/authorization.json"
+    authorization.parent.mkdir(parents=True)
+    authorization.write_text("{}\n", encoding="utf-8")
+    judge = PassingJudge()
+    service = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "6" * 64,
+        technical_flow_validation=True,
+    )
+    monkeypatch.setattr(
+        service,
+        "_technical_authorization",
+        lambda _project: SimpleNamespace(
+            path=authorization,
+            sha256="5" * 64,
+        ),
+    )
+    monkeypatch.setattr(service, "_unresolved_blocking", lambda _project: True)
+    monkeypatch.setattr(
+        service,
+        "_run_acceptance_checks",
+        lambda _project: (
+            [
+                {
+                    "name": "derived_artifacts",
+                    "passed": False,
+                    "severity": "hard",
+                    "returncode": 1,
+                }
+            ],
+            ExecutionResult.failed(
+                "PERMANENT_DELIVERY_ACCEPTANCE",
+                returncode=1,
+                check="derived_artifacts",
+            ),
+        ),
+    )
+
+    outcome = service.run(
+        make_context(project), reuse_pass=True, analysis_only=False
+    )
+
+    assert judge.judge_calls == 1
+    assert outcome.record.status is AuditStatus.PASS
+    assert outcome.record.judge_completed is True
+    assert outcome.record.delivery_allowed is False
+    assert outcome.execution.error_class == "PERMANENT_TECHNICAL_FLOW_NO_DELIVERY"
+    assert outcome.execution.metadata["quality_pass_fabricated"] is False
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+
+
+def test_normal_final_audit_still_blocks_unresolved_issue_ledger(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    judge = PassingJudge()
+    service = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "8" * 64,
+    )
+    monkeypatch.setattr(service, "_unresolved_blocking", lambda _project: True)
+
+    outcome = service.run(make_context(project), analysis_only=False)
+
+    assert judge.judge_calls == 0
+    assert outcome.record.status is AuditStatus.FAIL
+    assert outcome.record.error_class == "PERMANENT_DELIVERY_ACCEPTANCE"
+    assert outcome.record.decision == "CONTENT_NOT_READY"
+    assert outcome.record.delivery_allowed is False
+
+
 def test_content_freeze_receipt_removed_during_judge_blocks_acceptance(
     tmp_path: Path,
 ) -> None:
@@ -191,7 +670,7 @@ def test_content_freeze_receipt_removed_during_judge_blocks_acceptance(
         fingerprinter=lambda _project, _base: "7" * 64,
     )
 
-    outcome = service.run(context)
+    outcome = service.run(context, analysis_only=False)
 
     assert outcome.record.status is AuditStatus.INDETERMINATE
     assert outcome.record.error_class == "PERMANENT_FINAL_ACCEPTANCE_RECEIPT"
@@ -213,14 +692,16 @@ def test_final_audit_reuses_valid_pass_for_same_snapshot(
         runner,
         fingerprinter=lambda _project, _base: "b" * 64,
     )
-    first = service.run(make_context(project))
+    first = service.run(make_context(project), analysis_only=False)
     assert first.record.status is AuditStatus.PASS
     monkeypatch.setattr(
         "scripts.judgment_receipt.verify_receipt",
         lambda *_args, **_kwargs: (True, []),
     )
 
-    second = service.run(make_context(project), compile_pdf=False)
+    second = service.run(
+        make_context(project), compile_pdf=False, analysis_only=False
+    )
 
     assert second.record.status is AuditStatus.PASS
     assert second.record.reused is True
@@ -258,8 +739,12 @@ def test_consumed_exact_snapshot_override_remains_reusable(
         override_provider=provider,
     )
 
-    first = service.run(make_context(project), reuse_pass=False)
-    second = service.run(make_context(project), reuse_pass=True)
+    first = service.run(
+        make_context(project), reuse_pass=False, analysis_only=False
+    )
+    second = service.run(
+        make_context(project), reuse_pass=True, analysis_only=False
+    )
 
     assert first.record.status is AuditStatus.OVERRIDDEN
     assert second.record.status is AuditStatus.OVERRIDDEN
@@ -286,7 +771,7 @@ def test_final_audit_does_not_reuse_non_final_profile(
         runner,
         fingerprinter=lambda _project, _base: snapshot_id,
     )
-    first = service.run(make_context(project))
+    first = service.run(make_context(project), analysis_only=False)
     monkeypatch.setattr(
         "scripts.judgment_receipt.verify_receipt",
         lambda *_args, **_kwargs: (True, []),
@@ -298,7 +783,9 @@ def test_final_audit_does_not_reuse_non_final_profile(
     cached["profile"] = "model"
     cached_path.write_text(json.dumps(cached) + "\n", encoding="utf-8")
 
-    second = service.run(make_context(project), compile_pdf=False)
+    second = service.run(
+        make_context(project), compile_pdf=False, analysis_only=False
+    )
 
     assert first.record.status is AuditStatus.PASS
     assert second.record.reused is False
@@ -321,7 +808,7 @@ def test_final_audit_revalidates_tampered_acceptance_evidence_before_reuse(
         runner,
         fingerprinter=lambda _project, _base: "e" * 64,
     )
-    first = service.run(make_context(project))
+    first = service.run(make_context(project), analysis_only=False)
     assert first.record.status is AuditStatus.PASS
     monkeypatch.setattr(
         "scripts.judgment_receipt.verify_receipt",
@@ -331,7 +818,9 @@ def test_final_audit_revalidates_tampered_acceptance_evidence_before_reuse(
         '{"tampered":true}\n', encoding="utf-8"
     )
 
-    second = service.run(make_context(project), compile_pdf=False)
+    second = service.run(
+        make_context(project), compile_pdf=False, analysis_only=False
+    )
 
     assert second.record.reused is True
     assert judge.judge_calls == 1
@@ -351,7 +840,9 @@ def test_final_audit_rejects_content_mutation_during_judge(tmp_path: Path) -> No
         fingerprinter=lambda _project, _base: next(fingerprints),
     )
 
-    outcome = service.run(make_context(project), reuse_pass=False)
+    outcome = service.run(
+        make_context(project), reuse_pass=False, analysis_only=False
+    )
 
     assert outcome.record.status is AuditStatus.INDETERMINATE
     assert outcome.record.decision == "SNAPSHOT_CHANGED_DURING_FINAL_AUDIT"
@@ -374,7 +865,9 @@ def test_final_audit_passes_configured_page_limit_to_visual_gate(
         fingerprinter=lambda _project, _base: "3" * 64,
     )
 
-    outcome = service.run(make_context(project), reuse_pass=False)
+    outcome = service.run(
+        make_context(project), reuse_pass=False, analysis_only=False
+    )
 
     assert outcome.record.status is AuditStatus.PASS
     visual_args = next(
@@ -424,7 +917,7 @@ def test_no_judge_ablation_is_visible_and_never_fabricates_pass(
     class AblatedJudge:
         @staticmethod
         def execute(_context):
-            return ExecutionResult.succeeded(ablation="ABLATE_NO_JUDGE")
+            raise AssertionError("ABLATE_NO_JUDGE must not execute the judge")
 
     root = tmp_path / "factory"
     project = root / "ongoing" / "demo"
@@ -443,6 +936,71 @@ def test_no_judge_ablation_is_visible_and_never_fabricates_pass(
     assert outcome.record.status is AuditStatus.OVERRIDDEN
     assert outcome.record.decision == "ABLATE_NO_JUDGE"
     assert outcome.record.judge_completed is False
+    assert outcome.record.delivery_allowed is False
+    assert outcome.record.error_class == "PERMANENT_ABLATION_NO_DELIVERY"
+    assert outcome.record.returncode == 2
+    assert outcome.execution.returncode == 2
+    assert outcome.execution.error_class == "PERMANENT_ABLATION_NO_DELIVERY"
+    assert outcome.execution.metadata["delivery_allowed"] is False
+    assert outcome.record.evidence["analysis_only"] is True
+    assert "ablation_marker" not in outcome.record.evidence
+    assert outcome.execution.metadata["audit_result"] == (
+        ".factory/audits/analysis_latest.json"
+    )
+    assert not (project / "judge_outputs/final_submission.ablation.json").exists()
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/delivery_override_receipt.json").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
+    assert not (project / ".factory/finalization").exists()
+    assert not (project / "delivery_manifest.json").exists()
+    assert not (root / "papers").exists()
+    from scripts.workflow_state import final_audit_is_current
+
+    assert final_audit_is_current(project) is False
+
+
+def test_no_judge_ablation_precedes_delivery_override(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class AblatedJudge:
+        @staticmethod
+        def execute(_context):
+            raise AssertionError("delivery override must not bypass no-judge ablation")
+
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    snapshot_id = "4" * 64
+    store = AuthStore(root / "web/auth.db")
+    store.initialize()
+    store.bootstrap_admin("correct horse battery staple test only")
+    authorization = store.issue_delivery_override(
+        base_name="demo",
+        scope="deliver_snapshot",
+        bound_snapshot_id=snapshot_id,
+        source_verdict="REOPEN_REVISION_MODEL",
+        reason="test ablation priority",
+        actor="admin",
+    )
+    provider = SQLiteOverrideProvider(root / "web/auth.db")
+    monkeypatch.setenv("ABLATE_NO_JUDGE", "1")
+    service = FinalAuditService(
+        root,
+        AblatedJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: snapshot_id,
+        override_provider=provider,
+    )
+
+    outcome = service.run(
+        make_context(project), reuse_pass=True, analysis_only=False
+    )
+
+    assert outcome.record.decision == "ABLATE_NO_JUDGE"
+    assert outcome.record.delivery_allowed is False
+    assert outcome.record.override is False
+    assert outcome.execution.returncode == 2
     marker = json.loads(
         (project / "judge_outputs/final_submission.ablation.json").read_text(
             encoding="utf-8"
@@ -450,6 +1008,98 @@ def test_no_judge_ablation_is_visible_and_never_fabricates_pass(
     )
     assert marker["judge_executed"] is False
     assert marker["quality_pass_fabricated"] is False
-    from scripts.workflow_state import final_audit_is_current
+    assert marker["delivery_allowed"] is False
+    assert marker["terminal_reason"] == "PERMANENT_ABLATION_NO_DELIVERY"
+    assert outcome.record.evidence["analysis_only"] is False
+    assert outcome.record.evidence["ablation_marker"] == (
+        "judge_outputs/final_submission.ablation.json"
+    )
+    persisted = provider.get_override(authorization.override_id)
+    assert persisted is not None
+    assert persisted.consumed_at is None
+    assert not (project / "judge_outputs/delivery_override_receipt.json").exists()
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
 
-    assert final_audit_is_current(project) is True
+
+def test_no_judge_ablation_result_is_never_reusable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class AblatedJudge:
+        @staticmethod
+        def execute(_context):
+            raise AssertionError("no-judge audit must not execute the judge")
+
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    snapshot_id = "7" * 64
+    monkeypatch.setenv("ABLATE_NO_JUDGE", "1")
+    ablation = FinalAuditService(
+        root,
+        AblatedJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: snapshot_id,
+    ).run(make_context(project), reuse_pass=True, analysis_only=False)
+    monkeypatch.delenv("ABLATE_NO_JUDGE")
+    judge = PassingJudge()
+    normal = FinalAuditService(
+        root,
+        judge,
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: snapshot_id,
+    ).run(
+        make_context(project),
+        compile_pdf=False,
+        reuse_pass=True,
+        analysis_only=False,
+    )
+
+    assert ablation.record.delivery_allowed is False
+    assert normal.record.status is AuditStatus.PASS
+    assert normal.record.reused is False
+    assert judge.judge_calls == 1
+
+
+def test_technical_flow_plus_no_judge_ablation_is_non_delivery_terminal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class AblatedJudge:
+        @staticmethod
+        def execute(_context):
+            raise AssertionError("technical ablation must not execute the judge")
+
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    authorization = project / ".factory/technical_flow/authorization.json"
+    authorization.parent.mkdir(parents=True)
+    authorization.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("ABLATE_NO_JUDGE", "1")
+    service = FinalAuditService(
+        root,
+        AblatedJudge(),
+        FakeValidator(),
+        RecordingRunner(),
+        fingerprinter=lambda _project, _base: "5" * 64,
+        technical_flow_validation=True,
+    )
+    monkeypatch.setattr(
+        service,
+        "_technical_authorization",
+        lambda _project: SimpleNamespace(path=authorization, sha256="6" * 64),
+    )
+
+    outcome = service.run(
+        make_context(project), reuse_pass=True, analysis_only=False
+    )
+
+    assert outcome.record.decision == "ABLATE_NO_JUDGE"
+    assert outcome.record.delivery_allowed is False
+    assert outcome.record.evidence["technical_flow_validation"] is True
+    assert outcome.execution.returncode == 2
+    assert outcome.execution.metadata["technical_flow_validation"] is True
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()

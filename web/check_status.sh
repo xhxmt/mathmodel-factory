@@ -4,6 +4,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FACTORY_ROOT="${FACTORY:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 # shellcheck source=backend_service_health.sh
 source "$SCRIPT_DIR/backend_service_health.sh"
 FAILED=0
@@ -40,10 +41,10 @@ echo
 
 # 4. 检查上传目录
 echo "✓ 检查上传目录..."
-if [ -d "/home/tfisher/paper_factory/uploads" ]; then
+if [ -d "$FACTORY_ROOT/uploads" ]; then
     echo "  ✅ 上传目录存在"
-    echo "  └─ /home/tfisher/paper_factory/uploads/"
-    echo "  └─ 权限: $(stat -c '%a' /home/tfisher/paper_factory/uploads)"
+    echo "  └─ $FACTORY_ROOT/uploads/"
+    echo "  └─ 权限: $(stat -c '%a' "$FACTORY_ROOT/uploads")"
 else
     echo "  ❌ 上传目录不存在"
 fi
@@ -52,9 +53,9 @@ echo
 # 5. 检查关键文件
 echo "✓ 检查关键配置文件..."
 files=(
-    "/home/tfisher/paper_factory/web/backend/main.py"
-    "/home/tfisher/paper_factory/web/frontend/src/components/NewProjectModal.vue"
-    "/home/tfisher/paper_factory/.gitignore"
+    "$SCRIPT_DIR/backend/main.py"
+    "$SCRIPT_DIR/frontend/src/components/NewProjectModal.vue"
+    "$FACTORY_ROOT/.gitignore"
 )
 for file in "${files[@]}"; do
     if [ -f "$file" ]; then

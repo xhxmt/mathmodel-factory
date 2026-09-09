@@ -69,6 +69,7 @@ def test_step16_uses_shared_final_audit_and_atomic_release_before_delivery_check
     audit = 'python3 -m factory_core.cli audit "$PROJECT"'
     publish = 'scripts/publish_release.py" "$PROJECT" --root "$FACTORY"'
     assert audit in step16
+    assert '--accept-delivery' in step16
     assert publish in step16
     assert step16.index(audit) < step16.index(publish)
     assert step16.index(publish) < step16.index("delivery_quality_gate")
@@ -172,6 +173,8 @@ def test_step14_prompt_does_not_fabricate_gate2_pass():
     assert "Step 13 Gate 2 已经 PASS" not in prompt
     assert "不得假定 Gate 2 PASS" in prompt
     assert "gate2_delivery_override.json" in prompt
+    assert "`gate2_delivery_override.json` 不是技术续跑授权凭据" in prompt
+    assert "GATE2_CONTINUATION_AUTHORIZED" in prompt
 
 
 def test_verify_step_output_rejects_step9_without_step8_5_pass(tmp_path):
@@ -388,6 +391,62 @@ def test_verify_numbers_handles_latex_commands_and_exponents(tmp_path):
         "The verified result is $T_1\\approx1.3624\\,\\mathrm{s}$ with tolerance $<10^{-6}$.\n"
         "\\end{document}\n",
     )
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is True
+
+
+def test_verify_numbers_handles_ranges_scientific_notation_and_layout(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(
+        project / "results" / "p1" / "values.json",
+        json.dumps(
+            {
+                "range": [1200.47, 3999.64],
+                "tiny": 4.0779e-7,
+            }
+        ),
+    )
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n"
+        "\\begin{longtable}{p{0.22\\textwidth}p{0.49\\textwidth}}\n"
+        "Range: 1200.47--3999.64; spreads: $4.08\\times 10^{-7}$ and $4.08\\times10^-7$.\n"
+        "\\end{longtable}\n"
+        "\\lstinputlisting[firstline=53,lastline=170]{models/02_model.py}\n"
+        "\\end{document}\n",
+    )
+    write_file(project / "models" / "02_model.py", "# fixture\n")
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is True
+
+
+def test_verify_numbers_ignores_multiline_lstinputlisting_line_selectors(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(
+        project / "results" / "p1" / "values.json",
+        json.dumps({"result": 42.5}),
+    )
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n"
+        "Verified result: 42.5.\n"
+        "\\lstinputlisting[\n"
+        "  language=Python,\n"
+        "  firstline=540,\n"
+        "  lastline=650\n"
+        "]{models/02_model.py}\n"
+        "\\end{document}\n",
+    )
+    write_file(project / "models" / "02_model.py", "# fixture\n")
 
     from verify_numbers import generate_manifest, verify_paper
 

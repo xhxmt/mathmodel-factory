@@ -33,6 +33,23 @@ class StageContract:
     subtasks: tuple[StageSubtaskContract, ...]
 
 
+@dataclass(frozen=True)
+class GatePolicy:
+    gate: str
+    stage_id: int | None
+    subtask_key: str | None
+    source_step_id: int | None
+    kind: str
+    authority: str
+    condition: str
+    producer: str
+    binding: str
+    gate_family: str = "exact"
+    source_expression: str = ""
+    compatibility_diagnostic: str | None = None
+    projects_pending_action: bool = True
+
+
 def _step(step_id: int, key: str | None = None, *, conditional: bool = False):
     contract = contract_for(step_id)
     return StageSubtaskContract(
@@ -85,6 +102,120 @@ STAGE_CONTRACTS: tuple[StageContract, ...] = (
 )
 
 
+# Machine-readable descriptions of the Gate policies already enforced by the
+# v1 Stage/Step runtime.  The existing pending-action projection shares this
+# tuple, while the contract compiler consumes it read-only from outside runtime.
+GATE_POLICIES: tuple[GatePolicy, ...] = (
+    GatePolicy(
+        gate="preflight",
+        stage_id=1,
+        subtask_key=None,
+        source_step_id=1,
+        kind="human_consultation",
+        authority="project_workflow_decision",
+        condition="consultation_enabled_and_no_current_immutable_decision",
+        producer="factory_core.steps.gates._consultation_gate",
+        binding="fixed_owner_stage_from_native_producer",
+        projects_pending_action=False,
+    ),
+    GatePolicy(
+        gate="step3",
+        stage_id=2,
+        subtask_key="method_selection",
+        source_step_id=3,
+        kind="human_selection",
+        authority="project_workflow_decision",
+        condition="contest_core_requires_current_bound_selection",
+        producer="factory_core.steps.gates.prepare_human_gates",
+        binding="fixed_stage_subtask",
+    ),
+    GatePolicy(
+        gate="step4",
+        stage_id=2,
+        subtask_key=None,
+        source_step_id=4,
+        kind="human_consultation",
+        authority="project_workflow_decision",
+        condition="consultation_enabled_and_no_current_immutable_decision",
+        producer="factory_core.steps.gates._consultation_gate",
+        binding="fixed_owner_stage_from_native_producer",
+        projects_pending_action=False,
+    ),
+    GatePolicy(
+        gate="step8_5",
+        stage_id=6,
+        subtask_key="reviewer_entry_gate",
+        source_step_id=8,
+        kind="artifact_gate",
+        authority="artifact_validator",
+        condition="reviewer_entry_artifacts_and_pass_verdict_required",
+        producer="factory_core.steps.validators.NativeArtifactValidator._step_9",
+        binding="fixed_stage_subtask",
+    ),
+    GatePolicy(
+        gate="conditional_math_preflight",
+        stage_id=8,
+        subtask_key="conditional_math_preflight",
+        source_step_id=13,
+        kind="conditional_gate",
+        authority="dirty_classifier",
+        condition="semantic_dirty_runs_math_preflight_otherwise_bound_skip_receipt",
+        producer="factory_core.stages.next_stage_subtask",
+        binding="fixed_stage_subtask",
+        projects_pending_action=False,
+    ),
+    GatePolicy(
+        gate="content_freeze",
+        stage_id=10,
+        subtask_key="content_freeze_guard",
+        source_step_id=16,
+        kind="human_approval",
+        authority="project_workflow_decision",
+        condition="contest_policy_requires_current_approved_decision",
+        producer="factory_core.steps.gates.prepare_human_gates",
+        binding="fixed_stage_subtask",
+    ),
+    GatePolicy(
+        gate="delivery_freeze_override",
+        stage_id=10,
+        subtask_key="content_freeze_guard",
+        source_step_id=16,
+        kind="human_approval",
+        authority="project_workflow_decision",
+        condition="post_delivery_freeze_substantive_reopen_requires_approval",
+        producer="factory_core.engine.FactoryEngine.run",
+        binding="fixed_stage_subtask",
+    ),
+    GatePolicy(
+        gate="dynamic",
+        stage_id=None,
+        subtask_key=None,
+        source_step_id=None,
+        kind="human_consultation",
+        authority="project_workflow_decision",
+        condition="consultation_REQUEST_exists_and_no_current_immutable_decision",
+        producer="factory_core.steps.gates._consultation_gate",
+        binding="active_stage_or_stage_1_fallback",
+        projects_pending_action=False,
+    ),
+    GatePolicy(
+        gate="legacy_dynamic",
+        stage_id=None,
+        subtask_key=None,
+        source_step_id=None,
+        kind="legacy_human_consultation_family",
+        authority="legacy_adapter",
+        condition="legacy_.awaiting_consultation_marker_contains_arbitrary_gate_name",
+        producer="factory_core.adapters.legacy.LegacyArtifactValidator.validate",
+        binding="legacy_marker_runtime_value",
+        gate_family="legacy_arbitrary",
+        source_expression=r"GATE:([^\s]+)",
+        compatibility_diagnostic="UNANALYZABLE",
+        projects_pending_action=False,
+    ),
+)
+
+
 _STAGE_BY_ID = {stage.id: stage for stage in STAGE_CONTRACTS}
 _STAGE_BY_STEP = {
     subtask.checkpoint_step_id: stage
@@ -117,6 +248,20 @@ def validate_stage_catalog() -> None:
     reviewer_gate = _SUBTASK_BY_KEY.get("reviewer_entry_gate")
     if reviewer_gate is None or reviewer_gate[0].id != 6:
         raise ValueError("Step 8.5 reviewer-entry gate must remain in Stage 6")
+    for gate in GATE_POLICIES:
+        if gate.projects_pending_action and (
+            gate.stage_id is None
+            or gate.subtask_key is None
+            or gate.source_step_id is None
+        ):
+            raise ValueError(
+                f"projected Gate {gate.gate!r} requires a fixed Stage binding"
+            )
+        if gate.subtask_key is None:
+            continue
+        stage, subtask = _SUBTASK_BY_KEY[gate.subtask_key]
+        if stage.id != gate.stage_id or subtask.source_step_id != gate.source_step_id:
+            raise ValueError(f"Gate {gate.gate!r} does not match the Stage catalog")
 
 
 validate_stage_catalog()
@@ -153,6 +298,26 @@ def subtask_for_key(key: str) -> tuple[StageContract, StageSubtaskContract]:
         return _SUBTASK_BY_KEY[str(key)]
     except KeyError as exc:
         raise KeyError(f"Stage subtask {key!r} is not defined") from exc
+
+
+def gate_policy(gate: str) -> GatePolicy:
+    matches = tuple(policy for policy in GATE_POLICIES if policy.gate == str(gate))
+    if len(matches) != 1:
+        raise KeyError(f"Gate policy {gate!r} is not uniquely defined")
+    return matches[0]
+
+
+def native_consultation_policy_for_step(step_id: int) -> GatePolicy | None:
+    matches = tuple(
+        policy
+        for policy in GATE_POLICIES
+        if policy.kind == "human_consultation"
+        and policy.source_step_id == int(step_id)
+        and policy.binding == "fixed_owner_stage_from_native_producer"
+    )
+    if len(matches) > 1:
+        raise ValueError(f"Step {step_id} has multiple fixed consultation Gates")
+    return matches[0] if matches else None
 
 
 def completed_stage_for_step(step_id: int) -> int:
@@ -226,12 +391,12 @@ def next_stage_subtask(
 def _pending_projection(state: WorkflowState) -> tuple[int, str, int] | None:
     action = state.pending_action or {}
     gate = str(action.get("gate") or "")
-    if gate == "step8_5":
-        return 6, "reviewer_entry_gate", 8
-    if gate == "step3":
-        return 2, "method_selection", 3
-    if gate in {"content_freeze", "delivery_freeze_override"}:
-        return 10, "content_freeze_guard", 16
+    for policy in GATE_POLICIES:
+        if policy.projects_pending_action and policy.gate == gate:
+            assert policy.stage_id is not None
+            assert policy.subtask_key is not None
+            assert policy.source_step_id is not None
+            return policy.stage_id, policy.subtask_key, policy.source_step_id
     return None
 
 

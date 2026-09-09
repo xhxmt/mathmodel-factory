@@ -50,8 +50,27 @@ def build_final_acceptance_receipt(
     *,
     status: str,
     override_receipt: str | None = None,
+    workflow_id: str | None = None,
+    run_generation: str | None = None,
 ) -> dict[str, object]:
     project = project.resolve()
+    # This check deliberately precedes every read, directory creation, and
+    # receipt write in this producer.  It is a no-op only for projects without
+    # an explicit/current Phase9 coordinate.
+    from ..phase9_delivery_fence import (
+        delivery_side_effect_commit_lease,
+        require_delivery_side_effect_authority,
+    )
+
+    def verify_fence() -> None:
+        require_delivery_side_effect_authority(
+            project,
+            operation="acceptance",
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
+
+    verify_fence()
     from ..decision_receipts import verified_approval_receipts
 
     approvals = verified_approval_receipts(project)
@@ -117,7 +136,13 @@ def build_final_acceptance_receipt(
         "member_count": len(bundle["members"]),
     }
     receipt["content_sha256"] = _canonical_hash(receipt)
-    atomic_write_json(project / RECEIPT_PATH, receipt)
+    with delivery_side_effect_commit_lease(
+        project,
+        operation="acceptance",
+        workflow_id=workflow_id,
+        run_generation=run_generation,
+    ):
+        atomic_write_json(project / RECEIPT_PATH, receipt)
     return receipt
 
 

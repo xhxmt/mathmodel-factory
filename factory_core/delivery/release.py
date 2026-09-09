@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -20,6 +19,8 @@ from ..audit.persistence import atomic_write_json
 
 RELEASE_MANIFEST_SCHEMA = "paper-factory-release-v1"
 RELEASE_POINTER_SCHEMA = "paper-factory-release-pointer-v1"
+_PHASE9_RELEASE_MANIFEST_SCHEMA = "paper-factory-release-v2"
+_PHASE9_RELEASE_POINTER_SCHEMA = "paper-factory-release-pointer-v2"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CORE_RELEASE_ARTIFACTS = {
     "paper": "paper.pdf",
@@ -90,6 +91,37 @@ def _expected_release_artifacts(manifest: dict[str, object]) -> dict[str, str]:
     return expected
 
 
+def _manifest_delivery_fence(
+    manifest: dict[str, object], base: str
+) -> dict[str, object] | None:
+    fence = manifest.get("phase9_delivery_fence")
+    expected = {
+        "project_id",
+        "workflow_id",
+        "run_generation",
+        "replay_id",
+        "replay_mode",
+        "terminal_receipt_sha256",
+        "run_mode",
+        "modeling_consultation_contract",
+        "delivery_capability",
+    }
+    if not isinstance(fence, dict) or set(fence) != expected:
+        return None
+    text_fields = expected - {"terminal_receipt_sha256"}
+    if (
+        fence.get("project_id") != base
+        or any(
+            not isinstance(fence.get(name), str) or not str(fence[name]).strip()
+            for name in text_fields
+        )
+        or SHA256_RE.fullmatch(str(fence.get("terminal_receipt_sha256") or ""))
+        is None
+    ):
+        return None
+    return dict(fence)
+
+
 @dataclass(frozen=True)
 class ReleaseResult:
     release_id: str
@@ -101,13 +133,27 @@ class ReleaseResult:
     reused: bool = False
 
 
-def resolve_current_release(papers_root: Path, base: str) -> ReleaseResult | None:
+def resolve_current_release(
+    papers_root: Path, base: str, *, project: Path
+) -> ReleaseResult | None:
+    """Resolve a release only while its exact Authority coordinate is current.
+
+    The immutable manifest is necessary evidence, but it is never authority by
+    itself.  A stale PASS on disk therefore becomes invisible as soon as the
+    current generation, terminal, mode, or delivery capability changes.
+    """
+
     papers_root = papers_root.resolve()
+    project = project.resolve()
+    if project.name != base:
+        return None
     pointer_path = papers_root / base / "current.json"
     try:
         pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        pointer_schema = pointer.get("schema_version")
         if (
-            pointer.get("schema_version") != RELEASE_POINTER_SCHEMA
+            pointer_schema
+            not in {RELEASE_POINTER_SCHEMA, _PHASE9_RELEASE_POINTER_SCHEMA}
             or pointer.get("base") != base
             or not SHA256_RE.fullmatch(str(pointer.get("release_id") or ""))
         ):
@@ -122,14 +168,41 @@ def resolve_current_release(papers_root: Path, base: str) -> ReleaseResult | Non
         declared = manifest.get("content_sha256")
         unsigned = dict(manifest)
         unsigned.pop("content_sha256", None)
+        manifest_schema = manifest.get("schema_version")
+        expected_pointer_schema = (
+            _PHASE9_RELEASE_POINTER_SCHEMA
+            if manifest_schema == _PHASE9_RELEASE_MANIFEST_SCHEMA
+            else RELEASE_POINTER_SCHEMA
+        )
         if (
-            manifest.get("schema_version") != RELEASE_MANIFEST_SCHEMA
+            manifest_schema
+            not in {RELEASE_MANIFEST_SCHEMA, _PHASE9_RELEASE_MANIFEST_SCHEMA}
+            or pointer_schema != expected_pointer_schema
             or manifest.get("base") != base
             or manifest.get("release_id") != pointer["release_id"]
             or declared != _canonical_hash(unsigned)
             or pointer.get("manifest_sha256") != _sha256(manifest_path)
         ):
             return None
+        if manifest_schema == RELEASE_MANIFEST_SCHEMA:
+            from ..phase9_delivery_fence import legacy_delivery_projection_allowed
+
+            if not legacy_delivery_projection_allowed(project):
+                return None
+        else:
+            recorded_fence = _manifest_delivery_fence(manifest, base)
+            if recorded_fence is None:
+                return None
+            from ..phase9_delivery_fence import require_phase9_delivery_authority
+
+            live_fence = require_phase9_delivery_authority(
+                project,
+                workflow_id=str(recorded_fence["workflow_id"]),
+                run_generation=str(recorded_fence["run_generation"]),
+                operation="release",
+            )
+            if live_fence.__dict__ != recorded_fence:
+                return None
         expected = _expected_release_artifacts(manifest)
         artifacts = manifest.get("artifacts")
         if not isinstance(artifacts, dict) or set(artifacts) != set(expected):
@@ -169,9 +242,9 @@ def resolve_current_release(papers_root: Path, base: str) -> ReleaseResult | Non
 
 
 def current_release_artifacts(
-    papers_root: Path, base: str
+    papers_root: Path, base: str, *, project: Path
 ) -> tuple[Path, Path] | None:
-    release = resolve_current_release(papers_root, base)
+    release = resolve_current_release(papers_root, base, project=project)
     return (release.paper, release.submission_zip) if release is not None else None
 
 
@@ -189,10 +262,27 @@ class ReleasePublisher:
         status: str,
         package_builder: Callable[[Path], bool],
         deadline_check: Callable[[], None] | None = None,
+        workflow_id: str | None = None,
+        run_generation: str | None = None,
     ) -> ReleaseResult:
-        check = deadline_check or (lambda: None)
-        check()
+        from ..phase9_delivery_fence import (
+            delivery_side_effect_commit_lease,
+            require_delivery_side_effect_authority,
+        )
+
         project = project.resolve()
+
+        def verify_fence() -> None:
+            require_delivery_side_effect_authority(
+                project,
+                operation="release",
+                workflow_id=workflow_id,
+                run_generation=run_generation,
+            )
+
+        check = deadline_check or (lambda: None)
+        verify_fence()
+        check()
         base = project.name
         if not SHA256_RE.fullmatch(snapshot_id):
             raise ValueError("release id must be the final-audit SHA-256")
@@ -201,91 +291,174 @@ class ReleasePublisher:
             raise ValueError("final project PDF is missing")
         sources = self._validate_sources(project, snapshot_id, status)
 
-        control_dir = self.papers_root / base
-        releases_dir = self.papers_root / "releases" / base
-        control_dir.mkdir(parents=True, exist_ok=True)
-        releases_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = control_dir / ".publish.lock"
-        with lock_path.open("a+", encoding="ascii") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            check()
-            existing = self._existing_release(base, snapshot_id)
-            if existing is not None:
-                existing_status = json.loads(
-                    existing.manifest.read_text(encoding="utf-8")
-                ).get("status")
-                if existing_status != status:
-                    raise ValueError(
-                        "immutable release exists with a different audit status"
-                    )
-                self._assert_sources_match_release(
-                    project, snapshot_id, status, existing
-                )
-                check()
-                self._sync_legacy_aliases(base, existing)
-                check()
-                self._assert_sources_match_release(
-                    project, snapshot_id, status, existing
-                )
-                self._write_pointer(base, existing)
-                return existing
+        verify_fence()
+        check()
 
-            staging = Path(
-                tempfile.mkdtemp(prefix=f".{snapshot_id}.staging-", dir=releases_dir)
+        def verify_existing(existing: ReleaseResult) -> None:
+            existing_status = json.loads(
+                existing.manifest.read_text(encoding="utf-8")
+            ).get("status")
+            if existing_status != status:
+                raise ValueError(
+                    "immutable release exists with a different audit status"
+                )
+            self._assert_sources_match_release(
+                project, snapshot_id, status, existing
             )
-            try:
-                shutil.copyfile(project_pdf, staging / "paper.pdf")
-                if not package_builder(staging / "submission.zip"):
-                    raise RuntimeError("submission packaging failed")
-                check()
-                self._validate_zip(staging / "submission.zip", project_pdf, base)
-                sources = self._validate_sources(project, snapshot_id, status)
-                if _sha256(staging / "paper.pdf") != _sha256(project_pdf):
-                    raise ValueError("audited PDF changed during release construction")
-                for name, source in sources.items():
-                    shutil.copyfile(source, staging / f"{name}.json")
-                artifacts = {
-                    "paper": _artifact(staging / "paper.pdf", "paper.pdf"),
-                    "submission_zip": _artifact(
-                        staging / "submission.zip", "submission.zip"
-                    ),
-                    **{
-                        name: _artifact(staging / f"{name}.json", f"{name}.json")
-                        for name in sources
-                    },
-                }
-                manifest: dict[str, object] = {
-                    "schema_version": RELEASE_MANIFEST_SCHEMA,
-                    "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
-                    "base": base,
-                    "release_id": snapshot_id,
-                    "snapshot_id": snapshot_id,
-                    "status": status,
-                    "artifacts": artifacts,
-                    "evidence_artifacts": {
-                        name: f"{name}.json"
-                        for name in sources
-                        if name
-                        not in {
-                            "final_audit_receipt",
-                            "audit_result",
-                            "audit_snapshot",
-                        }
-                    },
-                }
-                manifest["content_sha256"] = _canonical_hash(manifest)
-                atomic_write_json(staging / "delivery_manifest.json", manifest)
-                for child in staging.iterdir():
-                    if child.is_file():
-                        _fsync_file(child)
-                _fsync_dir(staging)
 
+        # A reusable release can be detected without creating the papers tree.
+        # Re-resolve it under the Authority commit lease before repairing
+        # aliases or the pointer so a concurrent Phase9 transition cannot leave
+        # even a lock/control directory behind on rejection.
+        existing = self._existing_release(base, snapshot_id)
+        if existing is not None:
+            verify_existing(existing)
+            with delivery_side_effect_commit_lease(
+                project,
+                operation="release",
+                workflow_id=workflow_id,
+                run_generation=run_generation,
+            ):
+                check()
+                current = self._existing_release(base, snapshot_id)
+                if current is None:
+                    raise RuntimeError("immutable release changed during recovery")
+                verify_existing(current)
+                current.pointer.parent.mkdir(parents=True, exist_ok=True)
+                self._sync_legacy_aliases(base, current)
+                check()
+                self._assert_sources_match_release(
+                    project, snapshot_id, status, current
+                )
+                self._write_pointer(base, current)
+                return current
+
+        # Package construction may invoke a child process which takes its own
+        # submission lease.  Keep it outside the parent release lease to avoid
+        # cross-process flock deadlock, and stage only in a private external
+        # temporary directory.  Production callers use package_submission's
+        # stage-only mode, so this phase writes neither papers/ nor project
+        # finalization state.  Any late Phase9 refusal removes the whole temp.
+        with tempfile.TemporaryDirectory(
+            prefix=f"paper-factory-release-{snapshot_id}."
+        ) as temporary:
+            staging = Path(temporary)
+            shutil.copyfile(project_pdf, staging / "paper.pdf")
+            if not package_builder(staging / "submission.zip"):
+                # A production builder reports a child submission-fence
+                # refusal as a nonzero/False result.  Reclassify after the
+                # child returns so a Phase9 transition is not mislabeled as a
+                # generic packaging failure by this parent release boundary.
+                verify_fence()
+                raise RuntimeError("submission packaging failed")
+            check()
+            self._validate_zip(staging / "submission.zip", project_pdf, base)
+            sources = self._validate_sources(project, snapshot_id, status)
+            if _sha256(staging / "paper.pdf") != _sha256(project_pdf):
+                raise ValueError("audited PDF changed during release construction")
+            for name, source in sources.items():
+                shutil.copyfile(source, staging / f"{name}.json")
+            artifacts = {
+                "paper": _artifact(staging / "paper.pdf", "paper.pdf"),
+                "submission_zip": _artifact(
+                    staging / "submission.zip", "submission.zip"
+                ),
+                **{
+                    name: _artifact(staging / f"{name}.json", f"{name}.json")
+                    for name in sources
+                },
+            }
+            manifest: dict[str, object] = {
+                "schema_version": RELEASE_MANIFEST_SCHEMA,
+                "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+                "base": base,
+                "release_id": snapshot_id,
+                "snapshot_id": snapshot_id,
+                "status": status,
+                "artifacts": artifacts,
+                "evidence_artifacts": {
+                    name: f"{name}.json"
+                    for name in sources
+                    if name
+                    not in {
+                        "final_audit_receipt",
+                        "audit_result",
+                        "audit_snapshot",
+                    }
+                },
+            }
+            manifest["content_sha256"] = _canonical_hash(manifest)
+            atomic_write_json(staging / "delivery_manifest.json", manifest)
+            for child in staging.iterdir():
+                if child.is_file():
+                    _fsync_file(child)
+            _fsync_dir(staging)
+
+            with delivery_side_effect_commit_lease(
+                project,
+                operation="release",
+                workflow_id=workflow_id,
+                run_generation=run_generation,
+            ):
+                check()
+                # A peer may have committed this release while this caller was
+                # building its private staging tree.  Treat that as idempotent
+                # recovery instead of overwriting an immutable directory.
+                current = self._existing_release(base, snapshot_id)
+                if current is not None:
+                    verify_existing(current)
+                    current.pointer.parent.mkdir(parents=True, exist_ok=True)
+                    self._sync_legacy_aliases(base, current)
+                    check()
+                    self._assert_sources_match_release(
+                        project, snapshot_id, status, current
+                    )
+                    self._write_pointer(base, current)
+                    return current
+
+                current_sources = self._validate_sources(
+                    project, snapshot_id, status
+                )
+                if set(current_sources) != set(sources):
+                    raise ValueError("release evidence set changed during construction")
+                if _sha256(staging / "paper.pdf") != _sha256(project_pdf):
+                    raise ValueError("audited PDF changed before release commit")
+                for name, source in current_sources.items():
+                    if _sha256(staging / f"{name}.json") != _sha256(source):
+                        raise ValueError(
+                            f"release evidence changed before commit: {name}"
+                        )
+                self._validate_zip(staging / "submission.zip", project_pdf, base)
+
+                control_dir = self.papers_root / base
+                releases_dir = self.papers_root / "releases" / base
+                control_dir.mkdir(parents=True, exist_ok=True)
+                releases_dir.mkdir(parents=True, exist_ok=True)
                 release_dir = releases_dir / snapshot_id
-                os.replace(staging, release_dir)
-                _fsync_dir(releases_dir)
+                if release_dir.exists() or release_dir.is_symlink():
+                    raise RuntimeError("immutable release path already exists")
+                committed_staging = Path(
+                    tempfile.mkdtemp(
+                        prefix=f".{snapshot_id}.staging-", dir=releases_dir
+                    )
+                )
+                try:
+                    for child in staging.iterdir():
+                        if not child.is_file() or child.is_symlink():
+                            raise RuntimeError("private release staging is unsafe")
+                        shutil.copyfile(child, committed_staging / child.name)
+                        _fsync_file(committed_staging / child.name)
+                    _fsync_dir(committed_staging)
+                    os.replace(committed_staging, release_dir)
+                    _fsync_dir(releases_dir)
+                finally:
+                    if committed_staging.exists():
+                        shutil.rmtree(committed_staging)
                 result = self._result(base, snapshot_id, reused=False)
                 if result is None:
-                    raise RuntimeError("committed release failed integrity verification")
+                    raise RuntimeError(
+                        "committed release failed integrity verification"
+                    )
                 check()
                 self._assert_sources_match_release(
                     project, snapshot_id, status, result
@@ -297,14 +470,40 @@ class ReleasePublisher:
                 )
                 self._write_pointer(base, result)
                 return result
-            finally:
-                if staging.exists():
-                    shutil.rmtree(staging)
 
-    def recover(self, base: str) -> ReleaseResult | None:
-        current = resolve_current_release(self.papers_root, base)
+    def recover(
+        self,
+        base: str,
+        *,
+        project: Path,
+        workflow_id: str | None = None,
+        run_generation: str | None = None,
+    ) -> ReleaseResult | None:
+        from ..phase9_delivery_fence import (
+            delivery_side_effect_commit_lease,
+            require_delivery_side_effect_authority,
+        )
+
+        project = Path(project).resolve()
+        if project.name != base:
+            raise ValueError("release recovery project binding differs")
+        require_delivery_side_effect_authority(
+            project,
+            operation="release",
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
+        current = resolve_current_release(
+            self.papers_root, base, project=project
+        )
         if current is not None:
-            self._sync_legacy_aliases(base, current)
+            with delivery_side_effect_commit_lease(
+                project,
+                operation="release",
+                workflow_id=workflow_id,
+                run_generation=run_generation,
+            ):
+                self._sync_legacy_aliases(base, current)
         return current
 
     def _existing_release(self, base: str, release_id: str) -> ReleaseResult | None:
@@ -320,10 +519,16 @@ class ReleasePublisher:
             unsigned = dict(value)
             declared = unsigned.pop("content_sha256", None)
             if (
-                value.get("schema_version") != RELEASE_MANIFEST_SCHEMA
+                value.get("schema_version")
+                not in {RELEASE_MANIFEST_SCHEMA, _PHASE9_RELEASE_MANIFEST_SCHEMA}
                 or value.get("base") != base
                 or value.get("release_id") != release_id
                 or declared != _canonical_hash(unsigned)
+            ):
+                return None
+            if (
+                value.get("schema_version") == _PHASE9_RELEASE_MANIFEST_SCHEMA
+                and _manifest_delivery_fence(value, base) is None
             ):
                 return None
             expected = _expected_release_artifacts(value)
@@ -390,7 +595,9 @@ class ReleasePublisher:
 
     @staticmethod
     def _validate_sources(
-        project: Path, snapshot_id: str, status: str
+        project: Path,
+        snapshot_id: str,
+        status: str,
     ) -> dict[str, Path]:
         sources = {
             "final_audit_receipt": project
@@ -411,6 +618,8 @@ class ReleasePublisher:
             snapshot = AuditSnapshot(**snapshot_value)
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"release source is missing or invalid: {exc}") from exc
+        if audit_value.get("decision") == "ABLATE_NO_JUDGE":
+            raise ValueError("no-judge ablation never authorizes a release")
         if (
             audit_value.get("snapshot_id") != snapshot_id
             or audit_value.get("base") != project.name
@@ -427,10 +636,7 @@ class ReleasePublisher:
             or audit_value.get("judge_completed") is not True
         ):
             raise ValueError("PASS release does not have a completed PASS judgment")
-        if status == "OVERRIDDEN" and not (
-            audit_value.get("override") is True
-            or audit_value.get("decision") == "ABLATE_NO_JUDGE"
-        ):
+        if status == "OVERRIDDEN" and audit_value.get("override") is not True:
             raise ValueError("OVERRIDDEN release has no recognized authorization")
         valid, errors = verify_final_acceptance_receipt(
             project,
@@ -533,7 +739,11 @@ class ReleasePublisher:
     ) -> None:
         """Recheck approvals immediately before the atomic pointer switch."""
 
-        current = cls._validate_sources(project, snapshot_id, status)
+        current = cls._validate_sources(
+            project,
+            snapshot_id,
+            status,
+        )
         for name, source in current.items():
             copied = release.release_dir / f"{name}.json"
             if not copied.is_file() or _sha256(copied) != _sha256(source):

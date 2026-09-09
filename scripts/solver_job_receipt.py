@@ -124,10 +124,15 @@ def build_submission_receipt(
     input_paths: Iterable[str | Path] = (),
     output_paths: Iterable[str | Path] = (),
     seeds: Iterable[str | int] = (),
+    dependency_enforcement: str = "DECLARATION_ONLY",
 ) -> dict[str, Any]:
     project = Path(project_dir).resolve()
     if not job_id or not backend or not runtime:
         raise ReceiptError("job_id, backend, and runtime must be nonempty")
+    if dependency_enforcement not in {"DECLARATION_ONLY", "python-audit-open-v1", "python-audit-open-v2"}:
+        raise ReceiptError("unsupported solver dependency enforcement contract")
+    if dependency_enforcement.startswith("python-audit-open-") and (runtime != "python" or backend != "local"):
+        raise ReceiptError("Python file-open enforcement requires the local Python backend")
     script_record = _file_record(project, script)
     workdir_path, workdir_relative = _project_path(project, workdir, must_exist=True)
     if not workdir_path.is_dir():
@@ -140,6 +145,8 @@ def build_submission_receipt(
     ]
     if len(set(declared_outputs)) != len(declared_outputs):
         raise ReceiptError("declared solver outputs must be unique")
+    if script_record["path"] in declared_outputs:
+        raise ReceiptError("solver script cannot also be an output")
     argv_values = [str(item) for item in argv]
     base = {
         "schema": SUBMISSION_SCHEMA,
@@ -154,11 +161,32 @@ def build_submission_receipt(
         "max_time_seconds": int(max_time_seconds),
         "requested_at": int(requested_at),
         "inputs": input_records,
+        "dependency_enforcement": dependency_enforcement,
         "declared_outputs": declared_outputs,
         "seeds": [str(seed) for seed in seeds],
         "seed_claim_limit": "DECLARATION_ONLY_EXECUTION_CONSUMPTION_NOT_ATTESTED",
         "environment": _runtime_environment(runtime),
     }
+    if dependency_enforcement == "python-audit-open-v2":
+        base["output_initial_state"] = [_output_record(project, path) for path in declared_outputs]
+        snapshots = []
+        for index, record in enumerate(input_records):
+            if record["path"] not in declared_outputs:
+                continue
+            source, _ = _project_path(project, record["path"], must_exist=True)
+            data = source.read_bytes()
+            if len(data) != record["size"] or hashlib.sha256(data).hexdigest() != record["sha256"]:
+                raise ReceiptError("input/output changed during submission")
+            snapshot, relative = _project_path(project,
+                f".factory/solver_inputs/{job_id}/{index}-{source.name}", must_exist=False)
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            with snapshot.open("xb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            snapshots.append({"path": record["path"], "snapshot": {
+                "path": relative, "sha256": record["sha256"], "size": record["size"]}})
+        base["input_output_snapshots"] = snapshots
     base["request_sha256"] = canonical_hash(base)
     return _with_content_hash(base)
 
@@ -200,6 +228,40 @@ def _records_unchanged(project: Path, records: list[dict[str, Any]]) -> bool:
     return True
 
 
+def initial_input_records(submitted: dict[str, Any]) -> list[dict[str, Any]]:
+    """Immutable identities of inputs, including the initial bytes of I/O files."""
+    if submitted.get("dependency_enforcement") != "python-audit-open-v2":
+        return submitted["inputs"]
+    snapshots = {item["path"]: item["snapshot"] for item in submitted["input_output_snapshots"]}
+    overlap = {r["path"] for r in submitted["inputs"]} & set(submitted["declared_outputs"])
+    if set(snapshots) != overlap:
+        raise ReceiptError("input/output snapshot set differs from declared overlap")
+    records = []
+    for record in submitted["inputs"]:
+        snapshot = snapshots.get(record["path"])
+        if snapshot is not None and any(snapshot.get(key) != record[key] for key in ("sha256", "size")):
+            raise ReceiptError("input/output snapshot differs from initial input identity")
+        records.append(snapshot or record)
+    return records
+
+
+def _closure_valid(project, submitted, closure):
+    contract = submitted.get("dependency_enforcement")
+    expected = {r["path"]: r["sha256"] for r in [submitted["script"], *submitted["inputs"]]}
+    valid = (closure.get("schema") == contract and closure.get("status") == "COMPLETE"
+             and closure.get("exit_code") == 0 and closure.get("declared_sha256") == expected
+             and closure.get("undeclared_inputs") == [] and closure.get("changed_inputs") == [])
+    if contract == "python-audit-open-v2":
+        initial = {r["path"]: r["sha256"] for r in submitted["output_initial_state"] if r["exists"]}
+        overlap = sorted(set(expected) & set(submitted["declared_outputs"]))
+        valid = (valid and closure.get("submission_request_sha256") == submitted["request_sha256"]
+                 and closure.get("initial_output_sha256") == initial
+                 and closure.get("input_output_paths") == overlap
+                 and closure.get("preflight_errors") == []
+                 and _records_unchanged(project, initial_input_records(submitted)))
+    return valid
+
+
 def _result_artifacts(project: Path, refs: dict[str, Any]) -> list[dict[str, Any]]:
     artifacts: list[dict[str, Any]] = []
     for name, raw in sorted(refs.items()):
@@ -229,14 +291,23 @@ def build_completion_receipt(
     if normalized_status not in TERMINAL_STATUSES:
         raise ReceiptError("completion receipt requires a terminal status")
     script_unchanged = _records_unchanged(project, [submitted["script"]])
-    inputs_unchanged = _records_unchanged(project, submitted["inputs"])
+    inputs_unchanged = _records_unchanged(project, initial_input_records(submitted))
     outputs = [_output_record(project, path) for path in submitted["declared_outputs"]]
     outputs_complete = bool(outputs) and all(item["exists"] for item in outputs)
+    closure_valid = None
+    if submitted.get("dependency_enforcement") in {"python-audit-open-v1", "python-audit-open-v2"}:
+        try:
+            closure_path, _ = _project_path(project, result_refs["input_closure"], must_exist=True)
+            closure = json.loads(closure_path.read_text())
+            closure_valid = _closure_valid(project, submitted, closure)
+        except (OSError, KeyError, ValueError, TypeError):
+            closure_valid = False
     successful_outputs = (
         normalized_status == "COMPLETED"
         and script_unchanged
         and inputs_unchanged
         and outputs_complete
+        and closure_valid is not False
     )
     base = {
         "schema": COMPLETION_SCHEMA,
@@ -249,11 +320,15 @@ def build_completion_receipt(
         "finished_at": int(finished_at),
         "script_unchanged": script_unchanged,
         "inputs_unchanged": inputs_unchanged,
+        "input_closure_valid": closure_valid,
         "outputs_complete": outputs_complete,
         "successful_outputs": successful_outputs,
         "outputs": outputs,
         "result_artifacts": _result_artifacts(project, result_refs),
     }
+    if submitted.get("dependency_enforcement") == "python-audit-open-v2":
+        base["input_identity_semantics"] = "IMMUTABLE_INPUTS_AND_INITIAL_IO_SNAPSHOTS"
+        base["initial_inputs"] = initial_input_records(submitted)
     return _with_content_hash(base)
 
 
@@ -284,7 +359,7 @@ def build_evidence(
         completion
         and completion.get("successful_outputs") is True
         and current_outputs_match
-        and _records_unchanged(project, [submitted["script"], *submitted["inputs"]])
+        and _records_unchanged(project, [submitted["script"], *initial_input_records(submitted)])
     )
     errors: list[str] = []
     if completion is None:
@@ -294,8 +369,19 @@ def build_evidence(
             errors.append("COMPLETION_DID_NOT_PRODUCE_TRUSTED_OUTPUTS")
         if not current_outputs_match:
             errors.append("CURRENT_OUTPUTS_DIFFER_FROM_COMPLETION_RECEIPT")
-        if not _records_unchanged(project, [submitted["script"], *submitted["inputs"]]):
+        if not _records_unchanged(project, [submitted["script"], *initial_input_records(submitted)]):
             errors.append("SUBMITTED_CODE_OR_INPUTS_CHANGED")
+        if submitted.get("dependency_enforcement") == "python-audit-open-v2":
+            try:
+                records = [r for r in completion["result_artifacts"] if r.get("name") == "input_closure" and r.get("local")]
+                if len(records) != 1 or not _records_unchanged(project, records):
+                    raise ReceiptError("input closure evidence changed")
+                closure_path, _ = _project_path(project, records[0]["path"], must_exist=True)
+                if not _closure_valid(project, submitted, json.loads(closure_path.read_text())):
+                    raise ReceiptError("input closure evidence is invalid")
+            except (OSError, ValueError, KeyError, TypeError):
+                receipt_ready = False
+                errors.append("INPUT_CLOSURE_INVALID_OR_CHANGED")
     return {
         "schema": EVIDENCE_SCHEMA,
         "job_id": submitted["job_id"],

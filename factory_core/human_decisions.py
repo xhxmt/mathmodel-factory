@@ -113,17 +113,18 @@ def _option_evidence(project: Path, gate: str) -> tuple[list[str], Path]:
     return evidence, options_path
 
 
-def decision_fingerprints(
+def _decision_fingerprints_with_metadata(
     project_dir: str | Path,
     gate: str,
     evidence: tuple[str, ...] | list[str] = (),
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, Any]]:
     """Bind one decision request to exact options and subject bytes."""
 
     project = Path(project_dir).resolve()
     option_evidence, options_path = _option_evidence(project, gate)
     subject_paths: set[Path] = set()
     subject_metadata: list[dict[str, Any]] = []
+    fingerprint_metadata: dict[str, Any] = {}
 
     def bind_record(relative: str) -> None:
         subject_metadata.append(_file_record(project, project / relative))
@@ -269,11 +270,34 @@ def decision_fingerprints(
             "problem/deliverables.json",
         ):
             subject_paths.update(_contained_files(project, value))
-        from .solver_input_coverage import solver_declared_input_coverage
+        from .solver_input_coverage import (
+            SolverInputDriftError,
+            solver_declared_input_coverage,
+        )
 
-        solver_coverage = solver_declared_input_coverage(project)
-        subject_paths.update(solver_coverage.included_paths)
-        subject_paths.update(solver_coverage.evidence_paths)
+        try:
+            solver_coverage = solver_declared_input_coverage(project)
+        except SolverInputDriftError as exc:
+            drift = exc.to_dict()
+            fingerprint_metadata["solver_input_drift"] = drift
+            subject_metadata.append(
+                {
+                    "path": "<solver-input-drift>",
+                    "exists": True,
+                    "sha256": drift["fingerprint"],
+                    "identity": drift,
+                }
+            )
+            subject_paths.add(exc.current_path)
+            for receipt in exc.receipts:
+                subject_paths.update(_contained_files(project, str(receipt["path"])))
+        else:
+            subject_paths.update(solver_coverage.included_paths)
+            subject_paths.update(solver_coverage.evidence_paths)
+            if solver_coverage.authorized_drifts:
+                fingerprint_metadata["authorized_solver_input_drifts"] = list(
+                    solver_coverage.authorized_drifts
+                )
     elif gate == "delivery_freeze_override":
         for value in (
             "judge_outputs/final_submission_fingerprint.json",
@@ -296,7 +320,24 @@ def decision_fingerprints(
         )
     ]
     options_records = [_file_record(project, options_path)]
-    return canonical_hash(subject_records), canonical_hash(options_records)
+    return (
+        canonical_hash(subject_records),
+        canonical_hash(options_records),
+        fingerprint_metadata,
+    )
+
+
+def decision_fingerprints(
+    project_dir: str | Path,
+    gate: str,
+    evidence: tuple[str, ...] | list[str] = (),
+) -> tuple[str, str]:
+    """Bind one decision request while preserving the public two-value API."""
+
+    subject, options, _metadata = _decision_fingerprints_with_metadata(
+        project_dir, gate, evidence
+    )
+    return subject, options
 
 def build_decision_request(
     *,
@@ -314,8 +355,13 @@ def build_decision_request(
     if project_dir is None:
         subject_fingerprint = "LEGACY_UNBOUND"
         options_fingerprint = "LEGACY_UNBOUND"
+        fingerprint_metadata: dict[str, Any] = {}
     else:
-        subject_fingerprint, options_fingerprint = decision_fingerprints(
+        (
+            subject_fingerprint,
+            options_fingerprint,
+            fingerprint_metadata,
+        ) = _decision_fingerprints_with_metadata(
             project_dir, gate, evidence
         )
     request_id = hashlib.sha256(
@@ -331,6 +377,7 @@ def build_decision_request(
     )
     request_metadata = dict(action.get("metadata") or {})
     request_metadata.pop("human_decision", None)
+    request_metadata.update(fingerprint_metadata)
     return HumanDecisionRequest(
         request_id=request_id,
         gate=gate,
@@ -372,6 +419,10 @@ def validate_resolution(
     normalized = dict(resolution)
     normalized["gate"] = resolution_gate
     normalized["kind"] = kind.value
+    if pending_gate in {"joint_modeling_candidates", "joint_modeling_risk"}:
+        for key in ("request_id", "generation", "subject_fingerprint", "options_fingerprint"):
+            if normalized.get(key) != request.get(key):
+                raise InvalidTransition("联合建模答复必须显式绑定当前请求身份")
     if kind is HumanDecisionKind.SELECTION:
         selected = (
             normalized.get("selected_option")

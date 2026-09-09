@@ -52,6 +52,7 @@
         </div>
 
         <label class="chk"><input type="checkbox" v-model="form.no_start" :disabled="loading" /><span>仅创建，不自动开始</span></label>
+        <p class="hint">如需 GPT Pro + Claude Fable 联合建模，请勾选“仅创建”，创建后在项目概览中手动开启。</p>
         <label class="chk"><input type="checkbox" v-model="form.consult" :disabled="loading" /><span>启用人工咨询（关键决策点暂停等待人工）</span></label>
 
         <div v-if="error" class="m-err"><Icon name="alert-triangle" :size="14" /> {{ error }}</div>

@@ -30,6 +30,18 @@ This is the math-modeling-competition adaptation of the local paper factory (CUM
 - Time budget for the entire workflow defaults to 74 hours, but an explicitly supplied official competition deadline is authoritative. SQLite records `contest_started_at`, `contest_deadline_at`, `content_freeze_at` (T−6h), `delivery_freeze_at` (T−2h), and a six-hour delivery reserve. The shared lifecycle deadline caps model, command, audit, recovery, packaging, and publication work; Steps 0–15 cannot complete after content freeze, and Step 16 cannot switch the current release after the final deadline. Retry delays fail closed when they no longer fit.
 - Never stop at a plan or scaffold if the step requires concrete outputs on disk.
 
+## Optional joint modeling
+
+The project-scoped Claude Fable + GPT Pro workflow defaults off. A human may
+enable it while the native project is stopped, before Step 2 has ever started.
+Enabled Step 2 proposal/critique calls pin `claude-fable-5-1` with no fallback.
+Step 3 pauses for a request-bound Pro response, runs Claude synthesis, then
+opens the existing manual selection gate. Step 5 checks the selected full
+specification and pauses for a second Pro review plus human approval when the
+recorded risk conditions require it. No timeout chooses a model. Pro responses
+are human-mediated, with unverified model identity. See the precise conditions
+and current operation in [JOINT_MODELING.md](docs/operations/JOINT_MODELING.md).
+
 ## Contest Core v1
 
 The 17 internal Step contracts remain stable for validators and recovery, while
@@ -142,6 +154,14 @@ quality-contract schema, writes the snapshot under
 `audit_issue_ledger.md`. A stage PASS never grants delivery permission.
 
 ### Step 5: Full Solve
+
+Numeric claims additionally bind an explicitly accepted run and JSON field in
+`results/canonical_claims.json`. `scripts/canonical_claims.py` verifies the full
+solver receipt chain and creates immutable versions plus deterministic LaTeX
+values. Derived key results carry the claim ID and version; raw competing runs
+remain evidence, not interchangeable canonical answers. Changes invalidate
+dependent values and final audit snapshots. See
+`docs/operations/RERUN_REPAIR_AND_TECHNICAL_CONTINUATION.md`.
 
 Produce:
 - `results/<subproblem>/{values.json,plots.pdf,solver.log}` — one subdirectory per sub-problem identified in `problem/problem_brief.md`. Each `values.json` must carry a final status such as `CONVERGED` / `OPTIMAL`, the adopted objective or key result values, and enough decision variables for paper tables and `result*.xlsx` regeneration. `RUNNING`, `PARTIAL`, or side-channel-only results are not canonical. Interval/duration objectives must be refined at interval endpoints before adoption; a value exactly aligned with the search grid is an anomaly to investigate, not automatic proof of failure. Multi-resource sub-problems should record per-resource marginal contributions; zero marginal contribution is advisory unless the problem-specific quality contract proves it must be positive.
@@ -267,6 +287,19 @@ Produce:
 
 ### Step 13: Preliminary Mathematical Audit
 
+For an explicitly requested technical evaluation after an unsuccessful Step13,
+the bounded operator route in `factory_core.repair_operations` records an
+authorization and the actual failure/reopen event, then executes Steps14–16
+with their own Stage/Step identities. It leaves Step13 unsuccessful and the
+workflow paused. Step16 in this route is analysis-only; no release/acceptance
+permission or production-completion event is issued. Normal gates are unchanged.
+
+Formal Phase9-A is a separate, delivery-disabled forensic route using
+`scripts/phase9_authorized_runtime.py` and the authorization sequence in
+`docs/operations/PHASE9_PREP_RUNBOOK.md`. It rebuilds Step13 packets and executes
+all three applicable roles under a distinct runtime grant. It does not change
+this normal math-only precheck or authorize Steps14–16.
+
 Step 13 is the conditional exit subtask of Stage 8 and remains an integer Step
 contract for validation and `step_v2` compatibility. When a machine-owned
 `MODEL_DIRTY`, `MATH_DIRTY`, or `RESULT_DIRTY` flag is present, it
@@ -275,8 +308,9 @@ then invokes only the isolated math role against `judge_packets/math/`. It
 produces:
 
 - `judge_outputs/math.md` — strict math role envelope;
-- `judge_outputs/precheck.json` — `judge-precheck-v1` metadata declaring
-  `review_mode: math_only` and `delivery_allowed: false`;
+- `judge_outputs/precheck.json` — `judge-precheck-v2` metadata with
+  `audit_binding` and `input_fingerprint`, declaring `review_mode: math_only`
+  and `delivery_allowed: false`;
 - `judge_evaluation.md` with one of:
   - `VERDICT: PRECHECK_PASS` — continue to Step 14, but do not interpret this as
     final Gate-2 PASS;
@@ -284,6 +318,13 @@ produces:
     the existing scientific repair budget;
   - `VERDICT: INDETERMINATE_REVIEW` — packet, model, schema, or grounding
     uncertainty; retry Step 13 without consuming the scientific reopen budget.
+
+Every role packet must carry a valid, complete and eligible completeness record
+and nonempty context before the first model call. Ineligible packets stop
+dispatch at ordinary, prepared and precheck entry points. Truly missing inputs
+retain their owning-step recovery request only when it is earlier than the
+active Step; an unavailable earlier boundary returns `PERMANENT_RECOVERY_TARGET`
+with the missing paths and requires upstream repair.
 
 When none of those three semantic dirty flags is present, `stage_v1` does not
 invoke the math Agent. It writes a
@@ -307,6 +348,10 @@ allows work to proceed after Step 13; `deliver_snapshot` separately authorizes
 one exact 64-character final snapshot. Both preserve the real verdict and set
 `quality_pass_fabricated=false`. A project-local
 `gate2_delivery_override.json` is at most a request or historical artifact.
+These control-plane grants do not resolve a project Human Decision or advance
+its scheduler; the schema-v9 request/instance in `.factory/state.db` remains the
+per-project workflow authority. Project decisions likewise grant no Web ACL or
+delivery override.
 
 **Quality checks** (introduced 2026-06-24):
 - **Excellent paper writing benchmark**: abstract structure (opening + per-question delivery), problem analysis indexing, result presentation order (adopted solution first), validation phrasing (support credibility, not amplify uncertainty), internal traces removal
@@ -348,9 +393,12 @@ Do not treat `PRECHECK_PASS` or a skip receipt as the delivered-paper verdict.
 
 After Step 15 validation, the project is `CONTENT_READY`: its content may be
 audited independently with `python3 -m factory_core.cli audit <project>`. That
-command writes snapshot-bound records under `.factory/audits/` and compatibility
-judge artifacts, but does not publish, package, clean, archive, or mutate the
-workflow database.
+command is analysis-only by default. It writes snapshot-bound records under
+`.factory/audits/` and compatibility judge artifacts, but does not create
+`final_submission.sha256`, an override receipt, or a final acceptance receipt,
+and does not publish, package, clean, archive, or mutate the workflow database.
+Its current analysis projection is `.factory/audits/analysis_latest.json`; a
+same-snapshot analysis rerun does not replace a verified acceptance `latest.json`.
 
 ### Step 16: Final Compile + Judge + Appendix + Package
 
@@ -368,9 +416,13 @@ content reruns the owning work and reaches Gate 2 again.
 
 Step 16 is the workflow compatibility adapter between the independent audit
 subsystem and delivery. It invokes or reuses the audit for the current content
-snapshot, then performs delivery mutations only when the result is `PASS` or an
-administrator-issued, exact-snapshot `deliver_snapshot` authorization produces
-an `OVERRIDDEN` audit result. Native and Legacy adapters use this same path.
+snapshot, then explicitly enters the acceptance boundary before any delivery
+mutation. The Native adapter selects acceptance mode directly; the Legacy
+adapter invokes the final audit with `--accept-delivery`. Only a non-Phase9
+`PASS`, or an administrator-issued exact-snapshot `deliver_snapshot`
+authorization that produces `OVERRIDDEN`, may continue. A current Phase9
+acceptance, release, submission, or delivery request is permanently rejected,
+including requests with an exact workflow/run-generation coordinate.
 Stage 10 runs cleanup before building the canonical authored
 `factory-final-input-manifest-v4`, which binds the shared artifact-ownership
 schema. From `FINAL_SNAPSHOT_CREATED` until the atomic current-pointer switch,
@@ -382,7 +434,7 @@ Produce:
 - a freshly compiled `{base}_paper.pdf` (via `../../compile_paper.sh`); compilation failure is fatal and may not fall back to an older PDF
 - `logs/compilation/latex_inputs.json` with `status=PASS`; all three engine recorder files must share the same declared project-input identity, and every external input must be classified under a controlled TeX/font runtime root
 - `logs/compilation/bibliography_build_receipt.json` using `bibliography-build-receipt-v1`; BibTeX/Biber backend/version, first-pass AUX/BCF, `.bib`, project `.bst`, generated `.bbl`, and zero unresolved citations must verify
-- a fresh final-submission Gate-2 result whose `judge_outputs/final_submission.sha256` matches all current math / execution / paper packet fingerprints, role prompts, checker/evaluator implementation, Judge model registry/config selection, final paper-check report, paper assets, and the exact compiled PDF bytes. The PDF hash is a delivery-consistency binding, not evidence that the text-only LLM inspected its rendered appearance. Delivery manifests use the `2026-08-09.atomic_release_v7` contract.
+- a fresh final-submission Gate-2 result whose `judge_outputs/final_submission.sha256` matches all current math / execution / paper packet fingerprints, role prompts, checker/evaluator implementation, Judge model registry/config selection, final paper-check report, paper assets, and the exact compiled PDF bytes. The compiled PDF hash alone is a delivery-consistency binding; visual review additionally requires the relevant rendered pages to reach a capable judge. Delivery manifests use the `2026-08-09.atomic_release_v7` contract.
 - `.factory/finalization/submission_bundle_manifest.json` using `submission-bundle-manifest-v2`; each member carries its shared-registry owner/domain, the ZIP central directory and every member byte must match this manifest exactly, and no unreferenced `paper/` source may be packaged
 - code appendix integrated as `paper/appendix_code.tex` or `\inputminted{}` chunks
 - `papers/releases/{base}/{snapshot}/` — immutable release containing the exact audited PDF, deterministic submission ZIP, delivery manifest, final acceptance receipt, audit result, audit snapshot, and every verified human Approval receipt consumed by the release
@@ -393,8 +445,9 @@ Produce:
 On a fingerprint cache miss, the audit subsystem compiles the final PDF, reruns
 the complete Step-10 paper checks plus provenance, runs the visual/page gate,
 builds packets and the enforce-mode three-role Judge result, rejects any
-snapshot mutation during judging, then creates a judgment receipt and final
-acceptance receipt. `FINAL_AUDIT_MAX_PAGES` or machine-readable
+snapshot mutation during judging, then creates a judgment receipt. Only the
+explicit Step-16 acceptance mode may additionally create the final-submission
+marker and final acceptance receipt. `FINAL_AUDIT_MAX_PAGES` or machine-readable
 `problem/deliverables.json` `max_pages` configures the page limit. A compile
 failure, hard check failure, visual failure, non-PASS, INDETERMINATE, malformed
 receipt, missing/changed human approval, bibliography mismatch, or stale fingerprint blocks normal delivery. Submission packaging is

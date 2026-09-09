@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from factory_core.artifact_ownership import artifact_ownership
 from factory_core.domain import (
     ExecutionResult,
     InvalidTransition,
@@ -14,10 +16,11 @@ from factory_core.domain import (
     ValidationResult,
     WorkflowStatus,
 )
-from factory_core.dirty import (
+from factory_core.current_dirty import (
     capture_artifact_manifest,
     classifier_contract_sha256,
     manifest_fingerprint,
+    solver_receipt_job_id,
 )
 from factory_core.engine import FactoryEngine
 from factory_core.registry import StepDefinition, StepRegistry
@@ -185,6 +188,58 @@ def interrupt_stage_task(store, project, *, stage, subtask, source_step):
         },
         event_step=source_step,
     )
+
+
+@pytest.mark.parametrize("has_attempt_remaining", [True, False])
+def test_changed_inputs_keep_the_normal_stage_attempt_limit(tmp_path, has_attempt_remaining):
+    (tmp_path / "model.md").write_text("original model", encoding="utf-8")
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(
+        project_id=tmp_path.name,
+        project_type="math_modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+        last_completed_step=3,
+    )
+    registry, lifecycles = stage_registry()
+    limit = registry.get(4).max_attempts
+    manifest = capture_artifact_manifest(tmp_path)
+    store.transition(
+        expected_revision=state.revision,
+        event_type="STEP_FAILED",
+        event_step=4,
+        changes={
+            "status": WorkflowStatus.READY,
+            "active_step": 4,
+            "active_stage": 3,
+            "active_subtask": "model_construction",
+            "source_step_id": 4,
+            "attempt": limit - int(has_attempt_remaining),
+        },
+        subtask_baseline={
+            "stage_id": 3,
+            "subtask": "model_construction",
+            "source_step_id": 4,
+            "input_fingerprint": manifest_fingerprint(manifest),
+            "manifest": manifest,
+        },
+    )
+    prior_events = store.events()
+    (tmp_path / "model.md").write_text("corrected model", encoding="utf-8")
+
+    result = FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    assert store.events()[:len(prior_events)] == prior_events
+    started = [event for event in store.events() if event.type == "STEP_STARTED"]
+    if has_attempt_remaining:
+        assert lifecycles[4].calls == [limit]
+        assert [event.attempt for event in started] == [limit]
+        assert result.last_completed_step == 4
+    else:
+        assert result.status is WorkflowStatus.FAILED
+        assert result.attempt == limit
+        assert lifecycles[4].calls == []
+        assert started == []
+        assert store.events()[-1].payload["error_class"] == "PERMANENT_ATTEMPT_BUDGET_EXHAUSTED"
 
 
 def test_stage_catalog_covers_every_step_exactly_once_and_preserves_budgets():
@@ -690,10 +745,50 @@ def test_semantic_reopen_uses_earliest_dirty_owner(tmp_path):
     assert reopen.payload["dirty_owner_stages"] == [1, 4]
     assert reopen.payload["semantic_owner_stage"] == 1
     assert reopen.payload["resume_after_step"] == -1
+    assert reopen.payload["classifier_contract_sha256"] == classifier_contract_sha256()
     assert {(item["flag"], item["owner_stage"]) for item in store.dirty_flags()} == {
         ("MODEL_DIRTY", 1),
         ("RESULT_DIRTY", 4),
     }
+
+
+def test_semantic_reopen_budget_ignores_legacy_events_before_current_rebase():
+    classifier = classifier_contract_sha256()
+    events = [
+        SimpleNamespace(
+            revision=1,
+            type="STAGE_SEMANTIC_REOPENED",
+            payload={"stage": 4},
+        ),
+        SimpleNamespace(
+            revision=2,
+            type="STAGE_SEMANTIC_REOPENED",
+            payload={"stage": 4},
+        ),
+        SimpleNamespace(
+            revision=3,
+            type="DIRTY_CLASSIFIER_REBASED",
+            payload={"new_classifier_sha256": classifier},
+        ),
+    ]
+    engine = object.__new__(FactoryEngine)
+    engine.store = SimpleNamespace(events=lambda: events)
+
+    assert engine._stage_semantic_reopen_allowed(4)
+
+    for revision in (4, 5):
+        events.append(
+            SimpleNamespace(
+                revision=revision,
+                type="STAGE_SEMANTIC_REOPENED",
+                payload={
+                    "stage": 4,
+                    "classifier_contract_sha256": classifier,
+                },
+            )
+        )
+
+    assert not engine._stage_semantic_reopen_allowed(4)
 
 
 def test_stage_1_checkpoint_clears_problem_plan_dirty(tmp_path):
@@ -768,9 +863,199 @@ def test_late_chosen_method_change_reopens_stage2(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    ("relative", "kind", "owner", "final_input", "submission_member"),
+    [
+        (
+            "models/m2_airy/08_generate_derived.log",
+            "solver_runtime_log",
+            5,
+            False,
+            False,
+        ),
+        ("models/m2_airy/05_sensitivity.py", "model_validation", 5, True, True),
+        (
+            "models/m1_fringe/05_peak_rule_sensitivity.py",
+            "model_validation",
+            5,
+            True,
+            True,
+        ),
+        ("models/m2_airy/06_figures.py", "visualization", 6, True, True),
+        (
+            "figures/sensitivity_tornado_thickness.pdf",
+            "visualization",
+            6,
+            True,
+            True,
+        ),
+        (
+            "models/generate_derived.py",
+            "format_generation",
+            9,
+            True,
+            True,
+        ),
+        (
+            "results/derived_artifacts.json",
+            "format_manifest",
+            9,
+            True,
+            True,
+        ),
+        (
+            "number_verification.md",
+            "revision_validation",
+            8,
+            True,
+            True,
+        ),
+        (
+            "models/m2_airy/07_bootstrap_convergence.py",
+            "revision_validation",
+            8,
+            True,
+            True,
+        ),
+        (
+            "models/m2_airy/07_bootstrap_convergence.log",
+            "revision_validation_log",
+            8,
+            False,
+            False,
+        ),
+        (
+            "models/m2_airy/08_block_length_extended.py",
+            "revision_validation",
+            8,
+            True,
+            True,
+        ),
+        (
+            "results/problem3/bootstrap_convergence_sic.json",
+            "revision_validation",
+            8,
+            True,
+            True,
+        ),
+        (
+            "results/problem3/block_length_extended.json",
+            "revision_validation",
+            8,
+            True,
+            True,
+        ),
+        ("models/m1_fringe/02_model.py.stub", "solver_scaffold", 4, True, True),
+        ("scripts/step5/m2_sic_pso.py", "solver_implementation", 4, True, True),
+        (
+            "assumption_ledger.md",
+            "revision_validation",
+            8,
+            True,
+            True,
+        ),
+        ("models/m2_airy/02_model.py", "model_contract", 3, True, True),
+        ("scripts/verify_spec_impl.py", "model_implementation", 3, True, True),
+    ],
+)
+def test_solver_artifact_rules_precede_stage3_directory_fallbacks(
+    relative, kind, owner, final_input, submission_member
+):
+    ownership = artifact_ownership(relative)
+
+    assert ownership is not None
+    assert ownership.owner_stage == owner
+    assert ownership.semantic_domain == kind
+    expected_dirty = {
+        3: "MODEL_DIRTY",
+        4: "RESULT_DIRTY",
+        5: "RESULT_DIRTY",
+        6: "VISUAL_DIRTY",
+        7: "MATH_DIRTY",
+        8: "MATH_DIRTY",
+        9: "FORMAT_DIRTY",
+    }[owner]
+    assert ownership.dirty_flag == expected_dirty
+    assert ownership.final_input is final_input
+    assert ownership.submission_member is submission_member
+
+
+def test_solver_receipt_dirty_owner_follows_durable_job_owner(tmp_path):
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(
+        project_id="receipt-owner",
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    job_id = "local_python_sensitivity"
+    store.create_solver_job(
+        expected_revision=state.revision,
+        record={
+            "job_id": job_id,
+            "owner_stage": 5,
+            "owner_subtask": "sensitivity",
+            "backend": "local",
+            "runtime": "python",
+            "script": "models/m2/05_sensitivity.py",
+            "workdir": "models/m2",
+            "argv": [],
+            "max_time_seconds": 60,
+            "status": "completed",
+            "result_refs": {},
+        },
+    )
+    receipt = f".factory/solver_receipts/{job_id}.completed.json"
+    engine = FactoryEngine(tmp_path, store=store)
+    assert solver_receipt_job_id(receipt) == job_id
+    assert solver_receipt_job_id("results/problem1/values.json") is None
+    assert engine._solver_receipt_owner_stage(receipt) == 5
+    assert (
+        engine._solver_receipt_owner_stage(
+            ".factory/solver_receipts/unknown.completed.json"
+        )
+        is None
+    )
+
+
 def test_late_sensitivity_report_change_reopens_stage5(tmp_path):
     _late_owned_artifact_reopen(
         tmp_path, "sensitivity_report.md", expected_owner=5, expected_resume=5
+    )
+
+
+def test_late_number_verification_change_reopens_stage8(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "number_verification.md", expected_owner=8, expected_resume=10
+    )
+
+
+def test_late_assumption_ledger_revision_reopens_stage8(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "assumption_ledger.md", expected_owner=8, expected_resume=10
+    )
+
+
+def test_late_revision_bootstrap_evidence_change_reopens_stage8(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path,
+        "models/m2_airy/07_bootstrap_convergence.py",
+        expected_owner=8,
+        expected_resume=10,
+    )
+
+
+def test_late_revision_block_length_evidence_change_reopens_stage8(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path,
+        "models/m2_airy/08_block_length_extended.py",
+        expected_owner=8,
+        expected_resume=10,
+    )
+
+
+def test_late_shared_figure_renderer_change_reopens_stage6(tmp_path):
+    _late_owned_artifact_reopen(
+        tmp_path, "models/m2_airy/06_figures.py", expected_owner=6, expected_resume=7
     )
 
 
@@ -912,6 +1197,34 @@ def test_content_freeze_is_a_persistent_guard_before_delivery(tmp_path):
     assert guarded.last_completed_step == 15
     assert guarded.last_completed_stage == 9
     assert guarded.active_subtask == "delivery"
+
+
+def test_human_request_build_failure_clears_runner_state(tmp_path, monkeypatch):
+    registry, _lifecycles = stage_registry()
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id="demo", project_type="modeling")
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+
+    def fail_request(**_kwargs):
+        raise ValueError("fingerprint precondition failed")
+
+    monkeypatch.setattr("factory_core.engine.build_decision_request", fail_request)
+    failed = engine._await_action(
+        state,
+        {"type": "approval", "gate": "content_freeze"},
+        reason="review required",
+        evidence=(),
+    )
+
+    assert failed.status is WorkflowStatus.FAILED
+    assert failed.runner_pid is None
+    assert failed.runner_lease_id is None
+    assert failed.pending_action is None
+    event = store.events()[-1]
+    assert event.type == "DECISION_REQUEST_BUILD_FAILED"
+    assert event.payload["error_class"] == (
+        "PERMANENT_DECISION_REQUEST_BUILD_FAILED"
+    )
 
 
 def test_successful_prompt_stage_checkpoint_rejects_missing_prompt_identity(tmp_path):

@@ -3,6 +3,18 @@
 Step 5 是数据的「真相之锚」：评委读论文时所有引用的数字、所有图里的曲线、所有表里的值，都必须**单向追溯到本步骤产出的 `results/` 文件**。求解过程必须可重复，每条 solver 调用必须经 `solver_submit.sh`（不允许 `nohup python ... &` 直接调），提交时显式声明 inputs/outputs/seeds，完成后用统一 `--status <jobid> --json` 取得不可变两阶段 receipt；不要直接读取 SQLite、`.meta` 或内部 job 目录来证明真实性。
 
 [阶段审计反馈 — 重试时必读]
+
+- 数值生产者使用 `factory_core.json_values.dumps` 输出 NumPy bool/int/float/array；禁止把
+  不支持的类型转成字符串冒充数字，NaN/Inf 必须明确失败。Python 自带 bool 可直接序列化。
+- 本地 Python 求解会检查实际可审计文件读取，所有附件（包括经 argv 间接选择者）及
+  项目内导入代码都须声明 `--input`。`UNDECLARED_SOLVER_INPUT` 必须修正提交配置后重跑。
+- 对每个数值 claim 明确接受的 run/source/field 和科学理由；使用
+  `python3 __FACTORY__/scripts/canonical_claims.py __PROJECT_PATH__ --claim <ID> --source <path::field> --completion <submitted-job.completed.json> --candidate <alternative-path::field> --reason <reason>`
+  记录版本。receipt 路径来自公开 job evidence，不能手造。该操作核验完整提交/完成链，
+  只登记采信版本，不会运行 Solver。竞争结果不得按最低目标值自动选择物理真值。
+- `tables/canonical_claim_values.tex` 由此工具生成；论文、摘要和表格共用其中的
+  `\csname FactoryClaim<ID>\endcsname`。派生 key_results 必须带 `claim_id`、`canonical_version`
+  和对应 value。上游变化须重新接受版本并重生成派生物。
 - 若 `__PROJECT_PATH__/.factory/audits/profiles/results/latest.json` 存在且 `evidence.checkpoint_step` 为 5，先读取 `evidence.checks`、`hard_failures` 和 `repair_step`。优先修复 canonical source 绑定、invariants、provenance、spec/implementation 或 quality-contract 的精确失败项，禁止靠改论文表述掩盖求解错误。
 - 同时读取 `__PROJECT_PATH__/audit_issue_ledger.md` 的 `## Incremental audit findings`。`AUDIT-RESULTS-*` 行由机器审计维护；不要手工关闭，修复真相源和执行证据后让 runner 重跑 Step-5 `results` profile 自动更新。
 

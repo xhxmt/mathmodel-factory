@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib
 import os
 import re
 import shlex
@@ -194,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics = sub.add_parser("diagnostics")
     diagnostics.add_argument("project_dir")
 
+    joint = sub.add_parser("joint-modeling", help="Read or explicitly select the optional Claude + Pro workflow")
+    joint.add_argument("project_dir")
+    joint.add_argument("action", choices=["status", "enable", "disable", "consultation"])
+    joint.add_argument("--expected-revision", type=int)
+
     run = sub.add_parser("run")
     run.add_argument("project_dir")
     run.add_argument("--max-steps", type=int)
@@ -221,7 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         choices=["model", "results", "paper", "final"],
         default="final",
-        help="Run a stage audit; only the final profile may authorize delivery.",
+        help="Run analysis only; the final profile does not authorize delivery.",
     )
     audit.add_argument(
         "--checkpoint-step",
@@ -237,6 +243,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-reuse",
         action="store_true",
         help="Run a new audit even when the same snapshot already has a valid PASS.",
+    )
+    audit.add_argument(
+        "--accept-delivery",
+        action="store_true",
+        help=(
+            "After analysis, request final acceptance artifacts for a non-Phase9 "
+            "delivery workflow. Phase9 acceptance remains permanently disabled."
+        ),
     )
 
     solver = sub.add_parser("solver")
@@ -307,17 +321,39 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "phase78":
+        adapter = importlib.import_module("factory_core.phase78_cli")
+        return adapter.main(arguments[1:])
     if arguments and arguments[0] == "compat":
         try:
             return compat(arguments[1:])
         except FactoryCoreError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
+    # Keep the ordinary import-only CLI surface free of production Authority
+    # modules.  The concrete error type is needed only while executing a CLI
+    # command, and phase78/compat retain their established lazy boundaries.
+    from .phase9_delivery_fence import Phase9DeliveryFenceError
+
     args = build_parser().parse_args(arguments)
     project_value = getattr(args, "project_dir", None)
     project = Path(project_value).resolve() if project_value is not None else None
     service = FactoryService(ROOT)
     try:
+        if args.command == "joint-modeling":
+            from .joint_modeling import configure, consultation_view, status_view
+
+            assert project is not None
+            if args.action in {"enable", "disable"}:
+                if args.expected_revision is None:
+                    raise FactoryCoreError("切换联合建模需要 --expected-revision")
+                import getpass
+
+                configure(project, enabled=args.action == "enable", expected_revision=args.expected_revision,
+                          actor=f"manual-cli:{getpass.getuser()}")
+            result = consultation_view(project) if args.action == "consultation" else status_view(project)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "init":
             assert project is not None
             state = SQLiteStateStore(project).initialize(
@@ -396,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "worker":
             assert project is not None
             wait_for_worker_ready(Path(args.ready_file))
-            state = service.run(project, archive=True)
+            state = service.run(project, archive=True, ready_file=Path(args.ready_file))
             print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
             return 0 if state.status not in {WorkflowStatus.FAILED, WorkflowStatus.KILLED} else 1
         if args.command == "run":
@@ -430,8 +466,15 @@ def main(argv: list[str] | None = None) -> int:
                     resolved,
                     compile_pdf=not args.no_compile,
                     reuse_pass=not args.no_reuse,
+                    analysis_only=not args.accept_delivery,
                 )
             else:
+                if args.accept_delivery:
+                    print(
+                        "ERROR: --accept-delivery is only valid for the final profile",
+                        file=sys.stderr,
+                    )
+                    return 2
                 if args.no_compile:
                     print(
                         "ERROR: --no-compile is only valid for the final profile",
@@ -461,7 +504,7 @@ def main(argv: list[str] | None = None) -> int:
                     indent=2,
                 )
             )
-            if profile is AuditProfile.FINAL:
+            if profile is AuditProfile.FINAL and args.accept_delivery:
                 return 0 if outcome.record.delivery_allowed else 1
             return 0 if outcome.record.status is AuditStatus.PASS else 1
         if args.command == "solver":
@@ -578,7 +621,13 @@ def main(argv: list[str] | None = None) -> int:
         write_compatibility_projections(project, state)
         print(_state_json(project))
         return 0
-    except (FactoryCoreError, MigrationConflict, json.JSONDecodeError, OSError) as exc:
+    except (
+        FactoryCoreError,
+        MigrationConflict,
+        Phase9DeliveryFenceError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

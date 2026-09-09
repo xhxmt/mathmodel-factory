@@ -1,0 +1,53 @@
+{
+  "schema_version": "workflow-owner-parity-fixture-v1",
+  "cases": [
+    {
+      "case_id": "normal",
+      "paths": [
+        {"path": "problem/problem_brief.md", "owner_stage": 1, "rule_pattern": "problem/**"},
+        {"path": "method_decision.md", "owner_stage": 2, "rule_pattern": "method_decision.md"},
+        {"path": "results/problem1/values.json", "owner_stage": 4, "rule_pattern": "results/**/values.json"}
+      ]
+    },
+    {
+      "case_id": "run4_owner_incident",
+      "paths": [
+        {"path": "models/m1/solver.py.stub", "owner_stage": 4, "rule_pattern": "models/**/*.stub"},
+        {"path": "scripts/step5/solve.py", "owner_stage": 4, "rule_pattern": "scripts/step5/**"},
+        {"path": "models/m1/solver.log", "owner_stage": 5, "rule_pattern": "models/**/*.log"},
+        {"path": "models/m1/05_sensitivity.py", "owner_stage": 5, "rule_pattern": "models/**/05_sensitivity.py"},
+        {"path": "models/m1/06_figures.py", "owner_stage": 6, "rule_pattern": "models/**/06_figures.py"},
+        {"path": "figures/sensitivity_tornado.pdf", "owner_stage": 6, "rule_pattern": "figures/sensitivity_*"},
+        {"path": "models/generate_derived.py", "owner_stage": 9, "rule_pattern": "models/generate_derived.py"},
+        {"path": "number_verification.md", "owner_stage": 8, "rule_pattern": "number_verification.md"}
+      ]
+    },
+    {
+      "case_id": "conditional_step13",
+      "paths": [
+        {"path": "paper/sections/model.tex", "owner_stage": 8, "rule_pattern": "paper/**/*.tex"},
+        {"path": "judge_evaluation.md", "owner_stage": 8, "rule_pattern": "judge_evaluation.md"}
+      ]
+    },
+    {
+      "case_id": "human_gate",
+      "paths": [
+        {"path": "chosen_method.md", "owner_stage": 2, "rule_pattern": "chosen_method.md"},
+        {"path": "gate2_delivery_override.json", "owner_stage": 10, "rule_pattern": "gate2_delivery_override.json"}
+      ]
+    },
+    {
+      "case_id": "migration_legacy",
+      "paths": [
+        {"path": "analysis_guide.md", "owner_stage": 3, "rule_pattern": "analysis_guide.md"},
+        {"path": "results/legacy/values.json", "owner_stage": 4, "rule_pattern": "results/**/values.json"}
+      ]
+    },
+    {
+      "case_id": "unowned_diagnostic",
+      "paths": [
+        {"path": "technical_flow_bug_ledger.md", "owner_stage": null, "rule_pattern": null}
+      ]
+    }
+  ]
+}

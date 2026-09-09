@@ -8,7 +8,7 @@
       </div>
       <div class="readiness" :class="`st-${delivery.status || 'pending'}`">
         <Icon :name="delivery.ready ? 'check-circle' : 'alert-triangle'" :size="20" />
-        <strong>{{ delivery.ready ? '可以提交' : delivery.status === 'blocked' ? '存在阻塞' : '尚未就绪' }}</strong>
+        <strong>{{ deliveryAllowed && delivery.ready ? '可以提交' : delivery.status === 'blocked' ? '存在阻塞' : '未获交付许可' }}</strong>
         <span>{{ delivery.blocking_count || 0 }} 失败 · {{ delivery.pending_count || 0 }} 待完成</span>
       </div>
     </header>
@@ -34,10 +34,10 @@
         <strong class="mono">{{ release.available ? release.release_id?.slice(0, 16) : '尚未生成' }}</strong>
       </div>
       <div class="download-actions">
-        <button class="btn btn-sm btn-ghost" :disabled="!release.available || downloading" @click="downloadPaper">
+        <button class="btn btn-sm btn-ghost" :disabled="!deliveryAllowed || !release.available || downloading" @click="downloadPaper">
           <Icon name="download" :size="13" /> PDF
         </button>
-        <button class="btn btn-sm btn-amber" :disabled="!release.submission_available || downloading" @click="downloadSubmission">
+        <button class="btn btn-sm btn-amber" :disabled="!deliveryAllowed || !release.submission_available || downloading" @click="downloadSubmission">
           <Icon name="package" :size="13" /> 提交包 ZIP
         </button>
       </div>
@@ -57,6 +57,7 @@ export default {
   props: {
     base: { type: String, required: true },
     delivery: { type: Object, default: () => ({}) },
+    deliveryAllowed: { type: Boolean, default: false },
   },
   emits: ['open-file'],
   setup(props, { emit }) {

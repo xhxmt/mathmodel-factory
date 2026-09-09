@@ -1,0 +1,151 @@
+{
+  "schema": "stage-v1-shadow-parity-fixture-matrix-v2",
+  "baseline_commit": "357947948f034325ea6202694c20bf435910d011",
+  "existing_characterization": [
+    {
+      "fixture_id": "V1-NORMAL-001",
+      "binding": "BOUND",
+      "expected_status": "MATCH",
+      "v1_action": "TERMINATE",
+      "v1_coordinate": null,
+      "v1_execution_route": null,
+      "evidence_refs": [
+        "tests/fixtures/v1_characterization/cases/V1-NORMAL-001.json",
+        "tests/test_stage_scheduler.py::test_stage_scheduler_persists_all_subtask_checkpoints_and_atomic_cursor"
+      ],
+      "gap_ids": []
+    },
+    {
+      "fixture_id": "V1-DIRTY-001",
+      "binding": "UNAVAILABLE_LEGACY_UNBOUND",
+      "expected_status": "V1_UNREPRESENTABLE",
+      "evidence_refs": [
+        "tests/fixtures/v1_characterization/cases/V1-DIRTY-001.json"
+      ],
+      "gap_ids": [
+        "GAP-V1-DIRTY-FROZEN-MANIFEST"
+      ]
+    },
+    {
+      "fixture_id": "V1-SEMANTIC-REOPEN-001",
+      "binding": "BOUND",
+      "expected_status": "MATCH",
+      "v1_action": "REOPEN",
+      "v1_coordinate": {
+        "stage_id": 1,
+        "subtask": "problem_setup",
+        "source_step_id": 0
+      },
+      "v1_execution_route": null,
+      "evidence_refs": [
+        "tests/fixtures/v1_characterization/cases/V1-SEMANTIC-REOPEN-001.json",
+        "tests/test_stage_scheduler.py::test_semantic_reopen_uses_earliest_dirty_owner"
+      ],
+      "gap_ids": []
+    },
+    {
+      "fixture_id": "V1-HUMAN-GATE-001",
+      "binding": "UNAVAILABLE_LEGACY_UNBOUND",
+      "expected_status": "V1_UNREPRESENTABLE",
+      "evidence_refs": [
+        "tests/fixtures/v1_characterization/cases/V1-HUMAN-GATE-001.json"
+      ],
+      "gap_ids": [
+        "GAP-V1-GATE-ENTRYPOINT-PARITY"
+      ]
+    },
+    {
+      "fixture_id": "V1-RECOVERY-001",
+      "binding": "UNAVAILABLE_LEGACY_UNBOUND",
+      "expected_status": "V1_UNREPRESENTABLE",
+      "evidence_refs": [
+        "tests/fixtures/v1_characterization/cases/V1-RECOVERY-001.json"
+      ],
+      "gap_ids": [
+        "GAP-V1-RECOVERY-PROCESS-CRASH"
+      ]
+    },
+    {
+      "fixture_id": "V1-PACKET-REBUILD-001",
+      "binding": "UNAVAILABLE_LEGACY_UNBOUND",
+      "expected_status": "V1_UNREPRESENTABLE",
+      "evidence_refs": [
+        "tests/fixtures/v1_characterization/cases/V1-PACKET-REBUILD-001.json"
+      ],
+      "gap_ids": [
+        "GAP-V1-PACKET-PREDISPATCH"
+      ]
+    },
+    {
+      "fixture_id": "V1-TECHNICAL-TERMINAL-001",
+      "binding": "UNAVAILABLE_LEGACY_UNBOUND",
+      "expected_status": "V1_UNREPRESENTABLE",
+      "evidence_refs": [
+        "tests/fixtures/v1_characterization/cases/V1-TECHNICAL-TERMINAL-001.json"
+      ],
+      "gap_ids": [
+        "GAP-V1-TECHNICAL-TYPED-TERMINAL",
+        "GAP-V1-TECHNICAL-ABLATION-COMBINATION"
+      ]
+    },
+    {
+      "fixture_id": "V1-SOLVER-10OF10-001",
+      "binding": "UNAVAILABLE_LEGACY_UNBOUND",
+      "expected_status": "V1_UNREPRESENTABLE",
+      "evidence_refs": [
+        "tests/fixtures/v1_characterization/cases/V1-SOLVER-10OF10-001.json"
+      ],
+      "gap_ids": [
+        "GAP-V1-SOLVER-10OF10-CORPUS",
+        "GAP-V1-SOLVER-10OF10-RUBRIC"
+      ]
+    }
+  ],
+  "supplemental_shadow_cases": [
+    {
+      "case_id": "M02-NORMAL-PROGRESSION",
+      "expected_action": "DISPATCH",
+      "expected_coordinate": "stage:1:research_and_viability"
+    },
+    {
+      "case_id": "M02-CHECKPOINT-CURRENT-HEADS",
+      "expected_action": "DISPATCH",
+      "expected_coordinate": "stage:1:research_and_viability"
+    },
+    {
+      "case_id": "M02-HUMAN-GATE-PENDING",
+      "expected_action": "WAIT",
+      "expected_coordinate": "stage:10:content_freeze_guard"
+    },
+    {
+      "case_id": "M02-CONDITIONAL-STEP13-EXECUTE",
+      "expected_action": "DISPATCH",
+      "expected_route": "step:13"
+    },
+    {
+      "case_id": "M02-CONDITIONAL-STEP13-SKIP",
+      "expected_action": "DISPATCH",
+      "expected_route": "stage-subtask:conditional_math_preflight_skip"
+    },
+    {
+      "case_id": "M02-RECOVERY-WAIT",
+      "expected_action": "WAIT",
+      "expected_coordinate": "stage:4:solve"
+    },
+    {
+      "case_id": "M02-SOLVER-CURRENT",
+      "expected_action": "WAIT",
+      "expected_coordinate": "stage:4:solve"
+    },
+    {
+      "case_id": "M02-TECHNICAL-TERMINAL-NONDELIVERY",
+      "expected_action": "TERMINATE",
+      "delivery_allowed": false
+    },
+    {
+      "case_id": "M02-COMPLETED-TERMINAL",
+      "expected_action": "TERMINATE",
+      "delivery_allowed": true
+    }
+  ]
+}

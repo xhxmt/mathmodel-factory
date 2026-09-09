@@ -7,16 +7,17 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-
+from .adapters.infrastructure.process import _process_identity
 from .contest import ContestDeadlineExceeded, ContestPolicy, effective_timeout
 from .deadline import deadline_scope, ensure_deadline
-from .dirty import (
+from .current_dirty import (
     DirtyFlag,
     capture_artifact_manifest,
     classifier_contract_sha256,
     classify_manifest_changes,
     manifest_fingerprint,
     semantic_flags,
+    solver_receipt_job_id,
 )
 from .domain import (
     ExecutionResult,
@@ -114,6 +115,17 @@ class FactoryEngine:
         }:
             return state
 
+        # An already exhausted step schedule must not write RUN_STARTED before
+        # the production-state completion boundary is classified.  This path
+        # is also used by service.run() for a migrated Step-16 project.
+        if (
+            not stage_mode
+            and state.active_step is None
+            and state.runner_pid is None
+            and self.registry.next_after(state.last_completed_step) is None
+        ):
+            return self._commit_project_completed(state, stage_mode=False)
+
         if state.runner_pid is not None and not runner_is_live:
             state = self._transition(
                 expected_revision=state.revision,
@@ -136,7 +148,6 @@ class FactoryEngine:
                 changes={"status": WorkflowStatus.INTERRUPTED},
                 payload={"reason": "active run has no recorded runner"},
             )
-
         if state.active_step is not None and (not stage_mode or state.attempt > 0):
             enforce_recovery_lease = state.runner_pid == os.getpid()
             state = self.recover(
@@ -153,7 +164,6 @@ class FactoryEngine:
                 WorkflowStatus.COMPLETED,
             }:
                 return state
-
         lease = uuid.uuid4().hex
         state = self._transition(
             expected_revision=state.revision,
@@ -164,7 +174,7 @@ class FactoryEngine:
                 "runner_lease_id": lease,
                 "heartbeat_at": int(time.time()),
             },
-            payload={"lease_id": lease},
+            payload={"lease_id": lease, "worker_pid": os.getpid(), "worker_identity": _process_identity(os.getpid())},
             expected_runner_pid=state.runner_pid,
             expected_runner_lease_id=state.runner_lease_id,
         )
@@ -177,23 +187,10 @@ class FactoryEngine:
             else:
                 definition = self.registry.next_after(state.last_completed_step)
             if definition is None:
-                return self._owned_transition(
+                return self._commit_project_completed(
                     state,
-                    lease,
-                    event_type="PROJECT_COMPLETED",
-                    changes={
-                        "status": WorkflowStatus.COMPLETED,
-                        "active_step": None,
-                        "active_stage": None,
-                        "active_subtask": None,
-                        "source_step_id": None,
-                        "last_completed_stage": 10 if stage_mode else state.last_completed_stage,
-                        "attempt": 0,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
-                    subtask_baseline=None,
+                    stage_mode=stage_mode,
+                    runner_lease=lease,
                 )
             if max_steps is not None and completed_this_run >= max_steps:
                 return self._owned_transition(
@@ -384,6 +381,8 @@ class FactoryEngine:
                     payload=result.metadata,
                 )
             resume_after = result.metadata.get("resume_after_step")
+            if (continuation := self._stop_at_gate2(state, lease, result, outcome.validation)) is not None:
+                return continuation
             if resume_after is not None:
                 policy_payload = self.store.contest_policy()
                 if (
@@ -856,6 +855,8 @@ class FactoryEngine:
                 )
         return state
 
+    # These methods participate in the frozen persisted-owner symbol manifest;
+    # keep their source-span coordinates stable when editing earlier code.
     def _stage_manifest_delta(
         self,
         task: ScheduledStageTask,
@@ -888,19 +889,35 @@ class FactoryEngine:
             ]
             return "MISSING", output_fingerprint, after, dirty_changes
         before = dict(baseline["manifest"])
-        dirty_changes = [
-            {
+        dirty_changes = []
+        for change in classify_manifest_changes(before, after):
+            record = {
                 **change.to_dict(),
                 "classifier_contract_sha256": classifier_contract_sha256(),
             }
-            for change in classify_manifest_changes(before, after)
-        ]
+            receipt_owner = self._solver_receipt_owner_stage(change.cause_artifact)
+            if receipt_owner is not None:
+                record["owner_stage"] = receipt_owner
+            dirty_changes.append(record)
         return (
             str(baseline["input_fingerprint"]),
             output_fingerprint,
             after,
             dirty_changes,
         )
+
+    def _solver_receipt_owner_stage(self, artifact: str) -> int | None:
+        """Resolve shared receipt infrastructure to its durable job owner."""
+
+        job_id = solver_receipt_job_id(artifact)
+        if job_id is None:
+            return None
+        try:
+            job = self.store.solver_job(job_id)
+        except KeyError:
+            return None
+        owner_stage = job.get("owner_stage")
+        return int(owner_stage) if owner_stage is not None else None
 
     def _fail_stage_task(
         self,
@@ -1081,6 +1098,7 @@ class FactoryEngine:
                         "resume_after_step": semantic_reopen_target,
                         "semantic_owner_stage": semantic_owner_stage,
                         "reason": semantic_reason,
+                        "classifier_contract_sha256": classifier_contract_sha256(),
                     },
                     dirty_changes=dirty_changes,
                     event_step=task.source_step_id,
@@ -1110,6 +1128,7 @@ class FactoryEngine:
                     "dirty_owner_stages": upstream_owners,
                     "reason": semantic_reason,
                     "dirty_flags": sorted(new_flags),
+                    "classifier_contract_sha256": classifier_contract_sha256(),
                 },
                 dirty_changes=dirty_changes,
                 invalidate_checkpoints_after_step=semantic_reopen_target,
@@ -1270,12 +1289,34 @@ class FactoryEngine:
         )
 
     def _stage_semantic_reopen_allowed(self, stage_id: int) -> bool:
-        count = sum(
-            1
-            for event in self.store.events()
-            if event.type == "STAGE_SEMANTIC_REOPENED"
-            and int(event.payload.get("stage", -1)) == int(stage_id)
+        current_classifier = classifier_contract_sha256()
+        events = self.store.events()
+        legacy_boundary = max(
+            (
+                event.revision
+                for event in events
+                if event.type == "DIRTY_CLASSIFIER_REBASED"
+                and str(event.payload.get("new_classifier_sha256", ""))
+                == current_classifier
+            ),
+            default=0,
         )
+        count = 0
+        for event in events:
+            if event.type != "STAGE_SEMANTIC_REOPENED":
+                continue
+            if int(event.payload.get("stage", -1)) != int(stage_id):
+                continue
+            event_classifier = event.payload.get("classifier_contract_sha256")
+            if event_classifier is None:
+                # Legacy events did not record their classifier identity.  A
+                # later explicit rebase to the current contract is the audit
+                # boundary proving that older ownership decisions are stale.
+                if event.revision <= legacy_boundary:
+                    continue
+            elif str(event_classifier) != current_classifier:
+                continue
+            count += 1
         return count < 2
 
     def recover(
@@ -1556,17 +1597,42 @@ class FactoryEngine:
         event_type: str = "AWAITING_ACTION",
         lease: str | None = None,
     ) -> WorkflowState:
-        request = build_decision_request(
-            project_id=state.project_id,
-            project_dir=self.project_dir,
-            requested_revision=state.revision + 1,
-            generation=self.store.next_decision_generation(
-                str(action.get("gate") or action.get("type") or "human_decision")
-            ),
-            action=action,
-            reason=reason,
-            evidence=evidence,
-        )
+        try:
+            request = build_decision_request(
+                project_id=state.project_id,
+                project_dir=self.project_dir,
+                requested_revision=state.revision + 1,
+                generation=self.store.next_decision_generation(
+                    str(action.get("gate") or action.get("type") or "human_decision")
+                ),
+                action=action,
+                reason=reason,
+                evidence=evidence,
+            )
+        except Exception as exc:
+            transition = self._transition if lease is None else self._owned_transition
+            args = () if lease is None else (state, lease)
+            kwargs = {"expected_revision": state.revision} if lease is None else {}
+            return transition(
+                *args,
+                event_type="DECISION_REQUEST_BUILD_FAILED",
+                changes={
+                    "status": WorkflowStatus.FAILED,
+                    "pending_action": None,
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={
+                    "error_class": "PERMANENT_DECISION_REQUEST_BUILD_FAILED",
+                    "exception_type": type(exc).__name__,
+                    "reason": str(exc),
+                    "gate": str(action.get("gate") or ""),
+                    "action_type": str(action.get("type") or ""),
+                    "evidence": evidence,
+                },
+                **kwargs,
+            )
         action = dict(action)
         metadata = dict(action.get("metadata") or {})
         metadata["human_decision"] = request.to_dict()
@@ -1641,6 +1707,10 @@ class FactoryEngine:
             event_type="RESUMED",
             changes=changes,
         )
+
+    def _stop_at_gate2(self, state, lease, result, validation):
+        from .technical_continuation import stop_at_gate2
+        return stop_at_gate2(self, state, lease, result, validation)
 
     def kill(self, *, expected_revision: int) -> WorkflowState:
         return self._control_transition(expected_revision, "KILLED", WorkflowStatus.KILLED)
@@ -1830,6 +1900,22 @@ class FactoryEngine:
     def archive_completed(self, factory_root: str | Path) -> WorkflowState:
         root = Path(factory_root).resolve()
         state = self.store.load()
+        if state.status not in {WorkflowStatus.ARCHIVING, WorkflowStatus.COMPLETED}:
+            raise InvalidTransition("only completed projects can be archived")
+        if state.status is WorkflowStatus.COMPLETED and self.project_dir.parent.name == "complete":
+            return state
+
+        from .phase9_delivery_fence import delivery_side_effect_commit_lease
+
+        with delivery_side_effect_commit_lease(
+            self.project_dir,
+            operation="archive",
+        ):
+            return self._archive_completed_locked(root, state)
+
+    def _archive_completed_locked(
+        self, root: Path, state: WorkflowState
+    ) -> WorkflowState:
         if state.status is WorkflowStatus.ARCHIVING:
             if self.project_dir.parent.name == "complete":
                 return self._transition(
@@ -1852,10 +1938,6 @@ class FactoryEngine:
                 event_type="PROJECT_ARCHIVED",
                 changes={"status": WorkflowStatus.COMPLETED, "storage_scope": "complete"},
             )
-        if state.status is not WorkflowStatus.COMPLETED:
-            raise InvalidTransition("only completed projects can be archived")
-        if self.project_dir.parent.name == "complete":
-            return state
         destination = root / "complete" / self.project_dir.name
         if destination.exists():
             raise InvalidTransition(f"archive destination already exists: {destination}")
@@ -1877,6 +1959,48 @@ class FactoryEngine:
             event_type="PROJECT_ARCHIVED",
             changes={"status": WorkflowStatus.COMPLETED, "storage_scope": "complete"},
         )
+
+    def _commit_project_completed(
+        self,
+        state: WorkflowState,
+        *,
+        stage_mode: bool,
+        runner_lease: str | None = None,
+    ) -> WorkflowState:
+        from .phase9_delivery_fence import delivery_side_effect_commit_lease
+
+        with delivery_side_effect_commit_lease(
+            self.project_dir,
+            operation="completion",
+        ):
+            changes = {
+                "status": WorkflowStatus.COMPLETED,
+                "active_step": None,
+                "active_stage": None,
+                "active_subtask": None,
+                "source_step_id": None,
+                "last_completed_stage": (
+                    10 if stage_mode else state.last_completed_stage
+                ),
+                "attempt": 0,
+                "runner_pid": None,
+                "runner_lease_id": None,
+                "heartbeat_at": None,
+            }
+            if runner_lease is None:
+                return self._transition(
+                    expected_revision=state.revision,
+                    event_type="PROJECT_COMPLETED",
+                    changes=changes,
+                    subtask_baseline=None,
+                )
+            return self._owned_transition(
+                state,
+                runner_lease,
+                event_type="PROJECT_COMPLETED",
+                changes=changes,
+                subtask_baseline=None,
+            )
 
     def _transition(self, **kwargs) -> WorkflowState:
         return self._transitions.transition(**kwargs)

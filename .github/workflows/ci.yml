@@ -14,12 +14,65 @@ concurrency:
 
 jobs:
   core:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare an identical-tree audit source fixture
+        run: |
+          ci_source_commit="$(git rev-parse HEAD)"
+          ci_source_tree="$(git rev-parse 'HEAD^{tree}')"
+          ci_source_time="$(git show -s --format=%cI HEAD)"
+          ci_fixture_commit="$(printf 'CI source fixture for %s\n' "$ci_source_commit" |
+            GIT_AUTHOR_DATE="$ci_source_time" GIT_COMMITTER_DATE="$ci_source_time" \
+            git -c user.name='CI source fixture' -c user.email='ci@example.invalid' \
+              commit-tree "$ci_source_tree" -p "$ci_source_commit")"
+          git checkout --detach "$ci_fixture_commit"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$ci_source_tree"
+      - name: Install native evidence and sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config meson ninja-build libcap-dev poppler-utils
+          # Phase9 uses overlay mounts, which require Bubblewrap >= 0.11.
+          bwrap_archive="$RUNNER_TEMP/bubblewrap-0.11.2.tar.xz"
+          curl --fail --location --retry 3 \
+            https://github.com/containers/bubblewrap/releases/download/v0.11.2/bubblewrap-0.11.2.tar.xz \
+            --output "$bwrap_archive"
+          printf '69abc30005d2186baf7737feacd8da35633b93cf5af38838ecff17c5f8e924f6  %s\n' "$bwrap_archive" | sha256sum --check
+          tar -xf "$bwrap_archive" -C "$RUNNER_TEMP"
+          meson setup "$RUNNER_TEMP/bubblewrap-build" "$RUNNER_TEMP/bubblewrap-0.11.2" \
+            -Dsupport_setuid=false -Dtests=false -Dman=disabled \
+            -Dbash_completion=disabled -Dzsh_completion=disabled -Dselinux=disabled
+          ninja -C "$RUNNER_TEMP/bubblewrap-build"
+          sudo install -m 0755 "$RUNNER_TEMP/bubblewrap-build/bwrap" /usr/bin/bwrap
+          bwrap --version
+          overlay_probe="$RUNNER_TEMP/bwrap-overlay-probe"
+          mkdir -p "$overlay_probe/lower" "$overlay_probe/upper" "$overlay_probe/merged"
+          printf 'lower\n' > "$overlay_probe/lower/probe"
+          printf 'upper\n' > "$overlay_probe/upper/probe"
+          bwrap --unshare-all --new-session --die-with-parent --ro-bind / / \
+            --overlay-src "$overlay_probe/lower" --overlay-src "$overlay_probe/upper" \
+            --ro-overlay "$overlay_probe/merged" --proc /proc --dev /dev \
+            /bin/cat "$overlay_probe/merged/probe" | grep -x upper
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bind the native Node and npm paths used by audit fixtures
+        run: |
+          # Relative links remain resolvable while Bubblewrap prepares newroot.
+          sudo ln -srf "$(command -v node)" /usr/bin/node
+          sudo ln -srf "$(command -v npm)" /usr/bin/npm
+          /usr/bin/node --version
+          /usr/bin/npm --version
+          bwrap --unshare-all --new-session --die-with-parent --ro-bind / / \
+            --ro-bind /usr/bin/node /usr/bin/node --ro-bind /usr/bin/npm /usr/bin/npm \
+            --proc /proc --dev /dev /usr/bin/node --version
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # M0.3 golden pins explicitly include the interpreter patch version.
+          python-version: "3.13.5"
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -76,6 +129,8 @@ jobs:
       - run: npm ci
         working-directory: web/frontend
       - run: uv run pytest -q tests/test_web_control_plane_api.py tests/test_control_plane_uploads.py tests/test_web_frontend_runtime_helpers.py
+      - run: node --test tests/state-adaptation.test.mjs tests/joint-modeling.test.mjs tests/phase6-controller.test.mjs
+        working-directory: web/frontend
       - run: npm run build
         working-directory: web/frontend
 

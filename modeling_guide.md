@@ -187,6 +187,55 @@ ongoing/<base>/
 └── results/                     ← serialized numerical results (.json/.npz/.parquet)
 ```
 
+Storage format support and automatic judge review are separate contracts.
+Adopted jobs keep every declared input/output and initial snapshot in the
+required evidence chain. Small primitive numeric `.npy`/`.npz` files receive a
+lossless `numpy-review-capsule-v1` representation, including original bytes,
+SHA-256/size, member names, dtype, shape, storage order, and every element's
+index, byte offset and exact value. Grounding regenerates this representation
+before accepting a quote. Raw snapshots and decoded text both consume the packet
+budget; samples and unbound summaries cannot satisfy full evidence coverage.
+
+The current decoder supports NPY 1.0/2.0/3.0, boolean, signed/unsigned 8–64-bit
+integers, float16/32/64 and complex64/128, including endianness and C/F order.
+Limits per source: 128 KiB raw bytes, 128 KiB expanded NPZ members, 32 members,
+4 KiB NPY headers, 8 dimensions with each extent at most 4096, 4096 total
+elements, and 256 KiB rendered review bytes, subject also to the role budget.
+Object/pickle arrays, structured/string/date dtypes and other formats remain
+unsupported for automatic direct review. `.parquet` remains a permitted storage
+format, but there is currently no verified Parquet decoder in this review path;
+a required Parquet artifact therefore makes the packet incomplete. A companion
+JSON file does not waive the original required artifact. These limitations must
+be resolved before claiming a complete execution review.
+
+Native judge packets also support bounded `document-evidence-v1` XLSX and PDF
+views. XLSX includes all stored cells in every worksheet (including hidden
+sheets), lexical numeric values, formula expressions and stored caches, shared
+strings, styles and workbook/worksheet metadata. It does not recalculate formulas.
+Drawings, comments, external links and embedded workbook objects require native
+review and currently fail this cell-view reader explicitly. PDF evidence includes
+every rendered page at a maximum 2400-pixel dimension plus page text and unique
+image locators. Native grounding rerenders the frozen source to verify the page
+mapping. The path-free shadow grounding API cannot perform that derivation and
+continues to fail closed for PDF; this change grants no shadow/release authority.
+
+Sources and PNG pages are frozen under `judge_packets/assets/`, included in call
+archives and freshness checks, and required images must appear in the actual
+transport receipt. Codex CLI attaches each page with `--image`; OpenAI-compatible
+and Gemini HTTP adapters send image content blocks. Other CLI adapters and known
+text-only models fail explicitly when images are required. A successful preflight
+only establishes material availability; model context/vision capability and
+scientific judgment still require an actual authorized judge run.
+
+Document limits are 4 MiB per source, 32 MiB expanded XLSX content, 32 worksheets,
+100,000 stored cells, 32 pages per PDF, 128 images and 32 MiB assets per role, and
+2,000,000 additional document-text bytes per role. The existing ordinary-text
+budgets (180,000 bytes; execution 360,000) remain separate. Native API judge
+context is included in full, with a 4,000,000-byte combined text input cap (including
+the task prompt and framing); it is never
+silently truncated at the generic API runner's 200,000-byte per-file limit.
+Oversized required evidence remains required and makes the role incomplete.
+
 Hard rules:
 
 - Keep `data/raw/` immutable. Never overwrite raw source files.
@@ -342,6 +391,21 @@ Every solver script (.py / .jl / .m / .R) starts with a header comment:
 
 ### Reproducibility
 
+- Numerical JSON producers use `factory_core.json_values.dumps` to normalize
+  NumPy scalars/arrays into actual JSON bool/int/float/list values. Unsupported
+  types and non-finite numbers fail with a field path; Python bool is supported.
+- Local native Python jobs enforce their declared project-file reads through
+  `python-audit-open-v2` for new local jobs (legacy v1 receipts remain readable).
+  Reading or appending to a preexisting output requires declaring it as an input;
+  the submission preserves its initial bytes and hash separately from the final
+  output. Newly created or truncating-replaced outputs may be read back as this
+  run's generated data. Declare indirect attachments and imported project code
+  as inputs. This names Python audited file I/O, not arbitrary native-library
+  I/O or an OS sandbox. Other runtime receipts remain declaration-only.
+- Accepted numeric claims use the versioned contract in
+  `docs/operations/RERUN_REPAIR_AND_TECHNICAL_CONTINUATION.md`. Summaries and
+  tables must be regenerated when the explicitly accepted source/run changes.
+
 - Fix random seeds at the top of every script.
 - Pin solver versions where they affect numerical output (e.g.
   Gurobi 11 vs 12). Note the version in the script header.
@@ -449,6 +513,16 @@ update discipline:
   `scripts/create_derived_manifest.py`; verify it with
   `scripts/verify_derived_artifacts.py`, which regenerates in isolation and
   rejects current-output edits or undeclared/missing outputs.
+- Large scientific JSON may have a declared `.evidence-view.json` derivative
+  using `scripts/json_evidence_view.py` (`json-evidence-view-v1`). It retains
+  every key, scalar and undeclared array and replaces only explicitly named
+  numeric arrays with source-pointer/count/hash references and visible
+  limitations. The original file stays intact. `judge_packet.py` reconstructs
+  the view from that complete file; any mismatch makes the view unavailable.
+  Register the view as the claim artifact only when all evidence needed for
+  that claim remains inline. A reference never proves that the judge read or
+  validated the array. Required array-level claims still need complete inline
+  evidence or a separate review; never use a view to weaken their requirements.
 - `.factory/audits/profiles/{model,results,paper}/latest.json` — machine-owned
   stage feedback. On retry, read `evidence.checks` and its reports before
   editing. Fix the source artifact; do not hand-edit `AUDIT-*` ledger rows or
@@ -465,6 +539,10 @@ update discipline:
 - Project files cannot grant a quality bypass. Only an administrator record in
   `web/auth.db` may continue after Gate 2 or authorize one exact final snapshot;
   the real verdict remains visible and no PASS may be fabricated.
+- Control-plane grants in `web/auth.db` do not resolve Human Gates or advance
+  the project workflow. Those decisions live in the schema-v9
+  `.factory/state.db`; conversely, a project decision cannot grant Web access or
+  a delivery override.
 
 ## What you may NOT do
 
@@ -477,3 +555,6 @@ update discipline:
 - Do not skip the sensitivity analysis section even when the model is
   deterministic — at minimum, vary input data within plausible bounds.
 - Do not use emoji or informal voice anywhere in the paper.
+
+Normal-run evidence, numeric field binding and status contracts are documented in
+[docs/operations/NORMAL_RUN_AUDIT_CONTRACT.md](docs/operations/NORMAL_RUN_AUDIT_CONTRACT.md).

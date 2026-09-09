@@ -72,7 +72,7 @@ def run(args: argparse.Namespace) -> int:
         args.model,
         "-c",
         f'model_reasoning_effort="{args.effort}"',
-        "--full-auto",
+        "--approve-for-me",
         "-C",
         str(workdir),
         (

@@ -82,6 +82,14 @@ def _resolve_cli_consultation(tmp_path, answer="Use robust plan A exactly."):
 
 
 def _prompt_step(root, dispatcher):
+    store = SQLiteStateStore(root / "ongoing" / "demo")
+    state = store.load()
+    if state.active_step is None:
+        store.transition(
+            expected_revision=state.revision, event_type="STEP_STARTED",
+            changes={"active_step": 4, "attempt": 1},
+            payload={"step_name": "model_construction", "fixture": True},
+        )
     (root / "prompts").mkdir(parents=True, exist_ok=True)
     (root / "prompts" / "step4_model_construction.txt").write_text(
         "Build the model for __BASE_NAME__.\n", encoding="utf-8"

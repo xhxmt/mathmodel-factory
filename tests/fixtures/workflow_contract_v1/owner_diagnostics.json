@@ -1,0 +1,76 @@
+{
+  "schema_version": "workflow-owner-diagnostics-fixture-v1",
+  "cases": [
+    {
+      "case_id": "no_owner",
+      "rules": [],
+      "path": "unowned.md",
+      "resolution_codes": ["NO_OWNER"],
+      "strict_resolution": "reject"
+    },
+    {
+      "case_id": "multiple_owner",
+      "rules": [
+        ["models/**", 3, "model", "MODEL_DIRTY"],
+        ["models/special.py", 5, "validation", "RESULT_DIRTY"]
+      ],
+      "path": "models/special.py",
+      "resolution_codes": ["MULTIPLE_MATCH"],
+      "strict_resolution": "reject"
+    },
+    {
+      "case_id": "shadow_unreachable",
+      "rules": [
+        ["models/**", 3, "model", "MODEL_DIRTY"],
+        ["models/**/special.py", 5, "validation", "RESULT_DIRTY"]
+      ],
+      "compilation_codes": ["MULTIPLE_MATCH", "SHADOWED", "UNREACHABLE"],
+      "strict_compilation": "reject"
+    },
+    {
+      "case_id": "intentional_pair_priority",
+      "rules": [
+        ["models/special.py", 5, "validation", "RESULT_DIRTY"],
+        ["models/**", 3, "model", "MODEL_DIRTY"]
+      ],
+      "authorization": {
+        "winner_pattern": "models/special.py",
+        "winner_owner_stage": 5,
+        "loser_pattern": "models/**",
+        "loser_owner_stage": 3,
+        "issue_id": "OWNER-FIXTURE-001",
+        "rationale": "The fixture authorizes only this exact narrow-over-broad pair."
+      },
+      "path": "models/special.py",
+      "resolution_codes": ["INTENTIONAL_PRIORITY"],
+      "strict_resolution": "accept"
+    },
+    {
+      "case_id": "unanalyzable_static_pattern",
+      "rules": [
+        ["models/[ab]/**", 3, "model", "MODEL_DIRTY"],
+        ["models/a/special.py", 5, "validation", "RESULT_DIRTY"]
+      ],
+      "compilation_codes": ["UNANALYZABLE"],
+      "strict_compilation": "reject"
+    },
+    {
+      "case_id": "v1_authorized_bootstrap_log_pair",
+      "source": "current_registry",
+      "patterns": ["models/**/07_bootstrap_convergence.log", "models/**/*.log"],
+      "path": "models/m1/07_bootstrap_convergence.log",
+      "compilation_codes": ["INTENTIONAL_PRIORITY"],
+      "resolution_codes": ["INTENTIONAL_PRIORITY"],
+      "strict_resolution": "accept",
+      "issue_id": "RUN4-OWNER-001"
+    },
+    {
+      "case_id": "v1_known_same_owner_shadow",
+      "source": "current_registry",
+      "patterns": ["paper/**/*.tex", "paper/*.tex"],
+      "compilation_codes": ["OVERLAP", "SHADOWED", "UNREACHABLE"],
+      "strict_compilation": "reject",
+      "explanation": "The later Stage-8 paper/*.tex rule is already covered by the earlier same-owner globstar rule; v1 first-match output is unchanged."
+    }
+  ]
+}

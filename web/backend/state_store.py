@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 
-from factory_core.projections import runtime_payload
+from factory_core.projections import AUDIT_FIELDS, authoritative_status
 from factory_core.storage import SQLiteStateStore
 
 
@@ -139,6 +139,7 @@ def _from_snapshot(project_path: Path, base_name: str, snapshot: dict) -> dict:
     selection_pending = snapshot.get("state") == "awaiting_selection" or selection_from_files
     display_status = snapshot.get("display_status") or snapshot.get("state", "unknown")
     return {
+        **{key: snapshot[key] for key in AUDIT_FIELDS if key in snapshot},
         "base_name": base_name,
         "status": snapshot.get("state", "unknown"),
         "display_status": display_status,
@@ -251,29 +252,13 @@ def _fallback_status(project_path: Path, base_name: str) -> dict:
 def read_runtime_status(project_path: str | Path, base_name: str) -> dict:
     project = Path(project_path)
     workflow_store = SQLiteStateStore(project)
-    if workflow_store.exists and workflow_store.load().control_mode == "engine":
-        state = workflow_store.load()
-        snapshot = runtime_payload(
-            state,
-            contest_policy=workflow_store.contest_policy(),
-            now_epoch=workflow_store.now_epoch(),
-        )
-        from factory_core.workflow_events import project_runtime_diagnostics
-
-        projected = project_runtime_diagnostics(
-            workflow_store.events(), state
-        )["status"]
-        for key in (
-            "current_action",
-            "reason_code",
-            "reason_summary",
-            "suggested_actions",
-            "evidence",
-        ):
-            snapshot[key] = projected[key]
+    read = workflow_store.status_snapshot() if workflow_store.exists else None
+    if read is not None and read["state"].control_mode == "engine":
+        state = read["state"]
+        snapshot = authoritative_status(project, read)
         payload = _from_snapshot(project, base_name, snapshot)
         action = state.pending_action or {}
-        payload["status"] = state.status.value
+        payload["status"] = snapshot["state"]
         payload["consultation_pending"] = state.status.value == "awaiting_consultation"
         payload["consultation_gate"] = (
             action.get("gate") if payload["consultation_pending"] else None

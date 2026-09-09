@@ -12,6 +12,8 @@ def write_file(path: Path, text: str) -> None:
 
 def load_app_module():
     sys.modules.pop("web.backend.app", None)
+    sys.modules.pop("web.backend.main", None)
+    sys.modules.pop("web.backend.phase6_api", None)
     sys.modules.pop("pydantic", None)
     sys.modules.pop("dotenv", None)
     sys.modules.pop("fastapi", None)
@@ -62,6 +64,7 @@ def load_app_module():
     fastapi.WebSocketDisconnect = type("WebSocketDisconnect", (Exception,), {})
     fastapi.HTTPException = HTTPException
     fastapi.Depends = lambda dep=None: dep
+    fastapi.Query = lambda default=None, **_kwargs: default
     fastapi.status = types.SimpleNamespace(
         HTTP_401_UNAUTHORIZED=401,
         HTTP_404_NOT_FOUND=404,
@@ -76,6 +79,7 @@ def load_app_module():
 
     responses = types.ModuleType("fastapi.responses")
     responses.FileResponse = type("FileResponse", (), {})
+    responses.Response = type("Response", (), {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)})
     sys.modules["fastapi.responses"] = responses
 
     security = types.ModuleType("fastapi.security")

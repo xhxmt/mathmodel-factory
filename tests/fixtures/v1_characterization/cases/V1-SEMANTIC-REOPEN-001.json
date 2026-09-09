@@ -1,0 +1,59 @@
+{
+  "schema": "v1-characterization-case-v1",
+  "fixture_id": "V1-SEMANTIC-REOPEN-001",
+  "category": "semantic_reopen",
+  "fixture_kind": "pytest_runtime_tmp_path_descriptor",
+  "source_paths": [
+    "factory_core/engine.py",
+    "factory_core/dirty.py",
+    "factory_core/stages.py",
+    "tests/test_stage_scheduler.py"
+  ],
+  "pytest_nodes": [
+    "tests/test_stage_scheduler.py::test_semantic_reopen_uses_earliest_dirty_owner",
+    "tests/test_stage_scheduler.py::test_semantic_reopen_invalidates_all_downstream_checkpoints"
+  ],
+  "v1_expected": {
+    "dirty_owner_stages": [
+      1,
+      4
+    ],
+    "semantic_owner_stage": 1,
+    "resume_after_step": -1,
+    "active_dirty_flags": [
+      {
+        "flag": "MODEL_DIRTY",
+        "owner_stage": 1
+      },
+      {
+        "flag": "RESULT_DIRTY",
+        "owner_stage": 4
+      }
+    ],
+    "remaining_checkpoint_coordinates": [
+      {
+        "stage_id": 1,
+        "subtask": "problem_setup"
+      }
+    ]
+  },
+  "contracts": [
+    "INV-SEMANTIC-REOPEN-EARLIEST-OWNER",
+    "INV-OWNER-SCOPED-DIRTY-FLAGS",
+    "INV-DOWNSTREAM-CHECKPOINT-INVALIDATION"
+  ],
+  "machine_readable_fields": [
+    "dirty_owner_stages",
+    "semantic_owner_stage",
+    "resume_after_step",
+    "active_dirty_flags",
+    "remaining_checkpoint_coordinates"
+  ],
+  "missing_evidence": [
+    {
+      "gap_id": "GAP-V1-REOPEN-FROZEN-OWNER-MANIFEST",
+      "description": "Owner-stage selection is exercised against files created by the test rather than a frozen project artifact manifest.",
+      "impact": "A future ownership-registry change is caught by the pytest behavior, but no historical input corpus is retained for byte-level replay."
+    }
+  ]
+}

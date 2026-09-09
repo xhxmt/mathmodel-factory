@@ -3,9 +3,10 @@
 
 set -euo pipefail
 
-BACKEND_DIR="/home/tfisher/paper_factory/web/backend"
-FRONTEND_DIR="/home/tfisher/paper_factory/web/frontend"
-WEB_DIR="/home/tfisher/paper_factory/web"
+WEB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+FACTORY_ROOT="${FACTORY:-$(cd -- "$WEB_DIR/.." && pwd -P)}"
+BACKEND_DIR="$WEB_DIR/backend"
+FRONTEND_DIR="$WEB_DIR/frontend"
 
 echo "====================================="
 echo "压缩包上传功能 - 部署检查"
@@ -74,7 +75,7 @@ echo ""
 
 # 4. 检查上传目录
 echo "✓ 检查上传目录..."
-UPLOAD_DIR="/home/tfisher/paper_factory/uploads"
+UPLOAD_DIR="$FACTORY_ROOT/uploads"
 if [[ -d "$UPLOAD_DIR" ]]; then
     echo "  ✓ uploads/ 目录存在"
     echo "  权限: $(stat -c '%a' "$UPLOAD_DIR")"

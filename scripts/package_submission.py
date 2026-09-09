@@ -19,6 +19,10 @@ from factory_core.submission_bundle import (
     submission_bundle_manifest,
     verify_zip_against_manifest,
 )
+from factory_core.phase9_delivery_fence import (
+    delivery_side_effect_commit_lease,
+    require_delivery_side_effect_authority,
+)
 
 
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
@@ -61,53 +65,112 @@ def _write_deterministic_member(
     archive.writestr(info, source.read_bytes())
 
 
+def package_submission(
+    project: str | Path,
+    base: str,
+    output: str | Path,
+    *,
+    workflow_id: str | None = None,
+    run_generation: str | None = None,
+    stage_only: bool = False,
+) -> dict[str, object]:
+    """Build one submission only after an independent live Authority check.
+
+    This producer deliberately performs the fence check itself.  A caller's
+    prior audit, cached decision, or release check is not authority for this
+    filesystem mutation boundary.
+    """
+
+    project = Path(project).resolve()
+    output = Path(output).resolve()
+    if not project.is_dir():
+        raise ValueError(f"Project directory not found: {project}")
+
+    # This must precede manifest construction and every directory/file write.
+    def verify_fence() -> None:
+        require_delivery_side_effect_authority(
+            project,
+            operation="submission",
+            workflow_id=workflow_id,
+            run_generation=run_generation,
+        )
+
+    verify_fence()
+
+    manifest = submission_bundle_manifest(project, base)
+    members = manifest["members"]
+    names = {str(item["archive_path"]) for item in members}
+    if f"{base}_paper.pdf" not in names:
+        raise ValueError("Final PDF was not selected for packaging")
+    if not any(name.startswith("models/") for name in names):
+        raise ValueError("No model code selected for packaging")
+    if not any(name.startswith("results/") for name in names):
+        raise ValueError("No results selected for packaging")
+
+    with delivery_side_effect_commit_lease(
+        project,
+        operation="submission",
+        workflow_id=workflow_id,
+        run_generation=run_generation,
+    ):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_suffix(output.suffix + ".tmp")
+        temporary.unlink(missing_ok=True)
+        try:
+            with zipfile.ZipFile(
+                temporary, "w", compression=zipfile.ZIP_DEFLATED
+            ) as archive:
+                for item in members:
+                    _write_deterministic_member(
+                        archive,
+                        project / item["source_path"],
+                        item["archive_path"],
+                    )
+            verify_zip_against_manifest(temporary, manifest)
+            os.replace(temporary, output)
+            if not stage_only:
+                _atomic_write_json(
+                    project / ".factory/finalization/submission_bundle_manifest.json",
+                    manifest,
+                )
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    print(
+        f"Wrote {output} ({len(members)} files, manifest {manifest['manifest_sha256']})"
+    )
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project")
     parser.add_argument("base")
     parser.add_argument("output")
+    parser.add_argument("--workflow-id")
+    parser.add_argument("--run-generation")
+    parser.add_argument(
+        "--stage-only",
+        action="store_true",
+        help=(
+            "write only the caller-owned temporary ZIP; do not persist the "
+            "project submission manifest"
+        ),
+    )
     args = parser.parse_args()
 
-    project = Path(args.project).resolve()
-    output = Path(args.output).resolve()
-    if not project.is_dir():
-        raise SystemExit(f"Project directory not found: {project}")
     try:
-        manifest = submission_bundle_manifest(project, args.base)
-    except (OSError, ValueError) as exc:
-        raise SystemExit(str(exc)) from exc
-    members = manifest["members"]
-    names = {str(item["archive_path"]) for item in members}
-    if f"{args.base}_paper.pdf" not in names:
-        raise SystemExit("Final PDF was not selected for packaging")
-    if not any(name.startswith("models/") for name in names):
-        raise SystemExit("No model code selected for packaging")
-    if not any(name.startswith("results/") for name in names):
-        raise SystemExit("No results selected for packaging")
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_suffix(output.suffix + ".tmp")
-    temporary.unlink(missing_ok=True)
-    try:
-        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for item in members:
-                _write_deterministic_member(
-                    archive,
-                    project / item["source_path"],
-                    item["archive_path"],
-                )
-        verify_zip_against_manifest(temporary, manifest)
-        os.replace(temporary, output)
-        _atomic_write_json(
-            project / ".factory/finalization/submission_bundle_manifest.json",
-            manifest,
+        package_submission(
+            args.project,
+            args.base,
+            args.output,
+            workflow_id=args.workflow_id,
+            run_generation=args.run_generation,
+            stage_only=args.stage_only,
         )
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    print(
-        f"Wrote {output} ({len(members)} files, manifest {manifest['manifest_sha256']})"
-    )
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

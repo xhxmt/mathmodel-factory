@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
-import shutil
+import hashlib
+import json
 import sys
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Callable
 
 from ...domain import ExecutionResult
 from ...deadline import cap_timeout, deadline_scope
@@ -25,6 +27,7 @@ class ModelRequest:
     effort: str = ""
     output_file: Path | None = None
     context_files: tuple[str, ...] = ()
+    image_files: tuple[str, ...] = ()
     effective_prompt_file: Path | None = None
     base_url: str = ""
     key_env: str = ""
@@ -33,6 +36,9 @@ class ModelRequest:
     isolated: bool = False
     final_response_file: Path | None = None
     deadline_epoch: int | None = None
+    input_observer: Callable[[str, str], None] | None = None
+    prompt_format: str = "raw"
+    stdin_file: Path | None = None
 
 
 class _ProcessModelBackend:
@@ -43,9 +49,16 @@ class _ProcessModelBackend:
         self.supervisor = supervisor or ProcessSupervisor()
 
     def _run(self, request: ModelRequest, argv: list[str], label: str) -> ExecutionResult:
+        from scripts.document_evidence_view import image_inputs
+        try:
+            images = image_inputs(request.project_dir, request.image_files)
+        except (OSError, ValueError) as exc:
+            return ExecutionResult.failed("PERMANENT_INPUT_CONTRACT", returncode=2, reason=str(exc))
         with deadline_scope(request.deadline_epoch):
             timeout_seconds = cap_timeout(request.timeout_seconds)
         request = replace(request, timeout_seconds=timeout_seconds)
+        if request.input_observer is not None:
+            request.input_observer(request.prompt, request.prompt_format)
         logs = request.project_dir / "logs"
         stamp = time.strftime("%Y%m%d_%H%M%S")
         log = logs / f"step_{request.step_id}_{label}_{stamp}_{os.getpid()}.log"
@@ -56,14 +69,20 @@ class _ProcessModelBackend:
                 timeout_seconds=timeout_seconds,
                 stdout_path=log,
                 env={**os.environ, **request.env},
+                stdin_path=request.stdin_file,
             )
         )
         metadata = {
+            **result.metadata,
             "backend": self.name,
             "model": request.model,
             "log": str(log.relative_to(request.project_dir)),
             "duration_seconds": result.duration_seconds,
+            "process_pid": result.pid,
+            "process_timed_out": result.timed_out,
         }
+        if images:
+            metadata["image_inputs"] = images
         if result.returncode == 0:
             return ExecutionResult.succeeded(**metadata)
         if result.metadata.get("launch_error"):
@@ -97,32 +116,67 @@ class _ProcessModelBackend:
 class CodexCliBackend(_ProcessModelBackend):
     name = "codex"
 
-    def execute(self, request: ModelRequest) -> ExecutionResult:
+    def command(self, request: ModelRequest):
+        codex_cli = (
+            request.env.get("CODEX_CLI_PATH", "")
+            or os.getenv("CODEX_CLI_PATH", "")
+            or "codex"
+        )
         effective_model = (
             request.model
             or request.env.get("CODEX_MODEL", "")
             or os.getenv("CODEX_MODEL", "")
         )
+        service_tier = (
+            request.env.get("CODEX_SERVICE_TIER", "")
+            or os.getenv("CODEX_SERVICE_TIER", "")
+        ).strip().lower()
+        if service_tier and service_tier not in {"fast", "flex"}:
+            return ExecutionResult.failed(
+                "PERMANENT_MODEL_CONFIG",
+                returncode=2,
+                reason="CODEX_SERVICE_TIER must be unset, fast, or flex",
+            )
         request = replace(request, model=effective_model)
-        argv = ["codex", "exec"]
+        argv = [codex_cli]
+        if service_tier:
+            argv.extend(["-c", f'service_tier="{service_tier}"'])
+        argv.append("exec")
         if effective_model:
             argv.extend(["--model", effective_model])
         argv.extend(["-c", f'model_reasoning_effort="{request.effort or "xhigh"}"'])
         if request.isolated:
-            argv.extend(["--full-auto", "--ephemeral"])
+            argv.extend(
+                [
+                    "--approve-for-me",
+                    "--ephemeral",
+                ]
+            )
             if request.final_response_file is not None:
                 argv.extend(["--output-last-message", str(request.final_response_file)])
         else:
             argv.append("--dangerously-bypass-approvals-and-sandbox")
         workdir = request.workdir or request.project_dir
-        argv.extend(["-C", str(workdir), "--skip-git-repo-check", request.prompt])
-        return self._run(replace(request, workdir=workdir), argv, "codex")
+        for image in request.image_files:
+            argv.extend(["--image", str(request.project_dir / image)])
+        argv.extend(["-C", str(workdir), "--skip-git-repo-check", "--", request.prompt])
+        return replace(request, workdir=workdir), argv
+
+    def execute(self, request: ModelRequest) -> ExecutionResult:
+        command = self.command(request)
+        if isinstance(command, ExecutionResult):
+            return command
+        configured, argv = command
+        return self._run(configured, argv, "codex")
 
 
 class ClaudeCliBackend(_ProcessModelBackend):
     name = "claude"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
+        if request.image_files:
+            return ExecutionResult.failed("PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
+                reason="Claude CLI adapter has no verified image transport")
         argv = ["claude", "-p", request.prompt, "--dangerously-skip-permissions", "--effort", request.effort or "max"]
         if request.model:
             argv.extend(["--model", request.model])
@@ -133,6 +187,9 @@ class AgyBackend(_ProcessModelBackend):
     name = "agy"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
+        if request.image_files:
+            return ExecutionResult.failed("PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
+                reason="Agy adapter has no verified image transport")
         prompt_file = request.project_dir / "logs" / f"step_{request.step_id}_agy_{os.getpid()}.prompt.txt"
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.write_text(request.prompt, encoding="utf-8")
@@ -160,6 +217,9 @@ class ApiAgentBackend(_ProcessModelBackend):
     name = "api"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
+        if request.image_files and (request.model.startswith("deepseek") or request.env.get("FACTORY_API_BACKEND") == "claude"):
+            return ExecutionResult.failed("PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
+                reason="selected API model/backend cannot receive required page images")
         if request.output_file is None:
             return ExecutionResult.failed("PERMANENT_OUTPUT_CONTRACT", returncode=2)
         try:
@@ -207,6 +267,29 @@ class ApiAgentBackend(_ProcessModelBackend):
             argv.extend(["--effective-prompt-file", effective_prompt_file])
         for context_file in request.context_files:
             argv.extend(["--context-file", context_file])
+        from scripts.document_evidence_view import image_inputs
+        try:
+            images = image_inputs(request.project_dir, request.image_files)
+        except (OSError, ValueError) as exc:
+            return ExecutionResult.failed("PERMANENT_INPUT_CONTRACT", returncode=2, reason=str(exc))
+        for image in request.image_files:
+            argv.extend(["--image-file", image])
+        if images:
+            argv.extend(["--expected-image-inputs-sha256", hashlib.sha256(
+                json.dumps(images, sort_keys=True).encode()).hexdigest()])
+        if request.input_observer is not None:
+            from scripts.api_agent_run import build_effective_prompt
+
+            try:
+                effective, _ = build_effective_prompt(
+                    request.project_dir.resolve(), request.prompt,
+                    list(request.context_files), output_file,
+                )
+            except (OSError, ValueError) as exc:
+                return ExecutionResult.failed("PERMANENT_INPUT_CONTRACT", returncode=2, reason=str(exc))
+            argv.extend(["--expected-effective-prompt-sha256",
+                         hashlib.sha256(effective.encode("utf-8")).hexdigest()])
+            request = replace(request, prompt=effective, prompt_format="api-inline-v1")
         return self._run(request, argv, "api")
 
 

@@ -99,6 +99,8 @@ class SQLiteStateStore:
 
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
+        if connection.in_transaction:
+            raise RuntimeError("schema initialization cannot run inside a business transaction")
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS schema_info (
@@ -385,6 +387,8 @@ class SQLiteStateStore:
             raise RuntimeError(f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}")
 
     def _upgrade_schema(self, connection: sqlite3.Connection) -> None:
+        if connection.in_transaction:
+            raise RuntimeError("schema migration must precede the business transaction")
         try:
             row = connection.execute(
                 "SELECT schema_version FROM schema_info WHERE singleton = 1"
@@ -1226,31 +1230,7 @@ class SQLiteStateStore:
         }
 
     def verify_aggregate_domain_root(self) -> bool:
-        events = self.events()
-        expected = None
-        expected_effects: dict[str, str] | None = None
-        for event in reversed(events):
-            envelope = event.payload.get(ENVELOPE_KEY)
-            if isinstance(envelope, dict) and envelope.get("aggregate_root_hash_after"):
-                expected = str(envelope["aggregate_root_hash_after"])
-                raw_effects = envelope.get("effect_hashes_after")
-                if isinstance(raw_effects, dict):
-                    expected_effects = {
-                        str(key): str(value) for key, value in raw_effects.items()
-                    }
-                break
-        if expected is None:
-            return True
-        current = self.aggregate_domain_root()
-        current_effects = current["effect_hashes"]
-        if expected_effects is not None and set(expected_effects) != set(current_effects):
-            # Schema-v8 events created before policy/config entered the aggregate
-            # root remain verifiable for every domain they originally covered.
-            return all(
-                current_effects.get(key) == value
-                for key, value in expected_effects.items()
-            )
-        return current["aggregate_root_hash"] == expected
+        return bool(self.status_snapshot()["aggregate_valid"])
 
     def initialize(
         self,
@@ -1440,6 +1420,38 @@ class SQLiteStateStore:
     def now_epoch(self) -> int:
         return int(self._clock())
 
+    def status_snapshot(self) -> dict[str, Any]:
+        """Read state, events, policy and domain hashes in one SQLite snapshot."""
+        if not self.exists:
+            raise StateNotInitialized(f"workflow state does not exist: {self.path}")
+        with self._session() as connection:
+            self._upgrade_schema(connection)
+            self._validate_schema(connection)
+            connection.commit()  # migration completes before the read transaction
+            connection.execute("BEGIN")
+            row = connection.execute("SELECT * FROM project_state WHERE singleton = 1").fetchone()
+            if row is None:
+                raise StateNotInitialized(f"workflow state is not initialized: {self.path}")
+            state = self._state_from_row(row)
+            events = [WorkflowEvent(
+                revision=r["revision"], type=r["type"], created_at=r["created_at"],
+                step=r["step"], attempt=r["attempt"], payload=json.loads(r["payload_json"]),
+            ) for r in connection.execute("SELECT * FROM events ORDER BY revision")]
+            policy = connection.execute("SELECT * FROM contest_policy WHERE singleton = 1").fetchone()
+            effects = self._domain_effect_hashes(connection)
+        expected = next((e.payload[ENVELOPE_KEY] for e in reversed(events)
+                         if isinstance(e.payload.get(ENVELOPE_KEY), dict)
+                         and e.payload[ENVELOPE_KEY].get("aggregate_root_hash_after")), None)
+        valid = True
+        if expected is not None:
+            prior = expected.get("effect_hashes_after")
+            valid = (all(effects.get(k) == v for k, v in prior.items())
+                     if isinstance(prior, dict) and set(prior) != set(effects)
+                     else canonical_hash(effects) == expected["aggregate_root_hash_after"])
+        return {"state": state, "events": events,
+                "contest_policy": dict(policy) if policy is not None else None,
+                "aggregate_valid": valid, "now_epoch": self.now_epoch()}
+
     def contest_policy(self) -> dict[str, Any] | None:
         if not self.path.is_file():
             return None
@@ -1458,6 +1470,58 @@ class SQLiteStateStore:
             "delivery_freeze_at": row["delivery_freeze_at"],
             "delivery_reserve_seconds": row["delivery_reserve_seconds"],
         }
+
+    def read_finalization_approvals(
+        self,
+    ) -> tuple[bool, dict[str, dict[str, Any] | None]]:
+        """Read approval requirements and decisions without upgrading live state.
+
+        The private main/WAL snapshot also prevents a read connection from
+        creating or modifying SQLite sidecars beside the workflow database.
+        Older schemas without contest-core tables have no content-freeze
+        requirement; incomplete current schemas require explicit repair.
+        """
+        from .phase9_authority_lease import (
+            AuthorityStateLeaseError,
+            authority_state_commit_lease,
+            isolated_authority_snapshot_ro,
+        )
+
+        gates = ("content_freeze", "delivery_freeze_override")
+        decisions: dict[str, dict[str, Any] | None] = dict.fromkeys(gates)
+        try:
+            with authority_state_commit_lease(self.project_dir):
+                if not self.path.exists():
+                    return False, decisions
+                with isolated_authority_snapshot_ro(self.path) as connection:
+                    version_row = connection.execute(
+                        "SELECT schema_version FROM schema_info WHERE singleton=1"
+                    ).fetchone()
+                    if version_row is None or version_row[0] not in range(1, SCHEMA_VERSION + 1):
+                        raise ValueError("unsupported workflow schema for approval analysis")
+                    tables = {
+                        row[0] for row in connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                    }
+                    if "contest_policy" not in tables:
+                        if version_row[0] == SCHEMA_VERSION:
+                            raise ValueError("workflow contest policy table is missing")
+                        return False, decisions
+                    required = connection.execute(
+                        "SELECT 1 FROM contest_policy WHERE singleton=1"
+                    ).fetchone() is not None
+                    if not {"workflow_decision_requests", "workflow_decision_instances"} <= tables:
+                        if required or version_row[0] == SCHEMA_VERSION:
+                            raise ValueError("workflow approval tables require explicit migration")
+                        return False, decisions
+                    for gate in gates:
+                        decisions[gate] = self._current_decision_payload(
+                            self._latest_decision_row(connection, gate), gate
+                        )
+                    return required, decisions
+        except (AuthorityStateLeaseError, sqlite3.Error) as exc:
+            raise ValueError("workflow approvals cannot be read without mutation") from exc
 
     @staticmethod
     def _insert_decision_request(
@@ -1645,6 +1709,11 @@ class SQLiteStateStore:
         with self._session() as connection:
             self._upgrade_schema(connection)
             row = self._latest_decision_row(connection, gate)
+        return self._current_decision_payload(row, gate, current_only=current_only)
+
+    def _current_decision_payload(
+        self, row: sqlite3.Row | None, gate: str, *, current_only: bool = True
+    ) -> dict[str, Any] | None:
         if row is None or row["decision_id"] is None:
             return None
         if current_only and row["subject_fingerprint"] != "LEGACY_UNBOUND":
@@ -1880,10 +1949,16 @@ class SQLiteStateStore:
                 raise InvalidTransition("a resolved decision request cannot be superseded")
             from .human_decisions import decision_fingerprints
 
+            fresh_evidence = tuple(old_request.get("evidence") or ())
+            if pending_gate in {"joint_modeling_candidates", "joint_modeling_risk"}:
+                from .joint_modeling import refreshed_consultation
+
+                action, fresh_evidence = refreshed_consultation(self.project_dir, pending_gate)
+                pending = action.to_dict()
             current_subject, current_options = decision_fingerprints(
                 self.project_dir,
                 pending_gate,
-                tuple(old_request.get("evidence") or ()),
+                fresh_evidence,
             )
             if (
                 current_subject == str(old_row["subject_fingerprint"])
@@ -1906,9 +1981,9 @@ class SQLiteStateStore:
                 reason={
                     "code": "request_superseded",
                     "message": str(reason),
-                    "evidence": list(old_request.get("evidence") or ()),
+                    "evidence": list(fresh_evidence),
                 },
-                evidence=tuple(old_request.get("evidence") or ()),
+                evidence=fresh_evidence,
             ).to_dict()
             self._insert_decision_request(connection, fresh, created_at=now)
             connection.execute(
@@ -2058,6 +2133,10 @@ class SQLiteStateStore:
             subject_fingerprint=str(request["subject_fingerprint"]),
             options_fingerprint=str(request["options_fingerprint"]),
         )
+        if str(request["gate_type"]) in {"joint_modeling_candidates", "joint_modeling_risk", "step3"}:
+            from .joint_modeling import validate_durable_decision
+
+            validate_durable_decision(self.project_dir, json.loads(request["request_json"]), safe)
         selected = (
             safe.get("selected_option_id")
             or safe.get("selected_primary")

@@ -17,6 +17,7 @@ class SolverRequest:
     input_paths: tuple[Path, ...] = ()
     output_paths: tuple[str, ...] = ()
     seeds: tuple[str, ...] = ()
+    submission_receipt: Path | None = None
 
 
 @dataclass(frozen=True)

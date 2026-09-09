@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
 import time
+import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -22,7 +24,7 @@ from ..domain import (
     StepError,
     ValidationResult,
 )
-from ..dirty import (
+from ..current_dirty import (
     DIRTY_CLASSIFIER_SCHEMA,
     capture_artifact_manifest,
     classifier_contract_sha256,
@@ -34,6 +36,7 @@ from ..governance.overrides import (
     OverrideProvider,
     default_override_provider,
 )
+from ..phase9_delivery_fence import Phase9DeliveryFenceError
 from ..delivery.release import ReleasePublisher
 from ..contest import ContestDeadlineExceeded
 from ..deadline import ensure_deadline
@@ -126,7 +129,10 @@ class ParallelProposalStep:
         project = context.project_dir
         prefix = f"m{stream}"
         if _verdict(project / f"{prefix}_critique.md") in {"VALIDATED", "ABANDONED"}:
-            return True
+            from ..joint_modeling import policy, stream_execution_evidence
+
+            if not policy(project)["enabled"] or stream_execution_evidence(project, prefix):
+                return True
         for round_number in range(1, self.max_rounds + 1):
             proposal = self.renderer.render(
                 "step2_modeling_proposal.txt",
@@ -517,6 +523,9 @@ class JudgeStep:
         """Run the in-loop math precheck; full three-role review belongs to final audit."""
 
         project = context.project_dir
+        packet_failure = self._packet_preflight(context)
+        if packet_failure is not None:
+            return packet_failure
         role_result = self._run_role_with_retry(
             context, "math", self.ROLE_PROMPTS["math"]
         )
@@ -587,8 +596,11 @@ class JudgeStep:
     ) -> None:
         outputs = project / "judge_outputs"
         outputs.mkdir(parents=True, exist_ok=True)
+        from ..judge_batch import precheck_input_fingerprint
         payload = {
-            "schema_version": "judge-precheck-v1",
+            "schema_version": "judge-precheck-v2",
+            "audit_binding": metadata.get("audit_binding"),
+            "input_fingerprint": precheck_input_fingerprint(project),
             "review_mode": "math_only",
             "verdict": verdict,
             "source_role": "math",
@@ -644,12 +656,75 @@ class JudgeStep:
                 return ExecutionResult.failed(
                     "TRANSIENT_JUDGE_PACKET", returncode=result.returncode, command=label
                 )
+        packet_failure = self._packet_preflight(context)
+        if packet_failure is not None:
+            return packet_failure
         return ExecutionResult.succeeded(packets_prepared=True)
+
+    def _packet_preflight(self, context) -> ExecutionResult | None:
+        """Require eligible packets for the whole review before model dispatch."""
+        from scripts.judge_packet import COMPLETENESS_CONTRACT_VERSION
+
+        project = context.project_dir
+        blocked_roles: dict[str, list[str]] = {}
+        for role in self.ROLE_PROMPTS:
+            packet = project / "judge_packets" / role
+            try:
+                manifest = json.loads((packet / "manifest.json").read_text(encoding="utf-8"))
+                from scripts.document_evidence_view import manifest_assets, read_asset, image_inputs, image_records
+                if isinstance(manifest, dict):
+                    for relative, info in manifest_assets(manifest).items():
+                        data = read_asset(project, relative)
+                        if len(data) != info["bytes"] or hashlib.sha256(data).hexdigest() != info["sha256"]:
+                            raise ValueError("packet document asset changed")
+                    image_inputs(project, [im["path"] for im in image_records(manifest)])
+                completeness = manifest.get("completeness") if isinstance(manifest, dict) else None
+                requirements = completeness.get("requirements") if isinstance(completeness, dict) else None
+                if not (
+                    isinstance(requirements, list)
+                    and requirements
+                    and completeness.get("contract_version") == COMPLETENESS_CONTRACT_VERSION
+                    and completeness.get("status") == "COMPLETE"
+                    and completeness.get("eligible") is True
+                    and all(isinstance(item, dict) and item.get("satisfied") is True for item in requirements)
+                    and (packet / "context.txt").is_file()
+                    and (packet / "context.txt").stat().st_size > 0
+                ):
+                    blocked_roles[role] = [
+                        str(item.get("id") or "unknown_requirement")
+                        for item in (requirements or []) if isinstance(item, dict)
+                        and item.get("satisfied") is not True
+                    ] if isinstance(requirements, list) else []
+            except (OSError, ValueError, KeyError, TypeError):
+                blocked_roles[role] = []
+        if not blocked_roles:
+            return None
+        evidence = {
+            "judge_verdict": "INDETERMINATE_REVIEW",
+            "judge_completed": False,
+            "model_dispatch_allowed": False,
+            "blocked_roles": blocked_roles,
+        }
+        # This is a deterministic preflight result, never a model verdict or
+        # formal Phase9 receipt. Replace a stale compatibility PASS as well.
+        (project / "judge_evaluation.md").write_text(
+            "VERDICT: INDETERMINATE_REVIEW\n\n"
+            "Packet completeness preflight blocked model dispatch.\n\n"
+            + json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        validation = NativeArtifactValidator(self.factory_root, 13).validate(context)
+        metadata = {**validation.metadata, **evidence}
+        error_class = str(metadata.pop("error_class", "TRANSIENT_JUDGE_PACKET"))
+        return ExecutionResult.failed(error_class, returncode=2, **metadata)
 
     def execute_prepared(self, context) -> ExecutionResult:
         """Run isolated roles against packets prepared for this content snapshot."""
 
         project = context.project_dir
+        packet_failure = self._packet_preflight(context)
+        if packet_failure is not None:
+            return packet_failure
         for role, template in self.ROLE_PROMPTS.items():
             result = self._run_role_with_retry(context, role, template)
             if result.returncode != 0:
@@ -798,6 +873,8 @@ class JudgeStep:
                 return ExecutionResult.succeeded(
                     **last.metadata, role_attempts=role_attempt
                 )
+            if last.error_class == "PERMANENT_JUDGE_EVIDENCE_BINDING":
+                return last
         return ExecutionResult.failed(
             "PERMANENT_JUDGE_INFRASTRUCTURE",
             returncode=last.returncode,
@@ -1088,6 +1165,23 @@ class JudgeStep:
         )
 
     def _run_role(
+        self, context, role: str, template: str, *, retry_instructions: str = "",
+    ) -> ExecutionResult:
+        import fcntl
+        from ..judge_batch import JudgeBatchError
+
+        folder = context.project_dir / "judge_outputs"
+        folder.mkdir(parents=True, exist_ok=True)
+        with (folder / f".{role}.call.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                return self._run_role_locked(context, role, template,
+                                             retry_instructions=retry_instructions)
+            except (JudgeBatchError, OSError, ValueError) as exc:
+                return ExecutionResult.failed("PERMANENT_JUDGE_EVIDENCE_BINDING", returncode=2,
+                                              role=role, reason=str(exc), evidence_valid=False)
+
+    def _run_role_locked(
         self,
         context,
         role: str,
@@ -1099,12 +1193,54 @@ class JudgeStep:
         output = project / "judge_outputs" / f"{role}.md"
         snapshot = project / "judge_outputs" / f"{role}.rendered_prompt.txt"
         output.parent.mkdir(parents=True, exist_ok=True)
-        prompt = self.renderer.render(template, project, step_key=f"13_{role}")
+        prompt = self.renderer.render(template, project, step_key=f"{context.step_id}_{role}")
         prompt += self._phase_instructions(context.step_id, role)
         prompt += retry_instructions
+        from .. import judge_batch
+        expected = judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt)
+        metadata_path = output.with_suffix(output.suffix + ".llm-result.json")
+        if metadata_path.is_file():
+            prior = json.loads(metadata_path.read_text())
+            binding = prior.get("audit_binding")
+            if binding:
+                archive = f"judge_outputs/batches/{binding.get('batch_id')}/{binding.get('call_id')}"
+                if binding.get("archive") != archive or not (project / archive).resolve().is_relative_to(project.resolve()):
+                    raise judge_batch.JudgeBatchError("invalid call archive identity")
+                prior_request = json.loads((project / archive / "request.json").read_text())
+                expected = judge_batch.descriptor(project, self.factory_root, context.step_id,
+                    role, prompt, prompt_format=prior_request.get("prompt_format", "raw"))
+            if binding and binding.get("batch_id") == judge_batch.digest(expected):
+                response, frozen_metadata = judge_batch.verify(project, binding, expected)
+                mutable = {"audit_binding", "configuration_group", "configuration_group_schema"}
+                if ({k: v for k, v in prior.items() if k not in mutable}
+                        != {k: v for k, v in frozen_metadata.items() if k not in mutable}):
+                    raise judge_batch.JudgeBatchError("current metadata differs from frozen call")
+                if output.read_bytes() != response:
+                    raise judge_batch.JudgeBatchError("current response differs from frozen call")
+                return ExecutionResult.succeeded(role=role, reused=True,
+                    execution_step_id=context.step_id, template_step_id=13,
+                    call_id=binding["call_id"], audit_binding=binding)
+        # Freeze the raw input first for custom dispatchers. Process backends
+        # bind their exact transport input immediately before launch; fallbacks
+        # get separate uncommitted calls until one succeeds.
+        expected = judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt)
+        binding = judge_batch.begin(project, expected, template_prompt=prompt, prompt=prompt)
         snapshot.write_text(prompt, encoding="utf-8")
-        final_response = project / "tmp" / "native_judges" / role / "final_response.md"
-        final_response.parent.mkdir(parents=True, exist_ok=True)
+
+        def freeze_input(effective, prompt_format):
+            nonlocal expected, binding
+            prepared = judge_batch.descriptor(project, self.factory_root, context.step_id,
+                role, prompt, prompt_format=prompt_format)
+            if hashlib.sha256(effective.encode("utf-8")).hexdigest() != prepared["prompt_sha256"]:
+                raise judge_batch.JudgeBatchError("transport input differs from frozen descriptor")
+            if prepared != expected:
+                expected = prepared
+                binding = judge_batch.begin(project, expected, template_prompt=prompt, prompt=effective)
+            snapshot.write_text(effective, encoding="utf-8")
+        scratch_root = Path(os.environ.get("TMPDIR", str(project / "tmp"))).resolve()
+        scratch_root.mkdir(parents=True, exist_ok=True)
+        response_root = Path(tempfile.mkdtemp(prefix=f"paper-factory-{role}-", dir=scratch_root))
+        final_response = response_root / "final_response.md"
         for stale in (
             output,
             output.with_suffix(output.suffix + ".llm-result.json"),
@@ -1115,7 +1251,7 @@ class JudgeStep:
         result = self.dispatcher.execute(
             ModelRequest(
                 project_dir=project,
-                step_id=13,
+                step_id=context.step_id,
                 attempt=context.attempt,
                 prompt=prompt,
                 timeout_seconds=min(context.timeout_seconds, 3_600),
@@ -1126,12 +1262,14 @@ class JudgeStep:
                     f"judge_packets/{role}/manifest.json",
                     "judge_packets/objective_evidence.json",
                 ),
+                image_files=tuple(image["path"] for image in expected["image_inputs"]),
                 effective_prompt_file=snapshot,
                 isolated=True,
                 final_response_file=final_response,
                 deadline_epoch=context.deadline_epoch,
+                input_observer=freeze_input,
             ),
-            step_key=13,
+            step_key=context.step_id,
             defaults=self.contract.default_models,
         )
         if not _verdict(output) and _verdict(final_response):
@@ -1150,6 +1288,9 @@ class JudgeStep:
                 missing_artifacts=missing_artifacts,
                 **result.metadata,
             )
+        accepted_output_observer = getattr(self.dispatcher, "record_accepted_output", None)
+        if accepted_output_observer is not None:
+            accepted_output_observer(role, output)
         model_id = str(result.metadata.get("model_id") or self.contract.default_models[0])
         backend = str(result.metadata.get("backend") or "unknown")
         model = str(result.metadata.get("model") or model_id)
@@ -1166,6 +1307,8 @@ class JudgeStep:
                 "--transport", "native_model_backend",
                 "--prompt-file", snapshot,
                 "--timeout-seconds", "3600",
+                "--execution-step-id", str(context.step_id),
+                "--template-step-id", "13",
             ],
             label=f"judge_annotate_{role}",
             timeout_seconds=120,
@@ -1174,7 +1317,27 @@ class JudgeStep:
             return ExecutionResult.failed(
                 "TRANSIENT_JUDGE_PROVENANCE", returncode=annotated.returncode, role=role
             )
-        return ExecutionResult.succeeded(role=role, model_id=model_id, backend=backend)
+        if expected["image_inputs"]:
+            if result.metadata.get("image_inputs") != expected["image_inputs"]:
+                raise judge_batch.JudgeBatchError("backend did not deliver the required page images")
+            from scripts.judgment_receipt import _atomic_write_json
+            metadata = json.loads(metadata_path.read_text())
+            metadata["image_inputs"] = result.metadata["image_inputs"]
+            _atomic_write_json(metadata_path, metadata)
+        # Freeze only after the actual annotation succeeded and every input is
+        # still identical. A failed/partial call leaves an uncommitted archive.
+        if judge_batch.descriptor(project, self.factory_root, context.step_id, role, prompt,
+                                  prompt_format=expected["prompt_format"]) != expected:
+            raise judge_batch.JudgeBatchError("evaluator or input changed during call")
+        sealed = judge_batch.commit(project, binding, expected, exit_code=result.returncode,
+            prompt_path=snapshot, response_path=output, metadata_path=metadata_path)
+        from scripts.judgment_receipt import _atomic_write_json
+        metadata = json.loads(metadata_path.read_text())
+        metadata["audit_binding"] = sealed
+        _atomic_write_json(metadata_path, metadata)
+        return ExecutionResult.succeeded(role=role, model_id=model_id, backend=backend,
+                                         execution_step_id=context.step_id, template_step_id=13,
+                                         call_id=sealed["call_id"], audit_binding=sealed)
 
     @staticmethod
     def _phase_instructions(step_id: int, role: str) -> str:
@@ -1186,6 +1349,10 @@ class JudgeStep:
             "- Do not read those general project files. The only permitted inputs are exactly "
             f"judge_packets/{role}/context.txt, judge_packets/{role}/manifest.json, and "
             "judge_packets/objective_evidence.json.",
+            "- The document page images attached to this request are also permitted inputs. "
+            "Match each image, in attachment order, to its PAGE locator and hash in context.txt. "
+            "Inspect every attached page; use its unique PAGE locator as the exact quote for visual findings. "
+            "If any page is unreadable, return INDETERMINATE and identify that page.",
             f"- The generic paths judge_packets/context.txt and judge_packets/manifest.json do "
             f"not exist. Never omit the {role}/ directory.",
             "- Write only the required judge output file.",
@@ -1233,21 +1400,54 @@ class DeliveryStep:
     def prepare(self, context):
         return prepare_human_gates(context.project_dir, context.step_id)
 
+    def execute_analysis(self, context) -> ExecutionResult:
+        """Technical continuation: compilation and audit without publication."""
+        from ..audit.service import FinalAuditService
+        service = self.audit_service or FinalAuditService(self.factory_root, self.judge_step,
+            getattr(self.judge_step, "validator", self.validator), self.runner,
+            self.fingerprinter, self.override_provider)
+        return service.run(context, analysis_only=True, reuse_pass=True).execution
+
     def execute(self, context) -> ExecutionResult:
         project = context.project_dir
         base = project.name
-        cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
-        if cleanup.is_file():
-            self.runner.python(
-                self.factory_root,
-                project,
-                "scripts/cleanup_project_artifacts.py",
-                [project],
-                label="delivery_cleanup",
-                timeout_seconds=300,
-                accepted=(0, 1),
+        try:
+            from ..phase9_delivery_fence import (
+                delivery_side_effect_commit_lease,
+                require_delivery_side_effect_authority,
             )
-        final_input = build_final_input_manifest(project)
+
+            require_delivery_side_effect_authority(
+                project, operation="delivery"
+            )
+        except (OSError, ValueError) as exc:
+            return ExecutionResult.failed(
+                "PERMANENT_PHASE9_DELIVERY_DISABLED",
+                returncode=2,
+                delivery_error=str(exc),
+                delivery_allowed=False,
+            )
+        try:
+            with delivery_side_effect_commit_lease(project, operation="delivery"):
+                cleanup = self.factory_root / "scripts/cleanup_project_artifacts.py"
+                if cleanup.is_file():
+                    self.runner.python(
+                        self.factory_root,
+                        project,
+                        "scripts/cleanup_project_artifacts.py",
+                        [project],
+                        label="delivery_cleanup",
+                        timeout_seconds=300,
+                        accepted=(0, 1),
+                    )
+                final_input = build_final_input_manifest(project)
+        except Phase9DeliveryFenceError as exc:
+            return ExecutionResult.failed(
+                "PERMANENT_PHASE9_DELIVERY_DISABLED",
+                returncode=2,
+                delivery_error=str(exc),
+                delivery_allowed=False,
+            )
         workflow_events: list[dict[str, object]] = [
             {
                 "type": "FINAL_SNAPSHOT_CREATED",
@@ -1277,7 +1477,19 @@ class DeliveryStep:
             )
         else:
             audit_service = self.audit_service
-        outcome = audit_service.run(context)
+        try:
+            outcome = audit_service.run(context, analysis_only=False)
+        except Phase9DeliveryFenceError as exc:
+            return self._with_workflow_events(
+                ExecutionResult.failed(
+                    "PERMANENT_PHASE9_DELIVERY_DISABLED",
+                    returncode=2,
+                    delivery_error=str(exc),
+                    delivery_allowed=False,
+                    final_input_fingerprint=final_input.fingerprint,
+                ),
+                workflow_events,
+            )
         audit = outcome.execution
         try:
             finalization_guard()
@@ -1334,7 +1546,7 @@ class DeliveryStep:
                 self.factory_root,
                 project,
                 "scripts/package_submission.py",
-                [project, base, output],
+                [project, base, output, "--stage-only"],
                 label="package_submission",
                 timeout_seconds=600,
             )
@@ -1353,6 +1565,17 @@ class DeliveryStep:
         except FinalizationSnapshotChanged as exc:
             return self._snapshot_changed_result(
                 final_input.fingerprint, exc, workflow_events
+            )
+        except Phase9DeliveryFenceError as exc:
+            return self._with_workflow_events(
+                ExecutionResult.failed(
+                    "PERMANENT_PHASE9_DELIVERY_DISABLED",
+                    returncode=2,
+                    delivery_error=str(exc),
+                    audit_snapshot=outcome.snapshot.snapshot_id,
+                    delivery_allowed=False,
+                ),
+                workflow_events,
             )
         except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
             return self._with_workflow_events(

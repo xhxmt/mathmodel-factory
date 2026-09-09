@@ -117,6 +117,12 @@ def _require_string(value: object, where: str) -> str:
     return value.strip()
 
 
+def _require_exact_nonblank_string(value: object, where: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{where} must be a non-empty string")
+    return value
+
+
 def _validate_string_list(value: object, where: str) -> list[str]:
     if not isinstance(value, list):
         raise ValueError(f"{where} must be an array")
@@ -141,7 +147,11 @@ def _validate_hard_evidence(value: object) -> list[dict[str, str]]:
             raise ValueError(f"evidence[{index}] must be an object")
         _require_exact_keys(item, required | ({"quote_sha256"} if "quote_sha256" in item else set()), f"evidence[{index}]")
         evidence = {
-            field: _require_string(item[field], f"evidence[{index}].{field}")
+            field: (
+                _require_exact_nonblank_string(item[field], f"evidence[{index}].{field}")
+                if field == "quote"
+                else _require_string(item[field], f"evidence[{index}].{field}")
+            )
             for field in required
         }
         if len(evidence["chunk_id"]) != 64:
@@ -168,7 +178,11 @@ def _validate_paper_evidence(value: object, where: str) -> list[dict[str, str]]:
         expected = required | ({"quote_sha256"} if "quote_sha256" in item else set())
         _require_exact_keys(item, expected, f"{where}[{index}]")
         evidence = {
-            field: _require_string(item[field], f"{where}[{index}].{field}")
+            field: (
+                _require_exact_nonblank_string(item[field], f"{where}[{index}].{field}")
+                if field == "quote"
+                else _require_string(item[field], f"{where}[{index}].{field}")
+            )
             for field in required
         }
         if len(evidence["chunk_id"]) != 64:
@@ -201,7 +215,11 @@ def _validate_paper_issues(value: object) -> list[dict[str, str]]:
         expected = required | ({"quote_sha256"} if "quote_sha256" in item else set())
         _require_exact_keys(item, expected, f"issues[{index}]")
         issue = {
-            field: _require_string(item[field], f"issues[{index}].{field}")
+            field: (
+                _require_exact_nonblank_string(item[field], f"issues[{index}].{field}")
+                if field == "quote"
+                else _require_string(item[field], f"issues[{index}].{field}")
+            )
             for field in required
         }
         if issue["severity"] not in allowed_severity:
@@ -479,11 +497,11 @@ def _packet_completeness(
         files = payload.get("files")
         if not isinstance(files, list):
             raise ValueError("manifest files must be an array")
-        by_path: dict[str, dict[str, Any]] = {}
-        for index, file_item in enumerate(files):
-            if not isinstance(file_item, dict) or not isinstance(file_item.get("path"), str):
-                raise ValueError(f"invalid manifest file at index {index}")
-            by_path[file_item["path"]] = file_item
+        try:
+            from scripts.packet_evidence import PacketEvidence
+        except ModuleNotFoundError:  # direct script execution
+            from packet_evidence import PacketEvidence
+        evidence = PacketEvidence(files)
         requirements = completeness.get("requirements")
         if not isinstance(requirements, list) or not requirements:
             raise ValueError("packet completeness requirements are missing")
@@ -495,9 +513,10 @@ def _packet_completeness(
             if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
                 raise ValueError(f"invalid completeness paths at index {index}")
             actual_satisfied = [
-                path for path in paths if by_path.get(path, {}).get("status") == "included"
+                path for path in paths if evidence.complete(path)
             ]
-            actual_complete = bool(paths) and len(actual_satisfied) == len(paths)
+            actual_complete = (bool(paths) and len(actual_satisfied) == len(paths)
+                               and not requirement.get("binding_error"))
             if requirement.get("satisfied_paths") != actual_satisfied:
                 raise ValueError(f"completeness requirement {requirement['id']} paths conflict")
             if requirement.get("satisfied") is not actual_complete:

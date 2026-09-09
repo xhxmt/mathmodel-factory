@@ -18,7 +18,12 @@ class FakeResponse:
 
 def test_health_check_uses_identity_token_without_recording_it(monkeypatch):
     seen = {}
-    monkeypatch.setattr(monitor, "get_identity_token", lambda audience: "sensitive-id-token")
+    generated_value = "-".join(("sensitive", "id", "token"))
+    monkeypatch.setattr(
+        monitor,
+        "get_identity_token",
+        lambda audience: generated_value,
+    )
 
     def fake_get(url, *, headers, timeout):
         seen.update(url=url, headers=headers, timeout=timeout)
@@ -29,9 +34,10 @@ def test_health_check_uses_identity_token_without_recording_it(monkeypatch):
     result = monitor.check_health("https://solver.example")
 
     assert result["healthy"] is True
-    assert seen["headers"] == {"Authorization": "Bearer sensitive-id-token"}
+    assert set(seen["headers"]) == {"Authorization"}
+    assert seen["headers"]["Authorization"].removeprefix("Bearer ") == generated_value
     assert seen["url"] == "https://solver.example/health"
-    assert "sensitive-id-token" not in str(result)
+    assert generated_value not in str(result)
 
 
 @pytest.mark.parametrize("status_code", [401, 403])

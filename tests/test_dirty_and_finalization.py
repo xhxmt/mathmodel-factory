@@ -10,8 +10,8 @@ from factory_core.audit.domain import (
     AuditSnapshot,
     AuditStatus,
 )
-from factory_core.artifact_ownership import artifact_owner_stage
-from factory_core.dirty import (
+from factory_core.current_artifact_ownership import artifact_owner_stage
+from factory_core.current_dirty import (
     DirtyFlag,
     capture_artifact_manifest,
     classify_manifest_changes,
@@ -71,6 +71,20 @@ def test_derived_result_projection_does_not_reopen_canonical_solve(tmp_path):
 
     assert DirtyFlag.FORMAT in flags
     assert DirtyFlag.RESULT not in flags
+
+
+def test_number_verification_is_owned_by_final_revision_validation(tmp_path):
+    before = capture_artifact_manifest(tmp_path)
+    (tmp_path / "number_verification.md").write_text(
+        "# Number verification\n\nVERDICT: PASS\n", encoding="utf-8"
+    )
+    after = capture_artifact_manifest(tmp_path)
+
+    changes = classify_manifest_changes(before, after)
+
+    assert [(change.flag, change.owner_stage) for change in changes] == [
+        (DirtyFlag.MATH, 8)
+    ]
 
 
 def test_problem_plan_change_is_owned_by_understand_stage(tmp_path):
@@ -628,7 +642,8 @@ def test_declared_unowned_attachment_is_covered_and_included(tmp_path):
 class MutatingAudit:
     project: object
 
-    def run(self, _context):
+    def run(self, _context, *, analysis_only=True):
+        assert analysis_only is False
         paper = self.project / "demo_paper.tex"
         paper.write_text(
             paper.read_text(encoding="utf-8") + "% mutation\n",
@@ -661,7 +676,9 @@ class Unused:
     pass
 
 
-def test_delivery_returns_events_without_writing_workflow_state_when_input_changes(tmp_path):
+def test_delivery_returns_events_without_writing_workflow_state_when_input_changes(
+    tmp_path,
+):
     project = tmp_path / "demo"
     project.mkdir()
     (project / "demo_paper.tex").write_text(

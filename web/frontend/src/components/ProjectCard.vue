@@ -1,124 +1,78 @@
 <template>
-  <article class="card panel" :class="['ac-' + project.status, { pending: project.consultation_pending || project.selection_pending }]" @click="$emit('open', project)" tabindex="0" @keydown.enter="$emit('open', project)">
+  <article class="card panel" :class="['ac-' + state, { pending: awaiting }]" @click="$emit('open', project)" tabindex="0" @keydown.enter.self="$emit('open', project)">
     <div class="c-top">
-      <span class="dot" :class="dotClass"></span>
-      <span class="c-name mono">{{ project.base_name }}</span>
-      <span v-if="diagnosticBadge" class="tag diag-tag">{{ diagnosticBadge }}</span>
-      <span class="spacer"></span>
-      <span class="tag" :class="'st-' + project.status">{{ statusLabel }}</span>
+      <span class="dot" :class="tone"></span>
+      <span class="c-run mono">{{ project.base_name }}</span>
+      <span class="tag" :class="'st-' + state">{{ label }}</span>
     </div>
-
-    <div v-if="project.consultation_pending" class="c-consult">
-      <Icon name="alert-triangle" :size="13" />
-      <span>等待你处理 · {{ project.consultation_gate || 'gate' }}</span>
+    <h3>{{ project.problem_title || project.base_name }}</h3>
+    <div class="c-stage"><span class="mono">{{ stage?.id ? String(stage.id).padStart(2, '0') + ' / 10' : '—' }}</span><span>{{ stage?.name || '等待调度' }}</span></div>
+    <div v-if="awaiting || state === 'interrupted' || state === 'failed'" class="c-notice" :class="{ danger: state === 'interrupted' || state === 'failed' }">
+      <Icon :name="awaiting ? 'user' : 'alert-triangle'" :size="14" /><span>{{ hint }}</span>
     </div>
-    <div v-if="project.selection_pending" class="c-consult">
-      <Icon name="git-branch" :size="13" />
-      <span>等待选方案 · {{ project.selection_gate || 'step3' }}</span>
-    </div>
-
     <div class="c-rail">
-      <StepRail :current-step="project.current_step" :awaiting="project.consultation_pending || project.selection_pending" compact />
-      <div class="c-railmeta mono">
-        <span class="c-step">{{ stepText }}</span>
-        <span class="c-pct" :class="{ done: project.progress_percent >= 100 }">{{ Math.round(project.progress_percent) }}%</span>
-      </div>
+      <StepRail :project="project" :current-step="project.current_step" :awaiting="awaiting" compact />
+      <div class="c-railmeta"><span>{{ position }}</span><span class="mono" :class="{ done: state === 'completed' }">{{ progress }}%</span></div>
     </div>
-
+    <div class="c-evidence">
+      <span :class="{ valid: project.evidence_validity === 'VALID', invalid: project.evidence_validity === 'INVALID' }"><Icon name="shield" :size="12" />{{ evidence }}</span>
+      <span :class="{ valid: project.delivery_allowed }"><Icon :name="project.delivery_allowed ? 'check-circle' : 'lock'" :size="12" />{{ project.delivery_allowed ? '允许交付' : '未获交付许可' }}</span>
+    </div>
     <div class="c-foot">
-      <div class="c-meta mono">
-        <span class="m-i"><Icon name="clock" :size="11" /> {{ rel(project.last_updated) }}</span>
-        <span v-if="project.pid" class="m-i">PID {{ project.pid }}</span>
-      </div>
+      <span class="c-time mono"><Icon name="clock" :size="12" />{{ rel(project.last_updated) }}</span>
       <div class="c-actions" @click.stop>
-        <button v-if="project.is_running" class="btn btn-icon btn-sm btn-ghost" @click="$emit('action', project, 'pause')" title="暂停"><Icon name="pause" :size="13" /></button>
-        <button v-else-if="canResume" class="btn btn-icon btn-sm btn-ghost" @click="$emit('action', project, 'resume')" title="恢复"><Icon name="play" :size="13" /></button>
-        <button class="btn btn-sm btn-ghost enter" @click.stop="$emit('open', project)">进入 <Icon name="chevron-right" :size="13" /></button>
+        <button v-if="control" class="btn btn-sm" :class="awaiting ? 'btn-amber' : 'btn-ghost'" @click="perform"><Icon :name="control.icon" :size="13" />{{ control.label }}</button>
+        <button v-else class="btn btn-sm btn-ghost" @click="$emit('open', project)">查看项目<Icon name="chevron-right" :size="13" /></button>
       </div>
     </div>
   </article>
 </template>
-
 <script>
 import Icon from './Icon.vue'
 import StepRail from './StepRail.vue'
 import { relativeTime } from '../lib/api.js'
-import { badgeText } from '../lib/diagnostics.js'
-import { stepByIndex } from '../lib/steps.js'
-import { statusLabel as mapStatusLabel } from '../lib/status.js'
-
+import { executionStatus, executionLabel, statusTone, needsHuman, currentStage, stepText, projectProgress, primaryControl, executionHint, evidenceLabel } from '../lib/projectState.js'
 export default {
-  name: 'ProjectCard',
-  components: { Icon, StepRail },
-  props: { project: { type: Object, required: true } },
-  emits: ['open', 'action'],
+  name: 'ProjectCard', components: { Icon, StepRail }, props: { project: { type: Object, required: true } }, emits: ['open', 'action'],
   computed: {
-    statusLabel() { return mapStatusLabel(this.project.status) },
-    diagnosticBadge() { return badgeText(this.project) },
-    dotClass() {
-      return { running: 'live', awaiting_consultation: 'amber', awaiting_selection: 'amber', completed: 'ok', paused: 'paused', failed: 'bad', killed: 'bad' }[this.project.status] || ''
-    },
-    canResume() { return ['paused', 'ready', 'awaiting_consultation', 'awaiting_selection'].includes(this.project.status) },
-    stepText() {
-      const c = this.project.current_step
-      if (c >= 16) return '16 · 已完成'
-      const s = stepByIndex(Math.min(16, Math.max(0, c + 1)))
-      return s ? `${Math.max(0, c + 1)} · ${s.name}` : `Step ${c + 1}`
-    },
+    state() { return executionStatus(this.project) }, label() { return executionLabel(this.project) }, tone() { return statusTone(this.project) },
+    awaiting() { return needsHuman(this.project) }, stage() { return currentStage(this.project) }, position() { return stepText(this.project) },
+    progress() { return projectProgress(this.project) }, control() { return primaryControl(this.project) }, hint() { return executionHint(this.project) },
+    evidence() { return evidenceLabel(this.project) },
   },
-  methods: { rel: relativeTime },
+  methods: { rel: relativeTime, perform() { if (this.control?.kind === 'command') this.$emit('action', this.project, this.control.action); else this.$emit('open', this.project, this.control?.tab) } },
 }
 </script>
-
 <style scoped>
-.card {
-  position: relative; display: flex; flex-direction: column; gap: 14px;
-  padding: 16px 16px 14px; cursor: pointer;
-  border-left: 2px solid var(--ink-3);
-  transition: border-color 0.2s var(--ease), transform 0.2s var(--ease), box-shadow 0.2s var(--ease), background 0.2s var(--ease);
-}
-.card:hover { transform: translateY(-3px); box-shadow: var(--shadow); background: var(--panel-2); }
-.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ac-running { border-left-color: var(--live); }
-.ac-running:hover { box-shadow: var(--shadow), 0 10px 34px var(--live-glow); }
-.ac-completed { border-left-color: var(--ok); }
-.ac-completed:hover { box-shadow: var(--shadow), 0 10px 34px var(--ok-glow); }
-.ac-paused { border-left-color: var(--paused); }
-.ac-failed, .ac-killed { border-left-color: var(--bad); }
-.ac-failed:hover, .ac-killed:hover { box-shadow: var(--shadow), 0 10px 34px var(--bad-glow); }
-.card.pending { border-left-color: var(--amber); box-shadow: inset 2px 0 0 var(--amber), 0 0 0 1px var(--amber-line); }
-.card.pending:hover { box-shadow: inset 2px 0 0 var(--amber), 0 0 0 1px var(--amber-line), 0 10px 34px var(--amber-glow); }
-
-.c-top { display: flex; align-items: center; gap: 9px; }
-.c-name { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.spacer { flex: 1; }
-
-.c-consult {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 11px; margin: -2px 0;
-  background: var(--amber-dim); border: 1px solid var(--amber-line); border-radius: var(--r-sm);
-  color: var(--amber); font-size: 12px; font-weight: 600;
-}
-
-.c-rail { display: flex; flex-direction: column; gap: 9px; padding: 2px 2px 0; }
-.c-railmeta { display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
-.c-step { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.c-pct { color: var(--ink-3); font-weight: 700; }
-.c-pct.done { color: var(--ok); }
-
-.c-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
-.c-meta { display: flex; gap: 12px; font-size: 11px; color: var(--ink-3); }
-.m-i { display: inline-flex; align-items: center; gap: 5px; }
-.c-actions { display: flex; align-items: center; gap: 6px; }
-.enter { color: var(--ink-2); }
-.enter:hover { color: var(--ink); border-color: var(--live); }
-
-.tag { font: 600 10px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 8px; border-radius: var(--r-xs); border: 1px solid var(--line); background: var(--panel-2); color: var(--ink-2); white-space: nowrap; }
-.st-running { color: var(--live); border-color: var(--live-dim); background: var(--live-dim); }
-.st-awaiting_consultation { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
-.st-awaiting_selection { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
-.st-completed { color: var(--ok); border-color: var(--ok-dim); background: var(--ok-dim); }
-.st-paused { color: var(--paused); }
-.st-failed, .st-killed { color: var(--bad); border-color: var(--bad-dim); background: var(--bad-dim); }
-.diag-tag { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
+.card { min-width: 0; padding: 22px 22px 16px; display: flex; flex-direction: column; gap: 15px; cursor: pointer; border-top: 2px solid var(--line-2); transition: background .2s, border-color .2s, transform .2s; }
+.card:hover { background: var(--panel-2); transform: translateY(-2px); }
+.card:focus-visible { outline: 2px solid var(--live); outline-offset: 3px; }
+.c-top { display: flex; align-items: center; gap: 8px; }
+.c-run { font-size: 11px; color: var(--ink-3); flex: 1; min-width: 0; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+h3 { font-size: 17px; line-height: 1.5; font-weight: 600; margin: 0; }
+.c-stage { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: 13px; }
+.c-stage .mono { color: var(--ink-3); font-size: 12px; }
+.c-notice { display: flex; align-items: flex-start; gap: 8px; color: var(--amber); background: var(--amber-dim); border-radius: 6px; padding: 10px; font-size: 12px; line-height: 1.6; }
+.c-notice svg { flex-shrink: 0; margin-top: 3px; }
+.c-notice.danger { color: var(--bad); background: var(--bad-dim); }
+.c-rail { margin-top: auto; padding-top: 5px; display: grid; gap: 12px; }
+.c-railmeta { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--ink-2); }
+.c-evidence { display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--ink-3); font-size: 11px; }
+.c-evidence span { display: inline-flex; align-items: center; gap: 5px; }
+.c-evidence .valid, .done { color: var(--ok); }
+.c-evidence .invalid { color: var(--bad); }
+.c-foot { border-top: 1px solid var(--line); padding-top: 13px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.c-time { font-size: 11px; color: var(--ink-3); display: inline-flex; gap: 5px; align-items: center; }
+.c-actions .btn { font-size: 12px; }
+.tag { font-size: 11px; padding: 5px 8px; white-space: nowrap; }
+.ac-running, .ac-archiving { border-top-color: var(--live); }
+.ac-completed { border-top-color: var(--ok); }
+.ac-interrupted, .ac-failed { border-top-color: var(--bad); }
+.ac-retrying, .pending { border-top-color: var(--amber); }
+.pending { background: color-mix(in srgb, var(--amber-dim) 32%, var(--panel)); }
+.st-running, .st-archiving { color: var(--live); background: var(--live-dim); }
+.st-completed { color: var(--ok); background: var(--ok-dim); }
+.st-interrupted, .st-failed, .st-killed { color: var(--bad); background: var(--bad-dim); }
+.st-retrying, .st-awaiting_selection, .st-awaiting_consultation { color: var(--amber); background: var(--amber-dim); }
+.st-paused { color: var(--paused); background: var(--paused-dim); }
 </style>

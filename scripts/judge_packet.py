@@ -16,6 +16,10 @@ from factory_core.paper_sources import (
     require_safe_latex_dependencies,
     resolve_latex_dependency_graph,
 )
+from scripts.json_evidence_view import SUFFIX as EVIDENCE_VIEW_SUFFIX, verify_view
+from scripts.packet_evidence import ALIAS_CONTRACT, PacketEvidence
+from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, MAX_RAW_BYTES, render_file as render_numpy
+from scripts.document_evidence_view import SUFFIXES as DOCUMENT_SUFFIXES, render_file as render_document, MAX_ASSET_BYTES, MAX_IMAGES
 
 try:
     from scripts.claim_graph import (
@@ -66,7 +70,8 @@ TEXT_SUFFIXES = {
 MAX_CONTEXT_BYTES = 180_000
 EXECUTION_CONTEXT_BYTES = 360_000
 MAX_FILE_BYTES = 55_000
-PACKET_VERSION = 4
+PACKET_VERSION = 6
+DOCUMENT_CONTEXT_BYTES = 2_000_000
 COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v1"
 
 
@@ -123,6 +128,8 @@ def _is_model_code(relative: str) -> bool:
 
 def _is_execution_evidence(relative: str) -> bool:
     name = Path(relative).name
+    if relative.startswith(".factory/solver_receipts/") and name.endswith((".submitted.json", ".completed.json")):
+        return True
     if relative.startswith("logs/"):
         return (
             Path(relative).suffix.lower() == ".log"
@@ -151,6 +158,10 @@ def _execution_priority(project: Path, path: Path) -> tuple[int, str]:
     suffix = path.suffix.lower()
     if relative.endswith("_paper.tex") or relative == "paper/paper.tex":
         priority = 0
+    elif ("receipt" in name.lower() or relative.startswith(".factory/solver_receipts/")) and suffix == ".json":
+        priority = 1
+    elif relative.startswith("logs/") and any(word in name.lower() for word in ("stderr", "fail", "error")):
+        priority = 4
     elif relative == "results/canonical_results.json":
         priority = 1
     elif relative.startswith("models/") and path.stem.lower() == "03_solve":
@@ -467,6 +478,10 @@ def _role_requirements(
         project, paths, lambda relative: relative.startswith("logs/")
     )
     execution_trace = execution_trace or _first_path(
+        project, paths, lambda relative: relative.startswith(".factory/solver_receipts/")
+        and relative.endswith(".completed.json"),
+    )
+    execution_trace = execution_trace or _first_path(
         project,
         paths,
         lambda relative: relative.startswith("models/")
@@ -519,10 +534,15 @@ def _render_context(
     role: str,
     paths: list[Path],
     requirements: list[dict[str, object]],
+    assets: dict[str, bytes] | None = None,
 ) -> tuple[str, list[dict]]:
     chunks: list[str] = []
     files: list[dict] = []
     used = 0
+    document_used = 0
+    image_count = 0
+    assets = {} if assets is None else assets
+    by_content: dict[str, dict] = {}
     critical_for: dict[str, list[str]] = {}
     for requirement in requirements:
         for relative in requirement["paths"]:
@@ -541,39 +561,94 @@ def _render_context(
             item.update({"status": "omitted", "reason": omission_reason})
             files.append(item)
             continue
-        item.update({
-            "sha256": _sha256(resolved),
-            "size": resolved.stat().st_size,
-        })
-        if path.suffix.lower() not in TEXT_SUFFIXES:
+        item["size"] = resolved.stat().st_size
+        if path.suffix.lower() in NUMPY_SUFFIXES and item["size"] > MAX_RAW_BYTES:
+            item.update(status="omitted", reason="numpy_source_byte_limit")
+            files.append(item)
+            continue
+        item["sha256"] = _sha256(resolved)
+        document_assets = {}
+        if path.suffix.lower() in NUMPY_SUFFIXES:
+            try:
+                original, item["binary_review"] = render_numpy(resolved)
+                if (item["binary_review"]["source_sha256"] != item["sha256"]
+                        or item["binary_review"]["source_size"] != item["size"]):
+                    raise ValueError("numpy_source_changed_during_read")
+            except (OSError, ValueError) as exc:
+                item.update(status="omitted", reason=str(exc) if isinstance(exc, ValueError) else "numpy_source_unreadable")
+                files.append(item)
+                continue
+        elif path.suffix.lower() in DOCUMENT_SUFFIXES:
+            try:
+                original, item["document_review"], document_assets = render_document(resolved)
+                if (item["document_review"]["source_sha256"] != item["sha256"]
+                        or item["document_review"]["source_size"] != item["size"]):
+                    raise ValueError("document_source_changed_during_read")
+            except (OSError, ValueError) as exc:
+                item.update(status="omitted", reason=str(exc) if isinstance(exc, ValueError) else "document_source_unreadable")
+                files.append(item)
+                continue
+        elif path.suffix.lower() not in TEXT_SUFFIXES:
             item.update({"status": "omitted", "reason": "unsupported_non_text"})
             files.append(item)
             continue
-        original = resolved.read_text(encoding="utf-8", errors="replace")
+        else:
+            original = resolved.read_text(encoding="utf-8", errors="replace")
+        if relative.endswith(EVIDENCE_VIEW_SUFFIX):
+            try:
+                item["structured_evidence"] = verify_view(project, resolved.read_bytes())
+            except (OSError, ValueError, TypeError, KeyError):
+                item.update({"status": "omitted", "reason": "invalid_structured_evidence"})
+                files.append(item)
+                continue
+        canonical = by_content.get(item["sha256"])
+        if canonical is not None:
+            canonical.setdefault("aliases", []).append(relative)
+            item.update(status="alias", alias_of=canonical["path"],
+                        alias_chunk_id=canonical["chunk_id"],
+                        reason="identical_source_content", included_bytes=0)
+            files.append(item)
+            continue
         original_size = len(original.encode("utf-8"))
         header = f"\n----- FILE: {relative} -----\n"
         # A role's primary evidence is all-or-nothing.  It may use the whole
         # context budget, but is never silently middle-truncated.  Secondary
         # code and appendices retain the per-file cap and are disclosed below.
-        if relative in critical_for:
+        if relative in critical_for or "binary_review" in item or "document_review" in item:
             text = original
         else:
             framing_bytes = len((header + "\n").encode("utf-8"))
             remaining = max(0, context_limit - used - framing_bytes)
             text = _truncate_text(original, min(MAX_FILE_BYTES, remaining))
         encoded_size = len((header + text + "\n").encode("utf-8"))
-        if not text or used + encoded_size > context_limit:
-            item.update({"status": "omitted", "reason": "context_byte_limit"})
+        is_document = "document_review" in item
+        pages = len(item.get("document_review", {}).get("pages", []))
+        if image_count + pages > MAX_IMAGES:
+            item.update(status="omitted", reason="document_image_count_limit")
             files.append(item)
             continue
+        remaining = DOCUMENT_CONTEXT_BYTES - document_used if is_document else context_limit - used
+        if not text or encoded_size > remaining:
+            item.update({"status": "omitted", "reason": "document_context_byte_limit" if is_document else "context_byte_limit"})
+            files.append(item)
+            continue
+        if sum(len(data) for data in (assets | document_assets).values()) > MAX_ASSET_BYTES:
+            item.update(status="omitted", reason="document_asset_byte_limit")
+            files.append(item)
+            continue
+        assets.update(document_assets)
+        image_count += pages
         chunks.extend((header, text, "\n"))
-        used += encoded_size
+        if is_document:
+            document_used += encoded_size
+        else:
+            used += encoded_size
         included_size = len(text.encode("utf-8"))
         included_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
         chunk_id = hashlib.sha256(
             f"{role}\0{relative}\0{included_sha256}".encode("utf-8")
         ).hexdigest()
-        was_truncated = relative not in critical_for and included_size < original_size
+        was_truncated = included_size < original_size
         item.update({
             "status": "truncated" if was_truncated else "included",
             "included_bytes": included_size,
@@ -589,6 +664,7 @@ def _render_context(
                 else "remaining_context_byte_limit"
             )
         files.append(item)
+        by_content[item["sha256"]] = item
     if any(item["status"] == "omitted" for item in files):
         omitted_marker = "\n----- SOME SELECTED FILES OMITTED; SEE PACKET MANIFEST -----\n"
     else:
@@ -599,16 +675,17 @@ def _render_context(
 
 
 def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> dict:
-    by_path = {str(item["path"]): item for item in files}
+    evidence = PacketEvidence(files)
     evaluated: list[dict[str, object]] = []
     for declared in requirements:
         item = dict(declared)
         paths = [str(path) for path in item["paths"]]
         satisfied_paths = [
-            path for path in paths if by_path.get(path, {}).get("status") == "included"
+            path for path in paths
+            if evidence.complete(path)
         ]
         item["satisfied_paths"] = satisfied_paths
-        item["satisfied"] = bool(paths) and len(satisfied_paths) == len(paths)
+        item["satisfied"] = bool(paths) and len(satisfied_paths) == len(paths) and not item.get("binding_error")
         if not paths:
             item["failure_reason"] = "required_artifact_missing"
         elif not item["satisfied"]:
@@ -633,6 +710,17 @@ def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> d
         "contract_version": COMPLETENESS_CONTRACT_VERSION,
         "status": "COMPLETE" if complete else "INCOMPLETE",
         "eligible": complete,
+        "meaning": "REQUIRED_ARTIFACTS_ONLY",
+        "overall_coverage": {
+            "selected_paths": len(files),
+            "included_paths": sum(item["status"] == "included" for item in files),
+            "deduplicated_paths": sum(item["status"] == "alias" for item in files),
+            "truncated_paths": sum(item["status"] == "truncated" for item in files),
+            "omitted_paths": sum(item["status"] == "omitted" for item in files),
+            "all_selected_content_complete": all(
+                evidence.complete(item["path"])
+                for item in files),
+        },
         "requirements": evaluated,
         "limitations": limitations,
     }
@@ -689,15 +777,19 @@ def _manifest(
     context_limit = EXECUTION_CONTEXT_BYTES if role == "execution" else MAX_CONTEXT_BYTES
     status_counts = {
         status: sum(item["status"] == status for item in files)
-        for status in ("included", "truncated", "omitted")
+        for status in ("included", "alias", "truncated", "omitted")
     }
     manifest = {
         "version": PACKET_VERSION,
+        "alias_contract": ALIAS_CONTRACT,
         "role": role,
         "project": project.name,
         "status_counts": status_counts,
         "limits": {
-            "context_bytes": context_limit,
+            "context_bytes": context_limit + DOCUMENT_CONTEXT_BYTES,
+            "text_context_bytes": context_limit,
+            "document_context_bytes": DOCUMENT_CONTEXT_BYTES,
+            "document_asset_bytes": MAX_ASSET_BYTES,
             "per_file_bytes": MAX_FILE_BYTES,
             "critical_file_policy": "include_in_full_or_mark_role_incomplete",
         },
@@ -743,7 +835,18 @@ def packet_payloads(
         raise FileNotFoundError(f"project directory not found: {project}")
     base_name = base_name or project.name
     registry = build_claim_registry(project, base_name)
+    from scripts.claim_graph import claim_binding_issues
+    binding_issues = claim_binding_issues(project)
     selected = _selected_paths(project, base_name, registry)
+    from scripts.solver_evidence_selection import required_solver_evidence
+    solver_requirements = required_solver_evidence(project, registry)
+    known = {_relative(project, path) for path in selected["execution"]}
+    for requirement in solver_requirements:
+        for relative in requirement["paths"]:
+            if relative not in known and (project / relative).is_file():
+                selected["execution"].append(project / relative)
+                known.add(relative)
+    selected["execution"].sort(key=lambda path: _execution_priority(project, path))
     bundle_identity = None
     if (project / f"{base_name}_paper.pdf").is_file():
         from factory_core.submission_bundle import submission_bundle_manifest
@@ -759,9 +862,20 @@ def packet_payloads(
     result: dict[str, dict] = {}
     for role, paths in selected.items():
         requirements = _role_requirements(project, role, paths, base_name, registry)
-        context, files = _render_context(project, role, paths, requirements)
+        if role == "execution":
+            requirements.extend(solver_requirements)
+        applicable = {claim["id"] for claim in registry.get("claims", [])
+                      if role in claim.get("required_roles", [])}
+        for issue in binding_issues:
+            if issue["claim_id"] in applicable and issue.get("field") is not None:
+                requirements.append({"id": "claim_field:" + issue["claim_id"],
+                    "paths": [issue["path"]], "binding_error": issue["reason"],
+                    "field": issue["field"], "required_status": "included"})
+        assets = {}
+        context, files = _render_context(project, role, paths, requirements, assets)
         result[role] = {
             "context": context,
+            "assets": assets,
             "manifest": _manifest(
                 project,
                 role,
@@ -812,6 +926,16 @@ def build_packets(
     payloads = packet_payloads(project, base_name, objective_evidence)
     result: dict[str, dict] = {}
     for role, payload in payloads.items():
+        for relative, data in payload["assets"].items():
+            destination = project / relative
+            if not destination.resolve().is_relative_to(project) or destination.is_symlink():
+                raise ValueError("packet asset escapes project")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_suffix(destination.suffix + ".tmp")
+            if temporary.is_symlink():
+                raise ValueError("unsafe packet asset temporary path")
+            temporary.write_bytes(data)
+            temporary.replace(destination)
         packet_dir = project / "judge_packets" / role
         packet_dir.mkdir(parents=True, exist_ok=True)
         context = str(payload["context"])

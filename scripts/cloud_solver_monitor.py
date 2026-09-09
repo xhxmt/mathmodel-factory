@@ -43,6 +43,10 @@ FALLBACK_COOLDOWN = 3600  # 回退后恢复检查的冷却时间(秒)
 AUTH_ERROR_CATEGORIES = {"authentication", "authentication_config"}
 
 
+def _authorization_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
 def empty_health_history() -> Dict:
     return {
         "version": "2.0",
@@ -133,7 +137,7 @@ def check_health(url: str) -> Dict:
         start = time.time()
         response = requests.get(
             f"{url.rstrip('/')}/health",
-            headers={"Authorization": f"Bearer {token}"},
+            headers=_authorization_headers(token),
             timeout=HEALTH_CHECK_TIMEOUT,
         )
         del token
