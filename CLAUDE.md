@@ -129,7 +129,7 @@ bundle or coordinate-bound snapshot methods in Phase 2 tests. This is a
 persistence boundary only: do not treat table presence as Scheduler cutover,
 outbox delivery, command authorization, or production DB migration.
 
-The Phase-2 production-capable but not traffic-connected suffix is documented
+The Phase-2 production-capable persistence suffix is documented
 in `docs/architecture/PHASE2_PRODUCTION_AUTHORITY_FOUNDATION.md`. It appends
 `A2_0010` through `A2_0014` in a separate verified migration history and keeps
 the published `A2_0001` through `A2_0009` bytes/checksums unchanged. Its only
@@ -145,10 +145,14 @@ an already-verified restore replacement.
 The future Authority writer has one fenced complete-bundle mutation, the read
 repository is query-only/revision-atomic, and outbox delivery requires a
 durable consumer fence plus injected provider/reconciliation callbacks. The
-persisted switch defaults to `V1_ONLY`; no active Scheduler, Service, current
-CLI, Web/API/frontend, launcher, model, Solver, provider, or Phase 3-8 path
-imports or calls the production foundation. The current v1 writer inventory
-and route remain active and are not dual-written.
+persisted switch defaults to `V1_ONLY`. The first narrow application route is
+solver-policy configuration/query, documented in
+`docs/operations/AUTHORITY_SOLVER_POLICY_ROUTE.md`. It lazily enters Authority
+only for an explicitly migrated CANARY/PRIMARY database owned by the enabled
+`factory-service` writer. A2_0021 fences legacy SQL writes in those modes.
+Other application commands and the modeling scheduler are not yet ported;
+they cannot run through the old writer while this pilot owns the database.
+Unmigrated and V1_ONLY projects retain the current route without dual writing.
 
 The default-off Phase9 control plane is documented in
 `docs/operations/PHASE9_ENTRY_GATE.md` and

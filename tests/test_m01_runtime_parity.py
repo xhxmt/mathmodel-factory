@@ -51,6 +51,8 @@ FORBIDDEN_RUNTIME_IMPORTS = {
 # exact primitive family each consumer may reference; it is not a general
 # exemption for production runtime modules.
 PHASE2_8_PURE_MODULE_CONSUMERS = {
+    "factory_core/authority_solver_policy.py": frozenset({"canonical"}),
+    "factory_core/solver_policy_routing.py": frozenset({"canonical", "workflow_contract"}),
     "factory_core/phase9_provider_identity.py": frozenset({"canonical"}),
     "factory_core/phase9_provider_sandbox.py": frozenset({"canonical"}),
     "factory_core/phase9_runtime.py": frozenset({"canonical"}),
@@ -227,6 +229,8 @@ def test_production_runtime_does_not_import_or_reference_m01_pure_modules() -> N
 
 def test_phase2_8_pure_module_consumers_are_an_exact_closed_set() -> None:
     expected = {
+        "factory_core/authority_solver_policy.py": frozenset({"canonical"}),
+        "factory_core/solver_policy_routing.py": frozenset({"canonical", "workflow_contract"}),
         "factory_core/phase9_provider_identity.py": frozenset({"canonical"}),
         "factory_core/phase9_provider_sandbox.py": frozenset({"canonical"}),
         "factory_core/phase9_runtime.py": frozenset({"canonical"}),
@@ -269,7 +273,7 @@ def test_phase2_8_pure_module_consumers_are_an_exact_closed_set() -> None:
     }
 
     assert PHASE2_8_PURE_MODULE_CONSUMERS == expected
-    assert len(PHASE2_8_PURE_MODULE_CONSUMERS) == 33
+    assert len(PHASE2_8_PURE_MODULE_CONSUMERS) == 35
     assert set(PHASE2_8_PURE_MODULE_CONSUMERS).isdisjoint(PURE_M01_MODULES)
     assert all((ROOT / path).is_file() for path in PHASE2_8_PURE_MODULE_CONSUMERS)
 

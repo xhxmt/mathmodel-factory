@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-15: Authority solver-policy application route
+
+- Route solver configuration and queries through fenced Authority command
+  bundles for explicitly enabled CANARY/PRIMARY projects; retain native behavior
+  for unmigrated and V1_ONLY projects.
+- Add A2_0021 database guards against native table writes while Authority owns
+  the database. Preserve prior migration bytes and exact backup/restore paths.
+- Keep model execution, other workflow commands and notification dispatch out
+  of this configuration-only pilot; unsupported native writes fail explicitly.
+
 ## 2026-09-15: production alignment and audit boundary repairs
 
 - Reject every unreviewed solver receipt identity even when another version of the same path is included.

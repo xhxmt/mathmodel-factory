@@ -344,7 +344,11 @@ def test_source_row_drift_disables_production_writer_without_touching_v1(tmp_pat
     fixture = install_foundation(tmp_path)
     writer = configure_canary(fixture)
     connection = sqlite3.connect(fixture.database)
+    # Inject corruption beyond the ordinary SQL write fence, retaining its DDL.
+    fence_ddl = connection.execute("SELECT sql FROM sqlite_master WHERE name='authority_production_native_fence_project_state_update'").fetchone()[0]
+    connection.execute("DROP TRIGGER authority_production_native_fence_project_state_update")
     connection.execute("UPDATE project_state SET status='paused'")
+    connection.execute(fence_ddl)
     connection.commit()
     connection.close()
     with pytest.raises(Exception, match="source fence"):

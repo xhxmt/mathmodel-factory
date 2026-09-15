@@ -44,6 +44,7 @@ class CommandEnvelopeValidationError(ValueError):
 
 
 class CommandType(str, Enum):
+    CONFIGURE_SOLVER_POLICY = "CONFIGURE_SOLVER_POLICY"
     SHADOW_ADVANCE = "SHADOW_ADVANCE"
     SHADOW_RETRY = "SHADOW_RETRY"
     SHADOW_APPLY_DECISION = "SHADOW_APPLY_DECISION"

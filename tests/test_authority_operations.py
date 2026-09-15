@@ -323,7 +323,12 @@ def test_source_fence_drift_triggers_durable_one_way_auto_fallback(tmp_path):
     fixture = install_foundation(tmp_path)
     configure_canary(fixture)
     connection = sqlite3.connect(fixture.database)
+    # Simulate out-of-band corruption while restoring the exact guard DDL.
+    # Ordinary legacy writes are now rejected by A2_0021 instead.
+    fence_ddl = connection.execute("SELECT sql FROM sqlite_master WHERE name='authority_production_native_fence_project_state_update'").fetchone()[0]
+    connection.execute("DROP TRIGGER authority_production_native_fence_project_state_update")
     connection.execute("UPDATE project_state SET status='paused'")
+    connection.execute(fence_ddl)
     connection.commit()
     connection.close()
     health = evaluate_authority_health(
@@ -794,6 +799,9 @@ def test_fresh_active_cli_imports_no_production_authority_modules_and_has_only_t
         "factory_core/phase9_replay_evidence.py": {"authority_production_schema"},
         "factory_core/phase9_run_generation.py": {"authority_production_schema"},
         "factory_core/phase9_runtime_authority.py": {"authority_production_schema"},
+        "factory_core/solver_policy_routing.py": {
+            "authority_production_schema", "authority_production_writer", "authority_read_repository",
+        },
     }
     matches = {}
     for path in active_files:

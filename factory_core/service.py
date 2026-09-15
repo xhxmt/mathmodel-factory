@@ -856,6 +856,14 @@ class FactoryService:
         resolved = self.resolve_project(project)
         if mode in {"cloud", "auto"} and self._cloud_quarantined():
             raise InvalidTransition("cloud solver execution is quarantined")
+        from .solver_policy_routing import authority_solver_route, configure_authority_solver_policy
+
+        route = authority_solver_route(resolved)
+        if route is not None:
+            return configure_authority_solver_policy(
+                route, mode=mode, threshold_seconds=threshold_seconds,
+                allowed_runtimes=allowed_runtimes or ["python"], expected_revision=expected_revision,
+            )
         store = SQLiteStateStore(resolved)
         state = store.load()
         revision = state.revision if expected_revision is None else expected_revision
@@ -871,7 +879,13 @@ class FactoryService:
 
     def solver_policy(self, project: str | Path) -> dict[str, Any]:
         resolved = self.resolve_project(project)
-        policy = SQLiteStateStore(resolved).solver_policy()
+        from .solver_policy_routing import authority_solver_route, read_authority_solver_policy
+
+        route = authority_solver_route(resolved)
+        if route is not None:
+            policy = read_authority_solver_policy(route)
+        else:
+            policy = SQLiteStateStore(resolved).solver_policy()
         return {
             **policy,
             "quarantined": self._cloud_quarantined(),

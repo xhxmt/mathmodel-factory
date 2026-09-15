@@ -1,9 +1,9 @@
 """Additive production-foundation migrations for Authority Schema V2.
 
-This module is deliberately absent from the active CLI, Scheduler, Service,
-Web, and frontend import graphs.  It extends an exact, READY A2_0001..A2_0009
-installation with a separately verified suffix.  The published Phase-2 shadow
-migration bytes and checksums remain unchanged.
+The default CLI import graph does not load this module. Explicit Authority
+solver-policy routing loads it lazily to verify the installed foundation.
+It extends an exact, READY A2_0001..A2_0009 installation with a separately
+verified suffix. Published migration bytes and checksums remain unchanged.
 """
 
 from __future__ import annotations
@@ -31,9 +31,10 @@ from .authority_schema import (
 )
 from .canonical import canonical_bytes, canonical_sha256
 from .domain import SCHEMA_VERSION
+from .native_write_fence import NATIVE_FENCE_STATEMENTS, NATIVE_FENCE_TABLES
 
 
-AUTHORITY_PRODUCTION_SCHEMA_VERSION = 8
+AUTHORITY_PRODUCTION_SCHEMA_VERSION = 9
 AUTHORITY_PRODUCTION_SOURCE_SCHEMA = "authority-production-source-v1"
 PRODUCTION_MIGRATION_RUNNING = "RUNNING"
 PRODUCTION_MIGRATION_INTERRUPTED = "INTERRUPTED"
@@ -2661,10 +2662,6 @@ PRODUCTION_MIGRATIONS += (
     ),
 )
 
-PRODUCTION_MIGRATION_IDS = tuple(item.migration_id for item in PRODUCTION_MIGRATIONS)
-PRODUCTION_MIGRATION_CHECKSUMS = tuple(
-    item.checksum_sha256 for item in PRODUCTION_MIGRATIONS
-)
 BASE_AUTHORITY_PREFIX_SHA256 = canonical_sha256(
     {
         "authority_schema_version": AUTHORITY_SCHEMA_VERSION,
@@ -2720,15 +2717,24 @@ _REAL_SCHEMA_V9_COLUMNS = {
     ),
 }
 
-_REAL_SCHEMA_V9_REQUIRED_TABLES = frozenset(
-    {
-        "contest_policy", "dirty_causes", "dirty_classifier_rebases",
-        "dirty_flag_clear_receipts", "dirty_flags", "events", "project_config",
-        "project_state", "projection_failures", "projector_snapshots",
-        "prompt_attempt_inputs", "schema_info", "solver_jobs",
-        "stage_checkpoint_history", "stage_checkpoints", "stage_cursor_inputs",
-        "workflow_decision_instances", "workflow_decision_requests", "workflow_decisions",
-    }
+_REAL_SCHEMA_V9_REQUIRED_TABLES = frozenset(NATIVE_FENCE_TABLES)
+
+
+# This additive migration leaves every published A2_0010..A2_0020 byte intact.
+# Database triggers also fence direct SQL and concurrent/older Store processes.
+PRODUCTION_MIGRATIONS += (
+    _ProductionMigration(
+        "A2_0021_NATIVE_WRITE_FENCE",
+        NATIVE_FENCE_STATEMENTS + (
+            "UPDATE authority_production_schema_state SET production_schema_version=9 WHERE singleton=1",
+        ),
+    ),
+)
+
+
+PRODUCTION_MIGRATION_IDS = tuple(item.migration_id for item in PRODUCTION_MIGRATIONS)
+PRODUCTION_MIGRATION_CHECKSUMS = tuple(
+    item.checksum_sha256 for item in PRODUCTION_MIGRATIONS
 )
 
 
@@ -2959,6 +2965,10 @@ def _expected_production_objects(applied_count: int) -> tuple[tuple[object, ...]
         for statement in _PRODUCTION_BOOTSTRAP_STATEMENTS:
             connection.execute(statement)
         for migration in PRODUCTION_MIGRATIONS[:applied_count]:
+            if migration.migration_id == "A2_0021_NATIVE_WRITE_FENCE":
+                # Trigger parents carry no production objects or column reads.
+                for table in NATIVE_FENCE_TABLES:
+                    connection.execute(f"CREATE TABLE {table}(unused INTEGER)")
             for statement in migration.statements:
                 connection.execute(statement)
         return _production_objects(connection)
@@ -3452,7 +3462,7 @@ class AuthorityProductionMigrationRunner:
                 ).fetchone()
                 if (
                     row is not None
-                    and row["production_schema_version"] in {1, 2, 3, 4, 5, 6, 7, 8}
+                    and row["production_schema_version"] in {1, 2, 3, 4, 5, 6, 7, 8, 9}
                     and row["lock_owner"] == owner
                 ):
                     connection.execute(
@@ -3516,7 +3526,7 @@ class AuthorityProductionMigrationRunner:
                 if state["production_schema_version"] > AUTHORITY_PRODUCTION_SCHEMA_VERSION:
                     raise AuthorityProductionFutureSchema("future production schema")
                 if (
-                    state["production_schema_version"] not in {1, 2, 3, 4, 5, 6, 7, 8}
+                    state["production_schema_version"] not in {1, 2, 3, 4, 5, 6, 7, 8, 9}
                     or state["source_schema_version"] != SCHEMA_VERSION
                     or state["source_schema_identity_sha256"] != schema_identity
                     or state["source_fence_sha256"] != source_fence

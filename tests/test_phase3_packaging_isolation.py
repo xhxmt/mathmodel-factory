@@ -43,7 +43,7 @@ def _local_module_source(module_name: str) -> tuple[Path, bool] | None:
     return None
 
 
-def _local_import_graph(entrypoint: str) -> set[str]:
+def _local_import_graph(entrypoint: str, *, excluded_edges=frozenset()) -> set[str]:
     visited: set[str] = set()
     pending = [entrypoint]
     while pending:
@@ -79,7 +79,10 @@ def _local_import_graph(entrypoint: str) -> set[str]:
                     candidate = f"{base}.{alias.name}" if base else alias.name
                     if _local_module_source(candidate) is not None:
                         dependencies.add(candidate)
-        pending.extend(dependencies)
+        pending.extend(
+            dependency for dependency in dependencies
+            if (module_name, dependency) not in excluded_edges
+        )
     return visited
 
 
@@ -122,7 +125,31 @@ print("phase3-not-in-cli-scheduler-imports")
 
 
 def test_web_import_graph_does_not_load_phase3_runtime():
-    graph = _local_import_graph("web.backend.main")
+    # The two solver-policy methods are the sole explicit lazy Authority entry.
+    # Check the exact edge and its function scopes, retaining the broader static
+    # graph check for every other Web dependency (including lazy imports).
+    service = ast.parse((ROOT / "factory_core/service.py").read_text())
+    route_imports = {
+        node for node in ast.walk(service)
+        if isinstance(node, ast.ImportFrom) and node.module == "solver_policy_routing"
+    }
+    scoped_imports = {
+        node for function in ast.walk(service)
+        if isinstance(function, ast.FunctionDef)
+        and function.name in {"configure_solver_policy", "solver_policy"}
+        for node in ast.walk(function)
+        if isinstance(node, ast.ImportFrom) and node.module == "solver_policy_routing"
+    }
+    assert len(route_imports) == 2 and route_imports == scoped_imports
+    complete = _local_import_graph("web.backend.main")
+    assert "factory_core.solver_policy_routing" in complete
+    assert "factory_core.authority_production_writer" in complete
+    assert "factory_core.authority_read_repository" in complete
+    assert "factory_core.phase3_shadow_runtime" not in complete
+    graph = _local_import_graph(
+        "web.backend.main",
+        excluded_edges=frozenset({("factory_core.service", "factory_core.solver_policy_routing")}),
+    )
 
     assert "web.backend.main" in graph
     assert not set(PHASE3_RUNTIME_MODULES) & graph

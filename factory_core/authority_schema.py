@@ -561,6 +561,8 @@ def _source_value(value: object) -> dict[str, object]:
 def legacy_source_identity_sha256(connection: sqlite3.Connection) -> str:
     """Fingerprint exactly the immutable legacy inputs consumed by v2 backfill."""
 
+    from .native_write_fence import is_native_write_fence_object
+
     objects = [
         {
             "type": str(row[0]),
@@ -577,6 +579,7 @@ def legacy_source_identity_sha256(connection: sqlite3.Connection) -> str:
             ORDER BY type, name
             """
         )
+        if not is_native_write_fence_object(row)
     ]
     tables: list[dict[str, object]] = []
     for table in _LEGACY_SOURCE_TABLES:

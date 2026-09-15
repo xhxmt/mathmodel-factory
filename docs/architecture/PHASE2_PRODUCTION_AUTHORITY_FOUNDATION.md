@@ -1,10 +1,23 @@
 # Phase 2 Production Authority Foundation
 
+## Current solver-policy route (A2_0021)
+
+`A2_0021_NATIVE_WRITE_FENCE` adds 57 native-table write guards and advances the
+production schema version to 9. Its checksum is
+`3f942805c29604ac253a804db6d4389bcb1258e8eeb0869d8c97bd2765fa7820`.
+A2_0010–A2_0020 statements and checksums remain unchanged. No existing production
+database is automatically migrated or switched. The application pilot and its
+rollback limits are documented in the solver-policy runbook linked below.
+
 Status: production-capable persistence and operations foundation, installed only
-through an explicit standalone operator command. It has not received production
-traffic and is not imported by the active Scheduler, Service, Web/API/frontend,
-`factory_core.cli`, legacy launcher, model, Solver, provider, or Phase 3-8 code.
-The persisted default is `V1_ONLY`; v1 remains the only active production route.
+through an explicit standalone operator command. The persisted default is
+`V1_ONLY`; existing production projects retain the native route. A narrow
+solver-policy command/query route is now available for explicitly enabled,
+fully migrated pilot copies; see
+[`AUTHORITY_SOLVER_POLICY_ROUTE.md`](../operations/AUTHORITY_SOLVER_POLICY_ROUTE.md).
+The modeling scheduler, other application commands and provider dispatch have
+not been cut over. The historical acceptance records below do not certify this
+new application route.
 
 ## Frozen acceptance baseline
 
@@ -254,10 +267,11 @@ those labels: each production commit has a separate immutable row binding its
 bundle hash, writer ID/epoch, switch epoch, and exact `CANARY` or
 `AUTHORITY_PRIMARY` mode at commit time.
 
-This does not change the current v1 `TransitionCoordinator` or its known direct
-`SQLiteStateStore` exceptions. It creates a unique boundary for the future
-Authority mode; it does not falsely claim that the still-active v1 writer
-inventory has already been consolidated, and it never dual-writes v1 state.
+The original foundation did not consolidate the v1 `TransitionCoordinator`
+or its direct `SQLiteStateStore` exceptions. A2_0021 now blocks their native
+SQL writes in active Authority modes. Solver-policy configuration uses the
+Authority facade; other native commands remain unavailable in this pilot.
+No command is dual-written into the frozen native state.
 
 ## Supported read repository
 
@@ -329,8 +343,11 @@ V1_ONLY --explicit CAS--> CANARY --explicit CAS--> AUTHORITY_PRIMARY
 Forward transitions are never automatic. `V1_ONLY -> CANARY` requires both a
 fenced enabled writer and consumer. `CANARY -> AUTHORITY_PRIMARY` is a separate
 operator receipt. Returning to `V1_ONLY` is always permitted with a fresh
-switch-epoch CAS and disables Authority actors. These rows are evidence only in
-Phase 2; they do not route Scheduler, Web, Service, CLI, or launcher traffic.
+switch-epoch CAS and disables Authority actors. The original Phase-2 switch
+was evidence-only. With A2_0021 and the explicit `factory-service` writer,
+solver-policy commands and queries follow it; other Scheduler, Service, Web
+and launcher operations are not yet Authority handlers. Switching back does
+not copy Authority configuration into the frozen native state.
 
 Read-only health evaluation takes an explicit policy and caller time. It
 reports backlog depth, oldest pending age, in-flight and expired claims, retry
@@ -419,9 +436,9 @@ source, changed operation request, or changed prefix requires operator review.
 
 ## Non-goals and Phase 3 dependency
 
-This phase does not connect the Authority writer to the active application,
-perform a live migration, dispatch a provider request, deploy, cut over, or
-dual-write. It does not implement Phase 3 artifact registry persistence,
+The original foundation did not connect the Authority writer to the application.
+The subsequent A2_0021 solver-policy route is a narrow exception. No live
+migration, provider dispatch, full scheduler cutover or dual writing is claimed. It does not implement Phase 3 artifact registry persistence,
 Phase 4 leases/launcher, Phase 5 Execution Supervisor, Phase 6 API/UI, Phase 7
 release gates, or Phase 8 materialization/approval/egress dispatch.
 

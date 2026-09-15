@@ -80,7 +80,7 @@ def project_cloud_config(settings: Settings, base_name: str) -> dict:
         "env_file": str(env_file),
         "threshold_time": policy["threshold_seconds"],
         "solver_types": policy["allowed_runtimes"],
-        "revision": policy["updated_revision"],
+        "revision": policy.get("revision", policy["updated_revision"]),
         "invoker_service_account": cloud_invoker_service_account(settings),
         "project_id": settings.gcp_project_id or "level-night-476302-k0",
         "region": settings.gcp_region,
