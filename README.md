@@ -58,7 +58,7 @@ uv sync --extra tui     # 首次，安装 textual
 - `modeling_guide.md`：项目结构、求解器、LaTeX、图表生成及可复现性规范。
 - `prompts/step*.txt`：工作流每个步骤的智能体提示词模板。
 - `method_library/`：已注册的建模方法和可运行的种子模板。
-- `solver_submit.sh` 和 `solver_wrapper.sh`：异步本地求解器执行助手。
+- `solver_submit.sh`：异步本地求解器执行助手。
 - `compile_paper.sh`：LaTeX 辅助脚本，选择 `xelatex` 编译中文/国赛风格论文。
 - `scripts/`：辅助脚本，用于 Antigravity 路由、MinerU 解析、数字校验和清理工作。
 - `evaluation/`：评分解析器以及针对外部大语言模型（LLM）裁判的基准校准脚本。
@@ -66,7 +66,7 @@ uv sync --extra tui     # 首次，安装 textual
 - **`apps/tui/` 与 `run_tui.sh`**：Web 控制面的只读终端客户端（Textual），监控项目状态、阻塞原因与日志尾随。
 - **`docs/guides/`**：优秀论文基准文档（可视化与写作规范）
 
-诸如 `analysis_guide.md`、`stata_submit.sh` 和 `stata_wrapper.sh` 等旧文件仅为历史参考而保留，不再构成可执行社会科学工作流。新建模项目请遵循 `modeling_guide.md` 并使用 `solver_submit.sh`。
+诸如 `analysis_guide.md`、`stata_submit.sh` 和 `stata_wrapper.sh` 等旧文件已迁出本仓库（登记于 `docs/architecture/EXPERIMENTAL_CODE_SPLIT.json`，历史副本见归档目录），不再构成可执行社会科学工作流。新建模项目请遵循 `modeling_guide.md` 并使用 `solver_submit.sh`。
 
 ## 前置要求
 
@@ -90,7 +90,7 @@ git clone <repo-url> mathmodel-factory
 cd mathmodel-factory
 uv sync --extra web --extra models --locked
 (cd web/frontend && npm ci)
-chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh solver_wrapper.sh
+chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh
 ./launch_agents.sh status
 ```
 
