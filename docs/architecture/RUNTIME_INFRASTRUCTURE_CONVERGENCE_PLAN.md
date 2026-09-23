@@ -46,7 +46,7 @@
    FactoryEngine 的主 transition/solver 路径已调用它，但 compatibility selection、request
    supersede、prompt input binding 和 projection-failure bookkeeping 仍有直接 Store 调用；
    bootstrap/migration 与 archive relocation 另有显式写面。完整现状与未来静态门禁见
-   [`application_writer_allowlist_v1.json`](application_writer_allowlist_v1.json)。
+   `application_writer_allowlist_v1.json`（已迁出本仓库，登记于 `docs/architecture/EXPERIMENTAL_CODE_SPLIT.json`）。
 4. **WorkflowEvent 唯一解释为什么发生某次 durable 状态变化。** Artifact、receipt 和
    fingerprint 仍是机器证据权威；事件保存其不可变引用和哈希，不复制或替代证据。
 5. **Projector 只读取事实，不产生领域决定。** Projector 不得重新选择 retry/reopen/await/fail，

@@ -402,10 +402,10 @@ web/DEPLOYMENT.md               0    0        0  (已存在)
 
 ### 相关文档
 
-- [计划文档](/.claude/plans/imperative-riding-lampson.md)
-- [Web 部署文档](web/DEPLOYMENT.md)
-- [Web 快速入门](web/QUICKSTART.md)
-- [主项目文档](CLAUDE.md)
+- 计划文档：`/.claude/plans/imperative-riding-lampson.md`（仓库外的本地计划文件，不随仓库分发）
+- [Web 部署文档](../../web/docs/deployment/DEPLOYMENT.md)
+- [Web 快速入门](../../web/QUICKSTART.md)
+- [主项目文档](../../CLAUDE.md)
 
 ### 代码位置
 
