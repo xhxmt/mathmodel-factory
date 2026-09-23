@@ -1332,6 +1332,41 @@
       "path": "scripts/solver_router.sh",
       "sha256": "e1253806298141dcc3e130934e5b5d65b66308ea440b0c1953afb11b32d3546e",
       "reason": "Historical shell solver router; Native SQLite policy owns routing"
+    },
+    {
+      "path": "solver_wrapper.sh",
+      "sha256": "b1d0012b9a18c8b9e3eaa50588c82d50967e36699e8a0231dca1d775e98e459d",
+      "reason": "Zero-reference solver helper; its documented spawn contract no longer exists"
+    },
+    {
+      "path": "token_cost_2024b.sh",
+      "sha256": "24fea7320e1acd65930d2e4db66a64452d5512e816db7522b1b9d3be3e2aa2d6",
+      "reason": "Zero-reference one-off token accounting script"
+    },
+    {
+      "path": "resources/examples/Abstract_examples.md",
+      "sha256": "2b0d643c816c8a63918a996ae12b2e28cd6520b244680091475b8a26af974ff1",
+      "reason": "Surplus social-science writing example from an earlier phase"
+    },
+    {
+      "path": "evaluation/DEEP_ANALYSIS_COMPLETION.md",
+      "sha256": "628a270ee3f7c584e8bc892f38fde358a4f7dbf95661c7a8f89fadb1febdaab9",
+      "reason": "One-off completion report superseded by the current evaluation docs"
+    },
+    {
+      "path": "evaluation/P0_HARD_METRICS_COMPLETION.md",
+      "sha256": "3a11fbb3316634eac9e0b2bdd0ec3d147a2ed7074175cb274b18007130475cc2",
+      "reason": "One-off completion report superseded by the current evaluation docs"
+    },
+    {
+      "path": "evaluation/proxy_calibration_claude_opus_4_8_report.md",
+      "sha256": "4fe62b2969c954f9822e18264dc0d8c489f4f8c88fbeb14310260f103f370f40",
+      "reason": "Model-specific calibration report superseded by the generic proxy calibration interface"
+    },
+    {
+      "path": "evaluation/proxy_calibration_gemini_report.md",
+      "sha256": "555cc59c345075a46f20c7327efdbeafe035af3328a0962a13090471ccce67d9",
+      "reason": "Model-specific calibration report superseded by the generic proxy calibration interface"
     }
   ],
   "shared_baseline": "paper_new contains the complete tracked baseline so its experimental modules keep their original imports and tests; it is not a runtime dependency of paper_factory.",
