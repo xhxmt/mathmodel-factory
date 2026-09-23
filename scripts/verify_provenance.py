@@ -133,22 +133,6 @@ def _two_stage_evidence(project_dir, job_id):
     return None
 
 
-def _declared_stream_dirs(project_dir):
-    """从 model.md 粗略抽取声明用到的 stream 目录 (m<N>_<short>)。
-
-    只用于给 stub 检测提供上下文; 找不到就退回到扫描整个 models/。"""
-    model_md = os.path.join(project_dir, 'model.md')
-    streams = set()
-    if os.path.isfile(model_md):
-        try:
-            txt = open(model_md, 'r', encoding='utf-8').read()
-            for m in re.findall(r'\bm(\d+)_[a-z0-9]+', txt):
-                streams.add(m)
-        except Exception:
-            pass
-    return streams
-
-
 def check_stub_residue(project_dir):
     """B3: models/ 下任何 .stub 残留都是设计-实现断裂。"""
     models = os.path.join(project_dir, 'models')
