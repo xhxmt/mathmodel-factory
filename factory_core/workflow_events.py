@@ -34,6 +34,10 @@ _REPLAY_FIELDS = (
     "pending_action",
     "storage_scope",
 )
+#: Public alias: this tuple is the replay contract, and consumers outside this
+#: module need to assert against it (e.g. SQLiteStateStore.status_snapshot's
+#: event-replay equality gate).
+REPLAY_FIELDS = _REPLAY_FIELDS
 
 _CANONICAL_TYPES = {
     "STEP_PREPARE_AWAITING_ACTION": "HUMAN_DECISION_REQUESTED",

@@ -23,6 +23,7 @@ Exit conditions covered here (hermetic):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -134,24 +135,40 @@ def _rewind_to_v9(project: Path) -> None:
     try:
         connection.execute("DROP TRIGGER IF EXISTS events_append_only_update")
         connection.execute("DROP TRIGGER IF EXISTS events_append_only_delete")
+        # Replay-aware rewrite: a faithful v9 fixture must also say 9 inside the
+        # events' state_patch, otherwise project_state and the event stream
+        # disagree and the fixture is not self-consistent (0.7.2).
+        accumulated: dict = {}
+        saw_snapshot = False
         for row in connection.execute(
-            "SELECT revision, payload_json FROM events"
+            "SELECT revision, payload_json FROM events ORDER BY revision"
         ).fetchall():
             payload = json.loads(row["payload_json"])
             envelope = payload.get("_workflow")
             if not isinstance(envelope, dict):
                 continue
+            patch = envelope.get("state_patch")
+            if isinstance(patch, dict):
+                # mutate first: the accumulated state (and therefore the hash)
+                # must reflect the rewritten value
+                patch["schema_version"] = 9
+                if envelope.get("state_patch_mode") == "snapshot":
+                    accumulated = dict(patch)
+                    saw_snapshot = True
+                elif saw_snapshot:
+                    accumulated.update(patch)
+                envelope["state_hash_after"] = canonical_hash(accumulated)
             effects = envelope.get("effect_hashes_after")
             if isinstance(effects, dict) and _SIDE_TABLE in effects:
                 effects.pop(_SIDE_TABLE)
                 envelope["aggregate_root_hash_after"] = canonical_hash(effects)
-                connection.execute(
-                    "UPDATE events SET payload_json=? WHERE revision=?",
-                    (
-                        json.dumps(payload, ensure_ascii=True, sort_keys=True),
-                        row["revision"],
-                    ),
-                )
+            connection.execute(
+                "UPDATE events SET payload_json=? WHERE revision=?",
+                (
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True),
+                    row["revision"],
+                ),
+            )
         connection.executescript(_EVENTS_TRIGGERS_SQL)
         for trigger in _SIDE_TRIGGERS:
             connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
@@ -838,3 +855,227 @@ def test_bespoke_recovery_is_a_recordable_distinct_source(tmp_path):
         connection.commit()
     finally:
         connection.close()
+# ===========================================================================
+# 0.7.2 additions
+# ===========================================================================
+
+def test_read_migration_keeps_replay_equal_to_current_state(tmp_path):
+    """Major 1 gate: a read-triggered DDL migration must not desynchronise replay.
+
+    project_state.schema_version is a _REPLAY_FIELDS member, so bumping it from a
+    migration that a read path can trigger would leave the database saying 10
+    while the event stream replays to 9 -- with no event recording the change.
+    """
+
+    from factory_core.workflow_events import REPLAY_FIELDS, replay_events, replay_state
+
+    project, store = _initialize(tmp_path)
+    _rewind_to_v9(project)
+
+    connection = _connect(project)
+    try:
+        before = (
+            connection.execute("SELECT revision FROM project_state").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+        )
+    finally:
+        connection.close()
+    store.load()
+    store.status_snapshot()
+
+    snapshot = store.status_snapshot()
+    assert snapshot["event_replay_valid"] is True
+    assert snapshot["aggregate_valid"] is True
+
+    connection = _connect(project)
+    try:
+        after = (
+            connection.execute("SELECT revision FROM project_state").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+            connection.execute(
+                "SELECT schema_version FROM schema_info WHERE singleton=1"
+            ).fetchone()[0],
+            connection.execute(
+                "SELECT schema_version FROM project_state WHERE singleton=1"
+            ).fetchone()[0],
+        )
+    finally:
+        connection.close()
+
+    assert after[0] == before[0], "revision must not move"
+    assert after[1] == before[1], "no event may be appended"
+    assert after[2] == 10, "physical schema is upgraded"
+    assert after[3] == 9, "replay-recorded generation is untouched by a read"
+
+    replayed = replay_events(store.events())
+    current = replay_state(store.load())
+    assert all(replayed.get(f) == current.get(f) for f in REPLAY_FIELDS)
+
+
+def test_genuine_write_converges_workflow_schema_version(tmp_path):
+    """The replay-recorded generation converges on an event-carrying write."""
+
+    project, store = _initialize(tmp_path)
+    _rewind_to_v9(project)
+    state = store.load()
+    assert state.schema_version == 9, "a read leaves it alone"
+
+    written = store.transition(
+        expected_revision=state.revision,
+        event_type="SCHEMA_GENERATION_CONVERGENCE_FOR_TEST",
+        changes={},
+    )
+    assert written.schema_version == 10
+
+    snapshot = store.status_snapshot()
+    assert snapshot["event_replay_valid"] is True
+    assert snapshot["aggregate_valid"] is True
+
+    from factory_core.workflow_events import REPLAY_FIELDS, replay_events, replay_state
+
+    replayed = replay_events(snapshot["events"])
+    current = replay_state(snapshot["state"])
+    assert all(replayed.get(f) == current.get(f) for f in REPLAY_FIELDS)
+
+
+def test_attestation_without_domain_map_fails_closed(tmp_path):
+    """I2 addition: an attested aggregate root must carry its domain map."""
+
+    project, store = _initialize(tmp_path)
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision,
+        event_type="DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[],
+    )
+    assert store.status_snapshot()["effect_domain_generation_valid"] is True
+
+    connection = _connect(project)
+    try:
+        connection.execute("DROP TRIGGER IF EXISTS events_append_only_update")
+        connection.execute("DROP TRIGGER IF EXISTS events_append_only_delete")
+        row = connection.execute(
+            "SELECT revision, created_at, attempt, payload_json FROM events "
+            "ORDER BY revision DESC LIMIT 1"
+        ).fetchone()
+        payload = json.loads(row["payload_json"])
+        envelope = payload["_workflow"]
+        # malformed: attests a root but drops the domain map it was computed from
+        del envelope["effect_hashes_after"]
+        new_revision = int(row["revision"]) + 1
+        connection.execute(
+            "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
+            "VALUES (?, 'DIRTY_FOR_TEST', ?, NULL, ?, ?)",
+            (new_revision, int(row["created_at"]), int(row["attempt"]),
+             json.dumps(payload, ensure_ascii=True, sort_keys=True)),
+        )
+        connection.execute(
+            "UPDATE project_state SET revision=? WHERE singleton=1", (new_revision,)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    snapshot = store.status_snapshot()
+    assert snapshot["effect_domain_generation_valid"] is False
+    assert snapshot["aggregate_valid"] is False
+
+
+def test_dirty_clear_rebase_is_bound_into_the_transition_payload(tmp_path):
+    """Major 2: the dirty-clear path rebases inside its own transaction.
+
+    That second legitimate rebase path emits no DIRTY_CLASSIFIER_REBASED event of
+    its own, so its receipt identity must be bound into the transition payload;
+    otherwise no event records which rebase happened.
+    """
+
+    project, store = _initialize(tmp_path)
+    state = store.load()
+    dirtied = store.transition(
+        expected_revision=state.revision,
+        event_type="DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            {
+                "flag": "RESULT_DIRTY",
+                "owner_stage": 4,
+                "cause_artifact": "results/canonical_results.json",
+                "baseline_fingerprint": "a" * 64,
+                "current_fingerprint": "b" * 64,
+                "classifier_contract_sha256": "0" * 64,  # stale -> rebase is due
+                "classification_source": "frozen_rule",
+            }
+        ],
+    )
+    from factory_core.current_dirty import (
+        capture_artifact_manifest,
+        classifier_contract_sha256,
+        manifest_fingerprint,
+    )
+
+    # The dirty obligation carries a stale classifier identity, so the clear
+    # triggers an in-transaction rebase; the clear and its receipt must name the
+    # CURRENT identity, which is what the rebase rewrites the row to before the
+    # per-row check runs.
+    output = manifest_fingerprint(capture_artifact_manifest(project))
+    current = classifier_contract_sha256()
+    success_receipt = {
+        "schema_version": "factory-stage-checkpoint-v1",
+        "status": "PASS",
+        "stage": 4,
+        "output_fingerprint": output,
+        "classifier_contract_sha256": current,
+    }
+    cleared = store.transition(
+        expected_revision=dirtied.revision,
+        event_type="STAGE_SUCCEEDED_FOR_TEST",
+        changes={},
+        stage_checkpoint={
+            "stage_id": 4,
+            "subtask": "canonical_solve",
+            "source_step_id": 7,
+            "completed_step_id": 7,
+            "input_fingerprint": output,
+            "output_fingerprint": output,
+            "receipt": success_receipt,
+        },
+        clear_dirty_stage={
+            "owner_stage": 4,
+            "cleared_fingerprint": output,
+            "classifier_contract_sha256": current,
+            "success_receipt": success_receipt,
+        },
+    )
+
+    envelope = store.events()[-1].payload.get("_workflow") or {}
+    embedded = store.events()[-1].payload.get("embedded_rebase")
+    assert cleared.revision > dirtied.revision
+    assert embedded is not None, "the embedded rebase must be recorded"
+    assert embedded["bound_by"] == "dirty_clear_transaction"
+    assert embedded["rebase_id"], "receipt identity must be present"
+    assert envelope.get("event_version") == 2
+
+
+def test_provenance_contract_covers_more_than_this_module(tmp_path):
+    """Major 3: the provenance identity must pin the semantics it depends on.
+
+    Hashing only dirty_classification.py's own bytes would leave the pair
+    (classifier sha, policy sha) unable to uniquely rebuild an attribution.
+    """
+
+    root = Path(__file__).resolve().parents[1] / "factory_core"
+    narrow = hashlib.sha256(
+        DIRTY_CAUSE_CLASSIFICATION_SCHEMA.encode("ascii")
+        + b"\0"
+        + (root / "dirty_classification.py").read_bytes()
+    ).hexdigest()
+
+    assert classification_contract_sha256() != narrow, (
+        "the provenance contract must cover the ownership registries and matcher, "
+        "not only this module's bytes"
+    )
+    # and it must stay distinct from the classifier identity (Q14: kept separate)
+    from factory_core.current_dirty import classifier_contract_sha256 as classifier_sha
+
+    assert classification_contract_sha256() != classifier_sha()

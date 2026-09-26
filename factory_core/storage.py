@@ -26,7 +26,15 @@ from .stages import (
     completed_stage_for_step,
     initial_stage_checkpoints,
 )
-from .workflow_events import ENVELOPE_KEY, build_event_payload, canonical_hash
+from .workflow_events import (
+    ENVELOPE_KEY,
+    REPLAY_FIELDS as _REPLAY_FIELDS,
+    ReplayIntegrityError,
+    build_event_payload,
+    canonical_hash,
+    replay_events,
+    replay_state,
+)
 from .native_write_fence import native_write_error_boundary
 from .state_lease import state_commit_lease
 
@@ -1097,10 +1105,20 @@ class SQLiteStateStore:
         # checks.  A new domain key instead takes the tolerant per-domain branch
         # for pre-v10 events.
         ensure_dirty_cause_classification_schema(connection)
-        connection.execute(
-            "UPDATE project_state SET schema_version = ? WHERE singleton = 1",
-            (SCHEMA_VERSION,),
-        )
+        # 0.7.2: only the PHYSICAL schema version is written here.
+        #
+        # project_state.schema_version is a _REPLAY_FIELDS member (see
+        # workflow_events._REPLAY_FIELDS), so every versioned event's
+        # state_hash_after binds it.  Bumping it from a migration that a READ path
+        # can trigger would leave the database saying 10 while the event stream
+        # replays to 9 - a divergence between the current state and the
+        # event-sourced state, with no event recording the change.
+        #
+        # Physical vs workflow-state version are therefore separate:
+        #   schema_info.schema_version      physical DDL generation (this method)
+        #   project_state.schema_version    generation recorded in the event stream;
+        #                                   only an event-carrying write may change it
+        # transition() converges the latter on the next genuine write.
         connection.execute(
             "UPDATE schema_info SET schema_version = ? WHERE singleton = 1",
             (SCHEMA_VERSION,),
@@ -1454,33 +1472,71 @@ class SQLiteStateStore:
         expected = next((e.payload[ENVELOPE_KEY] for e in reversed(events)
                          if isinstance(e.payload.get(ENVELOPE_KEY), dict)
                          and e.payload[ENVELOPE_KEY].get("aggregate_root_hash_after")), None)
-        valid = True
+        # -- 0.7.2 (review I9): name the three distinct integrity questions instead
+        # of overloading one flag.  They answer different things:
+        #   latest_effect_attestation_valid  current domain projection matches the
+        #                                    most recent aggregate attestation
+        #   effect_domain_generation_valid   the effect-domain key set never shrank
+        #                                    and every attestation is well-formed
+        #   event_replay_valid               replaying the stream reproduces the
+        #                                    state the database currently reports
+        latest_effect_attestation_valid = True
         if expected is not None:
             prior = expected.get("effect_hashes_after")
-            valid = (all(effects.get(k) == v for k, v in prior.items())
-                     if isinstance(prior, dict) and set(prior) != set(effects)
-                     else canonical_hash(effects) == expected["aggregate_root_hash_after"])
-        # Effect-domain generation must be monotonic: once an event has recorded
-        # a domain key, no later event may omit it.
-        #
-        # The tolerant branch above keys off a mismatch between the LATEST event's
-        # domain set and the current one, so on its own it would accept a
-        # v9-shaped event arriving after a v10 event and silently put the new
-        # domains back under tolerance.  That would make "the window closes at the
-        # first v10 event" a property of the writer rather than of this verifier.
+            latest_effect_attestation_valid = (
+                all(effects.get(k) == v for k, v in prior.items())
+                if isinstance(prior, dict) and set(prior) != set(effects)
+                else canonical_hash(effects) == expected["aggregate_root_hash_after"]
+            )
+
+        # Effect-domain generation must be monotonic: once an event records a
+        # domain key, no later event may omit it.  Without this the key-set
+        # tolerance above would accept a v9-shaped event arriving after a v10
+        # event and silently stop covering the new domains.
+        effect_domain_generation_valid = True
         domains_seen: set[str] = set()
         for event in events:
             envelope = event.payload.get(ENVELOPE_KEY)
-            keys = envelope.get("effect_hashes_after") if isinstance(envelope, dict) else None
-            if not isinstance(keys, dict):
+            if not isinstance(envelope, dict):
                 continue
-            if not domains_seen <= set(keys):
-                valid = False
+            keys = envelope.get("effect_hashes_after")
+            if keys is None:
+                # An event that attests an aggregate root must carry the domain
+                # map that root was computed from, otherwise the attestation is
+                # unverifiable (review I2).
+                if envelope.get("aggregate_root_hash_after") is not None:
+                    effect_domain_generation_valid = False
+                    break
+                continue
+            if not isinstance(keys, dict) or not domains_seen <= set(keys):
+                effect_domain_generation_valid = False
                 break
             domains_seen |= set(keys)
+
+        # The event stream must rebuild the state the database reports.  A
+        # read-triggered DDL migration may not move a _REPLAY_FIELDS member
+        # without an event (review Major 1).
+        event_replay_valid = True
+        try:
+            replayed = replay_events(events)
+            current = replay_state(state)
+            event_replay_valid = all(
+                replayed.get(field) == current.get(field) for field in _REPLAY_FIELDS
+            )
+        except ReplayIntegrityError:
+            event_replay_valid = False
+
         return {"state": state, "events": events,
                 "contest_policy": dict(policy) if policy is not None else None,
-                "aggregate_valid": valid, "now_epoch": self.now_epoch()}
+                "aggregate_valid": (
+                    latest_effect_attestation_valid
+                    and effect_domain_generation_valid
+                    and event_replay_valid
+                ),
+                "latest_effect_attestation_valid": latest_effect_attestation_valid,
+                "effect_domain_generation_valid": effect_domain_generation_valid,
+                "event_replay_valid": event_replay_valid,
+                "now_epoch": self.now_epoch()}
 
     def contest_policy(self) -> dict[str, Any] | None:
         if not self.path.is_file():
@@ -2681,6 +2737,12 @@ class SQLiteStateStore:
         event_step: int | None | object = _UNSET,
     ) -> WorkflowState:
         changes = dict(changes or {})
+        # 0.7.2 (review Major 2): a dirty-clear transition rebases inside its own
+        # business transaction.  That is a second legitimate rebase path besides
+        # the explicit maintenance action, and it emits no
+        # DIRTY_CLASSIFIER_REBASED event of its own - so its receipt is bound into
+        # this transition's payload instead.
+        embedded_rebase: dict[str, Any] | None = None
         unknown = set(changes) - _MUTABLE_COLUMNS
         if unknown:
             raise ValueError(f"unsupported state fields: {sorted(unknown)}")
@@ -2726,6 +2788,13 @@ class SQLiteStateStore:
                         else None
                     )
                 values[key] = value
+            # 0.7.2: a genuine, event-carrying write converges the workflow-state
+            # schema generation.  It lands in this event's state_patch, so the
+            # event stream and the database stay in step.  A read-triggered DDL
+            # migration deliberately leaves it alone (see _upgrade_schema), and
+            # project_state.schema_version is a _REPLAY_FIELDS member, so changing
+            # it anywhere else would desynchronise replay from current state.
+            values["schema_version"] = SCHEMA_VERSION
             values.update(revision=revision, updated_at=now, last_event_at=now)
             assignments = ", ".join(f"{key} = ?" for key in values)
             connection.execute(
@@ -2996,7 +3065,7 @@ class SQLiteStateStore:
                     )
                 from .dirty_rebase import rebase_dirty_classifier_state
 
-                rebase_dirty_classifier_state(
+                embedded_rebase = rebase_dirty_classifier_state(
                     connection,
                     source_schema_version=SCHEMA_VERSION,
                     target_schema_version=SCHEMA_VERSION,
@@ -3049,6 +3118,16 @@ class SQLiteStateStore:
             updated = connection.execute(
                 "SELECT * FROM project_state WHERE singleton = 1"
             ).fetchone()
+            event_payload_in = dict(payload or {})
+            if embedded_rebase is not None:
+                event_payload_in["embedded_rebase"] = {
+                    "rebase_id": embedded_rebase.get("rebase_id"),
+                    "schema_version": embedded_rebase.get("schema_version"),
+                    "obligation_count": len(
+                        embedded_rebase.get("obligations") or ()
+                    ),
+                    "bound_by": "dirty_clear_transaction",
+                }
             safe_payload = self._versioned_event_payload(
                 connection,
                 before=row,
@@ -3056,7 +3135,7 @@ class SQLiteStateStore:
                 revision=revision,
                 event_type=event_type,
                 created_at=now,
-                payload=_redact(payload or {}),
+                payload=_redact(event_payload_in),
             )
             connection.execute(
                 "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) VALUES (?, ?, ?, ?, ?, ?)",

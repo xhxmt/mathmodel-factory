@@ -99,12 +99,36 @@ def ensure_dirty_cause_classification_schema(connection) -> None:
 
 
 def classification_contract_sha256() -> str:
-    """Identity of the provenance contract (schema name + this module's bytes)."""
+    """Identity of the provenance contract.
 
+    0.7.2 (review Q14 / Major 3): hashing only this module's bytes was too
+    narrow.  The derivation mirrors the classifiers' branch order *and* consults
+    ``ADDITIONAL_OWNERSHIP``, the frozen ownership registry and the globstar
+    matcher, so the contract must cover those too.  Otherwise the pair
+    ``(classifier_contract_sha256, policy_contract_sha256)`` cannot uniquely
+    rebuild how a cause was attributed, and the append-only provenance rows would
+    permanently record an identity that does not pin its own semantics.
+
+    This deliberately stays separate from ``classifier_contract_sha256()``
+    (Q14): a provenance-only change must not produce a new classifier identity
+    and trigger an unnecessary dirty rebase.
+    """
+
+    root = Path(__file__).parent
+    members = (
+        "dirty_classification.py",        # branch order, source vocabulary
+        "dirty.py",                       # the classifier order being mirrored
+        "artifact_ownership.py",          # frozen v1 registry + matcher
+        "current_artifact_ownership.py",  # ADDITIONAL_OWNERSHIP
+        "paper_sources.py",               # governs the .tex / @paper: branch
+    )
     digest = hashlib.sha256()
     digest.update(CLASSIFICATION_CONTRACT_SCHEMA.encode("ascii"))
-    digest.update(b"\0")
-    digest.update((Path(__file__).parent / "dirty_classification.py").read_bytes())
+    for name in members:
+        digest.update(b"\0")
+        digest.update(name.encode("ascii"))
+        digest.update(b"\0")
+        digest.update((root / name).read_bytes())
     return digest.hexdigest()
 
 
