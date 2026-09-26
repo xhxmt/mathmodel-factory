@@ -19,6 +19,7 @@ from .current_dirty import (
     semantic_flags,
     solver_receipt_job_id,
 )
+from .dirty_classification import classification_sources, source_for
 from .domain import (
     ExecutionResult,
     InvalidTransition,
@@ -895,6 +896,9 @@ class FactoryEngine:
                     "baseline_fingerprint": "MISSING",
                     "current_fingerprint": output_fingerprint,
                     "classifier_contract_sha256": classifier_contract_sha256(),
+                    # Not derived from a rule: constructed deliberately to fail
+                    # closed when the stage baseline is absent.
+                    "classification_source": "explicit_fail_closed",
                 },
                 {
                     "flag": DirtyFlag.RESULT.value,
@@ -903,15 +907,23 @@ class FactoryEngine:
                     "baseline_fingerprint": "MISSING",
                     "current_fingerprint": output_fingerprint,
                     "classifier_contract_sha256": classifier_contract_sha256(),
+                    "classification_source": "explicit_fail_closed",
                 },
             ]
             return "MISSING", output_fingerprint, after, dirty_changes
         before = dict(baseline["manifest"])
         dirty_changes = []
+        # Schema v10 provenance: derived outside the frozen classifier module so
+        # that dirty.py's bytes (part of the frozen classifier contract identity)
+        # stay untouched.
+        sources = classification_sources(before, after)
         for change in classify_manifest_changes(before, after):
             record = {
                 **change.to_dict(),
                 "classifier_contract_sha256": classifier_contract_sha256(),
+                "classification_source": source_for(
+                    sources, change.flag.value, change.cause_artifact
+                ),
             }
             receipt_owner = self._solver_receipt_owner_stage(change.cause_artifact)
             if receipt_owner is not None:

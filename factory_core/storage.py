@@ -387,9 +387,11 @@ class SQLiteStateStore:
         )
         from .dirty_rebase import ensure_dirty_rebase_schema
         from .prompt_receipts import ensure_prompt_receipt_schema
+        from .dirty_classification import ensure_dirty_cause_classification_schema
 
         ensure_dirty_rebase_schema(connection)
         ensure_prompt_receipt_schema(connection)
+        ensure_dirty_cause_classification_schema(connection)
         connection.execute(
             "INSERT OR IGNORE INTO schema_info(singleton, schema_version) VALUES (1, ?)",
             (SCHEMA_VERSION,),
@@ -415,11 +417,13 @@ class SQLiteStateStore:
         if current == SCHEMA_VERSION:
             from .dirty_rebase import ensure_dirty_rebase_schema
             from .prompt_receipts import ensure_prompt_receipt_schema
+            from .dirty_classification import ensure_dirty_cause_classification_schema
 
             ensure_dirty_rebase_schema(connection)
             ensure_prompt_receipt_schema(connection)
+            ensure_dirty_cause_classification_schema(connection)
             return
-        if current not in {1, 2, 3, 4, 5, 6, 7, 8}:
+        if current not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
             raise RuntimeError(
                 f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}"
             )
@@ -1082,6 +1086,15 @@ class SQLiteStateStore:
         migration_before = connection.execute(
             "SELECT * FROM project_state WHERE singleton=1"
         ).fetchone()
+        from .dirty_classification import ensure_dirty_cause_classification_schema
+
+        # Schema 9 -> 10 adds exactly the append-only provenance side table and
+        # its triggers, plus one new _domain_effect_hashes() key.  No existing
+        # table changes shape: each existing domain hash is a canonical hash over
+        # SELECT * rows, so any shape change would fail historical
+        # aggregate_valid checks.  Installed before the rebase below so the new
+        # domain exists when that rebase writes its event.
+        ensure_dirty_cause_classification_schema(connection)
         rebase_receipt = rebase_dirty_classifier_state(
             connection,
             source_schema_version=current,
@@ -1229,6 +1242,15 @@ class SQLiteStateStore:
             "dirty_clear_receipts": rows_hash(
                 "SELECT * FROM dirty_flag_clear_receipts "
                 "ORDER BY revision, flag, owner_stage"
+            ),
+            # Schema v10.  Registering the provenance side table as its own
+            # domain is what keeps pre-v10 events verifiable: their domain key
+            # set is smaller, so status_snapshot() takes the tolerant per-domain
+            # branch.  From the first v10 event onward the key sets match and the
+            # strict aggregate comparison applies, so any unexpected change to
+            # this table fails the aggregate check.
+            "dirty_cause_classification": rows_hash(
+                "SELECT * FROM dirty_cause_classification ORDER BY cause_id"
             ),
         }
 
@@ -2900,6 +2922,23 @@ class SQLiteStateStore:
                         str(dirty["classifier_contract_sha256"]),
                     ),
                 )
+                # Schema v10: record how this cause was classified, in the same
+                # transaction as the cause itself.  A caller that supplies no
+                # provenance leaves no row, and the read path then reports
+                # legacy_unrecorded rather than guessing from today's classifier.
+                _source = str(dirty.get("classification_source") or "")
+                if _source:
+                    from .dirty_classification import (
+                        classification_contract_sha256,
+                        record_classification,
+                    )
+
+                    record_classification(
+                        connection,
+                        cause_id=cause_id,
+                        classification_source=_source,
+                        contract_sha256=classification_contract_sha256(),
+                    )
                 connection.execute(
                     """
                     INSERT INTO dirty_flags(
