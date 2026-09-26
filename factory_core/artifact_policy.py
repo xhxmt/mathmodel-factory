@@ -120,6 +120,12 @@ class ArtifactPolicy:
     #: change to this artifact.  Required by ``EXPLICIT_ONLY`` unless the artifact
     #: is both non-final-input and non-submission (S1.3 closure table).
     blocker: str | None = None
+    #: Routing for a policy-only entry.  CI invariant 1 forbids giving it an
+    #: ``ownership_rule`` (that would make the policy disagree with
+    #: ``artifact_ownership``), so a policy-only entry that still has to route a
+    #: change names its consequence explicitly here.
+    route_stage: int | None = None
+    route_flag: str | None = None
 
     @property
     def is_policy_only(self) -> bool:
@@ -177,9 +183,88 @@ def compatibility_policy(rule: ArtifactOwnership) -> ArtifactPolicy:
     )
 
 
-#: Explicit policies added by later S1 commits.  Empty in S1-A, which is what
-#: makes S1-A behaviour-preserving.
-NATIVE_POLICY: tuple[ArtifactPolicy, ...] = ()
+#: Explicit policies for the 21 paths that A's real history showed falling into
+#: the fail-closed fallback (MATH@8 + RESULT@4).  S1-B.
+#
+#: Every one of them is policy-only: none has a Stage owner, and none gains one.
+#: The change they make is that a modification stops implying a *solve* rewind
+#: unless it genuinely is result evidence.
+#:
+#: Producer/consumer reading behind the roles (Q2 forbids guessing):
+#:   - the templates below have NO producer in Python; they are agent-authored
+#:   - results/canonical_results.json lists m1/m4_solver_evidence.json in its
+#:     evidence closure, so those two keep RESULT@4 - dropping it would let a
+#:     genuine result-evidence change pass unnoticed
+#:   - derived_artifacts_verification.latest.json binds results_values.tex by
+#:     byte comparison with "matches_regenerated", which is why the two .tex
+#:     artifacts are PRESENTATION_ONLY and rely on that chain
+#:   - tables.tex/results_values.tex and the appendix generators are rebuildable
+#:     presentation, so their own change yields FORMAT@9 and never a rewind
+#:   - the diagnostic/repair reports and the exploratory appendix sources declare
+#:     EXPLICIT_ONLY: no obligation is created, and blocking - if any - must come
+#:     from a named finding/repair contract
+#:
+#: All 21 are final_input=False and submission_member=False.  Promoting any of
+#: them into a delivery closure would change what ships or what the final audit
+#: consumes, and that is a separate, explicitly reviewed decision - not a
+#: side effect of removing a misclassification.
+NATIVE_POLICY: tuple[ArtifactPolicy, ...] = (
+    # -- Step 5 diagnostics and repair evidence: reports about work, not work.
+    ArtifactPolicy("step5_results_gap_report.md", ArtifactRole.DIAGNOSTIC.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("step5_scope_alignment_report.md", ArtifactRole.DIAGNOSTIC.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("step5_reuse_gap_record.md", ArtifactRole.DIAGNOSTIC.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("step5_bounded_repair_plan.md", ArtifactRole.REPAIR_EVIDENCE.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("step5_bounded_repair_report.md", ArtifactRole.REPAIR_EVIDENCE.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("step5_readonly_recovery_plan.md", ArtifactRole.REPAIR_EVIDENCE.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("step5_readonly_recovery_report.md", ArtifactRole.REPAIR_EVIDENCE.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("step4_reuse_gap_record.md", ArtifactRole.DIAGNOSTIC.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("m1_reuse_gap_record.md", ArtifactRole.DIAGNOSTIC.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("m4_reuse_gap_record.md", ArtifactRole.DIAGNOSTIC.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("m1_solver_evidence_failed.json", ArtifactRole.HISTORICAL_EVIDENCE.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    # -- Result-evidence closure: keep the rewind, drop the spurious MATH@8.
+    ArtifactPolicy("m1_solver_evidence.json", ArtifactRole.EVIDENCE.value,
+                   InvalidationMode.EVIDENCE_SUFFICIENCY.value, False, False,
+                   blocker="canonical_results_evidence_closure",
+                   route_stage=4, route_flag="RESULT_DIRTY"),
+    ArtifactPolicy("m4_solver_evidence.json", ArtifactRole.EVIDENCE.value,
+                   InvalidationMode.EVIDENCE_SUFFICIENCY.value, False, False,
+                   blocker="canonical_results_evidence_closure",
+                   route_stage=4, route_flag="RESULT_DIRTY"),
+    ArtifactPolicy("model_source_map.json", ArtifactRole.EVIDENCE_INDEX.value,
+                   InvalidationMode.EVIDENCE_SUFFICIENCY.value, False, False,
+                   blocker="canonical_results_evidence_closure",
+                   route_stage=4, route_flag="RESULT_DIRTY"),
+    # -- Rebuildable presentation: format obligation only, verified by the
+    #    derived-artifact chain rather than by a rewind.
+    ArtifactPolicy("tables.tex", ArtifactRole.DERIVED_PRESENTATION.value,
+                   InvalidationMode.PRESENTATION_ONLY.value, False, False,
+                   blocker="derived_artifacts_verification",
+                   route_stage=9, route_flag="FORMAT_DIRTY"),
+    ArtifactPolicy("results_values.tex", ArtifactRole.DERIVED_PRESENTATION.value,
+                   InvalidationMode.PRESENTATION_ONLY.value, False, False,
+                   blocker="derived_artifacts_verification",
+                   route_stage=9, route_flag="FORMAT_DIRTY"),
+    ArtifactPolicy("paper/appendix_sources/06_figures.py", ArtifactRole.DERIVED_GENERATOR.value,
+                   InvalidationMode.PRESENTATION_ONLY.value, False, False,
+                   blocker="derived_artifacts_verification",
+                   route_stage=9, route_flag="FORMAT_DIRTY"),
+    # -- Exploratory appendix sources: declared non-blocking, and both delivery
+    #    flags false, so NON_BLOCKING_BY_POLICY applies and finalization must not
+    #    fail closed for them.
+    ArtifactPolicy("paper/appendix_sources/pro01/**", ArtifactRole.EXPLORATORY.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+)
 
 #: A policy-only pattern may only shadow an ownership rule if it is listed here
 #: with a witness test.  Empty means "no shadowing is permitted" (CI invariant 3).

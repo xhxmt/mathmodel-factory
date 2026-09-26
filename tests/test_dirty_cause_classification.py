@@ -1154,18 +1154,79 @@ def _legacy_derivation(before: dict, after: dict) -> dict[tuple[str, str], str]:
     return sources
 
 
-@pytest.mark.parametrize("path", _DERIVATION_CORPUS)
-def test_policy_aware_derivation_matches_the_legacy_oracle(path):
-    """S1-D must not change attribution while NATIVE_POLICY is empty.
+def _unregistered_corpus():
+    """Corpus entries with no NATIVE_POLICY entry, where the pre-S1-D oracle
+    and the policy-aware derivation must still agree exactly."""
 
-    The derivation now routes through the policy layer; this asserts the result
-    is byte-identical to the pre-S1-D ownership-based derivation for every
-    branch the corpus can reach.
-    """
+    from factory_core.artifact_policy import artifact_policy
+
+    return tuple(
+        path for path in _DERIVATION_CORPUS
+        if artifact_policy(path) is None
+        or artifact_policy(path).ownership_rule is not None
+    )
+
+
+@pytest.mark.parametrize("path", _unregistered_corpus())
+def test_policy_aware_derivation_matches_the_legacy_oracle(path):
+    """For every path the policy layer resolves to an ownership rule (or not at
+    all), attribution must be byte-identical to the pre-S1-D ownership-based
+    derivation.  Paths S1-B registered are asserted separately below."""
 
     before = {path: "a"}
     after = {path: "b"}
     assert classification_sources(before, after) == _legacy_derivation(before, after)
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        # EXPLICIT_ONLY: no obligation, so no provenance entry at all
+        ("step5_results_gap_report.md", {}),
+        ("m1_reuse_gap_record.md", {}),
+        ("m1_solver_evidence_failed.json", {}),
+        ("paper/appendix_sources/pro01/input_arrays.npz", {}),
+        # routed evidence: keeps the result rewind, attributed policy_only
+        ("m1_solver_evidence.json", {("RESULT_DIRTY", "m1_solver_evidence.json"): "policy_only"}),
+        ("model_source_map.json", {("RESULT_DIRTY", "model_source_map.json"): "policy_only"}),
+        # rebuildable presentation: format obligation, attributed policy_only
+        ("tables.tex", {("FORMAT_DIRTY", "tables.tex"): "policy_only"}),
+        ("results_values.tex", {("FORMAT_DIRTY", "results_values.tex"): "policy_only"}),
+        ("paper/appendix_sources/06_figures.py",
+         {("FORMAT_DIRTY", "paper/appendix_sources/06_figures.py"): "policy_only"}),
+    ],
+)
+def test_s1b_registered_paths_attribute_as_policy_only(path, expected):
+    """The registered paths now differ from the pre-S1-D derivation on purpose.
+
+    This is the behaviour change S1-B exists to make, asserted per path so the
+    mapping cannot drift silently.  An EXPLICIT_ONLY entry contributes no
+    provenance at all because it produces no obligation to explain.
+    """
+
+    assert classification_sources({}, {path: "x"}) == expected
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        # the fail-closed pair is gone for every registered path
+        ("step5_results_gap_report.md", set()),
+        ("m1_solver_evidence.json", {("RESULT_DIRTY", 4)}),
+        ("tables.tex", {("FORMAT_DIRTY", 9)}),
+        ("results_values.tex", {("FORMAT_DIRTY", 9)}),
+        # and still present for a genuinely unknown path
+        ("truly_unknown_authored_contract.json", {("MATH_DIRTY", 8), ("RESULT_DIRTY", 4)}),
+    ],
+)
+def test_s1b_removes_the_fail_closed_pair_for_registered_paths(path, expected):
+    """The classifier's view of the same question, asserted alongside the
+    provenance view so the two cannot disagree."""
+
+    from factory_core.current_dirty import classify_manifest_changes
+
+    got = {(c.flag.value, c.owner_stage) for c in classify_manifest_changes({}, {path: "x"})}
+    assert got == expected, path
 
 
 def test_derivation_oracle_agrees_on_synthetic_and_paper_keys():
@@ -1199,26 +1260,12 @@ def test_policy_only_entry_is_attributed_as_policy_only(monkeypatch):
     lookup path rather than a stubbed one.
     """
 
-    from factory_core import artifact_policy as ap
-
-    entry = ap.ArtifactPolicy(
-        pattern="step5_results_gap_report.md",
-        role=ap.ArtifactRole.DIAGNOSTIC.value,
-        invalidation_mode=ap.InvalidationMode.FAIL_CLOSED.value,
-        final_input=False,
-        submission_member=False,
-        ownership_rule=None,
-    )
-    monkeypatch.setattr(ap, "POLICY_ORDER", (entry, *ap.POLICY_ORDER))
-    ap.artifact_policy.cache_clear()
-    try:
-        sources = classification_sources({}, {entry.pattern: "x"})
-        assert sources[("MATH_DIRTY", entry.pattern)] == "policy_only"
-        # and it is NOT the fail-closed fallback pair any more
-        assert ("RESULT_DIRTY", entry.pattern) not in sources
-        assert "policy_only" in CLASSIFICATION_SOURCES
-    finally:
-        ap.artifact_policy.cache_clear()
+    # the real registration, no injection
+    sources = classification_sources({}, {"m1_solver_evidence.json": "x"})
+    assert sources[("RESULT_DIRTY", "m1_solver_evidence.json")] == "policy_only"
+    # and it is NOT the fail-closed fallback pair any more
+    assert ("MATH_DIRTY", "m1_solver_evidence.json") not in sources
+    assert "policy_only" in CLASSIFICATION_SOURCES
 
 
 def test_policy_only_attribution_differs_from_fallback():
@@ -1226,8 +1273,8 @@ def test_policy_only_attribution_differs_from_fallback():
 
     from factory_core.artifact_policy import artifact_policy
 
-    path = "step5_results_gap_report.md"
-    assert artifact_policy(path) is None, "precondition: unregistered today"
+    path = "truly_unknown_authored_contract.json"
+    assert artifact_policy(path) is None, "precondition: genuinely unregistered"
     sources = classification_sources({}, {path: "x"})
     assert sources[("MATH_DIRTY", path)] == "fallback"
     assert sources[("RESULT_DIRTY", path)] == "fallback"

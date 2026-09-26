@@ -216,7 +216,11 @@ def _authored_source(artifact: str) -> dict[tuple[str, str], str]:
 
     if policy.ownership_rule is None:
         # Policy-only: described, but deliberately carries no Stage routing.
-        return {(_policy_flag(policy), artifact): "policy_only"}
+        # EXPLICIT_ONLY declares that the artifact's own modification creates no
+        # obligation, so it contributes no provenance entry either.
+        if policy.route_flag is None or policy.route_stage is None:
+            return {}
+        return {(str(policy.route_flag), artifact): "policy_only"}
 
     rule = policy.ownership_rule
     if any(rule is extra for extra in ADDITIONAL_OWNERSHIP):
@@ -232,20 +236,11 @@ def _authored_source(artifact: str) -> dict[tuple[str, str], str]:
 
 
 def _policy_flag(policy) -> str:
-    """The dirty flag a policy-only entry routes to.
+    """Compatibility shim: the flag a policy-only entry routes to, or MATH_DIRTY
+    when it routes nothing.  Kept so historical callers of the derivation keep a
+    stable name; the authoritative value is ``policy.route_flag``."""
 
-    A policy-only entry names its consequence in ``invalidation_mode``; only
-    ``UPSTREAM_RECOMPUTE`` corresponds to a Stage rewind, and such an entry
-    carries an ``ownership_rule`` by construction.  A policy-only entry that
-    still produces a change is therefore the fail-closed pair, which is what
-    ``FAIL_CLOSED`` declares.
-    """
-
-    from .artifact_policy import InvalidationMode
-
-    if policy.invalidation_mode == InvalidationMode.FAIL_CLOSED.value:
-        return "MATH_DIRTY"
-    return "MATH_DIRTY"
+    return str(policy.route_flag or "MATH_DIRTY")
 
 
 def source_for(

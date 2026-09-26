@@ -78,6 +78,14 @@ EDGE_CASE_PATHS = (
 )
 
 
+def policy_owner_stage_is_none(path) -> bool:
+    """A policy-only path must resolve to no Stage through the policy layer."""
+
+    from factory_core.artifact_policy import artifact_policy_owner_stage
+
+    return artifact_policy_owner_stage(path) is None
+
+
 def _witness(pattern: str) -> str:
     return pattern.replace("**", "x").replace("*", "x")
 
@@ -135,25 +143,41 @@ def test_compatibility_policy_copies_every_delivery_field_verbatim():
         assert policy.blocker is None
 
 
-def test_compatibility_phase_registers_nothing_new():
-    """S1-A is a no-op: today every policy is ownership-backed."""
+def test_s1b_registers_exactly_the_observed_gap_and_nothing_else():
+    """The registration is exactly the 21 observed paths, all policy-only."""
 
-    assert NATIVE_POLICY == ()
-    assert all(p.ownership_rule is not None for p in POLICY_ORDER)
-    assert len(POLICY_ORDER) == len(ARTIFACT_OWNERSHIP_REGISTRY)
+    covered = {
+        path for path in OBSERVED_GAP_PATHS
+        if artifact_policy(path) is not None
+    }
+    assert covered == set(OBSERVED_GAP_PATHS)
+    assert len(NATIVE_POLICY) == 18, "18 entries whose globs cover 21 paths"
+    assert all(p.is_policy_only for p in NATIVE_POLICY)
+    # every ownership rule still has its compatibility policy, and no ownership
+    # rule was displaced
+    backed = [p for p in POLICY_ORDER if p.ownership_rule is not None]
+    assert len(backed) == len(ARTIFACT_OWNERSHIP_REGISTRY)
     assert len(ADDITIONAL_OWNERSHIP) == 5
+    # and nothing shadowed the legacy registry
+    assert shadowed_ownership_rules() == []
 
 
 @pytest.mark.parametrize("path", OBSERVED_GAP_PATHS)
-def test_observed_gap_paths_are_still_unregistered_in_s1a(path):
-    """S1-A must not quietly register the 21 fallback paths.
+def test_observed_gap_paths_are_registered_by_s1b_without_gaining_an_owner(path):
+    """S1-B's whole point.
 
-    Registering them is S1-B's deliberate, reviewed change; doing it here would
-    hide a behaviour change inside a "no behaviour change" commit.
+    Each of the 21 fallback paths is now described by a policy, and **none of
+    them gained a Stage owner** - the legacy registry still returns None for
+    every one. That is what keeps this a classification fix rather than an
+    invented ownership.
     """
 
-    assert artifact_policy(path) is None, path
-    assert artifact_ownership(path) is None, path
+    policy = artifact_policy(path)
+    assert policy is not None, path
+    assert policy.is_policy_only, path
+    assert policy.ownership_rule is None, path
+    assert artifact_ownership(path) is None, f"must not gain a Stage owner: {path}"
+    assert policy_owner_stage_is_none(path), path
 
 
 # ------------------------------------------------------------------ invariant 3
@@ -184,10 +208,25 @@ def test_shadow_detector_actually_detects_shadowing():
 
 # ------------------------------------------------------- zero behaviour change
 @pytest.mark.parametrize("path", PATH_CORPUS)
-def test_policy_presence_matches_ownership_presence(path):
-    """The policy layer must never become a second, divergent authority."""
+def test_policy_presence_covers_and_may_extend_ownership_presence(path):
+    """S1-B widens coverage deliberately; it must not narrow it or diverge.
 
-    assert (artifact_policy(path) is None) == (artifact_ownership(path) is None), path
+    The relationship is now:
+      * every path the legacy registry resolves must resolve through the policy
+        layer to the *same* rule, and
+      * a policy-only entry must NOT be visible to ``artifact_ownership``.
+    Equality would be wrong once policy-only entries exist - and equality in the
+    other direction (policy missing where ownership exists) is still forbidden.
+    """
+
+    policy = artifact_policy(path)
+    legacy = artifact_ownership(path)
+    if legacy is not None:
+        assert policy is not None, f"policy must cover an owned path: {path}"
+        assert policy.ownership_rule is legacy, path
+    elif policy is not None:
+        assert policy.is_policy_only, path
+        assert legacy is None, path
 
 
 @pytest.mark.parametrize("path", PATH_CORPUS)
