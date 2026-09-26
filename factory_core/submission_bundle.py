@@ -8,11 +8,12 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from .current_artifact_ownership import (
-    ARTIFACT_OWNERSHIP_SCHEMA,
-    artifact_ownership,
-    iter_owned_artifacts,
+from .artifact_policy import (
+    artifact_policy,
+    iter_policy_artifacts,
+    policy_ownership_rule,
 )
+from .current_artifact_ownership import ARTIFACT_OWNERSHIP_SCHEMA
 from .paper_sources import require_safe_latex_dependencies
 
 
@@ -138,7 +139,7 @@ def submission_bundle_paths(
         selected.add(
             _validate_regular_file(project, pdf_candidate, label="final PDF")
         )
-    for candidate in iter_owned_artifacts(
+    for candidate in iter_policy_artifacts(
         project, submission_only=True, include_symlinks=True
     ):
         relative = candidate.relative_to(project)
@@ -165,7 +166,7 @@ def submission_bundle_paths(
     for solver_input in solver_coverage.included_paths:
         relative = solver_input.relative_to(project).as_posix()
         if (
-            artifact_ownership(relative) is None
+            artifact_policy(relative) is None
             and relative not in active_latex
             and relative not in declared
             and relative not in routes.roles
@@ -187,7 +188,7 @@ def submission_bundle_paths(
     unowned = sorted(
         relative
         for relative in tracked_artifact_paths(project)
-        if artifact_ownership(relative) is None
+        if artifact_policy(relative) is None
         and relative not in selected_relatives
     )
     if unowned:
@@ -214,7 +215,7 @@ def submission_bundle_manifest(
         project, resolved_base, require_pdf=require_pdf
     ):
         relative = path.relative_to(project).as_posix()
-        ownership = artifact_ownership(relative)
+        ownership = policy_ownership_rule(relative)
         members.append(
             {
                 "source_path": relative,

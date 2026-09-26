@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatchcase
 from functools import lru_cache
+from pathlib import Path
 
 from .artifact_ownership import ArtifactOwnership
 from .current_artifact_ownership import (
@@ -222,6 +223,69 @@ def policies_for_role(role: str) -> tuple[ArtifactPolicy, ...]:
     return tuple(p for p in POLICY_ORDER if p.role == role)
 
 
+
+# --------------------------------------------------------------------------
+# Policy-aware equivalents of the legacy consumers
+#
+# S1-C migrates every collection/routing consumer onto these.  While
+# NATIVE_POLICY is empty they are exact equivalents of their legacy
+# counterparts - that is what makes the migration reviewable - but they see
+# policy-only entries, which the ownership-based versions silently skip.
+# --------------------------------------------------------------------------
+
+def policy_ownership_rule(path) -> ArtifactOwnership | None:
+    """The legacy routing rule behind a path, or None.
+
+    Unlike ``artifact_ownership()`` this also returns None for a policy-only
+    entry, so callers reasoning about *routing* keep their old semantics while
+    the policy layer gains the ability to describe the path.
+    """
+
+    policy = artifact_policy(path)
+    return policy.ownership_rule if policy is not None else None
+
+
+def reopen_after_step_for_policy_artifact(path, *, default_stage: int = 3) -> int:
+    """Policy-aware reopen target.  Equivalent while only compatibility
+    policies exist; a policy-only entry falls back to ``default_stage`` exactly
+    as an unregistered path does today."""
+
+    from .stages import resume_after_step_for_stage
+
+    policy = artifact_policy(path)
+    owner_stage = (
+        policy.ownership_rule.owner_stage
+        if policy is not None and policy.ownership_rule is not None
+        else default_stage
+    )
+    return resume_after_step_for_stage(owner_stage)
+
+
+def iter_policy_artifacts(project_dir, *, final_input_only=False,
+                          submission_only=False, include_symlinks=False):
+    """Policy-aware twin of ``iter_owned_artifacts``.
+
+    Deliberately mirrors that function's walk and skip order exactly; the only
+    difference is that membership is decided by ``artifact_policy`` instead of
+    ``artifact_ownership``, so a policy-only entry is visible.
+    """
+
+    project = Path(project_dir).resolve()
+    for path in sorted(project.rglob("*")):
+        relative = path.relative_to(project)
+        policy = artifact_policy(relative.as_posix())
+        if policy is None or (final_input_only and not policy.final_input):
+            continue
+        if submission_only and not policy.submission_member:
+            continue
+        if any(part in {"archive", "__pycache__"} for part in relative.parts):
+            continue
+        if path.is_symlink():
+            if include_symlinks:
+                yield path
+        elif path.is_file():
+            yield path
+
 def _witness_path(pattern: str) -> str:
     """A concrete path that the pattern matches, for shadowing analysis.
 
@@ -273,6 +337,9 @@ __all__ = [
     "artifact_policy",
     "artifact_policy_owner_stage",
     "compatibility_policy",
+    "iter_policy_artifacts",
     "policies_for_role",
+    "policy_ownership_rule",
+    "reopen_after_step_for_policy_artifact",
     "shadowed_ownership_rules",
 ]

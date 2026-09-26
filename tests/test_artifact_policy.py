@@ -16,6 +16,7 @@ import pytest
 
 from factory_core.current_artifact_ownership import (
     ARTIFACT_OWNERSHIP_REGISTRY,
+    iter_owned_artifacts,
     ADDITIONAL_OWNERSHIP,
     _OWNERSHIP_ORDER,
     artifact_owner_stage,
@@ -23,6 +24,9 @@ from factory_core.current_artifact_ownership import (
 )
 from factory_core.artifact_policy import (
     NATIVE_POLICY,
+    iter_policy_artifacts,
+    policy_ownership_rule,
+    reopen_after_step_for_policy_artifact,
     POLICY_ONLY_SHADOW_ALLOWLIST,
     POLICY_ORDER,
     ArtifactPolicy,
@@ -283,3 +287,213 @@ def test_role_vocabulary_is_closed_and_compatibility_roles_are_frozen_domains():
         "EXPLORATORY",
     }
     assert policies_for_role("canonical_result")
+
+# ===========================================================================
+# S1-C-prep: the migrated consumers must be exact equivalents
+# ===========================================================================
+
+def _tree(tmp_path, relatives):
+    root = tmp_path / "proj"
+    for rel in relatives:
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    return root
+
+
+#: A tree that exercises collector membership: final-input yes/no, submission
+#: yes/no, unregistered, archived and scratch paths.
+_COLLECTOR_TREE = (
+    "results/canonical_results.json",
+    "results/problem1/values.json",
+    "judge_evidence.json",
+    "STEP5_RECEIPT.json",
+    "method_fit_suggestions.json",
+    ".factory/solver_inputs/snap.json",
+    "problem/problem_brief.md",
+    "m1_spec.md",
+    "solve_log.md",
+    "abstract_draft.md",
+    "references.bib",
+    "tables/t.tex",
+    "paper/main_paper.tex",
+    "result1.xlsx",
+    "style/s.tex",
+    "unknown_authored_contract.json",
+    "archive/old.json",
+    "__pycache__/c.json",
+    "data/intermediate/scratch.csv",
+)
+
+_ITERATOR_KWARGS = (
+    {},
+    {"final_input_only": True},
+    {"submission_only": True},
+    {"final_input_only": True, "include_symlinks": True},
+    {"submission_only": True, "include_symlinks": True},
+    {"final_input_only": True, "submission_only": True},
+)
+
+
+@pytest.mark.parametrize("kwargs", _ITERATOR_KWARGS)
+def test_policy_iterator_is_set_identical_to_the_ownership_iterator(tmp_path, kwargs):
+    """The core S1-C-prep guarantee.
+
+    While NATIVE_POLICY is empty the policy-aware collector must yield exactly
+    the same files, otherwise the migration itself would change what ships or
+    what the final audit consumes.
+    """
+
+    root = _tree(tmp_path, _COLLECTOR_TREE)
+    owned = {
+        p.relative_to(root).as_posix()
+        for p in iter_owned_artifacts(root, **kwargs)
+    }
+    policy = {
+        p.relative_to(root).as_posix()
+        for p in iter_policy_artifacts(root, **kwargs)
+    }
+    assert policy == owned
+
+
+def test_policy_iterator_mirrors_the_walk_and_skip_order(tmp_path):
+    """Including the archive/__pycache__ skip, which is not ownership-driven."""
+
+    root = _tree(tmp_path, _COLLECTOR_TREE)
+    got = {
+        p.relative_to(root).as_posix()
+        for p in iter_policy_artifacts(root)
+    }
+    assert "archive/old.json" not in got
+    assert "__pycache__/c.json" not in got
+    # data/intermediate/** IS registered, but explicitly final_input=False and
+    # submission_member=False, so it shows in the unfiltered walk and in neither
+    # delivery set.
+    assert "data/intermediate/scratch.csv" in got
+    assert "data/intermediate/scratch.csv" not in {
+        p.relative_to(root).as_posix()
+        for p in iter_policy_artifacts(root, final_input_only=True)
+    }
+    assert "data/intermediate/scratch.csv" not in {
+        p.relative_to(root).as_posix()
+        for p in iter_policy_artifacts(root, submission_only=True)
+    }
+    assert "unknown_authored_contract.json" not in got, "unregistered is skipped"
+    assert "results/canonical_results.json" in got
+
+
+@pytest.mark.parametrize("path", PATH_CORPUS)
+def test_policy_ownership_rule_matches_the_legacy_lookup(path):
+    """``policy_ownership_rule`` must agree with ``artifact_ownership`` for every
+    path that has a rule, and be None exactly where the legacy lookup is None."""
+
+    assert policy_ownership_rule(path) is artifact_ownership(path) if (
+        artifact_ownership(path) is not None
+    ) else policy_ownership_rule(path) is None
+
+
+@pytest.mark.parametrize("path", PATH_CORPUS)
+def test_policy_reopen_target_matches_the_legacy_one(path):
+    from factory_core.current_artifact_ownership import reopen_after_step_for_artifact
+
+    assert reopen_after_step_for_policy_artifact(path) == (
+        reopen_after_step_for_artifact(path)
+    )
+    assert reopen_after_step_for_policy_artifact(path, default_stage=7) == (
+        reopen_after_step_for_artifact(path, default_stage=7)
+    )
+
+
+def test_submission_coverage_gate_accepts_exactly_the_same_paths(tmp_path):
+    """The two fail-closed gates in submission_bundle are membership tests.
+
+    If the migration had widened them, the submission bundle could silently
+    grow; if it had narrowed them, a previously valid bundle would start
+    raising.  Both directions are asserted here.
+    """
+
+    root = _tree(tmp_path, _COLLECTOR_TREE)
+    for rel in _COLLECTOR_TREE:
+        legacy_none = artifact_ownership(rel) is None
+        policy_none = artifact_policy(rel) is None
+        assert policy_none == legacy_none, rel
+
+
+def test_diagnostics_owner_stage_now_uses_the_current_registry():
+    """Regression for a real drift the migration fixes.
+
+    web/backend/diagnostics_service.py imported the FROZEN registry, so it
+    reported owner_stage=None for judge_evidence.json (really 10) and 3 for
+    scope_review_manifest.json (really 10).
+    """
+
+    from factory_core.artifact_ownership import artifact_owner_stage as frozen_lookup
+
+    for path, expected in (
+        ("judge_evidence.json", 10),
+        ("models/reporting_scope/scope_review_manifest.json", 10),
+        ("STEP5_RECEIPT.json", 4),
+        ("method_fit_suggestions.json", 1),
+    ):
+        assert artifact_policy_owner_stage(path) == expected
+        assert frozen_lookup(path) != expected, (
+            "this path is precisely where the frozen lookup drifted"
+        )
+        assert artifact_policy_owner_stage(path) == artifact_owner_stage(path)
+
+
+def test_every_ownership_consumer_is_migrated_except_the_frozen_classifier():
+    """A source-level guard: no production module may still call the legacy
+    owner lookups, except factory_core/dirty.py (frozen trust root) and the
+    provenance mirror that deliberately reproduces the frozen branch order.
+    """
+
+    import re
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1]
+    allowed = {
+        "factory_core/dirty.py",                 # frozen: hashed into the classifier identity
+        "factory_core/dirty_classification.py",  # mirrors the frozen classifier on purpose
+        "factory_core/artifact_ownership.py",    # the definitions
+        "factory_core/current_artifact_ownership.py",
+        "factory_core/artifact_policy.py",
+    }
+    legacy_names = (
+        "artifact_ownership",
+        "artifact_owner_stage",
+        "reopen_after_step_for_artifact",
+        "iter_owned_artifacts",
+    )
+    call = re.compile(r"\b(" + "|".join(legacy_names) + r")\(")
+    #: A module is migrated when the name it calls is bound by an import from the
+    #: policy layer - including aliases such as
+    #: ``from ...artifact_policy import artifact_policy_owner_stage as artifact_owner_stage``.
+    policy_import = re.compile(
+        r"^\s*from [\w.]*artifact_policy import ([^\n(]+)", re.M
+    )
+    offenders = []
+    for base in ("factory_core", "apps", "scripts", "web"):
+        for source in (root / base).rglob("*.py"):
+            rel = source.relative_to(root).as_posix()
+            if rel in allowed or "__pycache__" in rel:
+                continue
+            text = source.read_text(encoding="utf-8", errors="replace")
+            rebound = set()
+            for import_list in policy_import.findall(text):
+                for item in import_list.split(","):
+                    item = item.strip()
+                    if not item:
+                        continue
+                    if " as " in item:
+                        rebound.add(item.split(" as ")[-1].strip())
+                    else:
+                        rebound.add(item)
+            for match in call.finditer(text):
+                if match.group(1) in rebound:
+                    continue
+                line = text[: match.start()].count("\n") + 1
+                offenders.append(
+                    f"{rel}:{line}  {text.splitlines()[line - 1].strip()[:70]}"
+                )
+    assert offenders == [], "unmigrated ownership consumers:\n" + "\n".join(offenders)

@@ -17,7 +17,7 @@ from scripts.workflow_state import (
     gate2_verdict,
     step16_ready,
 )
-from ..current_artifact_ownership import reopen_after_step_for_artifact
+from ..artifact_policy import reopen_after_step_for_policy_artifact
 from ..paper_sources import count_abstract_placeholders
 
 
@@ -506,7 +506,7 @@ class NativeArtifactValidator:
     @staticmethod
     def _artifact_owner(relative: str) -> int:
         """Return the last completed step needed to rerun an artifact's owner."""
-        return reopen_after_step_for_artifact(relative, default_stage=3)
+        return reopen_after_step_for_policy_artifact(relative, default_stage=3)
 
     def _step_14(self, project: Path):
         paper = _paper(project)

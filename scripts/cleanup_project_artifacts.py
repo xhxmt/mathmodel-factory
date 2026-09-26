@@ -161,9 +161,9 @@ def authoritative_protected_paths(project):
     project = Path(project).resolve()
     protected = set()
     try:
-        from factory_core.current_artifact_ownership import iter_owned_artifacts
+        from factory_core.artifact_policy import iter_policy_artifacts
 
-        owned = list(iter_owned_artifacts(project, final_input_only=True))
+        owned = list(iter_policy_artifacts(project, final_input_only=True))
     except Exception:
         return None
     for path in owned:

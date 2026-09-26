@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from .current_artifact_ownership import artifact_ownership
+from .artifact_policy import policy_ownership_rule
 from .current_dirty import capture_artifact_manifest, classifier_contract_sha256, manifest_fingerprint
 from .domain import InvalidTransition, RevisionConflict, SCHEMA_VERSION
 from .workflow_events import canonical_hash
@@ -48,7 +48,7 @@ def recover_final_evidence_config(store, *, expected_revision: int, source_revis
             raise InvalidTransition(message)
 
     artifact = "judge_evidence.json"
-    owner = artifact_ownership(artifact)
+    owner = policy_ownership_rule(artifact)
     require(owner is not None and owner.owner_stage == 10
             and owner.dirty_flag == "FORMAT_DIRTY", "final evidence ownership missing")
     now = int(store._clock())
