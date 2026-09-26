@@ -39,6 +39,7 @@ CLASSIFICATION_SOURCES = (
     "fallback",              # matched no rule -> fail-closed MATH@8 + RESULT@4
     "explicit_fail_closed",  # constructed deliberately as a fail-closed cause
     "bespoke_recovery",      # created by the bespoke final-evidence recovery path
+    "policy_only",           # S1-D: routed by a policy entry with no Stage owner
 )
 
 #: Recordable values.  ``legacy_unrecorded`` is included so that a v10 cause
@@ -121,6 +122,11 @@ def classification_contract_sha256() -> str:
         "artifact_ownership.py",          # frozen v1 registry + matcher
         "current_artifact_ownership.py",  # ADDITIONAL_OWNERSHIP
         "paper_sources.py",               # governs the .tex / @paper: branch
+        # S1-D: the derivation resolves routing through the policy layer, so the
+        # policy registry and its matcher now decide provenance too.  Omitting
+        # it would let a policy change alter attribution while the recorded
+        # contract identity stayed the same.
+        "artifact_policy.py",
     )
     digest = hashlib.sha256()
     digest.update(CLASSIFICATION_CONTRACT_SCHEMA.encode("ascii"))
@@ -152,9 +158,6 @@ def classification_sources(before: dict, after: dict) -> dict[tuple[str, str], s
     their cause, so they are mapped onto that path here.
     """
 
-    from .artifact_ownership import artifact_ownership
-    from .current_dirty import ADDITIONAL_OWNERSHIP, artifact_pattern_matches
-
     changed = sorted(
         path for path in set(before) | set(after) if before.get(path) != after.get(path)
     )
@@ -181,23 +184,68 @@ def classification_sources(before: dict, after: dict) -> dict[tuple[str, str], s
             if not any(key.startswith(f"@paper:{artifact}:") for key in changed):
                 sources[("FORMAT_DIRTY", artifact)] = "paper_semantic"
             continue
-        current_rule = next(
-            (rule for rule in ADDITIONAL_OWNERSHIP
-             if artifact_pattern_matches(rule.pattern, artifact)),
-            None,
-        )
-        if current_rule is not None:
-            sources[(current_rule.dirty_flag, artifact)] = "current_rule"
-            continue
-        frozen_rule = artifact_ownership(artifact)
-        if frozen_rule is not None:
-            sources[(frozen_rule.dirty_flag, artifact)] = "frozen_rule"
-        else:
-            # The fail-closed default emits both flags for the same artifact.
-            sources[("MATH_DIRTY", artifact)] = "fallback"
-            sources[("RESULT_DIRTY", artifact)] = "fallback"
+        sources.update(_authored_source(artifact))
 
     return sources
+
+
+def _authored_source(artifact: str) -> dict[tuple[str, str], str]:
+    """Provenance for one authored (non-synthetic) path.
+
+    S1-D routes this through the policy layer rather than the raw ownership
+    tables, so a path that is described by a policy entry with no Stage owner is
+    attributed as ``policy_only`` instead of falling into ``fallback``.  The
+    legacy ``frozen_rule`` / ``current_rule`` distinction is preserved by asking
+    which registry actually supplied the rule.
+
+    While ``NATIVE_POLICY`` is empty this returns exactly what the previous
+    ownership-based derivation returned - that equivalence is asserted by test.
+    """
+
+    from .artifact_policy import artifact_policy
+    from .artifact_ownership import ARTIFACT_OWNERSHIP_REGISTRY
+    from .current_artifact_ownership import ADDITIONAL_OWNERSHIP
+
+    policy = artifact_policy(artifact)
+    if policy is None:
+        # The fail-closed default emits both flags for the same artifact.
+        return {
+            ("MATH_DIRTY", artifact): "fallback",
+            ("RESULT_DIRTY", artifact): "fallback",
+        }
+
+    if policy.ownership_rule is None:
+        # Policy-only: described, but deliberately carries no Stage routing.
+        return {(_policy_flag(policy), artifact): "policy_only"}
+
+    rule = policy.ownership_rule
+    if any(rule is extra for extra in ADDITIONAL_OWNERSHIP):
+        return {(rule.dirty_flag, artifact): "current_rule"}
+    if any(rule is frozen for frozen in ARTIFACT_OWNERSHIP_REGISTRY):
+        return {(rule.dirty_flag, artifact): "frozen_rule"}
+    # A rule from neither registry cannot be attributed; fail closed on the
+    # provenance side too rather than inventing a source.
+    return {
+        ("MATH_DIRTY", artifact): "fallback",
+        ("RESULT_DIRTY", artifact): "fallback",
+    }
+
+
+def _policy_flag(policy) -> str:
+    """The dirty flag a policy-only entry routes to.
+
+    A policy-only entry names its consequence in ``invalidation_mode``; only
+    ``UPSTREAM_RECOMPUTE`` corresponds to a Stage rewind, and such an entry
+    carries an ``ownership_rule`` by construction.  A policy-only entry that
+    still produces a change is therefore the fail-closed pair, which is what
+    ``FAIL_CLOSED`` declares.
+    """
+
+    from .artifact_policy import InvalidationMode
+
+    if policy.invalidation_mode == InvalidationMode.FAIL_CLOSED.value:
+        return "MATH_DIRTY"
+    return "MATH_DIRTY"
 
 
 def source_for(

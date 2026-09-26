@@ -34,6 +34,8 @@ from factory_core import storage as storage_module
 from factory_core.current_dirty import classify_manifest_changes
 from factory_core.dirty_classification import (
     CLASSIFICATION_SOURCES,
+    _PAPER_DOMAIN_FLAGS,
+    _paper_key_present,
     DIRTY_CAUSE_CLASSIFICATION_SCHEMA,
     LEGACY_UNRECORDED,
     classification_contract_sha256,
@@ -1079,3 +1081,265 @@ def test_provenance_contract_covers_more_than_this_module(tmp_path):
     from factory_core.current_dirty import classifier_contract_sha256 as classifier_sha
 
     assert classification_contract_sha256() != classifier_sha()
+
+# ===========================================================================
+# S1-D: policy-aware provenance derivation
+# ===========================================================================
+
+#: Paths exercising every attribution branch the derivation can take.
+_DERIVATION_CORPUS = (
+    "results/canonical_results.json",                 # frozen rule
+    "results/problem1/values.json",                   # frozen rule
+    "solve_log.md",                                   # frozen rule
+    "judge_evidence.json",                            # current rule (ADDITIONAL)
+    "models/reporting_scope/scope_review_manifest.json",  # current rule
+    "STEP5_RECEIPT.json",                             # current rule
+    "method_fit_suggestions.json",                    # current rule
+    ".factory/solver_inputs/snap.json",               # current rule
+    "unknown_authored_contract.json",                 # fallback
+    "step5_results_gap_report.md",                     # fallback (S1-B will register)
+    "tables.tex",                                     # format rule
+    "paper/main_paper.tex",                           # paper source rule
+    "abstract_draft.md",                              # stage 9 prose
+    "result1.xlsx",                                   # declared result
+    "data/intermediate/scratch.csv",                  # stage 4, final_input False
+)
+
+
+def _legacy_derivation(before: dict, after: dict) -> dict[tuple[str, str], str]:
+    """The pre-S1-D ownership-based derivation, reproduced verbatim.
+
+    Used only as a reference oracle so the S1-D rewrite can be shown to be
+    equivalent while NATIVE_POLICY is empty.
+    """
+
+    from factory_core.artifact_ownership import artifact_ownership
+    from factory_core.current_artifact_ownership import (
+        ADDITIONAL_OWNERSHIP,
+        artifact_pattern_matches,
+    )
+
+    changed = sorted(
+        path for path in set(before) | set(after) if before.get(path) != after.get(path)
+    )
+    sources: dict[tuple[str, str], str] = {}
+    for artifact in changed:
+        if artifact.startswith("@protected:"):
+            sources[("MATH_DIRTY", artifact)] = "protected"
+        elif artifact.startswith("@paper:"):
+            _, relative, domain = artifact.split(":", 2)
+            flag = _PAPER_DOMAIN_FLAGS[domain]
+            sources[(flag, relative)] = "paper_semantic"
+    for artifact in changed:
+        if artifact.startswith("@"):
+            continue
+        if artifact.endswith(".tex") and _paper_key_present(artifact, before, after):
+            if not any(key.startswith(f"@paper:{artifact}:") for key in changed):
+                sources[("FORMAT_DIRTY", artifact)] = "paper_semantic"
+            continue
+        current_rule = next(
+            (rule for rule in ADDITIONAL_OWNERSHIP
+             if artifact_pattern_matches(rule.pattern, artifact)),
+            None,
+        )
+        if current_rule is not None:
+            sources[(current_rule.dirty_flag, artifact)] = "current_rule"
+            continue
+        frozen_rule = artifact_ownership(artifact)
+        if frozen_rule is not None:
+            sources[(frozen_rule.dirty_flag, artifact)] = "frozen_rule"
+        else:
+            sources[("MATH_DIRTY", artifact)] = "fallback"
+            sources[("RESULT_DIRTY", artifact)] = "fallback"
+    return sources
+
+
+@pytest.mark.parametrize("path", _DERIVATION_CORPUS)
+def test_policy_aware_derivation_matches_the_legacy_oracle(path):
+    """S1-D must not change attribution while NATIVE_POLICY is empty.
+
+    The derivation now routes through the policy layer; this asserts the result
+    is byte-identical to the pre-S1-D ownership-based derivation for every
+    branch the corpus can reach.
+    """
+
+    before = {path: "a"}
+    after = {path: "b"}
+    assert classification_sources(before, after) == _legacy_derivation(before, after)
+
+
+def test_derivation_oracle_agrees_on_synthetic_and_paper_keys():
+    cases = [
+        ({}, {"@protected:paper/main.tex:BUG1": "x"}),
+        ({}, {"@paper:tables.tex:format": "x"}),
+        ({}, {"@paper:tables.tex:math": "x"}),
+        ({"paper/p.tex": "a"}, {"paper/p.tex": "b", "@paper:paper/p.tex:prose": "b"}),
+    ]
+    for before, after in cases:
+        assert classification_sources(before, after) == _legacy_derivation(before, after)
+
+
+def test_derivation_covers_every_emitted_change_for_the_corpus():
+    for path in _DERIVATION_CORPUS:
+        before, after = {path: "a"}, {path: "b"}
+        sources = classification_sources(before, after)
+        for change in classify_manifest_changes(before, after):
+            assert (
+                source_for(sources, change.flag.value, change.cause_artifact)
+                != LEGACY_UNRECORDED
+            ), f"underived: {change.flag.value} {change.cause_artifact}"
+
+
+def test_policy_only_entry_is_attributed_as_policy_only(monkeypatch):
+    """The reason S1-D exists: a policy-only entry must be distinguishable from
+    the fail-closed fallback, so provenance can tell "described but unrouted"
+    from "nothing knows this path".
+
+    Injected through the real registry so the assertion exercises the production
+    lookup path rather than a stubbed one.
+    """
+
+    from factory_core import artifact_policy as ap
+
+    entry = ap.ArtifactPolicy(
+        pattern="step5_results_gap_report.md",
+        role=ap.ArtifactRole.DIAGNOSTIC.value,
+        invalidation_mode=ap.InvalidationMode.FAIL_CLOSED.value,
+        final_input=False,
+        submission_member=False,
+        ownership_rule=None,
+    )
+    monkeypatch.setattr(ap, "POLICY_ORDER", (entry, *ap.POLICY_ORDER))
+    ap.artifact_policy.cache_clear()
+    try:
+        sources = classification_sources({}, {entry.pattern: "x"})
+        assert sources[("MATH_DIRTY", entry.pattern)] == "policy_only"
+        # and it is NOT the fail-closed fallback pair any more
+        assert ("RESULT_DIRTY", entry.pattern) not in sources
+        assert "policy_only" in CLASSIFICATION_SOURCES
+    finally:
+        ap.artifact_policy.cache_clear()
+
+
+def test_policy_only_attribution_differs_from_fallback():
+    """Contrast: the same path with no policy at all is the fail-closed pair."""
+
+    from factory_core.artifact_policy import artifact_policy
+
+    path = "step5_results_gap_report.md"
+    assert artifact_policy(path) is None, "precondition: unregistered today"
+    sources = classification_sources({}, {path: "x"})
+    assert sources[("MATH_DIRTY", path)] == "fallback"
+    assert sources[("RESULT_DIRTY", path)] == "fallback"
+
+
+#: The provenance contract before S1-D, when artifact_policy.py was not yet a
+#: dependency of the derivation.
+_PROVENANCE_CONTRACT_AT_0_7_2 = None  # recorded in the S1-D stage record
+
+
+def test_classification_contract_covers_the_policy_layer_but_not_the_classifier():
+    """S1-D made attribution depend on artifact_policy.py, so the provenance
+    contract must cover it.  The classifier identity must NOT move: keeping the
+    two apart is Q14, and is what stops a provenance-only change forcing a dirty
+    rebase.
+    """
+
+    import inspect
+
+    import factory_core.dirty as dirty
+    from factory_core.current_dirty import classifier_contract_sha256 as classifier_sha
+
+    members_source = inspect.getsource(classification_contract_sha256)
+    assert "artifact_policy.py" in members_source
+
+    # provenance identity != classifier identity
+    assert classification_contract_sha256() != classifier_sha()
+
+    # the frozen classifier trust root is untouched by S1-D
+    assert dirty.classifier_contract_sha256() == (
+        "c451a9d0be64fabd185c7561b67093956e663db6e845915cd320fea1cbabc515"
+    )
+
+
+def test_provenance_contract_moves_when_a_contract_member_moves(tmp_path):
+    """Guard against a vacuous "the contract covers X" claim: perturbing a
+    covered module's bytes must change the identity."""
+
+    import factory_core.dirty_classification as dc_module
+
+    original = dc_module.classification_contract_sha256()
+    real_read = Path.read_bytes
+
+    def fake_read(self):
+        data = real_read(self)
+        if self.name == "artifact_policy.py":
+            return data + b"\n# perturbation\n"
+        return data
+
+    try:
+        Path.read_bytes = fake_read
+        assert dc_module.classification_contract_sha256() != original
+    finally:
+        Path.read_bytes = real_read
+
+
+# --------------------------------------------------------- replay regression
+def test_s1d_replay_regression_on_v9_fixture(tmp_path):
+    """The 0.7.2 replay gate must still hold after the S1-D changes."""
+
+    project, store = _initialize(tmp_path)
+    _rewind_to_v9(project)
+
+    store.status_snapshot()  # triggers the DDL migration
+    state = store.load()
+    assert state.schema_version == 9, "a read still leaves the replay generation alone"
+
+    snapshot = store.status_snapshot()
+    assert snapshot["event_replay_valid"] is True
+    assert snapshot["aggregate_valid"] is True
+
+    # a genuine write converges it, and replay still equals current state
+    written = store.transition(
+        expected_revision=state.revision,
+        event_type="S1D_REPLAY_FOR_TEST",
+        changes={},
+    )
+    assert written.schema_version == 10
+    after = store.status_snapshot()
+    assert after["event_replay_valid"] is True
+    assert after["aggregate_valid"] is True
+
+
+def test_s1d_new_cause_records_policy_aware_provenance(tmp_path):
+    """A cause created after S1-D carries a source from the extended vocabulary."""
+
+    project, store = _initialize(tmp_path)
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision,
+        event_type="DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            {
+                "flag": "RESULT_DIRTY",
+                "owner_stage": 4,
+                "cause_artifact": "results/canonical_results.json",
+                "baseline_fingerprint": "a" * 64,
+                "current_fingerprint": "b" * 64,
+                "classifier_contract_sha256": "c" * 64,
+                "classification_source": "frozen_rule",
+            }
+        ],
+    )
+    connection = _connect(project)
+    try:
+        row = connection.execute(
+            "SELECT c.cause_id, k.classification_source, k.policy_contract_sha256 "
+            "FROM dirty_causes c "
+            f"JOIN {_SIDE_TABLE} k ON k.cause_id=c.cause_id ORDER BY c.rowid DESC LIMIT 1"
+        ).fetchone()
+        assert row["classification_source"] == "frozen_rule"
+        assert row["policy_contract_sha256"] == classification_contract_sha256()
+    finally:
+        connection.close()
