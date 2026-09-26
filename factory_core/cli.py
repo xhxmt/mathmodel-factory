@@ -187,6 +187,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("project_dir")
     run.add_argument("--max-steps", type=int)
 
+    rebase = sub.add_parser(
+        "rebase-classifier",
+        help="Explicitly rebase active dirty obligations under revision CAS",
+    )
+    rebase.add_argument("project_dir")
+    rebase.add_argument("--expected-revision", type=int)
+
     worker = sub.add_parser("worker")
     worker.add_argument("project_dir")
     worker.add_argument("--ready-file", required=True)
@@ -392,6 +399,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "run":
             assert project is not None
             state = service.run(project, max_steps=args.max_steps, archive=True)
+            print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.command == "rebase-classifier":
+            # Explicit maintenance action.  The classifier rebase appends an
+            # event and increments the business revision, so it must never be a
+            # side effect of opening a project for reading (0.7.1).
+            assert project is not None
+            store = SQLiteStateStore(project)
+            expected = args.expected_revision
+            if expected is None:
+                expected = store.load().revision
+            state = store.rebase_dirty_classifier(expected_revision=expected)
             print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
             return 0
         if args.command == "archive":

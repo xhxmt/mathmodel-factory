@@ -498,10 +498,11 @@ def test_failed_migration_rolls_back_completely(tmp_path, monkeypatch):
     def _boom(*args, **kwargs):
         raise RuntimeError("migration aborted")
 
-    # imported inside _upgrade_schema, so patch the defining module
-    import factory_core.dirty_rebase as rebase_module
+    # 0.7.1 removed the classifier rebase from _upgrade_schema, so inject the
+    # failure at a step the 9->10 migration still performs.
+    import factory_core.dirty_classification as dc_module
 
-    monkeypatch.setattr(rebase_module, "rebase_dirty_classifier_state", _boom)
+    monkeypatch.setattr(dc_module, "ensure_dirty_cause_classification_schema", _boom)
     with pytest.raises(RuntimeError, match="migration aborted"):
         store.status_snapshot()
 
@@ -616,3 +617,224 @@ def test_derivation_covers_every_change_the_classifier_emits(before, after):
             source_for(sources, change.flag.value, change.cause_artifact)
             != LEGACY_UNRECORDED
         ), f"underived change: {change.flag.value} {change.cause_artifact}"
+
+
+# ===========================================================================
+# 0.7.1 additions
+# ===========================================================================
+
+def test_read_paths_do_not_mutate_revision_or_events(tmp_path):
+    """I7: opening a project for reading must not append events or bump revision.
+
+    The schema DDL migration is allowed on a read path; mutating the workflow
+    event stream and the business revision is not.
+    """
+
+    project, store = _initialize(tmp_path)
+    _rewind_to_v9(project)
+
+    connection = _connect(project)
+    try:
+        before_events = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        before_revision = connection.execute(
+            "SELECT revision FROM project_state WHERE singleton=1"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert _schema_version(project) == 9
+
+    # every read entry point that previously ran the migration
+    store.load()
+    store.status_snapshot()
+    store.events()
+    store.dirty_flags()
+    store.stage_checkpoints()
+    store.aggregate_domain_root()
+    store.solver_jobs()
+
+    connection = _connect(project)
+    try:
+        after_events = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        after_revision = connection.execute(
+            "SELECT revision FROM project_state WHERE singleton=1"
+        ).fetchone()[0]
+        last_types = [
+            r[0] for r in connection.execute(
+                "SELECT type FROM events ORDER BY revision DESC LIMIT 3"
+            )
+        ]
+    finally:
+        connection.close()
+
+    assert _schema_version(project) == 10, "the DDL migration should still happen"
+    assert after_events == before_events, "a read must not append events"
+    assert after_revision == before_revision, "a read must not move the revision"
+    assert "DIRTY_CLASSIFIER_REBASED" not in last_types
+
+
+def test_explicit_rebase_is_cas_guarded_and_is_the_only_writer(tmp_path):
+    """I7: the rebase stays available, but only as an explicit CAS-guarded action."""
+
+    from factory_core.domain import RevisionConflict
+
+    project, store = _initialize(tmp_path)
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision,
+        event_type="DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            {
+                "flag": "RESULT_DIRTY",
+                "owner_stage": 4,
+                "cause_artifact": "results/canonical_results.json",
+                "baseline_fingerprint": "a" * 64,
+                "current_fingerprint": "b" * 64,
+                "classifier_contract_sha256": "0" * 64,  # stale -> a rebase is due
+                "classification_source": "frozen_rule",
+            }
+        ],
+    )
+
+    current = store.load()
+    rebased = store.rebase_dirty_classifier(expected_revision=current.revision)
+    assert rebased.revision == current.revision + 1
+    assert store.events()[-1].type == "DIRTY_CLASSIFIER_REBASED"
+
+    with pytest.raises(RevisionConflict):
+        store.rebase_dirty_classifier(expected_revision=current.revision)
+
+
+def test_effect_domain_generation_must_be_monotonic(tmp_path):
+    """I2: a v9-shaped event after a v10 event must invalidate the aggregate.
+
+    The tolerant branch would accept such an event on its own (the latest event's
+    domain set differs from the current one), so this asserts the verifier
+    enforces the invariant instead of relying on writers never regressing.
+    """
+
+    project, store = _initialize(tmp_path)
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision,
+        event_type="DIRTY_FOR_TEST",
+        changes={},
+        dirty_changes=[],
+    )
+    assert store.status_snapshot()["aggregate_valid"] is True
+
+    connection = _connect(project)
+    try:
+        connection.execute("DROP TRIGGER IF EXISTS events_append_only_update")
+        connection.execute("DROP TRIGGER IF EXISTS events_append_only_delete")
+        row = connection.execute(
+            "SELECT revision, created_at, attempt, payload_json FROM events "
+            "ORDER BY revision DESC LIMIT 1"
+        ).fetchone()
+        payload = json.loads(row["payload_json"])
+        envelope = payload["_workflow"]
+        effects = dict(envelope["effect_hashes_after"])
+        effects.pop(_SIDE_TABLE)  # regress to a v9-shaped domain set
+        envelope["effect_hashes_after"] = effects
+        envelope["aggregate_root_hash_after"] = canonical_hash(effects)
+        new_revision = int(row["revision"]) + 1
+        connection.execute(
+            "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
+            "VALUES (?, 'DIRTY_FOR_TEST', ?, NULL, ?, ?)",
+            (
+                new_revision,
+                int(row["created_at"]),
+                int(row["attempt"]),
+                json.dumps(payload, ensure_ascii=True, sort_keys=True),
+            ),
+        )
+        connection.execute(
+            "UPDATE project_state SET revision=? WHERE singleton=1", (new_revision,)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert store.status_snapshot()["aggregate_valid"] is False
+
+
+def test_provenance_insert_rejected_at_db_level_rolls_back_cause(tmp_path):
+    """I6: database-level (not monkeypatch) proof of the shared transaction."""
+
+    project, store = _initialize(tmp_path)
+    state = store.load()
+
+    connection = _connect(project)
+    try:
+        connection.execute(
+            f"""
+            CREATE TRIGGER reject_classification_insert
+            BEFORE INSERT ON {_SIDE_TABLE}
+            BEGIN
+                SELECT RAISE(ABORT, 'classification insert rejected');
+            END
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.transition(
+            expected_revision=state.revision,
+            event_type="DIRTY_FOR_TEST",
+            changes={},
+            dirty_changes=[
+                {
+                    "flag": "RESULT_DIRTY",
+                    "owner_stage": 4,
+                    "cause_artifact": "results/canonical_results.json",
+                    "baseline_fingerprint": "a" * 64,
+                    "current_fingerprint": "b" * 64,
+                    "classifier_contract_sha256": "c" * 64,
+                    "classification_source": "frozen_rule",
+                }
+            ],
+        )
+
+    connection = _connect(project)
+    try:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM dirty_causes WHERE cause_artifact=?",
+                ("results/canonical_results.json",),
+            ).fetchone()[0]
+            == 0
+        ), "the cause must not survive a rejected provenance insert"
+    finally:
+        connection.close()
+
+
+def test_bespoke_recovery_is_a_recordable_distinct_source(tmp_path):
+    """I5: the bespoke recovery writer records provenance, not legacy_unrecorded."""
+
+    from factory_core.dirty_classification import record_classification
+
+    assert "bespoke_recovery" in CLASSIFICATION_SOURCES
+
+    project, _store = _initialize(tmp_path)
+    connection = _connect(project)
+    try:
+        connection.execute(
+            "INSERT INTO dirty_causes(cause_id, flag, owner_stage, cause_revision, "
+            "cause_artifact, baseline_fingerprint, current_fingerprint, "
+            "classifier_contract_sha256) VALUES ('x','RESULT_DIRTY',4,1,'a','b','c','d')"
+        )
+        # no provenance row -> the pre-existing reading
+        assert recorded_source(connection, "x") == LEGACY_UNRECORDED
+        record_classification(
+            connection,
+            cause_id="x",
+            classification_source="bespoke_recovery",
+            contract_sha256="e" * 64,
+        )
+        # and the recovery path's own value is distinguishable from that reading
+        assert recorded_source(connection, "x") == "bespoke_recovery"
+        connection.commit()
+    finally:
+        connection.close()

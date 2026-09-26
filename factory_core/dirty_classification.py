@@ -38,6 +38,7 @@ CLASSIFICATION_SOURCES = (
     "protected",             # produced by the @protected: early branch
     "fallback",              # matched no rule -> fail-closed MATH@8 + RESULT@4
     "explicit_fail_closed",  # constructed deliberately as a fail-closed cause
+    "bespoke_recovery",      # created by the bespoke final-evidence recovery path
 )
 
 #: Recordable values.  ``legacy_unrecorded`` is included so that a v10 cause

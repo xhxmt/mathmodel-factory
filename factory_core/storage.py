@@ -739,367 +739,364 @@ class SQLiteStateStore:
                 "ALTER TABLE dirty_flag_clear_receipts_v9 "
                 "RENAME TO dirty_flag_clear_receipts"
             )
-        for checkpoint in connection.execute(
-            "SELECT * FROM stage_checkpoints ORDER BY completed_revision, stage_id, subtask"
-        ).fetchall():
-            checkpoint_id = canonical_hash(
-                {
-                    "stage_id": int(checkpoint["stage_id"]),
-                    "subtask": str(checkpoint["subtask"]),
-                    "revision": int(checkpoint["completed_revision"]),
-                    "input": str(checkpoint["input_fingerprint"]),
-                    "output": str(checkpoint["output_fingerprint"]),
-                }
-            )[:32]
+        # v8 -> v9 data back-fill.  It is version-specific and must not re-run on
+        # a later migration: these steps INSERT into tables that are themselves
+        # effect-hash domains (stage_checkpoint_history, dirty_causes,
+        # workflow_decision_requests/instances, solver_jobs).  Re-running them on
+        # a 9 -> 10 migration mutates those domains without any event re-attesting
+        # the new hashes, so the historical aggregate check fails closed.  Projects
+        # created directly on v9 never ran these steps, which is why they were the
+        # ones affected (audit finding I7).
+        if current < 9:
+            for checkpoint in connection.execute(
+                "SELECT * FROM stage_checkpoints ORDER BY completed_revision, stage_id, subtask"
+            ).fetchall():
+                checkpoint_id = canonical_hash(
+                    {
+                        "stage_id": int(checkpoint["stage_id"]),
+                        "subtask": str(checkpoint["subtask"]),
+                        "revision": int(checkpoint["completed_revision"]),
+                        "input": str(checkpoint["input_fingerprint"]),
+                        "output": str(checkpoint["output_fingerprint"]),
+                    }
+                )[:32]
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO stage_checkpoint_history(
+                        checkpoint_id, stage_id, subtask, source_step_id,
+                        completed_step_id, input_fingerprint, output_fingerprint,
+                        completed_revision, receipt_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        checkpoint_id,
+                        checkpoint["stage_id"],
+                        checkpoint["subtask"],
+                        checkpoint["source_step_id"],
+                        checkpoint["completed_step_id"],
+                        checkpoint["input_fingerprint"],
+                        checkpoint["output_fingerprint"],
+                        checkpoint["completed_revision"],
+                        checkpoint["receipt_json"],
+                    ),
+                )
+            for dirty in connection.execute(
+                "SELECT * FROM dirty_flags ORDER BY cause_revision, flag"
+            ).fetchall():
+                cause_id = canonical_hash(
+                    {
+                        "revision": int(dirty["cause_revision"]),
+                        "flag": str(dirty["flag"]),
+                        "owner_stage": int(dirty["owner_stage"]),
+                        "artifact": str(dirty["cause_artifact"]),
+                        "baseline": str(dirty["baseline_fingerprint"]),
+                        "current": str(dirty["current_fingerprint"]),
+                    }
+                )[:32]
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO dirty_causes(
+                        cause_id, flag, owner_stage, cause_revision,
+                        cause_artifact, baseline_fingerprint,
+                        current_fingerprint, classifier_contract_sha256
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cause_id,
+                        dirty["flag"],
+                        dirty["owner_stage"],
+                        dirty["cause_revision"],
+                        dirty["cause_artifact"],
+                        dirty["baseline_fingerprint"],
+                        dirty["current_fingerprint"],
+                        dirty["classifier_contract_sha256"],
+                    ),
+                )
             connection.execute(
                 """
-                INSERT OR IGNORE INTO stage_checkpoint_history(
-                    checkpoint_id, stage_id, subtask, source_step_id,
-                    completed_step_id, input_fingerprint, output_fingerprint,
-                    completed_revision, receipt_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    checkpoint_id,
-                    checkpoint["stage_id"],
-                    checkpoint["subtask"],
-                    checkpoint["source_step_id"],
-                    checkpoint["completed_step_id"],
-                    checkpoint["input_fingerprint"],
-                    checkpoint["output_fingerprint"],
-                    checkpoint["completed_revision"],
-                    checkpoint["receipt_json"],
-                ),
+                CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_update
+                BEFORE UPDATE ON workflow_decisions
+                BEGIN
+                    SELECT RAISE(ABORT, 'workflow decisions are append-only');
+                END
+                """
             )
-        for dirty in connection.execute(
-            "SELECT * FROM dirty_flags ORDER BY cause_revision, flag"
-        ).fetchall():
-            cause_id = canonical_hash(
-                {
-                    "revision": int(dirty["cause_revision"]),
-                    "flag": str(dirty["flag"]),
-                    "owner_stage": int(dirty["owner_stage"]),
-                    "artifact": str(dirty["cause_artifact"]),
-                    "baseline": str(dirty["baseline_fingerprint"]),
-                    "current": str(dirty["current_fingerprint"]),
-                }
-            )[:32]
             connection.execute(
                 """
-                INSERT OR IGNORE INTO dirty_causes(
-                    cause_id, flag, owner_stage, cause_revision,
-                    cause_artifact, baseline_fingerprint,
-                    current_fingerprint, classifier_contract_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    cause_id,
-                    dirty["flag"],
-                    dirty["owner_stage"],
-                    dirty["cause_revision"],
-                    dirty["cause_artifact"],
-                    dirty["baseline_fingerprint"],
-                    dirty["current_fingerprint"],
-                    dirty["classifier_contract_sha256"],
-                ),
+                CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_delete
+                BEFORE DELETE ON workflow_decisions
+                BEGIN
+                    SELECT RAISE(ABORT, 'workflow decisions are append-only');
+                END
+                """
             )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_update
-            BEFORE UPDATE ON workflow_decisions
-            BEGIN
-                SELECT RAISE(ABORT, 'workflow decisions are append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS workflow_decisions_append_only_delete
-            BEFORE DELETE ON workflow_decisions
-            BEGIN
-                SELECT RAISE(ABORT, 'workflow decisions are append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS workflow_decision_requests_immutable_identity
-            BEFORE UPDATE OF request_id, gate_type, generation, kind, action_type,
-                             requested_revision, subject_fingerprint,
-                             options_fingerprint, created_at, request_json
-            ON workflow_decision_requests
-            BEGIN
-                SELECT RAISE(ABORT, 'workflow decision requests have immutable identity');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS workflow_decision_requests_append_only_delete
-            BEFORE DELETE ON workflow_decision_requests
-            BEGIN
-                SELECT RAISE(ABORT, 'workflow decision requests are append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS workflow_decision_instances_append_only_update
-            BEFORE UPDATE ON workflow_decision_instances
-            BEGIN
-                SELECT RAISE(ABORT, 'workflow decision instances are append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS workflow_decision_instances_append_only_delete
-            BEFORE DELETE ON workflow_decision_instances
-            BEGIN
-                SELECT RAISE(ABORT, 'workflow decision instances are append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_update
-            BEFORE UPDATE ON dirty_flag_clear_receipts
-            BEGIN
-                SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_delete
-            BEFORE DELETE ON dirty_flag_clear_receipts
-            BEGIN
-                SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS stage_checkpoint_history_append_only_update
-            BEFORE UPDATE ON stage_checkpoint_history
-            BEGIN
-                SELECT RAISE(ABORT, 'stage checkpoint history is append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS stage_checkpoint_history_append_only_delete
-            BEFORE DELETE ON stage_checkpoint_history
-            BEGIN
-                SELECT RAISE(ABORT, 'stage checkpoint history is append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS dirty_causes_append_only_update
-            BEFORE UPDATE ON dirty_causes
-            BEGIN
-                SELECT RAISE(ABORT, 'dirty causes are append-only');
-            END
-            """
-        )
-        connection.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS dirty_causes_append_only_delete
-            BEFORE DELETE ON dirty_causes
-            BEGIN
-                SELECT RAISE(ABORT, 'dirty causes are append-only');
-            END
-            """
-        )
-        project_row = connection.execute(
-            "SELECT project_id FROM project_state WHERE singleton=1"
-        ).fetchone()
-        project_id = str(project_row["project_id"]) if project_row is not None else "legacy"
-        legacy_rows = connection.execute(
-            "SELECT gate, decided_at, decision_json FROM workflow_decisions ORDER BY decided_at, gate"
-        ).fetchall()
-        for legacy in legacy_rows:
-            gate = str(legacy["gate"])
-            request_id = canonical_hash(
-                {"project_id": project_id, "gate": gate, "generation": 1, "legacy": True}
-            )[:24]
-            try:
-                decision = json.loads(legacy["decision_json"])
-            except (TypeError, json.JSONDecodeError):
-                decision = {"gate": gate, "legacy_payload_invalid": True}
-            kind = str(decision.get("kind") or (
-                "approval"
-                if gate in {"content_freeze", "delivery_freeze_override"}
-                else "selection"
-            ))
-            request_payload = {
-                "request_id": request_id,
-                "gate": gate,
-                "generation": 1,
-                "kind": kind,
-                "type": "legacy_unbound",
-                "requested_revision": 0,
-                "subject_fingerprint": "LEGACY_UNBOUND",
-                "options_fingerprint": "LEGACY_UNBOUND",
-                "reason": {"code": "legacy_unbound", "message": "Migrated schema-v7 decision"},
-                "evidence": [],
-                "metadata": {"migration": "schema_v8"},
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS workflow_decision_requests_immutable_identity
+                BEFORE UPDATE OF request_id, gate_type, generation, kind, action_type,
+                                 requested_revision, subject_fingerprint,
+                                 options_fingerprint, created_at, request_json
+                ON workflow_decision_requests
+                BEGIN
+                    SELECT RAISE(ABORT, 'workflow decision requests have immutable identity');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS workflow_decision_requests_append_only_delete
+                BEFORE DELETE ON workflow_decision_requests
+                BEGIN
+                    SELECT RAISE(ABORT, 'workflow decision requests are append-only');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS workflow_decision_instances_append_only_update
+                BEFORE UPDATE ON workflow_decision_instances
+                BEGIN
+                    SELECT RAISE(ABORT, 'workflow decision instances are append-only');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS workflow_decision_instances_append_only_delete
+                BEFORE DELETE ON workflow_decision_instances
+                BEGIN
+                    SELECT RAISE(ABORT, 'workflow decision instances are append-only');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_update
+                BEFORE UPDATE ON dirty_flag_clear_receipts
+                BEGIN
+                    SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS dirty_flag_clear_receipts_append_only_delete
+                BEFORE DELETE ON dirty_flag_clear_receipts
+                BEGIN
+                    SELECT RAISE(ABORT, 'dirty clear receipts are append-only');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS stage_checkpoint_history_append_only_update
+                BEFORE UPDATE ON stage_checkpoint_history
+                BEGIN
+                    SELECT RAISE(ABORT, 'stage checkpoint history is append-only');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS stage_checkpoint_history_append_only_delete
+                BEFORE DELETE ON stage_checkpoint_history
+                BEGIN
+                    SELECT RAISE(ABORT, 'stage checkpoint history is append-only');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS dirty_causes_append_only_update
+                BEFORE UPDATE ON dirty_causes
+                BEGIN
+                    SELECT RAISE(ABORT, 'dirty causes are append-only');
+                END
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS dirty_causes_append_only_delete
+                BEFORE DELETE ON dirty_causes
+                BEGIN
+                    SELECT RAISE(ABORT, 'dirty causes are append-only');
+                END
+                """
+            )
+            project_row = connection.execute(
+                "SELECT project_id FROM project_state WHERE singleton=1"
+            ).fetchone()
+            project_id = str(project_row["project_id"]) if project_row is not None else "legacy"
+            legacy_rows = connection.execute(
+                "SELECT gate, decided_at, decision_json FROM workflow_decisions ORDER BY decided_at, gate"
+            ).fetchall()
+            for legacy in legacy_rows:
+                gate = str(legacy["gate"])
+                request_id = canonical_hash(
+                    {"project_id": project_id, "gate": gate, "generation": 1, "legacy": True}
+                )[:24]
+                try:
+                    decision = json.loads(legacy["decision_json"])
+                except (TypeError, json.JSONDecodeError):
+                    decision = {"gate": gate, "legacy_payload_invalid": True}
+                kind = str(decision.get("kind") or (
+                    "approval"
+                    if gate in {"content_freeze", "delivery_freeze_override"}
+                    else "selection"
+                ))
+                request_payload = {
+                    "request_id": request_id,
+                    "gate": gate,
+                    "generation": 1,
+                    "kind": kind,
+                    "type": "legacy_unbound",
+                    "requested_revision": 0,
+                    "subject_fingerprint": "LEGACY_UNBOUND",
+                    "options_fingerprint": "LEGACY_UNBOUND",
+                    "reason": {"code": "legacy_unbound", "message": "Migrated schema-v7 decision"},
+                    "evidence": [],
+                    "metadata": {"migration": "schema_v8"},
+                }
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO workflow_decision_requests(
+                        request_id, gate_type, generation, kind, action_type,
+                        requested_revision, subject_fingerprint, options_fingerprint,
+                        status, created_at, request_json
+                    ) VALUES (?, ?, 1, ?, 'legacy_unbound', 0, 'LEGACY_UNBOUND',
+                              'LEGACY_UNBOUND', 'legacy_unbound', ?, ?)
+                    """,
+                    (
+                        request_id,
+                        gate,
+                        kind,
+                        int(legacy["decided_at"]),
+                        json.dumps(request_payload, ensure_ascii=True, sort_keys=True),
+                    ),
+                )
+                selected = (
+                    decision.get("selected_option_id")
+                    or decision.get("selected_primary")
+                    or decision.get("selected")
+                )
+                approved = decision.get("approved")
+                if kind == "approval" and not isinstance(approved, bool):
+                    normalized_selection = str(selected or "").lower()
+                    if normalized_selection.startswith(("approve", "allow", "override")):
+                        approved = True
+                    elif normalized_selection.startswith(("reject", "deny")):
+                        approved = False
+                    else:
+                        approved = None
+                    # Never preserve a truthy legacy string such as "false" as an
+                    # approval. Current gates accept the boolean true only.
+                    if approved is None:
+                        decision.pop("approved", None)
+                    else:
+                        decision["approved"] = approved
+                outcome = (
+                    "approved" if approved is True else "rejected" if approved is False else "selected"
+                )
+                decision_id = canonical_hash(
+                    {"request_id": request_id, "decision": decision}
+                )[:32]
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO workflow_decision_instances(
+                        decision_id, request_id, kind, outcome, approved,
+                        selected_option_id, reason, evidence_manifest_sha256,
+                        decided_by, decided_at, decision_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LEGACY_UNBOUND', ?, ?, ?)
+                    """,
+                    (
+                        decision_id,
+                        request_id,
+                        kind,
+                        outcome,
+                        None if approved is None else int(approved),
+                        None if selected is None else str(selected),
+                        str(decision.get("reason") or ""),
+                        str(decision.get("selected_by") or decision.get("source") or "legacy"),
+                        int(legacy["decided_at"]),
+                        json.dumps(decision, ensure_ascii=True, sort_keys=True),
+                    ),
+                )
+            rows = connection.execute(
+                "SELECT singleton, last_completed_step, scheduler_generation "
+                "FROM project_state"
+            ).fetchall()
+            for state_row in rows:
+                if state_row["scheduler_generation"] == STAGE_SCHEDULER_GENERATION:
+                    stage_version = STAGE_CATALOG_VERSION
+                else:
+                    stage_version = None
+                connection.execute(
+                    "UPDATE project_state SET last_completed_stage=?, "
+                    "stage_catalog_version=COALESCE(stage_catalog_version, ?) "
+                    "WHERE singleton=?",
+                    (
+                        completed_stage_for_step(state_row["last_completed_step"]),
+                        stage_version,
+                        state_row["singleton"],
+                    ),
+                )
+            solver_columns = {
+                column[1]
+                for column in connection.execute("PRAGMA table_info(solver_jobs)").fetchall()
             }
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO workflow_decision_requests(
-                    request_id, gate_type, generation, kind, action_type,
-                    requested_revision, subject_fingerprint, options_fingerprint,
-                    status, created_at, request_json
-                ) VALUES (?, ?, 1, ?, 'legacy_unbound', 0, 'LEGACY_UNBOUND',
-                          'LEGACY_UNBOUND', 'legacy_unbound', ?, ?)
-                """,
-                (
-                    request_id,
-                    gate,
-                    kind,
-                    int(legacy["decided_at"]),
-                    json.dumps(request_payload, ensure_ascii=True, sort_keys=True),
-                ),
-            )
-            selected = (
-                decision.get("selected_option_id")
-                or decision.get("selected_primary")
-                or decision.get("selected")
-            )
-            approved = decision.get("approved")
-            if kind == "approval" and not isinstance(approved, bool):
-                normalized_selection = str(selected or "").lower()
-                if normalized_selection.startswith(("approve", "allow", "override")):
-                    approved = True
-                elif normalized_selection.startswith(("reject", "deny")):
-                    approved = False
-                else:
-                    approved = None
-                # Never preserve a truthy legacy string such as "false" as an
-                # approval. Current gates accept the boolean true only.
-                if approved is None:
-                    decision.pop("approved", None)
-                else:
-                    decision["approved"] = approved
-            outcome = (
-                "approved" if approved is True else "rejected" if approved is False else "selected"
-            )
-            decision_id = canonical_hash(
-                {"request_id": request_id, "decision": decision}
-            )[:32]
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO workflow_decision_instances(
-                    decision_id, request_id, kind, outcome, approved,
-                    selected_option_id, reason, evidence_manifest_sha256,
-                    decided_by, decided_at, decision_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LEGACY_UNBOUND', ?, ?, ?)
-                """,
-                (
-                    decision_id,
-                    request_id,
-                    kind,
-                    outcome,
-                    None if approved is None else int(approved),
-                    None if selected is None else str(selected),
-                    str(decision.get("reason") or ""),
-                    str(decision.get("selected_by") or decision.get("source") or "legacy"),
-                    int(legacy["decided_at"]),
-                    json.dumps(decision, ensure_ascii=True, sort_keys=True),
-                ),
-            )
-        rows = connection.execute(
-            "SELECT singleton, last_completed_step, scheduler_generation "
-            "FROM project_state"
-        ).fetchall()
-        for state_row in rows:
-            if state_row["scheduler_generation"] == STAGE_SCHEDULER_GENERATION:
-                stage_version = STAGE_CATALOG_VERSION
-            else:
-                stage_version = None
-            connection.execute(
-                "UPDATE project_state SET last_completed_stage=?, "
-                "stage_catalog_version=COALESCE(stage_catalog_version, ?) "
-                "WHERE singleton=?",
-                (
-                    completed_stage_for_step(state_row["last_completed_step"]),
-                    stage_version,
-                    state_row["singleton"],
-                ),
-            )
-        solver_columns = {
-            column[1]
-            for column in connection.execute("PRAGMA table_info(solver_jobs)").fetchall()
-        }
-        if "job_revision" not in solver_columns:
-            connection.execute(
-                "ALTER TABLE solver_jobs ADD COLUMN job_revision INTEGER NOT NULL DEFAULT 1"
-            )
-        solver_columns = {
-            column[1]
-            for column in connection.execute("PRAGMA table_info(solver_jobs)").fetchall()
-        }
-        for column, definition in (
-            ("idempotency_key", "TEXT"),
-            ("request_sha256", "TEXT"),
-            ("owner_stage", "INTEGER"),
-            ("owner_subtask", "TEXT"),
-            ("owner_revision", "INTEGER"),
-            ("attempt_id", "TEXT"),
-        ):
-            if column not in solver_columns:
+            if "job_revision" not in solver_columns:
                 connection.execute(
-                    f"ALTER TABLE solver_jobs ADD COLUMN {column} {definition}"
+                    "ALTER TABLE solver_jobs ADD COLUMN job_revision INTEGER NOT NULL DEFAULT 1"
                 )
-        connection.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS solver_jobs_idempotency_key_unique "
-            "ON solver_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL"
-        )
-        receipt_rows = connection.execute(
-            "SELECT payload_json FROM events WHERE type='SOLVER_JOB_RECEIPT_SUBMITTED'"
-        ).fetchall()
-        for receipt_row in receipt_rows:
-            try:
-                receipt_payload = json.loads(receipt_row["payload_json"])
-            except (TypeError, json.JSONDecodeError):
-                continue
-            job_id = receipt_payload.get("job_id")
-            request_sha256 = receipt_payload.get("request_sha256")
-            if job_id and request_sha256:
-                connection.execute(
-                    "UPDATE solver_jobs SET request_sha256=COALESCE(request_sha256, ?) "
-                    "WHERE job_id=?",
-                    (str(request_sha256), str(job_id)),
-                )
-        from .dirty_rebase import (
-            ensure_dirty_rebase_schema,
-            rebase_dirty_classifier_state,
-        )
+            solver_columns = {
+                column[1]
+                for column in connection.execute("PRAGMA table_info(solver_jobs)").fetchall()
+            }
+            for column, definition in (
+                ("idempotency_key", "TEXT"),
+                ("request_sha256", "TEXT"),
+                ("owner_stage", "INTEGER"),
+                ("owner_subtask", "TEXT"),
+                ("owner_revision", "INTEGER"),
+                ("attempt_id", "TEXT"),
+            ):
+                if column not in solver_columns:
+                    connection.execute(
+                        f"ALTER TABLE solver_jobs ADD COLUMN {column} {definition}"
+                    )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS solver_jobs_idempotency_key_unique "
+                "ON solver_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL"
+            )
+            receipt_rows = connection.execute(
+                "SELECT payload_json FROM events WHERE type='SOLVER_JOB_RECEIPT_SUBMITTED'"
+            ).fetchall()
+            for receipt_row in receipt_rows:
+                try:
+                    receipt_payload = json.loads(receipt_row["payload_json"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                job_id = receipt_payload.get("job_id")
+                request_sha256 = receipt_payload.get("request_sha256")
+                if job_id and request_sha256:
+                    connection.execute(
+                        "UPDATE solver_jobs SET request_sha256=COALESCE(request_sha256, ?) "
+                        "WHERE job_id=?",
+                        (str(request_sha256), str(job_id)),
+                    )
+        from .dirty_rebase import ensure_dirty_rebase_schema
         from .prompt_receipts import ensure_prompt_receipt_schema
+        from .dirty_classification import ensure_dirty_cause_classification_schema
 
         ensure_dirty_rebase_schema(connection)
         ensure_prompt_receipt_schema(connection)
-        migration_before = connection.execute(
-            "SELECT * FROM project_state WHERE singleton=1"
-        ).fetchone()
-        from .dirty_classification import ensure_dirty_cause_classification_schema
-
         # Schema 9 -> 10 adds exactly the append-only provenance side table and
         # its triggers, plus one new _domain_effect_hashes() key.  No existing
         # table changes shape: each existing domain hash is a canonical hash over
-        # SELECT * rows, so any shape change would fail historical
-        # aggregate_valid checks.  Installed before the rebase below so the new
-        # domain exists when that rebase writes its event.
+        # SELECT * rows, so a shape change would fail historical aggregate_valid
+        # checks.  A new domain key instead takes the tolerant per-domain branch
+        # for pre-v10 events.
         ensure_dirty_cause_classification_schema(connection)
-        rebase_receipt = rebase_dirty_classifier_state(
-            connection,
-            source_schema_version=current,
-            target_schema_version=SCHEMA_VERSION,
-        )
         connection.execute(
             "UPDATE project_state SET schema_version = ? WHERE singleton = 1",
             (SCHEMA_VERSION,),
@@ -1108,45 +1105,21 @@ class SQLiteStateStore:
             "UPDATE schema_info SET schema_version = ? WHERE singleton = 1",
             (SCHEMA_VERSION,),
         )
-        if rebase_receipt is not None and migration_before is not None:
-            now = int(self._clock())
-            revision = int(migration_before["revision"]) + 1
-            connection.execute(
-                "UPDATE project_state SET revision=?, updated_at=?, last_event_at=? "
-                "WHERE singleton=1",
-                (revision, now, now),
-            )
-            migration_after = connection.execute(
-                "SELECT * FROM project_state WHERE singleton=1"
-            ).fetchone()
-            payload = self._versioned_event_payload(
-                connection,
-                before=migration_before,
-                after=migration_after,
-                revision=revision,
-                event_type="DIRTY_CLASSIFIER_REBASED",
-                created_at=now,
-                payload={
-                    "schema_version": rebase_receipt.get("schema_version"),
-                    "rebase_id": rebase_receipt.get("rebase_id"),
-                    "source_schema_version": current,
-                    "target_schema_version": SCHEMA_VERSION,
-                    "obligation_count": len(
-                        rebase_receipt.get("obligations") or ()
-                    ),
-                    "migration": True,
-                },
-            )
-            connection.execute(
-                "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
-                "VALUES (?, 'DIRTY_CLASSIFIER_REBASED', ?, NULL, ?, ?)",
-                (
-                    revision,
-                    now,
-                    int(migration_before["attempt"]),
-                    json.dumps(payload, ensure_ascii=True, sort_keys=True),
-                ),
-            )
+        # 0.7.1: the classifier rebase is deliberately NOT run here.
+        #
+        # This method is reached by read paths as well (load(), status_snapshot(),
+        # events(), dirty_flags(), ...).  A rebase appends a DIRTY_CLASSIFIER_REBASED
+        # event and increments the business revision, so running it on a pure
+        # inspection would invalidate a caller's expected revision and move a
+        # completed project's revision without any business write.
+        #
+        # It also cannot be deferred into transition(): transition() enforces
+        # row["revision"] == expected_revision (storage.py: transition), so a
+        # revision-bumping rebase inside that transaction would make every
+        # queued transition raise RevisionConflict.
+        #
+        # The rebase is therefore an explicit maintenance action:
+        # SQLiteStateStore.rebase_dirty_classifier() / `factory rebase-classifier`.
         connection.commit()
 
     @staticmethod
@@ -1487,6 +1460,24 @@ class SQLiteStateStore:
             valid = (all(effects.get(k) == v for k, v in prior.items())
                      if isinstance(prior, dict) and set(prior) != set(effects)
                      else canonical_hash(effects) == expected["aggregate_root_hash_after"])
+        # Effect-domain generation must be monotonic: once an event has recorded
+        # a domain key, no later event may omit it.
+        #
+        # The tolerant branch above keys off a mismatch between the LATEST event's
+        # domain set and the current one, so on its own it would accept a
+        # v9-shaped event arriving after a v10 event and silently put the new
+        # domains back under tolerance.  That would make "the window closes at the
+        # first v10 event" a property of the writer rather than of this verifier.
+        domains_seen: set[str] = set()
+        for event in events:
+            envelope = event.payload.get(ENVELOPE_KEY)
+            keys = envelope.get("effect_hashes_after") if isinstance(envelope, dict) else None
+            if not isinstance(keys, dict):
+                continue
+            if not domains_seen <= set(keys):
+                valid = False
+                break
+            domains_seen |= set(keys)
         return {"state": state, "events": events,
                 "contest_policy": dict(policy) if policy is not None else None,
                 "aggregate_valid": valid, "now_epoch": self.now_epoch()}
