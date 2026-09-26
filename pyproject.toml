@@ -33,6 +33,7 @@ cloud = [
   "pydantic-settings>=2.5,<3",
   "pyscipopt>=6.2,<7",
   "python-multipart==0.0.29",
+  "requests>=2.31,<3",
   "scipy>=1.12,<2",
   "sympy>=1.12,<2",
   "uvicorn[standard]==0.47.0",
