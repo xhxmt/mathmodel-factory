@@ -73,7 +73,10 @@ def pause_project(
         raise FactoryCoreError("NATIVE_WORKFLOW_REQUIRED: historical project control is in paper_new")
     service = _service(project, factory_root)
     state = service.pause(
-        project, expected_revision=expected_revision
+        project,
+        expected_revision=expected_revision,
+        subcode="OPERATOR",
+        actor="operator",
     )
     return {
         "project_dir": str(project),
@@ -101,7 +104,12 @@ def resume_project(
                 project, expected_revision=expected_revision
             )
         else:
-            state = service.resume(project, expected_revision=expected_revision)
+            state = service.resume(
+                project,
+                expected_revision=expected_revision,
+                subcode="OPERATOR",
+                actor="operator",
+            )
     except FactoryCoreError as exc:
         if "pending action" in str(exc):
             raise RuntimeError("unresolved action") from exc

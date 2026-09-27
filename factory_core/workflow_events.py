@@ -59,10 +59,21 @@ class ReplayIntegrityError(ValueError):
 
 @dataclass(frozen=True)
 class GateReason:
+    """The structured reason attached to an event.
+
+    ``code`` stays the canonical, stable discriminator; ``subcode`` carries the
+    finer distinction that used to live in a field outside the envelope, and
+    ``actor`` records who caused the transition.  Both are additive: events
+    written before them simply leave them empty, so an old event stays readable
+    and no new top-level event type is introduced for a subtype.
+    """
+
     code: str
     message: str = ""
     evidence: tuple[str, ...] = ()
     recovery_target: dict[str, Any] | None = None
+    subcode: str = ""
+    actor: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return _json_value(self)
@@ -119,6 +130,8 @@ def normalize_reason(
         )
         message = str(raw.get("message") or "")
         evidence = tuple(raw.get("evidence") or payload.get("evidence") or ())
+        subcode = str(raw.get("subcode") or "")
+        actor = str(raw.get("actor") or "")
     else:
         code = str(
             payload.get("error_class")
@@ -127,6 +140,14 @@ def normalize_reason(
         )
         message = str(raw or payload.get("message") or "")
         evidence = tuple(payload.get("evidence") or ())
+        subcode = ""
+        actor = ""
+    # A reopened work item records why it reopened in ``final_decision``, which
+    # historically lived outside the envelope; lift it in so the reason alone can
+    # be read (review X-01: r517's REOPEN_REVISION_TEXT was invisible to
+    # ``reason.code``).
+    if not subcode and payload.get("final_decision"):
+        subcode = str(payload["final_decision"])
     recovery_target = {
         key: payload[key]
         for key in ("resume_after_step", "stage", "subtask", "source_step")
@@ -137,6 +158,8 @@ def normalize_reason(
         message=message,
         evidence=evidence,
         recovery_target=recovery_target or None,
+        subcode=subcode,
+        actor=actor,
     )
 
 

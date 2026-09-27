@@ -761,3 +761,135 @@ def test_decision_receipt_repair_refuses_symlinked_evidence_directory(tmp_path):
         store.repair_decision_receipt(decision["request_id"])
 
     assert list(outside.iterdir()) == []
+
+
+# ===========================================================================
+# S4.1: reason code + subcode + actor
+# ===========================================================================
+
+def test_resumable_events_carry_reason_subcode_and_actor():
+    """PAUSED and RESUMED must say why and who, without a new event type.
+
+    A's 13 RESUMED and 11 PAUSED events all had an empty reason message, so the
+    root cause of a stop could not be read from the event at all.
+    """
+
+    from factory_core.workflow_events import normalize_reason
+
+    for event_type in ("PAUSED", "RESUMED"):
+        reason = normalize_reason(
+            event_type,
+            {"reason": {"code": event_type, "subcode": "DEADLINE", "actor": "engine"}},
+        )
+        assert reason.code == event_type
+        assert reason.subcode == "DEADLINE"
+        assert reason.actor == "engine"
+        assert reason.to_dict()["subcode"] == "DEADLINE"
+        assert reason.to_dict()["actor"] == "engine"
+
+
+def test_reopen_revision_text_is_readable_from_the_reason():
+    """The r517 case.
+
+    Its decisive value lived in a payload field outside the envelope, so
+    ``reason.code`` alone could not distinguish a text revision from any other
+    reopen.  It is now lifted into ``subcode``.
+    """
+
+    from factory_core.workflow_events import normalize_reason
+
+    reason = normalize_reason("STEP_REOPENED", {"final_decision": "REOPEN_REVISION_TEXT"})
+    assert reason.code == "WORK_REOPENED", "the canonical code is unchanged"
+    assert reason.subcode == "REOPEN_REVISION_TEXT"
+
+
+def test_an_explicit_subcode_wins_over_the_lifted_decision():
+    from factory_core.workflow_events import normalize_reason
+
+    reason = normalize_reason(
+        "STEP_REOPENED",
+        {"final_decision": "REOPEN_REVISION_TEXT", "reason": {"code": "WORK_REOPENED", "subcode": "INVALIDATED_RESULT"}},
+    )
+    assert reason.subcode == "INVALIDATED_RESULT"
+
+
+def test_legacy_events_remain_readable_with_empty_subcode_and_actor():
+    """Additive means additive: an event written before S4.1 keeps its shape."""
+
+    from factory_core.workflow_events import normalize_reason
+
+    legacy = normalize_reason("STEP_FAILED", {"error_class": "PERMANENT_ATOMIC_DELIVERY", "message": "x"})
+    assert legacy.code == "PERMANENT_ATOMIC_DELIVERY"
+    assert legacy.message == "x"
+    assert legacy.subcode == ""
+    assert legacy.actor == ""
+
+
+def test_reason_round_trips_through_the_event_envelope():
+    from factory_core.workflow_events import ENVELOPE_KEY, build_event_payload, normalize_reason
+
+    payload = build_event_payload(
+        project_id="p",
+        revision=2,
+        event_type="PAUSED",
+        created_at=1,
+        payload={"reason": {"code": "PAUSED", "subcode": "EXECUTION_SCOPE", "actor": "engine"}},
+        before=None,
+        after={"revision": 2},
+    )
+    envelope_reason = payload[ENVELOPE_KEY]["reason"]
+    assert envelope_reason["subcode"] == "EXECUTION_SCOPE"
+    assert envelope_reason["actor"] == "engine"
+    assert normalize_reason("PAUSED", payload).subcode == "EXECUTION_SCOPE"
+
+
+def test_service_refuses_an_empty_or_invented_reason_detail():
+    """The vocabulary is enforced, so a PAUSED event cannot be silent again."""
+
+    from factory_core.domain import InvalidTransition
+    from factory_core.service import _require_reason_detail
+
+    with pytest.raises(InvalidTransition, match="subcode must be one of"):
+        _require_reason_detail("PAUSED", "", "operator")
+    with pytest.raises(InvalidTransition, match="subcode must be one of"):
+        _require_reason_detail("PAUSED", "SOMETHING_NEW", "operator")
+    with pytest.raises(InvalidTransition, match="actor must be one of"):
+        _require_reason_detail("RESUMED", "OPERATOR", "")
+
+    # and the intended values pass
+    _require_reason_detail("PAUSED", "DEADLINE", "engine")
+    _require_reason_detail("RESUMED", "AUTO_RECOVERY", "scheduler")
+
+
+def test_pause_and_resume_record_the_reason_through_the_heartbeat_path(tmp_path):
+    """End to end: an operator pause is readable from the event alone."""
+
+    from factory_core.service import FactoryService
+    from factory_core.storage import SQLiteStateStore
+
+    root = tmp_path / "factory"
+    root.mkdir()
+    (root / "ongoing").mkdir()
+    project = root / "ongoing" / "demo"
+    project.mkdir()
+    SQLiteStateStore(project).initialize(project_id="demo", project_type="modeling")
+
+    service = FactoryService(root)
+    paused = service.pause(project, subcode="OPERATOR", actor="operator")
+    resumed = service.resume(
+        project, expected_revision=paused.revision, subcode="OPERATOR", actor="operator"
+    )
+
+    events = SQLiteStateStore(project).events()
+    pause_event = next(e for e in reversed(events) if e.type == "PAUSED")
+    resume_event = next(e for e in reversed(events) if e.type == "RESUMED")
+
+    pause_reason = pause_event.payload["_workflow"]["reason"]
+    assert pause_reason["code"] == "PAUSED"
+    assert pause_reason["subcode"] == "OPERATOR"
+    assert pause_reason["actor"] == "operator"
+
+    resume_reason = resume_event.payload["_workflow"]["reason"]
+    assert resume_reason["code"] == "RESUMED"
+    assert resume_reason["subcode"] == "OPERATOR"
+    assert resumed.revision > paused.revision

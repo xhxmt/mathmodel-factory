@@ -409,12 +409,29 @@ class FactoryService:
                 state = engine.archive_completed(self.root)
         return state
 
-    def pause(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
+    def pause(
+        self,
+        project: str | Path,
+        *,
+        expected_revision: int | None = None,
+        subcode: str = "OPERATOR",
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Pause, recording why and who (S4.1).
+
+        ``subcode`` and ``actor`` are required to be meaningful: a PAUSED event
+        whose reason cannot be read is the failure S4.1 exists to remove.  The
+        canonical ``code`` stays ``PAUSED``.
+        """
+
+        _require_reason_detail("PAUSED", subcode, actor)
         engine = self.engine(project)
         snapshot = engine.store.status_snapshot()
         state = snapshot["state"]
         revision = state.revision if expected_revision is None else expected_revision
-        updated = engine.pause(expected_revision=revision)
+        updated = engine.pause(
+            expected_revision=revision, subcode=subcode, actor=actor
+        )
         self._verify_runner_stop(engine.project_dir, snapshot)
         return updated
 
@@ -423,6 +440,8 @@ class FactoryService:
         project: str | Path,
         *,
         expected_revision: int | None = None,
+        subcode: str = "OPERATOR",
+        actor: str = "operator",
     ) -> WorkflowState:
         engine = self.engine(project)
         state = engine.get_state()
@@ -444,7 +463,10 @@ class FactoryService:
                 "consultation projection drift: "
                 + "; ".join(consultation.errors)
             )
-        return engine.resume(expected_revision=state.revision)
+        _require_reason_detail("RESUMED", subcode, actor)
+        return engine.resume(
+            expected_revision=state.revision, subcode=subcode, actor=actor
+        )
 
     def kill(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
         engine = self.engine(project)
@@ -1455,3 +1477,32 @@ def wait_for_worker_ready(path: Path, *, timeout_seconds: float = 30.0) -> None:
             return
         time.sleep(0.05)
     raise TimeoutError(f"worker launch handshake timed out: {path}")
+
+
+# ---------------------------------------------------------------------------
+# S4.1: structured reason vocabularies
+#
+# Closed on purpose: a free-form string would be no better than the empty reason
+# message it replaces.  The canonical ``code`` stays the discriminator; these
+# only add *why* and *who*.
+# ---------------------------------------------------------------------------
+
+PAUSED_SUBCODES = frozenset(
+    {"OPERATOR", "DEADLINE", "EXECUTION_SCOPE", "FREEZE_BOUNDARY"}
+)
+RESUMED_SUBCODES = frozenset({"OPERATOR", "RETRY", "AUTO_RECOVERY"})
+REASON_ACTORS = frozenset({"operator", "engine", "scheduler"})
+
+
+def _require_reason_detail(event: str, subcode: str, actor: str) -> None:
+    """Refuse an empty or unknown reason detail rather than recording a useless one."""
+
+    allowed = PAUSED_SUBCODES if event == "PAUSED" else RESUMED_SUBCODES
+    if subcode not in allowed:
+        raise InvalidTransition(
+            f"{event} subcode must be one of {sorted(allowed)}, got {subcode!r}"
+        )
+    if actor not in REASON_ACTORS:
+        raise InvalidTransition(
+            f"{event} actor must be one of {sorted(REASON_ACTORS)}, got {actor!r}"
+        )

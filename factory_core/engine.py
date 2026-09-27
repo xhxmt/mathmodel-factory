@@ -1709,10 +1709,28 @@ class FactoryEngine:
             **kwargs,
         )
 
-    def pause(self, *, expected_revision: int) -> WorkflowState:
-        return self._control_transition(expected_revision, "PAUSED", WorkflowStatus.PAUSED)
+    def pause(
+        self,
+        *,
+        expected_revision: int,
+        subcode: str = "OPERATOR",
+        actor: str = "operator",
+    ) -> WorkflowState:
+        return self._control_transition(
+            expected_revision,
+            "PAUSED",
+            WorkflowStatus.PAUSED,
+            subcode=subcode,
+            actor=actor,
+        )
 
-    def resume(self, *, expected_revision: int) -> WorkflowState:
+    def resume(
+        self,
+        *,
+        expected_revision: int,
+        subcode: str = "OPERATOR",
+        actor: str = "operator",
+    ) -> WorkflowState:
         state = self.store.load()
         if state.runner_pid is not None and self._pid_is_live(state.runner_pid):
             raise InvalidTransition(
@@ -1751,6 +1769,7 @@ class FactoryEngine:
             expected_revision=expected_revision,
             event_type="RESUMED",
             changes=changes,
+            payload={"reason": {"code": "RESUMED", "subcode": subcode, "actor": actor}},
         )
 
     def _stop_at_gate2(self, state, lease, result, validation):
@@ -1778,8 +1797,20 @@ class FactoryEngine:
         )
 
     def _control_transition(
-        self, expected_revision: int, event: str, status: WorkflowStatus
+        self,
+        expected_revision: int,
+        event: str,
+        status: WorkflowStatus,
+        *,
+        subcode: str = "",
+        actor: str = "",
     ) -> WorkflowState:
+        """A control transition, with a structured reason (S4.1).
+
+        ``subcode`` and ``actor`` record *why* and *who* without adding a new
+        top-level event type: the canonical ``code`` stays the discriminator.
+        """
+
         return self._transition(
             expected_revision=expected_revision,
             event_type=event,
@@ -1789,6 +1820,7 @@ class FactoryEngine:
                 "runner_lease_id": None,
                 "heartbeat_at": None,
             },
+            payload={"reason": {"code": event, "subcode": subcode, "actor": actor}},
         )
 
     def deactivate(self, *, expected_revision: int, legacy_inferred_step: int | None = None) -> WorkflowState:
