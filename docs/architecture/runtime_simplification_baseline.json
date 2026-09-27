@@ -1,0 +1,198 @@
+{
+  "schema": "factory-runtime-simplification-baseline-v1",
+  "recorded_at": "2026-09-26T02:19:58Z",
+  "recorded_by": "S0 (read-only collection; this file is the only artifact written)",
+  "local": {
+    "head": "a3322367128b8c54b3246377577bf8f43319cc47",
+    "branch": "feat/mcp-readonly-server",
+    "status_porcelain_count": 26,
+    "status_porcelain_breakdown": {
+      "modified_M": 20,
+      "untracked_??": 6
+    },
+    "status_porcelain_sha256": "b8d161c0bcde5584135b6ac4eec81b7a9be385561a01791141d3b8517bdc613a",
+    "diff_stat": "20 files changed, 1292 insertions(+), 409 deletions(-)",
+    "diff_stat_sha256": "2cecbbd0a9c2fea44c8aa6109ebe54957a73472085c29ac193b4a64ea08132c9",
+    "note": "measured BEFORE this baseline file was written; adding this file makes it 27 entries and changes the sha. The 2 RUNTIME_SIMPLIFICATION_*.md docs were already present.",
+    "hash_methods": {
+      "status_porcelain_sha256": "python3: sha256('\\n'.join(sorted(git status --porcelain lines)) + '\\n') -- Python string sort, C order, so ' M' sorts before '??'",
+      "diff_stat_sha256": "python3: sha256(git diff --stat output + '\\n')",
+      "reproducibility_warning": "coreutils sort under a UTF-8 locale applies collation and may reorder ' M' vs '??' lines, producing a DIFFERENT sha for an identical tree. Use the Python recipes above, not '| sort | sha256sum'."
+    }
+  },
+  "remotes": {
+    "origin": "https://github.com/xhxmt/mathmodel-factory.git",
+    "upstream": "https://github.com/nwilmers/paper_factory.git"
+  },
+  "remote_main": {
+    "head": "bde49712ec0764c5ace31f17a7efb538440d536d",
+    "fetched_at": "2026-09-26T02:19:58Z",
+    "feature_branch_present_remotely": false,
+    "relationship": "main is a STRICT ANCESTOR of local HEAD; local is 13 commits ahead; 0 commits in main not in HEAD; merge-base = bde49712 -> no divergence, clean fast-forward possible",
+    "ahead": 13,
+    "behind": 0,
+    "correction": "The review's premise 'GitHub main 已前进到另一 commit' is NOT confirmed: main is still bde49712, identical to the value recorded as 'GitHub main 当前值' in the 2026-09-23 cleanup audit (rev2/rev3). The true situation is that the feature branch carries 13 unpushed commits."
+  },
+  "runtime": {
+    "schema_version_code": 9,
+    "schema_version_observed_project_db": 9,
+    "classifier_contract_sha256_frozen": "c451a9d0be64fabd185c7561b67093956e663db6e845915cd320fea1cbabc515",
+    "classifier_contract_sha256_current": "22d365b0d9c0a84cdc153353c5e2291494683476a06f8b95437365809664fdf9",
+    "dirty_classifier_schema_frozen": "factory-dirty-classifier-v9",
+    "dirty_classifier_schema_current": "factory-native-dirty-classifier-v10",
+    "ownership_schema_frozen": "factory-artifact-ownership-v1",
+    "ownership_schema_current": "factory-native-artifact-ownership-v3",
+    "frozen_registry_rule_count": 83,
+    "additional_ownership_rule_count": 5,
+    "note": "NEITHER current sha equals any of the 21 historical classifier identities observed in project history."
+  },
+  "test_baseline": {
+    "command": ".venv/bin/python -m pytest -q --tb=no --continue-on-collection-errors",
+    "cwd": "/home/tfisher/paper_factory",
+    "result": "9 failed, 1938 passed, 4 warnings, 2 errors in 180.14s",
+    "passed": 1938,
+    "failed": 9,
+    "collection_errors": 2,
+    "warnings": 4,
+    "duration_s": 180.14,
+    "tests_executed": 1947,
+    "collection_errors_detail": [
+      {
+        "file": "tests/test_cloud_solver_monitor.py",
+        "cause": "ModuleNotFoundError: No module named 'requests'"
+      },
+      {
+        "file": "tests/test_cloud_solver_security.py",
+        "cause": "ModuleNotFoundError: No module named 'psutil'"
+      }
+    ],
+    "failures": [
+      {
+        "file": "tests/test_cloud_solver_api_persistence.py",
+        "tests": 8,
+        "attribution": "ENVIRONMENT",
+        "cause": "ModuleNotFoundError: No module named 'psutil'"
+      },
+      {
+        "file": "tests/test_payload_secret_scan.py::test_complete_candidate_source_snapshot_has_no_secret_findings",
+        "tests": 1,
+        "attribution": "FEATURE_BRANCH_INTRODUCED",
+        "cause": "12 secret findings, all in files added by the 13 unpushed commits"
+      }
+    ],
+    "environment_gap": {
+      "psutil": "declared in pyproject [project.optional-dependencies].cloud; the .venv does not have the cloud extra",
+      "requests": "imported by scripts/cloud_solver_monitor.py but declared in NO pyproject extra -> real packaging gap",
+      "decision": "NOT installed during S0, to avoid changing the environment being baselined"
+    },
+    "secret_scan_attribution": {
+      "findings": 12,
+      "finding_paths": [
+        "docs/mcp/README.md",
+        "tests/test_mcp_audit_fixes.py",
+        "tests/test_mcp_readonly.py",
+        "tests/test_mcp_audit_fixes_oauth.py",
+        "tests/test_mcp_oauth.py",
+        "tests/test_mcp_rev2_fixes.py",
+        "tests/test_mcp_rev3_fixes.py"
+      ],
+      "all_files_absent_at_main": "verified via git cat-file -e bde49712:<path>",
+      "main_tree_scan": {
+        "files_scanned": 858,
+        "findings": 0
+      },
+      "conclusion": "This failure is introduced entirely by the unpushed MCP feature work, not inherited from main. It is a merge blocker for the MCP branch but does NOT affect S1 (S1 touches factory_core, not MCP).",
+      "clean": "the two RUNTIME_SIMPLIFICATION_*.md docs contributed 0 findings"
+    },
+    "main_baseline_inferred": {
+      "status": "INFERRED, NOT EXECUTED",
+      "expected": "8 failed + 2 collection errors (all environment), 0 secret findings",
+      "why_not_executed": "running the suite against the main tree would risk importing factory_core from the editable install in the repo rather than from the extracted tree, mixing baselines. Deferred as an open item."
+    }
+  },
+  "observed_history": {
+    "distinct_classifier_identities_union": 21,
+    "per_project": {
+      "A_2026A": 3,
+      "B_2025B_formal": 5,
+      "R_run4": 14,
+      "cumcm_2025_b_stability": 1,
+      "run3": 1,
+      "cumcm_2020_a": 0
+    },
+    "source": "dirty_causes.group by classifier_contract_sha256"
+  },
+  "allowed_paths": {
+    "S0": [
+      "docs/architecture/runtime_simplification_baseline.json",
+      "docs/architecture/runtime_simplification_stage*.json"
+    ],
+    "S1": [
+      "factory_core/current_artifact_ownership.py",
+      "factory_core/dirty.py",
+      "factory_core/submission_bundle.py",
+      "factory_core/finalization.py",
+      "factory_core/storage.py",
+      "tests/test_reopen_artifact_policy.py (new)",
+      "tests/test_dirty_and_finalization.py"
+    ],
+    "S5": [
+      "factory_core/cli.py",
+      "factory_core/storage.py",
+      "factory_core/solver_reconcile.py (new)"
+    ],
+    "S4_1": [
+      "factory_core/engine.py",
+      "factory_core/workflow_events.py"
+    ],
+    "S4_2": [
+      "factory_core/effective_prompt.py",
+      "factory_core/adapters/models/dispatcher.py"
+    ],
+    "S4_3": [
+      "factory_core/finalization.py",
+      "release write path (TBD)"
+    ],
+    "S6": [
+      "work/configure_reuse_execution.py",
+      "docs/reuse_execution_contract.json",
+      "operator wrappers (TBD)"
+    ],
+    "S3": [
+      "factory_core/final_evidence_recovery.py",
+      "factory_core/final_judge_projection.py",
+      "tests/test_final_evidence_recovery.py"
+    ],
+    "docs": [
+      "docs/architecture/RUNTIME_SIMPLIFICATION_*.md"
+    ],
+    "planning_time_expectation": "Each stage MUST record allowed_paths_actual in runtime_simplification_stage<S>.json"
+  },
+  "must_not_touch": [
+    "factory_core/artifact_ownership.py  (frozen v1 trust root; hashed by classifier_contract_sha256)",
+    "any .factory/state.db of any project (A/B/R and all others)",
+    "apps/mcp/** and deploy/**  (separate in-progress feature; out of scope for S0-S6)",
+    "history rewriting of events / dirty_causes rows"
+  ],
+  "gate_decision": {
+    "gate": "S0 requires deciding the implementation branch when main and the worktree differ",
+    "outcome": "main is a strict ancestor with zero divergence -> implementation may proceed on the existing branch feat/mcp-readonly-server, or on a fresh branch cut from bde49712. No rebase required either way.",
+    "open": "OWNER DECISION: keep S1-S6 on feat/mcp-readonly-server (simple, but mixes two features in one branch) or cut a clean branch from bde49712 (cleaner PR, but S1 then needs the factory_core tree from main).",
+    "recommendation": "Option B: cut a clean implementation branch from bde49712. Rationale: zero target-code difference (see factory_core_identity_across_trees); main tree secret scan is clean (0 findings) while the feature branch carries 12; the S1 diff would otherwise mix with 26 unrelated working-tree entries; test baseline is cleaner. Cost: one baseline re-measurement (~3 min)."
+  },
+  "open_items": [
+    "U-06 process liveness check not performed (DB 'running' vs actual process)",
+    "main baseline not executed (see test_baseline.main_baseline_inferred)",
+    "requests missing from pyproject declared deps (packaging gap)",
+    "12 secret findings must be resolved before the MCP branch can merge",
+    "Test baseline is branch-specific: the S0 numbers (9 failed / 1938 passed / 2 errors) were measured on the feature-branch working tree and MUST NOT be reused as the gate on a branch cut from main -- re-measure on the chosen branch.",
+    "S6 step 3 depends on project-local docs/reuse_execution_contract.json and work/configure_reuse_execution.py; confirm their presence on the chosen branch."
+  ],
+  "factory_core_identity_across_trees": {
+    "verified": "2026-09-26",
+    "evidence": "git diff --stat bde49712..HEAD -- factory_core  -> empty; and no factory_core/** entry among the 20 modified files in git status",
+    "conclusion": "factory_core/ is byte-identical across remote main, local HEAD, and the working tree.",
+    "implication": "Every S1-S6 target module (current_artifact_ownership.py, dirty.py, submission_bundle.py, finalization.py, storage.py, engine.py, workflow_events.py, effective_prompt.py, final_evidence_recovery.py, final_judge_projection.py, cli.py) is identical on all three. The branch decision therefore does NOT change any code under modification; it only affects diff cleanliness and test-baseline composition.",
+    "files_touched_by_the_13_unpushed_commits": "./apps/mcp/** (new), ./deploy/**, ./docs/**, ./tests/** (deletes tests/verify_* fixtures, adds MCP tests, modifies tests/test_native_boundary.py), ./pyproject.toml, ./scripts/evidence_grounding.py, ./scripts/verify_provenance.py"
+  }
+}

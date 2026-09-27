@@ -1,0 +1,247 @@
+{
+  "schema": "factory-runtime-simplification-baseline-impl-v1",
+  "recorded_at": "2026-09-26T07:26:02Z",
+  "purpose": "Implementation-branch baseline for S1-S6. Supersedes the S0 baseline's whitelist, which conflicted with the plan (it listed dirty.py as modifiable and omitted current_dirty.py / scripts/cleanup_project_artifacts.py / domain.py / storage.py). The S0 baseline is preserved unchanged as S0 evidence.",
+  "branch": {
+    "name": "feat/runtime-simplification",
+    "base_commit": "bde49712ec0764c5ace31f17a7efb538440d536d",
+    "head": "aaea7f8c12327e7eb0707a4c4b4f4b0a8cc4a4c4",
+    "worktree_path": "/home/tfisher/paper_factory/.worktrees/runtime-simplification",
+    "created_from": "bde49712 (remote origin/main), NOT from feat/mcp-readonly-server",
+    "prerequisite_commit": {
+      "sha": "aaea7f8c12327e7eb0707a4c4b4f4b0a8cc4a4c4",
+      "subject": "fix cloud test environment dependency declaration",
+      "files_changed": 1,
+      "content": "pyproject.toml: add \"requests>=2.31,<3\" to [project.optional-dependencies].cloud",
+      "why": "scripts/cloud_solver_monitor.py imports requests directly; no extra declared it. google-cloud-storage pulls it transitively, so the gap only surfaced when the cloud extra was absent -- the state that left 2 test modules uncollectable."
+    },
+    "status_porcelain_count": 0,
+    "status_porcelain": []
+  },
+  "runtime": {
+    "schema_version_code": 9,
+    "classifier_contract_sha256_frozen": "c451a9d0be64fabd185c7561b67093956e663db6e845915cd320fea1cbabc515",
+    "classifier_contract_sha256_current": "22d365b0d9c0a84cdc153353c5e2291494683476a06f8b95437365809664fdf9",
+    "matches_S0_anchor": true,
+    "ownership_schema_frozen": "factory-artifact-ownership-v1",
+    "ownership_schema_current": "factory-native-artifact-ownership-v3",
+    "frozen_registry_rule_count": 83,
+    "additional_ownership_rule_count": 5,
+    "note": "factory_core is byte-identical to bde49712 (verified), so these must equal the S0 values."
+  },
+  "test_baseline": {
+    "command": ".venv/bin/python -m pytest -q --tb=no --continue-on-collection-errors",
+    "cwd": "/home/tfisher/paper_factory/.worktrees/runtime-simplification",
+    "interpreter": "3.13.5",
+    "installed_extras": [
+      "cloud",
+      "web",
+      "+ pytest/httpx/httpx2/numpy (dev group)"
+    ],
+    "summary": "1757 passed, 4 warnings in 189.31s (0:03:09)",
+    "passed": 1757,
+    "failed": 0,
+    "collection_errors": 0,
+    "duration_s": 189.31,
+    "collection_error_files": [],
+    "failed_tests": [],
+    "gate": "0 failed / 0 collection errors",
+    "gate_satisfied": true,
+    "comparison_to_feature_branch": {
+      "feature_branch_working_tree": "9 failed, 1938 passed, 4 warnings, 2 errors in 180.14s",
+      "note": "The feature-branch baseline (9 failed / 2 collection errors) was environment-caused (psutil/requests absent) plus one feature-branch-introduced secret-scan failure. That baseline MUST NOT be used as the gate on this branch."
+    }
+  },
+  "environment_preparation": {
+    "python_extras_installed": [
+      "cloud",
+      "web",
+      "tui",
+      "+ pytest/httpx/httpx2/numpy (dev group)"
+    ],
+    "requests_declaration": "prerequisite commit adds requests>=2.31,<3 to the cloud extra",
+    "node_frontend": "npm ci in web/frontend/. Required because a fresh worktree has no node_modules (gitignored, not carried over from the main tree). tests/test_web_frontend_runtime_helpers.py spawns node to import web/frontend/src/*; without it 13 tests fail with ERR_MODULE_NOT_FOUND (vue-router).",
+    "measurement_rounds": {
+      "round_1": "13 failed, 1719 passed, 3 errors -- 3 collection errors from the missing tui extra (textual) + 13 frontend failures from the missing node_modules. Both are worktree environment gaps, not code defects.",
+      "round_2": "after installing the tui extra and running npm ci -- see test_baseline below."
+    }
+  },
+  "allowed_paths": {
+    "_correction": "Corrected against the plan: + current_dirty.py, + scripts/cleanup_project_artifacts.py, + domain.py, + storage.py; - dirty.py (moved to must_not_touch).",
+    "S0_S6_docs": [
+      "docs/architecture/*.md",
+      "docs/architecture/*.json"
+    ],
+    "prerequisite": [
+      "pyproject.toml"
+    ],
+    "S1": [
+      "factory_core/current_artifact_ownership.py",
+      "factory_core/current_dirty.py",
+      "factory_core/submission_bundle.py",
+      "factory_core/finalization.py",
+      "factory_core/storage.py",
+      "scripts/cleanup_project_artifacts.py",
+      "factory_core/domain.py",
+      "tests/test_reopen_artifact_policy.py (new)",
+      "tests/test_dirty_and_finalization.py"
+    ],
+    "S5": [
+      "factory_core/cli.py",
+      "factory_core/storage.py",
+      "factory_core/solver_reconcile.py (new)"
+    ],
+    "S4_1": [
+      "factory_core/engine.py",
+      "factory_core/workflow_events.py"
+    ],
+    "S4_2": [
+      "factory_core/effective_prompt.py",
+      "factory_core/adapters/models/dispatcher.py"
+    ],
+    "S4_3": [
+      "factory_core/finalization.py",
+      "release write path (TBD)"
+    ],
+    "S6": [
+      "factory_core/service.py",
+      "factory_core/engine.py (bounded-advance contract)",
+      "contract/template generator side (TBD)"
+    ],
+    "S3": [
+      "factory_core/final_evidence_recovery.py",
+      "factory_core/final_judge_projection.py",
+      "tests/test_final_evidence_recovery.py"
+    ]
+  },
+  "must_not_touch": [
+    "factory_core/artifact_ownership.py  (frozen v1 trust root; hashed by classifier_contract_sha256)",
+    "factory_core/dirty.py  (FROZEN BYTES. It is the immutable historical v9 classifier implementation and part of the compatibility trust root: classifier_contract_sha256() hashes its bytes. No new logic goes in; all S1 behaviour lands in current_dirty.py / the ArtifactPolicy layer.)",
+    "any .factory/state.db of any project (read-only verification only)",
+    "apps/mcp/** and deploy/**  (separate in-progress feature; the 12 secret findings are out of scope)",
+    "governing history: events, dirty_causes rows, published receipts",
+    "existing table row shapes (effect-hash compatibility, see 0.7)",
+    "A/B/R project-local files, incl. ongoing/cumcm_2026_a_fable_pro_20260910/docs/reuse_execution_contract.json"
+  ],
+  "open_items": [
+    "I8-a read-only v9 precondition validator not implemented",
+    "I8-b read-only migration/domain drift audit across the 6 state DBs not run",
+    "true code-version downgrade regression still pending",
+    "S6 item 10 (durable bounded-run contract identity) planned, not implemented"
+  ],
+  "reference_docs_authoritative_location": {
+    "authoritative_copy": "/home/tfisher/paper_factory/docs/architecture",
+    "authoritative_branch": "feat/mcp-readonly-server (main working tree, untracked)",
+    "worktree_copies": "/home/tfisher/paper_factory/.worktrees/runtime-simplification/docs/architecture",
+    "rule": "Edit the authoritative copy only. The worktree copies are execution-reference only, kept untracked so the code PR is not polluted by doc-sync churn. When the architecture docs are formally committed, the final versions move into the implementation branch.",
+    "review_request_note": "RUNTIME_SIMPLIFICATION_REVIEW_REQUEST.md (v2) is a review-deliverable; authoritative copy is the main working tree. The worktree holds execution-reference copies of plan/audit-response/S0-baseline, refreshed after each plan revision."
+  },
+  "reference_docs": [
+    {
+      "name": "RUNTIME_SIMPLIFICATION_IMPLEMENTATION_PLAN.md",
+      "in_worktree": "docs/architecture/RUNTIME_SIMPLIFICATION_IMPLEMENTATION_PLAN.md",
+      "sha256": "d8efc61b05a8c5d71be2e72d591d5ca79367d48a1fadeabe108077fcf06557ff",
+      "bytes": 72323,
+      "source_of_copy": "/home/tfisher/paper_factory/docs/architecture/RUNTIME_SIMPLIFICATION_IMPLEMENTATION_PLAN.md",
+      "tracked": false,
+      "description": "rev7.2 self-contained plan + 0.5/0.6/0.7/0.7.1/0.7.2/S1-A/S1-C-prep record"
+    },
+    {
+      "name": "RUNTIME_SIMPLIFICATION_AUDIT_RESPONSE.md",
+      "in_worktree": "docs/architecture/RUNTIME_SIMPLIFICATION_AUDIT_RESPONSE.md",
+      "sha256": "308c5ee308ee811bc0973d57f35f8b63573cd5f10748710f4cebe6f768082298",
+      "bytes": 61276,
+      "source_of_copy": "/home/tfisher/paper_factory/docs/architecture/RUNTIME_SIMPLIFICATION_AUDIT_RESPONSE.md",
+      "tracked": false,
+      "description": "audit response, SS2.5/SS5 M1 attribution corrected"
+    },
+    {
+      "name": "runtime_simplification_baseline.json",
+      "in_worktree": "docs/architecture/runtime_simplification_baseline.json",
+      "sha256": "2dc401e9ef3a5f9040b777e4356a18feb3ffccab7f8c2082174554748ce95d39",
+      "bytes": 10564,
+      "source_of_copy": "/home/tfisher/paper_factory/docs/architecture/runtime_simplification_baseline.json",
+      "tracked": false,
+      "description": "S0 baseline (evidence, frozen)"
+    }
+  ],
+  "environment": {
+    "interpreter_path": "/home/tfisher/paper_factory/.worktrees/runtime-simplification/.venv/bin/python",
+    "interpreter_version": "3.13.5",
+    "venv_path": "/home/tfisher/paper_factory/.worktrees/runtime-simplification/.venv",
+    "venv_is_worktree_local": true,
+    "why_separate_venv": "The main tree's editable install uses a MetaPathFinder (__editable___modeling_factory_2_0_0_finder.py), which takes precedence over PYTHONPATH. Reusing the main .venv would therefore import scripts/ and apps/ from the MAIN tree (scripts/evidence_grounding.py and scripts/verify_provenance.py differ on the feature branch), making the baseline untrustworthy.",
+    "extras_installed": [
+      "cloud",
+      "web",
+      "tui"
+    ],
+    "dev_group_installed": [
+      "pytest",
+      "httpx",
+      "httpx2",
+      "numpy"
+    ],
+    "pip_freeze_count": 84,
+    "pip_freeze_sha256": "653a0d807cbb67df9aa40b96539c56fcf6531e2ae6077352a79c9a0858f3f29e",
+    "node_version": "v20.19.2",
+    "npm_version": "9.2.0",
+    "frontend_package_lock_sha256": "46b3b0d162d8ead408f4d5494d80badc7aba2fcb9f13331b56519fd22009264c",
+    "frontend_npm_ci": "succeeded (0 vulnerabilities)",
+    "frontend_node_modules": "locally generated by npm ci; gitignored; NOT part of the source baseline",
+    "note": "Recorded so that 'same commit, different test count' can be attributed to environment vs source."
+  },
+  "test_baseline_history": [
+    {
+      "stage": "0.6 (branch baseline)",
+      "commit": "aaea7f8",
+      "result": "1757 passed, 0 failed, 0 collection errors"
+    },
+    {
+      "stage": "0.7",
+      "commit": "bbed84c",
+      "result": "1783 passed, 0 failed, 0 collection errors"
+    },
+    {
+      "stage": "0.7.1",
+      "commit": "ed69234",
+      "result": "1788 passed, 0 failed, 0 collection errors"
+    },
+    {
+      "stage": "0.7.2",
+      "commit": "5568d01",
+      "result": "1793 passed, 0 failed, 0 collection errors"
+    },
+    {
+      "stage": "S1-A",
+      "commit": "36733b8",
+      "result": "2178 passed, 0 failed, 0 collection errors",
+      "delta": "+385; zero regressions and zero modified existing code"
+    },
+    {
+      "stage": "S1-C-prep",
+      "commit": "dda04ce",
+      "result": "2424 passed, 0 failed, 0 collection errors",
+      "delta": "+246; 15/15 collector configurations set-identical"
+    }
+  ],
+  "stage_records": [
+    "docs/architecture/runtime_simplification_stage0_7.json",
+    "docs/architecture/runtime_simplification_stage0_7_1.json",
+    "docs/architecture/runtime_simplification_stage0_7_2.json",
+    "docs/architecture/runtime_simplification_stage_S1A.json",
+    "docs/architecture/runtime_simplification_stage_S1Cprep.json"
+  ],
+  "schema_version_at_baseline": 9,
+  "schema_version_after_0_7": 10,
+  "stages_completed": [
+    "0.5",
+    "0.6",
+    "0.7",
+    "0.7.1",
+    "0.7.2",
+    "S1-A",
+    "S1-C-prep"
+  ],
+  "next_stage": "S1-D"
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "G3",
+  "title": "Historical replay and reason-envelope compatibility",
+  "recorded_at": "2026-09-27T01:41:42Z",
+  "branch": "feat/runtime-simplification",
+  "parent_commit": "832361432b3b2a7b4245fe265e22dd5899849345",
+  "risk_being_gated": "S4.1 changed the reason attached to every event. The risk is not that new events look wrong - it is that OLD events stop being readable or replayable, which would break the audit chain the whole project depends on.",
+  "assertions": {
+    "full_replay": "A/B/R whole streams replay with hash verification ON (replay_events defaults to verify_hashes=True) and reproduce the current state across every REPLAY_FIELDS member",
+    "old_events_unchanged": "no historical envelope carries subcode/actor - additive means old events are unchanged, not back-filled",
+    "hashes_intact": "every event with a recorded state_hash_after still verifies, and a deliberately corrupted stream is rejected so the check is not vacuous",
+    "reason_always_readable": "normalize_reason yields a non-empty code and string subcode/actor for every real event, with no exception on unknown shapes",
+    "r517_lift": "the real r517 event still carries final_decision=REOPEN_REVISION_TEXT, its canonical code is the unchanged WORK_REOPENED, and normalize_reason now surfaces REOPEN_REVISION_TEXT as the subcode",
+    "read_only": "revision, event count, the sum of payload_json lengths and even the mtime are unchanged after the gate runs - no historical payload may be rewritten",
+    "non_vacuous": "the gate asserts the real trees are actually present and each holds >100 events, so it cannot pass by skipping"
+  },
+  "test_baseline": {
+    "before": "2516 / 0 failed",
+    "after": "see the G3 commit message",
+    "tests_added": 17
+  },
+  "next_stage": "S6 (bounded-advance execution contract + retiring the hand-written driver layer) - the final stage of this goal",
+  "note": "S4.2 and S4.3 exist in the plan but are outside this goal's objective, which names S4.1; they remain unimplemented and are recorded as such."
+}

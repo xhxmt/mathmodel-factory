@@ -1,0 +1,47 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "G2",
+  "title": "Solver-reconciliation gate over the real anomalies",
+  "recorded_at": "2026-09-26T14:57:34Z",
+  "branch": "feat/runtime-simplification",
+  "parent_commit": "dee53325859364e09f642611c3b182f48e0ad883",
+  "purpose": "S5 reports; G2 asserts what it reports on the real projects and pins the interpretation, so a later change cannot quietly reclassify the two known anomalies.",
+  "the_two_anomalies": {
+    "A": {
+      "job_id": "local_python_20260910154426_560c138e",
+      "db_status": "running",
+      "execution_state": "TERMINAL_SUCCESS",
+      "evidence_state": "INVALID",
+      "workflow_relevance": "UNRESOLVED",
+      "blocks": true,
+      "why": "no owner slot recorded, so nothing can be proven about it"
+    },
+    "B": {
+      "job_id": "local_python_20260908173110_dd1262a8",
+      "db_status": "running",
+      "execution_state": "TERMINAL_SUCCESS",
+      "evidence_state": "INVALID",
+      "workflow_relevance": "SUPERSEDED",
+      "blocks": false,
+      "why": "a later job succeeded in the same owner slot (revision 3 > 2)"
+    },
+    "central_claim": "they agree on execution and evidence and differ only in relevance - which is exactly why one flag could not answer for both"
+  },
+  "gate_assertions": [
+    "both anomalies report deterministic execution from the exit artifact while the db row stays stale",
+    "neither has COMPLETE evidence, because no completion receipt exists",
+    "A blocks with UNRESOLVED; B does not block, being provably SUPERSEDED",
+    "A has exactly two blockers, both UNRESOLVED",
+    "B and R have no blockers at all",
+    "reading a real project mutates nothing - revision, event count, job count, file size and even mtime are unchanged",
+    "the six relevance values are a closed set and the blocking pair is REQUIRED + UNRESOLVED",
+    "the result is JSON-serialisable, since S5 is a shadow evaluator that must be reportable"
+  ],
+  "test_baseline": {
+    "before": "2496 / 0 failed",
+    "after": "see the G2 commit message",
+    "tests_added": 13,
+    "note": "the real-project evaluations make this gate take ~29s; that is accepted because it is the only place the anomalies are asserted against real data"
+  },
+  "next_stage": "S4.1 (reason code/subcode/actor)"
+}

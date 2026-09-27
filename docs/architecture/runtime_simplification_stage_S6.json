@@ -1,0 +1,44 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "S6",
+  "title": "Bounded-advance execution contract; retiring the hand-written driver layer",
+  "recorded_at": "2026-09-27T03:10:55Z",
+  "branch": "feat/runtime-simplification",
+  "parent_commit": "99ba1bcb745cdf7a1a05b615ad8a6af1f5b8701a",
+  "why": "Project A's work/ holds 128 entries (979 MB): 52 scripts call .run(, 24 call run(max_steps=1...), 20 hard-code an assert state.revision == N, 47 ship their own protected_files.json plus a verify() hash check, and 29 keep a progress.json. They are not one wrapper that can be deleted - they are a layer that grew because there was no supported way to say 'advance this project, but only within this scope, from this exact state, without touching these artifacts', and no way to notice that a run had made no progress. Their hard-coded revisions rot silently and none of them is in version control.",
+  "no_second_runner": "FactoryEngine.run already advances continuously. The contract constrains and records one bounded invocation of it; run_bounded is that invocation, not a new loop. The advance loop was extracted verbatim into _advance_loop.",
+  "the_ten_capabilities": {
+    "1_expected_revision_cas": "checked before any event is written; a stale authorisation is refused up front (test asserts nothing was written)",
+    "2_expected_cursor": "(stage, subtask, source_step) compared as well, so a matching revision with a different position is still refused",
+    "3_allowed_source_steps": "carried by the contract and enforced by the existing boundary; the contract and the explicit kwarg must agree or the call is refused",
+    "4_max_subtasks": "an explicit bound; run_policy=bounded_subtasks requires one",
+    "5_protected_manifest": "project-relative path -> sha256, verified at entry AND before a successful checkpoint commits",
+    "6_lease_checks": "unchanged - still the engine's own runner/lease handling",
+    "7_structured_result": "BoundedRunResult: run_id, contract sha, start/end revision, status, stop reason, completed subtasks, made_progress, boundary fingerprint, both verifications, blocked reason, contract violation",
+    "8_pre_commit_protection": "a violation blocks the success checkpoint with PERMANENT_PROTECTED_MANIFEST_VIOLATED instead of being discovered by the caller afterwards",
+    "9_made_progress_and_boundary": "boundary_fingerprint over revision/status/stage/subtask/source step/last completed/blocked reason/dependency fingerprint; a repeated fingerprint with no progress reports UNCHANGED_BOUNDARY / NEEDS_INSPECTION instead of raising. No seen journal and no new state machine - the caller passes the previous fingerprint in.",
+    "10_durable_contract_identity": "bounded_run_id and bounded_run_contract_sha256 bound into RUN_STARTED (and the failure payloads), so the event stream can answer afterwards which authorisation a run executed under"
+  },
+  "manifest_safety": "rejects absolute paths (POSIX and Windows), any '..' component, any '.' component (including a leading './', which PurePosixPath would otherwise collapse), the empty path, and non-lowercase-sha256 digests; at verification time a symlink - or a parent component that is a symlink resolving outside the project - is reported unsafe rather than compared",
+  "two_verifications_why": "entry answers 'was the state already what the caller expected?'; pre-commit answers 'did this run break it?'. Only the latter cannot distinguish an already-dirty project from one this run dirtied.",
+  "surfaces": {
+    "factory_core/bounded_run.py (new)": "contract, validation, identity, manifest verification, boundary fingerprint, structured result",
+    "factory_core/engine.py": "run(contract=...) with CAS + cursor + identity binding; _advance_loop extracted; pre-commit protection; run_bounded()",
+    "factory_core/service.py": "advance_bounded()",
+    "factory_core/cli.py": "factory advance <project> --expected-revision N [--expected-stage] [--expected-subtask] [--allowed-source-steps ...] [--max-subtasks] [--protected-manifest f.json] [--actor] [--run-policy] [--previous-boundary-fingerprint]"
+  },
+  "design_fixes_found_while_building": [
+    "'.' component check: PurePosixPath collapses a leading './', so './x' slipped past the traversal check; the raw components are now inspected before normalisation",
+    "contract leak: the instance attribute was set before several early returns, so a run that returned early left the contract behind for the next invocation; it is now set only around the advance loop",
+    "stop-reason ordering: a 'ready' project that had not advanced reported NO_FURTHER_WORK, which would hide a repeated boundary; UNCHANGED now takes precedence"
+  ],
+  "test_harness_note": "the tests need a registry that can actually complete a step. A bare FactoryEngine uses an empty StepRegistry (step 0 is not registered) while the real registry needs prompt templates from the code root, so the fake-registry pattern from tests/test_factory_engine.py is reused.",
+  "tests_added": 23,
+  "next_stage": "none - S6 is the final stage in this goal",
+  "open_items": [
+    "the contract is not yet wired into the prompt/contract generator side: no future reuse project emits one_native_step_per_run any more, but the generator that did was never located (grep found no tracked file containing it; it lives in an untracked project work/ script)",
+    "nothing consumes run_bounded in production yet; existing callers keep using run(). Migrating the canary to run_bounded is the operational step that would prove the work/*.py layer can be retired.",
+    "S4.2 (prompt identity) and S4.3 (three-layer candidate identity) remain unimplemented; they are outside this goal's named scope",
+    "I8-a / I8-b / the true code-version downgrade regression remain pending"
+  ]
+}

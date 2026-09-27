@@ -1,0 +1,36 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "S4.1",
+  "title": "Structured reason: code + subcode + actor",
+  "recorded_at": "2026-09-27T01:30:38Z",
+  "branch": "feat/runtime-simplification",
+  "parent_commit": "c762ecaebd422ea58a732a2bf1df378359a1b503",
+  "problem": {
+    "silent_control_events": "A's 13 RESUMED and 11 PAUSED events all had an empty reason message, so why a project stopped could not be read from the event at all",
+    "hidden_decision_field": "r517's decisive value (REOPEN_REVISION_TEXT) lived in a payload field OUTSIDE the envelope, so reason.code could not distinguish a text revision from any other reopen - audit finding X-01"
+  },
+  "design": {
+    "canonical_code_unchanged": "code remains the stable discriminator; no new top-level event type is introduced for a subtype",
+    "subcode": "the finer distinction, e.g. PAUSED/OPERATOR, PAUSED/DEADLINE, PAUSED/EXECUTION_SCOPE, PAUSED/FREEZE_BOUNDARY, RESUMED/OPERATOR, RESUMED/RETRY, RESUMED/AUTO_RECOVERY",
+    "actor": "who caused it: operator | engine | scheduler",
+    "additive": "both fields default to empty, so events written before S4.1 keep their shape and stay readable (asserted)",
+    "final_decision_lift": "normalize_reason now lifts payload['final_decision'] into subcode when no explicit subcode is given, which is what makes the r517 case readable from the reason alone",
+    "vocabulary_is_closed_and_enforced": "service._require_reason_detail refuses an empty or unknown subcode/actor rather than recording a useless value - the whole point is that a silent control event cannot come back"
+  },
+  "surfaces_changed": {
+    "factory_core/workflow_events.py": "GateReason gains subcode + actor; normalize_reason reads both and lifts final_decision",
+    "factory_core/engine.py": "_control_transition takes subcode/actor and writes them into the reason; pause() and resume() accept and forward them",
+    "factory_core/service.py": "pause()/resume() accept and forward them, with the closed vocabularies and the enforcement helper",
+    "scripts/project_ctl.py": "records OPERATOR/operator explicitly"
+  },
+  "compatibility": {
+    "historical_events": "unchanged and asserted readable with empty subcode/actor",
+    "replay": "unaffected - the fields are outside the replay patch, so state_hash_after is untouched",
+    "frozen_dirty_py": "untouched"
+  },
+  "tests_added": 8,
+  "next_stage": "G3 (old-event replay + reason-envelope compatibility), then S4.2/S4.3 are out of this goal's scope, then S6",
+  "open_items": [
+    "internal pause paths (deadline, freeze boundary, execution scope) still default to OPERATOR; each should pass its own subcode when those paths are next touched"
+  ]
+}

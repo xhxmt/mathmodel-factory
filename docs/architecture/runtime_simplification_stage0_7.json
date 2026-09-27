@@ -1,0 +1,127 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "0.7",
+  "title": "Schema 9 -> 10 compatibility gate (append-only dirty-cause provenance)",
+  "recorded_at": "2026-09-26T07:48:37Z",
+  "branch": "feat/runtime-simplification",
+  "parent_commit": "aaea7f8c12327e7eb0707a4c4b4f4b0a8cc4a4c4",
+  "decision": "Q10 = Option A (bump SCHEMA_VERSION to 10 rather than 9->9 via ensure_*_schema)",
+  "schema_before": 9,
+  "schema_after": 10,
+  "migration_accept_set_before": "{1,...,8}",
+  "migration_accept_set_after": "{1,...,9}",
+  "code_changes": {
+    "modified": [
+      "factory_core/domain.py  (SCHEMA_VERSION 9 -> 10)",
+      "factory_core/storage.py (accept 9; install side table on create/current/9->10 migrate; new _domain_effect_hashes key; write provenance in the cause's transaction)",
+      "factory_core/engine.py (derive provenance for each change; tag the explicit MISSING_STAGE_INPUT_BASELINE fail-closed pair)"
+    ],
+    "added": [
+      "factory_core/dirty_classification.py  (side table DDL + triggers + derivation + read path)",
+      "tests/test_dirty_cause_classification.py  (26 tests)"
+    ],
+    "diffstat": "3 files changed, 53 insertions(+), 2 deletions(-)  (+ 2 new files)",
+    "frozen_modules_untouched": [
+      "factory_core/dirty.py  (Q11: bytes frozen; provenance derived in the new module instead)",
+      "factory_core/artifact_ownership.py"
+    ]
+  },
+  "design_note_provenance_outside_frozen_module": "classification_source is derived in factory_core/dirty_classification.py by mirroring the classifier's branch order, rather than by adding a field to DirtyChange. dirty.py's bytes are hashed into classifier_contract_sha256(), so any edit there would change the frozen classifier identity that historical dirty_causes and rebase receipts reference. classifier_contract_sha256() is deliberately NOT changed by 0.7; folding the provenance contract into the classifier identity is an explicit S1-D item (CI invariant 4).",
+  "exit_conditions": {
+    "1_schema_version_is_10": {
+      "status": "PASS",
+      "evidence": "test_schema_version_is_10"
+    },
+    "2_upgrade_accepts_9_to_10": {
+      "status": "PASS",
+      "evidence": "test_upgrade_accepts_current_9"
+    },
+    "3_only_side_table_and_triggers_added": {
+      "status": "PASS",
+      "evidence": "test_upgrade_only_adds_the_side_table_and_its_triggers (set diff of tables == {side table}; trigger diff == the 2 new triggers)"
+    },
+    "4_own_domain_key": {
+      "status": "PASS",
+      "evidence": "test_side_table_has_its_own_domain_key (aggregate_domain_root has the key)"
+    },
+    "5_real_v9_upgrade_keeps_aggregate_valid": {
+      "status": "PASS",
+      "hermetic_evidence": "test_v9_project_upgrades_and_stays_aggregate_valid",
+      "real_history_evidence": "see real_history_verification below (A/B/R copies)"
+    },
+    "6_dirty_causes_column_set_unchanged": {
+      "status": "PASS",
+      "evidence": "test_upgrade_only_adds_the_side_table_and_its_triggers (every pre-existing table keeps its exact column list)"
+    },
+    "7_old_cause_reads_legacy_unrecorded": {
+      "status": "PASS",
+      "evidence": "test_cause_without_provenance_reads_legacy_unrecorded and test_legacy_unrecorded_is_not_re_derived_from_the_current_classifier"
+    },
+    "8_same_transaction_for_cause_and_provenance": {
+      "status": "PASS",
+      "evidence": "test_new_cause_records_provenance_in_same_transaction and test_provenance_failure_rolls_back_the_cause (provenance insert forced to fail -> no dirty_causes row survives)"
+    },
+    "9_triggers_reject_update_and_delete": {
+      "status": "PASS",
+      "evidence": "test_side_table_rejects_update_and_delete"
+    },
+    "10_downgrade_barrier": {
+      "status": "PASS",
+      "evidence": "test_old_v9_writer_cannot_continue_writing_a_schema_10_database",
+      "note": "The v9 writer's accept-set was {1..8}; 10 is outside it, so its _upgrade_schema() raises instead of writing."
+    },
+    "11_migration_is_idempotent": {
+      "status": "PASS",
+      "evidence": "test_upgrade_only_adds_the_side_table_and_its_triggers (second run leaves table columns and schema version identical)"
+    },
+    "12_failed_migration_rolls_back_completely": {
+      "status": "PASS",
+      "evidence": "test_failed_migration_rolls_back_completely (rebase hook forced to raise -> schema stays 9, side table and triggers absent)"
+    },
+    "extra_tolerance_window_ends_at_first_v10_event": {
+      "status": "PASS",
+      "evidence": "test_first_v10_event_ends_the_tolerance_window (tampering with the side table afterwards makes aggregate_valid False)",
+      "note": "Before any v10 event exists the new key is covered only by the tolerant per-domain branch. That window is inherent to status_snapshot()'s key-set test and is exactly what the pre-v10 compatibility relies on."
+    },
+    "extra_derivation_covers_every_emitted_change": {
+      "status": "PASS",
+      "evidence": "test_derivation_covers_every_change_the_classifier_emits (parametrised over frozen_rule / current_rule / protected / paper_semantic / fallback shapes)"
+    }
+  },
+  "test_baseline": {
+    "branch_baseline_before_0_7": "1757 passed, 0 failed, 0 collection errors",
+    "after_0_7": "1783 passed, 4 warnings, 0 failed, 0 collection errors (190.86s)",
+    "delta": "+26 (the new test module); no pre-existing test changed behaviour",
+    "command": ".venv/bin/python -m pytest -q --tb=no --continue-on-collection-errors"
+  },
+  "real_history_verification": {
+    "method": "copy each project's .factory/state.db to /tmp, open it with the v10 code, then inspect the copy. Originals untouched.",
+    "projects": [
+      "A cumcm_2026_a_fable_pro_20260910",
+      "B cumcm_2025_b_gpt_formal_20260908t153023z",
+      "R cumcm_2025_b_codex_luna_stability_20260817_run4"
+    ],
+    "all_passed": true,
+    "per_project": {
+      "schema_version": "9 -> 10",
+      "aggregate_valid": true,
+      "dirty_causes_columns": "unchanged (8 columns, identical order)",
+      "dirty_causes_row_counts": {
+        "A": "491 -> 491",
+        "B": "1274 -> 1274",
+        "R": "2090 -> 2090"
+      },
+      "side_table_present": true,
+      "side_triggers_present": 2,
+      "provenance_rows": 0,
+      "legacy_cause_reads": "legacy_unrecorded",
+      "latest_event_has_new_domain_key": true,
+      "rebase_event_written": "yes, exactly one; revision +1 (the migration's designed dirty_classifier rebase fires because these projects' recorded classifier identity predates today's current identity)"
+    }
+  },
+  "open_items": [
+    "classifier_contract_sha256() deliberately unchanged; folding the provenance contract into the classifier identity is an S1-D item (CI invariant 4).",
+    "final_evidence_recovery / final_judge_projection / dirty_rebase insert dirty_causes rows directly and therefore leave no provenance -> they read as legacy_unrecorded. Accepted for 0.7 because they are the S3 deprecation targets; the same-transaction contract is enforced on the normal transition path.",
+    "The tolerant branch still covers the new domain key until the first v10 event is written."
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "0.7.1",
+  "title": "Never mutate workflow state from a read path (+ a latent migration defect it had masked)",
+  "recorded_at": "2026-09-26T08:47:42Z",
+  "branch": "feat/runtime-simplification",
+  "commit": "ed692347801705baab42818e01df434368a22b71",
+  "commit_subject": "0.7.1: never mutate workflow state from a read path",
+  "trigger": "External review I7 verdict: current behaviour not acceptable; handle before S1-A, at minimum before the real A/B/R originals are opened by v10 code.",
+  "changes": {
+    "factory_core/storage.py": "_upgrade_schema is DDL-only (no rebase, no event, no revision); v8->v9 back-fill guarded by `if current < 9:`; status_snapshot enforces monotonic effect-domain generation",
+    "factory_core/cli.py": "new `rebase-classifier` subcommand (with --expected-revision)",
+    "factory_core/dirty_classification.py": "new source value `bespoke_recovery`",
+    "factory_core/final_evidence_recovery.py": "write-entry 3 now records provenance",
+    "tests/test_dirty_cause_classification.py": "+5 tests",
+    "diffstat": "5 files changed, 622 insertions(+), 374 deletions(-)",
+    "diffstat_caveat": "Most of storage.py's 733-line diff is the 4-space re-indent of the 336-line v8->v9 back-fill block; the logic change there is the single guard."
+  },
+  "i7_direct_fix": {
+    "problem": "_upgrade_schema() is reached by 40 call sites, many of them pure read entry points (load, status_snapshot, events, dirty_flags, stage_checkpoints, ...). It ran the classifier rebase, appending DIRTY_CLASSIFIER_REBASED and incrementing the business revision.",
+    "rejected_alternative": "deferring the rebase into the next business write transaction is NOT viable: transition() enforces row['revision'] == expected_revision, so a revision-bumping rebase inside that transaction makes every queued transition raise RevisionConflict.",
+    "adopted": "migration = DDL only; rebase is an explicit maintenance action (SQLiteStateStore.rebase_dirty_classifier + new `factory rebase-classifier` CLI entry). The method previously had no production caller and no CLI entry, so the capability was unreachable."
+  },
+  "latent_defect_exposed": {
+    "symptom": "After removing the automatic rebase, A/B/R copies diverged: B and R reported aggregate_valid=false while A stayed true.",
+    "diagnosis": {
+      "A": {
+        "changed_v9_domains": [],
+        "table_deltas": {}
+      },
+      "B": {
+        "changed_v9_domains": [
+          "checkpoint_history"
+        ],
+        "table_deltas": {
+          "stage_checkpoint_history": "49 -> 62 (+13)"
+        }
+      },
+      "R": {
+        "changed_v9_domains": [
+          "checkpoint_history"
+        ],
+        "table_deltas": {
+          "stage_checkpoint_history": "77 -> 90 (+13)"
+        }
+      }
+    },
+    "root_cause": "_upgrade_schema contained a 336-line v8->v9 data back-fill with NO source-version guard, so any later migration re-ran it. It INSERTs into tables that are themselves effect-hash domains (stage_checkpoint_history, dirty_causes, workflow_decision_requests/_instances, solver_jobs) and UPDATEs project_state/solver_jobs. B and R were created directly on v9, so they had never run the back-fill; their first 9->10 migration appended 13 checkpoint history rows, changing the checkpoint_history domain with no event re-attesting the hash.",
+    "why_previously_hidden": "the migration's trailing rebase event computes effect_hashes_after AFTER all mutations, so it silently re-attested the changed domains. That event had been masking a pre-existing defect; removing it merely made the defect visible.",
+    "fix": "guard the whole back-fill block with `if current < 9:` -- storage.py, 336 lines re-indented."
+  },
+  "verification_on_real_history_copies": {
+    "method": "copy each project's .factory/state.db to /tmp, open with v10 code, inspect the copy. Originals untouched.",
+    "projects": [
+      "A cumcm_2026_a_fable_pro_20260910",
+      "B cumcm_2025_b_gpt_formal_20260908t153023z",
+      "R cumcm_2025_b_codex_luna_stability_20260817_run4"
+    ],
+    "all_passed": true,
+    "per_project": {
+      "schema_version": "9 -> 10",
+      "revision": {
+        "A": "561 -> 561",
+        "B": "1411 -> 1411",
+        "R": "2484 -> 2484"
+      },
+      "events": {
+        "A": "561 -> 561",
+        "B": "1411 -> 1411",
+        "R": "2484 -> 2484"
+      },
+      "tables_mutated": "none",
+      "aggregate_valid": true,
+      "provenance_rows": 0,
+      "legacy_cause_reads": "legacy_unrecorded"
+    },
+    "conclusion": "A 9->10 migration is now DDL-only: no workflow state change, no event, no revision move, and the historical aggregate check stays valid."
+  },
+  "other_items": {
+    "I2_domain_monotonicity": "status_snapshot() now asserts the effect-domain key set never shrinks across the event stream. Test test_effect_domain_generation_must_be_monotonic builds the case where the tolerance branch itself would pass, proving the invariant is what rejects it.",
+    "I5_write_entry_3": "final_evidence_recovery now records classification_source='bespoke_recovery'; write-entry 2 (v8->v9 historical reconstruction) deliberately still records nothing, so legacy_unrecorded now means exactly 'created before the provenance contract, or reconstructed by a historical migration'.",
+    "I6_db_level_rollback": "test_provenance_insert_rejected_at_db_level_rolls_back_cause installs a BEFORE INSERT ... RAISE(ABORT) trigger on the provenance table and asserts neither the cause nor its provenance lands.",
+    "Concurrency": "not re-tested here; the existing test_concurrent_transitions_* series covers revision CAS."
+  },
+  "available_exit_conditions": {
+    "read_paths_do_not_mutate": "PASS (test_read_paths_do_not_mutate_revision_or_events)",
+    "explicit_rebase_is_cas_guarded": "PASS (test_explicit_rebase_is_cas_guarded_and_is_the_only_writer)",
+    "domain_generation_monotonic": "PASS (test_effect_domain_generation_must_be_monotonic)",
+    "same_transaction_db_level": "PASS (test_provenance_insert_rejected_at_db_level_rolls_back_cause)",
+    "bespoke_recovery_distinct_source": "PASS (test_bespoke_recovery_is_a_recordable_distinct_source)",
+    "migration_ddl_only_on_real_history": "PASS (real_history_verification above)",
+    "failed_migration_rolls_back": "PASS (test_failed_migration_rolls_back_completely, injection point moved to ensure_dirty_cause_classification_schema because the rebase no longer runs)"
+  },
+  "test_baseline": {
+    "branch_baseline": "1757 passed / 0 failed / 0 collection errors (aaea7f8)",
+    "after_0_7": "1783 passed (bbed84c)",
+    "after_0_7_1": "1788 passed / 0 failed / 0 collection errors (ed69234)",
+    "delta": "+5; no pre-existing test changed behaviour",
+    "note": "0.7.1 touched the migration (40 call sites), status_snapshot, the recovery path and the CLI, with zero regressions.",
+    "command": ".venv/bin/python -m pytest -q --tb=no --continue-on-collection-errors"
+  },
+  "open_items": [
+    "True binary/code-version downgrade regression still pending: run bde49712's code as a separate interpreter against a schema-10 fixture and assert it refuses before any business write.",
+    "Reviewer question I9: does aggregate_valid need to distinguish 'chain self-consistent' from 'self-consistent as of the last write'? Before this fix, the trailing rebase re-attested mutated domains.",
+    "Reviewer question I8: are there other unguarded migration-time data writes besides the guarded block?"
+  ]
+}
