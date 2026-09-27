@@ -19,6 +19,14 @@ from .current_dirty import (
     semantic_flags,
     solver_receipt_job_id,
 )
+from .bounded_run import (
+    BoundedRunContract,
+    BoundedRunError,
+    BoundedRunResult,
+    ProtectedManifestViolation,
+    check_cursor,
+    verify_protected_manifest,
+)
 from .dirty_classification import classification_sources, source_for
 from .domain import (
     ExecutionResult,
@@ -81,6 +89,101 @@ class FactoryEngine:
         self._transitions = TransitionCoordinator(
             self.project_dir, self.store, self._projector
         )
+        #: The bounded-run contract this invocation is executing under, if any.
+        #: Held on the instance so the pre-commit protection check can see it,
+        #: and cleared in run()'s finally so it cannot leak between invocations.
+        self._bounded_contract: BoundedRunContract | None = None
+
+    def run_bounded(self, contract: BoundedRunContract) -> "BoundedRunResult":
+        """Execute one authorised, bounded advance and report it structurally.
+
+        This is the supported replacement for the hand-written ``work/*.py``
+        drivers: it verifies the protected manifest at entry, runs the existing
+        continuous runner under the contract, verifies the manifest again, and
+        returns a structured outcome instead of leaving the caller to journal its
+        own progress file and guess at the stop reason.
+
+        It adds no second runner - ``run`` is the same loop, invoked under a
+        contract.
+        """
+
+        from .bounded_run import (
+            BoundedRunResult,
+            boundary_fingerprint,
+            classify_stop_reason,
+            reconcile_contract_violation,
+        )
+
+        start_state = self.store.load()
+        if contract.protected_manifest:
+            entry = verify_protected_manifest(self.project_dir, contract.protected_manifest)
+            if not entry.ok:
+                # Refuse before writing anything: the caller's own expectation is
+                # already violated, so advancing would build on a broken premise.
+                raise ProtectedManifestViolation(
+                    "protected manifest is already violated at entry: " + entry.describe()
+                )
+        else:
+            entry = verify_protected_manifest(self.project_dir, {})
+
+        start_revision = int(start_state.revision)
+        previous_status = str(
+            getattr(start_state.status, "value", start_state.status)
+        )
+        end_state = self.run(contract=contract)
+
+        succeeded = [
+            event
+            for event in self.store.events(since_revision=start_revision)
+            if event.type == "STEP_SUCCEEDED"
+        ]
+        completed = len(succeeded)
+        final = verify_protected_manifest(self.project_dir, contract.protected_manifest)
+        blocked_reason = ""
+        pending = getattr(end_state, "pending_action", None)
+        if pending is not None:
+            blocked_reason = str(
+                getattr(pending, "type", None)
+                or getattr(pending, "kind", None)
+                or "PENDING_ACTION"
+            )
+        stop_reason = classify_stop_reason(
+            end_state,
+            previous_status=previous_status,
+            completed=completed,
+            bounded=contract.max_subtasks,
+        )
+        if not final.ok:
+            stop_reason = "PROTECTED_MANIFEST_VIOLATED"
+        fingerprint = boundary_fingerprint(
+            end_state, blocked_reason=blocked_reason
+        )
+        made_progress = int(end_state.revision) > start_revision
+        violation = reconcile_contract_violation(
+            contract, end_state, start_revision=start_revision, completed=completed
+        )
+        return BoundedRunResult(
+            run_id=contract.run_id,
+            contract_sha256=contract.contract_sha256,
+            run_policy=contract.run_policy,
+            actor=contract.actor,
+            start_revision=start_revision,
+            end_revision=int(end_state.revision),
+            status=str(getattr(end_state.status, "value", end_state.status)),
+            stop_reason=stop_reason,
+            completed_subtasks=completed,
+            made_progress=made_progress,
+            boundary_fingerprint=fingerprint,
+            unchanged_boundary=(
+                contract.previous_boundary_fingerprint is not None
+                and contract.previous_boundary_fingerprint == fingerprint
+                and not made_progress
+            ),
+            entry_verification=entry,
+            final_verification=final,
+            blocked_reason=blocked_reason,
+            contract_violation=violation,
+        )
 
     def get_state(self) -> WorkflowState:
         return self.store.load()
@@ -88,8 +191,43 @@ class FactoryEngine:
     def run(
         self, *, max_steps: int | None = None,
         allowed_source_steps: frozenset[int] | None = None,
+        contract: "BoundedRunContract | None" = None,
     ) -> WorkflowState:
+        """Advance the project.
+
+        ``contract`` is optional and additive: when given, it pins the revision
+        and cursor this invocation was authorised against, records the
+        authorisation in ``RUN_STARTED``, and makes the protected manifest part of
+        the pre-commit check.  Callers that pass nothing keep the old behaviour.
+        """
+
+        if contract is not None:
+            if contract.allowed_source_steps is not None:
+                # The contract is the authorisation; the explicit kwarg is the
+                # lower-level form of the same thing and must not disagree.
+                if (
+                    allowed_source_steps is not None
+                    and frozenset(allowed_source_steps) != contract.allowed_source_steps
+                ):
+                    raise BoundedRunError(
+                        "allowed_source_steps disagrees with the bounded run contract"
+                    )
+                allowed_source_steps = contract.allowed_source_steps
+            if contract.max_subtasks is not None:
+                if max_steps is not None and max_steps != contract.max_subtasks:
+                    raise BoundedRunError(
+                        "max_steps disagrees with the bounded run contract"
+                    )
+                max_steps = contract.max_subtasks
         state = self.store.load()
+        if contract is not None:
+            # Compare-and-swap first: a stale authorisation must be refused before
+            # any event is written, not discovered afterwards.
+            if int(state.revision) != int(contract.expected_revision):
+                raise BoundedRunError(
+                    f"expected revision {contract.expected_revision}, found {state.revision}"
+                )
+            check_cursor(state, contract.expected_cursor)
         if state.scheduler_generation not in {
             STEP_SCHEDULER_GENERATION,
             STAGE_SCHEDULER_GENERATION,
@@ -178,10 +316,43 @@ class FactoryEngine:
                 "runner_lease_id": lease,
                 "heartbeat_at": int(time.time()),
             },
-            payload={"lease_id": lease, "worker_pid": os.getpid(), "worker_identity": _process_identity(os.getpid())},
+            payload={
+                "lease_id": lease,
+                "worker_pid": os.getpid(),
+                "worker_identity": _process_identity(os.getpid()),
+                **(
+                    {"bounded_run": contract.event_payload()}
+                    if contract is not None
+                    else {}
+                ),
+            },
             expected_runner_pid=state.runner_pid,
             expected_runner_lease_id=state.runner_lease_id,
         )
+        # Set only for the duration of the advance loop: the pre-commit
+        # protection check reads it, and an early return above must not leave it
+        # behind for a later invocation.
+        self._bounded_contract = contract
+        try:
+            return self._advance_loop(
+                state,
+                lease=lease,
+                stage_mode=stage_mode,
+                max_steps=max_steps,
+                allowed_source_steps=allowed_source_steps,
+            )
+        finally:
+            self._bounded_contract = None
+
+    def _advance_loop(
+        self,
+        state: WorkflowState,
+        *,
+        lease: str,
+        stage_mode: bool,
+        max_steps: int | None,
+        allowed_source_steps: frozenset[int] | None,
+    ) -> WorkflowState:
         completed_this_run = 0
         while True:
             stage_task: ScheduledStageTask | None = None
@@ -1061,6 +1232,38 @@ class FactoryEngine:
                 dirty_changes=dirty_changes,
                 event_step=task.source_step_id,
             )
+
+        # S6: the contract's protected manifest is verified here, immediately
+        # before a successful checkpoint can commit, so a violation blocks the
+        # commit instead of being discovered by the caller afterwards.  The entry
+        # check answers a different question (was the state already as expected),
+        # so both are needed.
+        if self._bounded_contract is not None and self._bounded_contract.protected_manifest:
+            verification = verify_protected_manifest(
+                self.project_dir, self._bounded_contract.protected_manifest
+            )
+            if not verification.ok:
+                return self._stage_transition(
+                    state,
+                    lease,
+                    event_type="STEP_FAILED",
+                    changes={
+                        "status": WorkflowStatus.FAILED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "error_class": "PERMANENT_PROTECTED_MANIFEST_VIOLATED",
+                        "stage": task.stage_id,
+                        "subtask": task.subtask,
+                        "source_step": task.source_step_id,
+                        "protected_manifest": verification.to_dict(),
+                        "bounded_run": self._bounded_contract.event_payload(),
+                    },
+                    dirty_changes=dirty_changes,
+                    event_step=task.source_step_id,
+                )
 
         from .final_judge_projection import classify_delivery_report
 

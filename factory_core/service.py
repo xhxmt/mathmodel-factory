@@ -409,6 +409,22 @@ class FactoryService:
                 state = engine.archive_completed(self.root)
         return state
 
+    def advance_bounded(self, project: str | Path, contract):
+        """Run one authorised, bounded advance and return its structured outcome.
+
+        This is the supported entry point for what the hand-written ``work/*.py``
+        drivers used to do: advance under an explicit scope and protection
+        contract, and get back a report rather than writing a progress file.
+        """
+
+        from .bounded_run import BoundedRunContract
+
+        if not isinstance(contract, BoundedRunContract):
+            raise InvalidTransition("advance_bounded requires a BoundedRunContract")
+        engine = self.engine(project)
+        self._require_stage_runtime(engine.store.load())
+        return engine.run_bounded(contract)
+
     def pause(
         self,
         project: str | Path,
