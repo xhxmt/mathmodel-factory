@@ -782,6 +782,38 @@ artifact：`runtime_simplification_g45c_work_backup.json`。备份位于仓库�
 
 **此刻 `work/` 仍未被改动**（本轮只有读取与归档）。
 
+### 6.8 G4.5c 第 2 步：批次 1（`run_results_adoption.py`）已完成
+
+批次记录：`runtime_simplification_g45c_batches.json`。
+
+**为什么先选它**：它是 `registry_limit` 族里**唯一独立的**驱动（不被任何 patcher 引用），因此能在不触碰任何链的前提下，完整走通一次「改写 → 编译体检 → CI → 等价测试 → inventory 复查」的闭环。
+
+| | 值 |
+|---|---|
+| 原件 | 53 行 / 2755 B / sha256 `7ae5a2f8…c9faba` |
+| 迁移后 | 71 行 / sha256 `a22f310878e581f3…` |
+| 替换内容 | `assert status/active_step/last_completed_step` → `expected_cursor`（**并补上原件没有的 revision CAS**）；`SingleAttemptRegistry` + shim 自检 → `max_attempts_per_step={5:1}` / `max_reopens_per_step={5:0}`；自写 `protected_files.json` + `verify_sources()` → `protected_manifest`（**不再写盘**）；两次 `progress.json` → `BoundedRunResult`；无条件 `protected_files_unchanged=True` → `final_verification.ok`；`engine.run(max_steps=1)` → `service.advance_bounded`（受支持的服务入口） |
+
+**指标复查（单调下降，唯一上升项是预期替代物）**
+
+| 指标 | scrub | before | after | Δ |
+|---|---|---|---|---|
+| `.run(` | code only | 52 | 51 | −1 |
+| 精确工作流推进 | code only | 25 | 24 | −1 |
+| `max_steps=1` | code only | 23 | 22 | −1 |
+| registry shim | code only | 4 | 3 | −1 |
+| `progress.json` | no comments | 35 | 33 | −2 |
+| `protected_files` | no comments | 113 | 110 | −3 |
+| `advance_bounded` | code only | 0 | 1 | **+1（预期替代物）** |
+
+**编译体检**：`work/` 全部 212 个文件，改写前后 **0 语法错误**。
+
+**一处测量方法的修正（值得记住）**：第一次复查报出 `registry_shim` 未下降、`protected_files` 上升——纯粹因为**迁移文件自己的说明注释**里写了 `class SingleAttemptRegistry(...)` 与 `protected_files.json`。指标必须对注释免疫。但两套 scrub 不能一刀切：`.run(`/`max_attempts=` 属**代码形状**（注释与字符串都抹掉），而 `progress.json`/`protected_files` 是**文件名、只存在于字符串里**（只抹注释）。最终采用两套 scrub，并把 before 值从**归档里取回的原件**上重新测得，保证前后同口径。
+
+**判据 4 已满足**：`test_the_batch1_driver_shape_is_equivalent_after_migration` 与 `test_the_batch1_cursor_precondition_is_an_authorisation_not_an_assert` 已进入 CI，legacy 轨忠实复现了该驱动的 `SingleAttemptRegistry`。
+
+**尚未改动**：任何被 patcher 引用的驱动（8 条链）与任何 patcher。
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。

@@ -978,3 +978,104 @@ def test_a_checkpoint_rewritten_during_the_run_blocks_the_commit():
         checkpoint["source_step_id"] == 7
         for checkpoint in after["tables"]["stage_checkpoints"]
     )
+
+
+# ================= batch 1: the first production driver actually rewritten
+# work/run_results_adoption.py was migrated in place on 2026-10-07 (batch 1 of
+# G4.5c).  This pins the shape it was rewritten from, so the rewrite has a
+# version-controlled equivalence proof rather than only a backup.
+def _adoption_shim():
+    """The driver's SingleAttemptRegistry: step 5 capped at one attempt."""
+
+    base = canary.stage_registry()
+
+    class SingleAttemptRegistry(StepRegistry):
+        def get(self, step_id):
+            definition = base.get(step_id)
+            if step_id == 5:
+                return dataclasses.replace(definition, max_attempts=1, max_reopens=0)
+            return definition
+
+        def next_after(self, completed_step):
+            definition = base.next_after(completed_step)
+            return self.get(definition.id) if definition else None
+
+        def stage_subtask(self, key):
+            return base.stage_subtask(key)
+
+        def __iter__(self):
+            return (self.get(definition.id) for definition in base)
+
+    return SingleAttemptRegistry()
+
+
+def test_the_batch1_driver_shape_is_equivalent_after_migration():
+    """legacy: run(max_steps=1) + SingleAttemptRegistry.  migrated: ceilings."""
+
+    canary.build_seed(canary.stage_seed_at_step_5_with_protected_file)
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=_adoption_shim(),
+        sleeper=lambda _: None,
+    )
+    with canary.frozen_time():
+        legacy_state = engine.run(max_steps=1)
+    legacy = canary.collect(root)
+    legacy["returned_last_completed_step"] = legacy_state.last_completed_step
+
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    contract = BoundedRunContract(
+        expected_revision=state.revision,
+        expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id),
+        max_subtasks=1,
+        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+        max_attempts_per_step={5: 1},
+        max_reopens_per_step={5: 0},
+        protected_manifest=_protected(),
+        actor="operator",
+    )
+    with canary.frozen_time():
+        outcome = engine.run_bounded(contract)
+    migrated = canary.collect(root)
+    migrated["returned_last_completed_step"] = migrated["project_state"]["last_completed_step"]
+
+    assert migrated["returned_last_completed_step"] == legacy["returned_last_completed_step"]
+    assert outcome.completed_subtasks == 1
+
+    findings = canary.compare(legacy, migrated)
+    non_empty = {area: diff for area, diff in findings.items() if diff}
+    assert not non_empty, "\n".join(
+        f"{area}:\n  " + "\n  ".join(diff[:10]) for area, diff in non_empty.items()
+    )
+    assert outcome.entry_verification.ok and outcome.final_verification.ok
+    assert not any(p.endswith("progress.json") for p in migrated["files"])
+    assert not any(p.endswith("protected_files.json") for p in migrated["files"])
+
+
+def test_the_batch1_cursor_precondition_is_an_authorisation_not_an_assert():
+    """The driver asserted ready/active_step==5/last_completed_step==4.
+
+    As an authorisation the same expectation is refused with a readable reason,
+    and - unlike the assertion - it also pins the revision the driver never
+    checked.
+    """
+
+    from factory_core.bounded_run import BoundedRunError
+
+    canary.build_seed(canary.stage_seed_at_step_5_with_protected_file)
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+
+    with canary.frozen_time(), pytest.raises(BoundedRunError, match="cursor mismatch"):
+        engine.run_bounded(
+            BoundedRunContract(expected_revision=state.revision, expected_cursor=(9, "delivery", 16))
+        )

@@ -1,0 +1,98 @@
+{
+  "schema": "factory-runtime-simplification-g45c-batch-record-v1",
+  "backup_reference": "runtime_simplification_g45c_work_backup.json",
+  "note": "work/ is not under version control, so a batch cannot be shown as a diff in this repository.  What is recorded here is the auditable facts: the original digest (retrievable from the verified archive), the new digest, the measured metric movement, and the version-controlled test that carries the equivalence proof.",
+  "measurement_method": {
+    "code_shape_metrics": "comments AND string literals blanked in place (tokenize ranges; adjacency and line structure preserved) so a migration's own explanatory comment cannot inflate the metric that measures the migration",
+    "filename_metrics": "comments blanked, string literals kept - progress.json and protected_files live in strings, so blanking strings would erase the thing being counted",
+    "why_this_matters": "the first attempt at this measurement reported registry_shim unchanged and protected_files/refs up, purely because the migrated file's comment named the removed constructs",
+    "baseline": "the pre-rewrite tree, with the original file read back out of the verified archive"
+  },
+  "batches": [
+    {
+      "batch": 1,
+      "date_utc": "2026-10-07",
+      "family": "registry_limit",
+      "scope_reason": "chosen as the only standalone driver in its family: it is referenced by no patcher, so the batch exercises the full rewrite -> compile check -> CI -> equivalence -> inventory loop without touching a chain",
+      "driver": "run_results_adoption.py",
+      "original": {
+        "sha256": "7ae5a2f86b1b0a6c84de73050e1d17a20c1a4faa1781b6c714aa4b633cc9faba",
+        "bytes": 2755,
+        "lines": 53
+      },
+      "migrated": {
+        "sha256": "a22f310878e581f3bd77bd7bdad5d7ca31660ce131f325a389c5ec88ffd50620",
+        "bytes": 3142,
+        "lines": 71
+      },
+      "what_was_replaced": {
+        "assert status=='ready' and active_step==5 and last_completed_step==4": "expected_cursor (and a revision CAS the driver never had)",
+        "class SingleAttemptRegistry + assert registry.get(5).max_attempts==1": "max_attempts_per_step={5:1}, max_reopens_per_step={5:0}",
+        "(W/'protected_files.json').write_text + def verify_sources()": "protected_manifest, verified at entry and before commit; nothing written to disk",
+        "(W/'progress.json').write_text twice": "BoundedRunResult",
+        "report['protected_files_unchanged'] = True": "final_verification.ok, derived",
+        "engine.run(max_steps=1)": "service.advance_bounded (the supported service entry)"
+      },
+      "metric_delta": {
+        "naive_dot_run_files": {
+          "before": 52,
+          "after": 51,
+          "delta": -1
+        },
+        "precise_workflow_files": {
+          "before": 25,
+          "after": 24,
+          "delta": -1
+        },
+        "max_steps_1_files": {
+          "before": 23,
+          "after": 22,
+          "delta": -1
+        },
+        "registry_shim_files": {
+          "before": 4,
+          "after": 3,
+          "delta": -1
+        },
+        "progress_json_refs": {
+          "before": 35,
+          "after": 33,
+          "delta": -2
+        },
+        "protected_files_refs": {
+          "before": 113,
+          "after": 110,
+          "delta": -3
+        },
+        "run_bounded_refs": {
+          "before": 0,
+          "after": 0,
+          "delta": 0
+        },
+        "advance_bounded_refs": {
+          "before": 0,
+          "after": 1,
+          "delta": 1,
+          "expected": "the replacement entry point itself appears"
+        }
+      },
+      "metric_verdict": "every hand-rolled metric fell by exactly the expected amount; the only increase is advance_bounded, the intended replacement",
+      "compile_check": {
+        "files": 212,
+        "syntax_errors_before": 0,
+        "syntax_errors_after": 0
+      },
+      "equivalence_tests": [
+        "tests/test_gate_g4_driver_migration.py::test_the_batch1_driver_shape_is_equivalent_after_migration",
+        "tests/test_gate_g4_driver_migration.py::test_the_batch1_cursor_precondition_is_an_authorisation_not_an_assert"
+      ],
+      "deletion_criteria_status": {
+        "legacy_and_bounded_equivalent_in_ci": true,
+        "journal_and_manifest_carried_by_contract_fields": true,
+        "not_referenced_by_other_scripts": true,
+        "equivalence_test_in_ci": true,
+        "rotted_state_recorded": "the driver asserted active_step==5/last_completed_step==4 of a project now completed at revision 561"
+      }
+    }
+  ]
+}
