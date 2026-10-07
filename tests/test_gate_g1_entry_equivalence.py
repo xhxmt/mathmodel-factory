@@ -78,7 +78,8 @@ def _two_step_registry() -> StepRegistry:
 def _legacy_track(registry_factory) -> dict:
     root = canary.restore_seed()
     engine = FactoryEngine(root, store=canary.store_at(root), registry=registry_factory())
-    state = engine.run(max_steps=1)
+    with canary.frozen_time():
+        state = engine.run(max_steps=1)
     result = canary.collect(root)
     result["returned_status"] = str(getattr(state.status, "value", state.status))
     result["returned_revision"] = int(state.revision)
@@ -91,7 +92,8 @@ def _bounded_on(root: Path, registry_factory, *, expected_revision: int, **contr
 
     engine = FactoryEngine(root, store=canary.store_at(root), registry=registry_factory())
     contract = BoundedRunContract(expected_revision=expected_revision, **contract_kwargs)
-    outcome = engine.run_bounded(contract)
+    with canary.frozen_time():
+        outcome = engine.run_bounded(contract)
     result = canary.collect(root)
     result["returned_status"] = outcome.status
     result["returned_revision"] = outcome.end_revision
@@ -216,7 +218,7 @@ def test_smoke_stale_revision_is_refused_before_any_write():
 
     from factory_core.bounded_run import BoundedRunError
 
-    with pytest.raises(BoundedRunError):
+    with canary.frozen_time(), pytest.raises(BoundedRunError):
         engine.run_bounded(contract)
 
     after = canary.collect(root)
@@ -608,3 +610,40 @@ def test_stage_v1_dirty_obligations_are_carried_equivalently():
     )
 
     _assert_equivalent(legacy, bounded)
+
+
+# ==================================== the determinism the harness depends on
+def test_every_event_is_stamped_with_the_pinned_clock():
+    """No time source may bypass the harness, or equality becomes luck.
+
+    ``prompt_step.py`` builds its own ``SQLiteStateStore(context.project_dir)``
+    with the default clock, so without ``frozen_time()`` the PROMPT_INPUT_BOUND
+    event is stamped from the real wall clock.  Two tracks then agree only when
+    they happen to fall inside the same second - passing on an idle machine and
+    failing on a loaded one, which is the worst possible failure mode.
+
+    This asserts the property directly, so a future un-injected time source
+    (in this path or a new one) fails here - plainly - instead of surfacing as
+    an unexplained event_id mismatch somewhere else.
+    """
+
+    evidence = canary.build_seed(_stage_seed)
+    legacy = _legacy_track(_stage_registry)
+    bounded = _bounded_track(
+        _stage_registry,
+        expected_revision=evidence["project_state"]["revision"],
+        max_subtasks=1,
+        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+    )
+
+    for label, track in (("legacy", legacy), ("bounded", bounded)):
+        assert track["event_created_at"], label
+        off_clock = [
+            (event["revision"], event["type"])
+            for event, stamp in zip(track["events"], track["event_created_at"])
+            if stamp != canary.CONSTANT_EPOCH
+        ]
+        assert off_clock == [], f"{label} events stamped off the pinned clock: {off_clock}"
+
+    # and the two tracks agree on the stamps, which is what the comparison uses
+    assert legacy["event_created_at"] == bounded["event_created_at"]

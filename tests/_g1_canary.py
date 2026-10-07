@@ -43,6 +43,8 @@ import json
 import shutil
 import sqlite3
 import tempfile
+import time as _time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -59,6 +61,50 @@ def constant_clock() -> float:
     return CONSTANT_EPOCH
 
 
+@contextmanager
+def frozen_time():
+    """Pin the wall clock for the duration of one track.
+
+    The injected store clock is not the only time source.  ``prompt_step.py``
+    builds its own ``SQLiteStateStore(context.project_dir)`` (lines 130, 175,
+    288 and 384) with the *default* clock, so the ``PROMPT_INPUT_BOUND`` event's
+    ``created_at`` - and therefore its ``event_id``, which is hashed from it -
+    comes from the real wall clock.
+
+    That matters more than it sounds: the two tracks would then differ only when
+    they straddle a second boundary, so on a fast machine the difference hides
+    and on a loaded one it appears.  Freezing the clock makes the tracks
+    genuinely time-independent instead of accidentally equal, and it is what
+    lets ``heartbeat_at`` be compared exactly rather than normalised away.
+    """
+
+    import factory_core.storage as storage_module
+
+    original_time = _time.time
+    original_store = storage_module.SQLiteStateStore
+
+    class _FrozenStore(original_store):
+        """A store whose default clock is the constant, not ``time.time``.
+
+        ``SQLiteStateStore.__init__`` declares ``clock: ... = time.time``, so the
+        default is bound once at class-definition time.  Patching ``time.time``
+        alone therefore does **not** reach an internally constructed store - and
+        ``prompt_step.py`` re-imports ``SQLiteStateStore`` inside its methods
+        (lines 130, 175, 288, 384), so replacing the module attribute does.
+        """
+
+        def __init__(self, project_dir, *, clock=constant_clock):
+            super().__init__(project_dir, clock=clock)
+
+    _time.time = constant_clock
+    storage_module.SQLiteStateStore = _FrozenStore
+    try:
+        yield
+    finally:
+        _time.time = original_time
+        storage_module.SQLiteStateStore = original_store
+
+
 def store_at(root: Path) -> SQLiteStateStore:
     """A store pinned to the canonical clock."""
 
@@ -71,13 +117,15 @@ CANARY_BASE = Path(tempfile.gettempdir()) / "pf-g1-canary"
 CANARY_PROJECT = CANARY_BASE / "project"
 CANARY_SEED = CANARY_BASE / "seed"
 
-#: Values that cannot be pinned, so they are replaced before comparison.
-#: ``lease_id``/``runner_lease_id`` are ``uuid.uuid4().hex`` (engine.py:309) and
-#: ``heartbeat_at`` comes from two direct ``time.time()`` calls (engine.py:317,
-#: 504) rather than the injected store clock.  ``worker_pid``/``worker_identity``
-#: are deliberately *not* here: both tracks run in this one process, so they must
-#: match exactly.
-NORMALISED_KEYS = frozenset({"runner_lease_id", "lease_id", "heartbeat_at", "runner_pid"})
+#: The values that genuinely cannot be pinned, so they are replaced before
+#: comparison - and nothing else.  ``lease_id``/``runner_lease_id`` are
+#: ``uuid.uuid4().hex`` (engine.py:309) and ``runner_pid`` is the owning process.
+#:
+#: ``heartbeat_at`` is *not* here: it comes from two direct ``time.time()`` calls
+#: (engine.py:317, 504), and ``frozen_time()`` pins those, so it can be compared
+#: exactly.  ``worker_pid``/``worker_identity`` are absent for the same reason -
+#: both tracks run in this one process and must match.
+NORMALISED_KEYS = frozenset({"runner_lease_id", "lease_id", "runner_pid"})
 
 #: The one expected structural difference: the bounded track binds its
 #: authorisation into RUN_STARTED.
@@ -268,6 +316,9 @@ def collect(root: Path) -> dict[str, Any]:
             }
             for event in events
         ],
+        # exposed deliberately: a non-injected time source shows up here rather
+        # than only as a mystifying event_id mismatch
+        "event_created_at": [event.created_at for event in events],
         "tables": _normalise(tables),
         "aggregate_domain_root": store.aggregate_domain_root(),
         "files": file_manifest(root),
@@ -318,6 +369,7 @@ def compare(legacy: dict[str, Any], bounded: dict[str, Any]) -> dict[str, list[s
         "project_state": (legacy["project_state"], bounded["project_state"]),
         "replay_state": (legacy["replay_state"], bounded["replay_state"]),
         "state_hashes": (legacy["state_hashes"], bounded["state_hashes"]),
+        "event_created_at": (legacy["event_created_at"], bounded["event_created_at"]),
         "tables": (legacy["tables"], bounded["tables"]),
         "aggregate_domain_root": (
             legacy["aggregate_domain_root"],
