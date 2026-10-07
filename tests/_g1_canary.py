@@ -528,6 +528,28 @@ def paused_seed(root: Path) -> None:
     )
 
 
+def stage_seed_at_step_5(root: Path) -> None:
+    """A Stage v1 project whose next subtask is source step 5 (Stage 4, solve).
+
+    The state the first Gate 4 driver hard-coded as an assertion
+    (``status == 'ready' and active_step == 5``), expressed as a seed instead so
+    the migration can be proved against it after the original project completed
+    and the assertion rotted.
+    """
+
+    store_at(root).initialize(
+        project_id="g1-canary",
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+        last_completed_step=4,
+    )
+
+
+def stage_seed_at_step_5_with_protected_file(root: Path) -> None:
+    stage_seed_at_step_5(root)
+    (root / PROTECTED_FILE).write_text(PROTECTED_CONTENT, encoding="utf-8")
+
+
 def stage_seed_with_solver(root: Path) -> None:
     """A Stage project whose next Step has a durable local solver job.
 
