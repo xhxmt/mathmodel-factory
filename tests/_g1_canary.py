@@ -48,6 +48,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
+from factory_core.domain import ExecutionResult, ValidationResult, WorkflowStatus
+from factory_core.registry import StepRegistry
+from factory_core.stages import STAGE_SCHEDULER_GENERATION
+from factory_core.steps import build_native_registry
+from factory_core.steps.catalog import STEP_CONTRACTS
 from factory_core.storage import SQLiteStateStore
 from factory_core.workflow_events import ENVELOPE_KEY, replay_events, replay_state
 
@@ -423,3 +428,197 @@ def bounded_authorisation(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def fixture_digest(evidence: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical(evidence).encode("utf-8")).hexdigest()
+
+# =============================================== shared hermetic Stage fixtures
+#: The hermetic *factory root* (prompt templates), deliberately outside
+#: CANARY_BASE because build_seed() clears that directory.
+FACTORY_ROOT = Path(tempfile.gettempdir()) / "pf-g1-factory"
+
+#: The durable local solver job the solver scenario seeds.
+SOLVER_JOB_ID = "local_python_g1_canary_0001"
+
+
+def ensure_factory() -> Path:
+    """A factory root carrying the real prompt template names.
+
+    ``PromptRenderer`` resolves ``contract.prompt`` verbatim under
+    ``<root>/prompts``, so the fixture must use the real file names rather than
+    a synthesised scheme - otherwise it would exercise a template layout the
+    product does not have.
+    """
+
+    prompts = FACTORY_ROOT / "prompts"
+    prompts.mkdir(parents=True, exist_ok=True)
+    for contract in STEP_CONTRACTS:
+        if contract.prompt is not None:
+            (prompts / contract.prompt).write_text(
+                "hermetic prompt for __BASE_NAME__ at __PROJECT_PATH__\n",
+                encoding="utf-8",
+            )
+    return FACTORY_ROOT
+
+
+class HermeticDispatcher:
+    """Stands in for the model backend: deterministic, no external call.
+
+    ``on_execute`` lets a scenario act *during* the Step - which is how the
+    protected-manifest pre-commit check is reached without a real model.
+    """
+
+    def __init__(self, on_execute=None):
+        self._on_execute = on_execute
+        self.calls = 0
+
+    def execute(self, request, **kwargs):
+        self.calls += 1
+        if self._on_execute is not None:
+            self._on_execute(request)
+        return ExecutionResult.succeeded(model_id="hermetic")
+
+
+class HermeticValidator:
+    """Accepts whatever the hermetic dispatcher produced."""
+
+    def validate(self, context):
+        return ValidationResult.valid("artifact")
+
+
+def stage_registry(*, dispatcher=None) -> StepRegistry:
+    """The production registry shape, with the two side-effect seams replaced.
+
+    ``build_native_registry`` is the real builder: every Step contract, its real
+    prompt, the real Stage subtask routing and the real checkpoint machinery.
+    Only the dispatcher (no model calls) and the validator (no real artifact
+    parsing) are hermetic.  That is the point of the injection points - the
+    Stage paths the simplification touches stay on the execution path.
+    """
+
+    return build_native_registry(
+        ensure_factory(),
+        dispatcher=dispatcher or HermeticDispatcher(),
+        validator_factory=lambda _root, _step: HermeticValidator(),
+    )
+
+
+def stage_seed(root: Path) -> None:
+    """A fresh Stage v1 project, ready to advance its first subtask."""
+
+    store_at(root).initialize(
+        project_id="g1-canary",
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+
+
+def paused_seed(root: Path) -> None:
+    """A project that has genuinely stopped: no entry can advance it.
+
+    The honest construction for a repeated-boundary case, because a run that
+    *did* advance shifts the revision, and ``boundary_fingerprint`` covers the
+    revision - so two advancing runs can never report an unchanged boundary.
+    """
+
+    store = store_at(root)
+    state = store.initialize(project_id="g1-canary", project_type="modeling")
+    store.transition(
+        expected_revision=state.revision,
+        event_type="PAUSED",
+        changes={"status": WorkflowStatus.PAUSED},
+        payload={"reason": {"code": "PAUSED", "subcode": "OPERATOR", "actor": "operator"}},
+    )
+
+
+def stage_seed_with_solver(root: Path) -> None:
+    """A Stage project whose next Step has a durable local solver job.
+
+    ``last_completed_step=4`` puts the cursor on Stage 4 / subtask ``solve`` /
+    source step 5, and the job carries that same slot, so the run's dirty
+    classification consults a receipt with an owner to resolve rather than an
+    empty table.
+    """
+
+    store = store_at(root)
+    state = store.initialize(
+        project_id="g1-canary",
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+        last_completed_step=4,
+    )
+    store.create_solver_job(
+        expected_revision=state.revision,
+        record={
+            "job_id": SOLVER_JOB_ID,
+            "owner_stage": 4,
+            "owner_subtask": "solve",
+            "backend": "local",
+            "runtime": "python",
+            "script": "models/m1/05_solve.py",
+            "workdir": "models/m1",
+            "argv": [],
+            "max_time_seconds": 60,
+            "status": "completed",
+            "result_refs": {},
+        },
+    )
+
+    jobs = root / ".factory" / "solver_jobs"
+    jobs.mkdir(parents=True, exist_ok=True)
+    (jobs / f"{SOLVER_JOB_ID}.json").write_text(
+        '{"status": "completed", "returncode": 0, "finished_at": 1700000000}\n',
+        encoding="utf-8",
+    )
+    receipts = root / ".factory" / "solver_receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    (receipts / f"{SOLVER_JOB_ID}.completed.json").write_text(
+        '{"job_id": "%s", "schema_version": "factory-solver-receipt-v1"}\n' % SOLVER_JOB_ID,
+        encoding="utf-8",
+    )
+
+
+def stage_seed_with_dirty(root: Path) -> None:
+    """A Stage project carrying a live dirty obligation.
+
+    A clean one-subtask advance leaves the dirty tables empty, so comparing them
+    would prove nothing - the "equal because both are empty" failure mode.
+    """
+
+    from factory_core.current_dirty import classifier_contract_sha256
+
+    store = store_at(root)
+    state = store.initialize(
+        project_id="g1-canary",
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    store.transition(
+        expected_revision=state.revision,
+        event_type="MATH_CHANGED_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            {
+                "flag": "MATH_DIRTY",
+                "owner_stage": 8,
+                "cause_artifact": "canary_paper.tex",
+                "baseline_fingerprint": "a" * 64,
+                "current_fingerprint": "b" * 64,
+                "classifier_contract_sha256": classifier_contract_sha256(),
+            }
+        ],
+    )
+
+
+#: A file the protected-manifest scenarios guard.  Seeded at a known content so
+#: the contract can hold its digest and a run can then be made to break it.
+PROTECTED_FILE = "canary_protected.txt"
+PROTECTED_CONTENT = "sealed content\n"
+
+
+def stage_seed_with_protected_file(root: Path) -> None:
+    """A Stage v1 project plus a file a contract may declare protected."""
+
+    stage_seed(root)
+    (root / PROTECTED_FILE).write_text(PROTECTED_CONTENT, encoding="utf-8")
+
+
+def protected_digest(content: str = PROTECTED_CONTENT) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()

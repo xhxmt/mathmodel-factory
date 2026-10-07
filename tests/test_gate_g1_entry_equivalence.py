@@ -226,17 +226,7 @@ def test_smoke_stale_revision_is_refused_before_any_write():
     assert after["project_state"]["revision"] == before["project_state"]["revision"]
 
 
-def _paused_seed(root: Path) -> None:
-    """A project that has genuinely stopped: no entry can advance it."""
-
-    store = canary.store_at(root)
-    state = store.initialize(project_id="g1-canary", project_type="modeling")
-    store.transition(
-        expected_revision=state.revision,
-        event_type="PAUSED",
-        changes={"status": WorkflowStatus.PAUSED},
-        payload={"reason": {"code": "PAUSED", "subcode": "OPERATOR", "actor": "operator"}},
-    )
+_paused_seed = canary.paused_seed
 
 
 def test_smoke_repeated_boundary_reports_needs_inspection():
@@ -292,119 +282,14 @@ def test_smoke_both_entries_leave_a_paused_project_alone():
 
 
 # ============================================== Layer 2: the Stage v1 canary
-#: The hermetic *factory root* (prompt templates), deliberately outside
-#: CANARY_BASE because build_seed() clears that directory.
-FACTORY_ROOT = Path(tempfile.gettempdir()) / "pf-g1-factory"
-
-
-def _ensure_factory() -> Path:
-    """A factory root carrying the real prompt template names.
-
-    ``PromptRenderer`` resolves ``contract.prompt`` verbatim under
-    ``<root>/prompts``, so the fixture must use the real file names rather than
-    a synthesised scheme - otherwise it would exercise a template layout the
-    product does not have.
-    """
-
-    prompts = FACTORY_ROOT / "prompts"
-    prompts.mkdir(parents=True, exist_ok=True)
-    for contract in STEP_CONTRACTS:
-        if contract.prompt is not None:
-            (prompts / contract.prompt).write_text(
-                "hermetic prompt for __BASE_NAME__ at __PROJECT_PATH__\n",
-                encoding="utf-8",
-            )
-    return FACTORY_ROOT
-
-
-class _HermeticDispatcher:
-    """Stands in for the model backend: deterministic, no external call."""
-
-    @staticmethod
-    def execute(request, **_kwargs):
-        return ExecutionResult.succeeded(model_id="hermetic")
-
-
-class _HermeticValidator:
-    """Accepts whatever the hermetic dispatcher produced."""
-
-    def validate(self, context):
-        return ValidationResult.valid("artifact")
-
-
-def _stage_registry() -> StepRegistry:
-    """The production registry shape, with the two side-effect seams replaced.
-
-    ``build_native_registry`` is the real builder: every Step contract, its real
-    prompt, the real Stage subtask routing and the real checkpoint machinery.
-    Only the dispatcher (no model calls) and the validator (no real artifact
-    parsing) are hermetic.  That is the point of the injection points - the
-    Stage paths the simplification touches stay on the execution path.
-    """
-
-    return build_native_registry(
-        _ensure_factory(),
-        dispatcher=_HermeticDispatcher(),
-        validator_factory=lambda _root, _step: _HermeticValidator(),
-    )
-
-
-def _stage_seed(root: Path) -> None:
-    canary.store_at(root).initialize(
-        project_id="g1-canary",
-        project_type="modeling",
-        scheduler_generation=STAGE_SCHEDULER_GENERATION,
-    )
-
-
-def _stage_seed_with_solver(root: Path) -> None:
-    """A Stage project whose next Step has a durable local solver job.
-
-    ``last_completed_step=4`` puts the cursor on Stage 4 / subtask ``solve`` /
-    source step 5, and the job carries that same slot, so the run's dirty
-    classification actually consults a receipt with an owner to resolve rather
-    than an empty table.
-    """
-
-    store = canary.store_at(root)
-    state = store.initialize(
-        project_id="g1-canary",
-        project_type="modeling",
-        scheduler_generation=STAGE_SCHEDULER_GENERATION,
-        last_completed_step=4,
-    )
-    store.create_solver_job(
-        expected_revision=state.revision,
-        record={
-            "job_id": SOLVER_JOB_ID,
-            "owner_stage": 4,
-            "owner_subtask": "solve",
-            "backend": "local",
-            "runtime": "python",
-            "script": "models/m1/05_solve.py",
-            "workdir": "models/m1",
-            "argv": [],
-            "max_time_seconds": 60,
-            "status": "completed",
-            "result_refs": {},
-        },
-    )
-
-    jobs = root / ".factory" / "solver_jobs"
-    jobs.mkdir(parents=True, exist_ok=True)
-    (jobs / f"{SOLVER_JOB_ID}.json").write_text(
-        '{"status": "completed", "returncode": 0, "finished_at": 1700000000}\n',
-        encoding="utf-8",
-    )
-    receipts = root / ".factory" / "solver_receipts"
-    receipts.mkdir(parents=True, exist_ok=True)
-    (receipts / f"{SOLVER_JOB_ID}.completed.json").write_text(
-        '{"job_id": "%s", "schema_version": "factory-solver-receipt-v1"}\n' % SOLVER_JOB_ID,
-        encoding="utf-8",
-    )
-
-
-SOLVER_JOB_ID = "local_python_g1_canary_0001"
+# The hermetic Stage fixtures live in the shared harness so the Gate 2 failure
+# scenarios reuse exactly the same registry and seeds rather than a second copy
+# that could drift from this one.
+_stage_registry = canary.stage_registry
+_stage_seed = canary.stage_seed
+_stage_seed_with_solver = canary.stage_seed_with_solver
+_stage_seed_with_dirty = canary.stage_seed_with_dirty
+SOLVER_JOB_ID = canary.SOLVER_JOB_ID
 
 
 def test_stage_v1_advances_one_subtask_equivalently_on_both_tracks():
@@ -551,40 +436,6 @@ def test_the_comparator_is_silent_on_the_same_inputs():
 
 
 # ================================================ G1.4 with obligations present
-def _stage_seed_with_dirty(root: Path) -> None:
-    """A Stage project carrying a live dirty obligation.
-
-    A clean one-subtask advance leaves the dirty tables empty, so comparing them
-    would prove nothing - the "equal because both are empty" failure mode.  This
-    seed records a real obligation against a later stage's artifact, so the
-    comparison has rows on both sides.
-    """
-
-    from factory_core.current_dirty import classifier_contract_sha256
-
-    store = canary.store_at(root)
-    state = store.initialize(
-        project_id="g1-canary",
-        project_type="modeling",
-        scheduler_generation=STAGE_SCHEDULER_GENERATION,
-    )
-    store.transition(
-        expected_revision=state.revision,
-        event_type="MATH_CHANGED_FOR_TEST",
-        changes={},
-        dirty_changes=[
-            {
-                "flag": "MATH_DIRTY",
-                "owner_stage": 8,
-                "cause_artifact": "canary_paper.tex",
-                "baseline_fingerprint": "a" * 64,
-                "current_fingerprint": "b" * 64,
-                "classifier_contract_sha256": classifier_contract_sha256(),
-            }
-        ],
-    )
-
-
 def test_stage_v1_dirty_obligations_are_carried_equivalently():
     """G1.4 asserted on a non-empty obligation set."""
 
