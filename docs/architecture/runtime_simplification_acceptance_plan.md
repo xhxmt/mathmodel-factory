@@ -443,7 +443,7 @@ domain root
 | G3.1 读触发迁移 | `test_a_read_migrates_the_physical_schema_and_not_the_event_stream` | 实测三元组 `(user_version 0, schema_info 9→10, project_state 9→9)`；events 与 revision 不变；v10 侧表 `dirty_cause_classification` 由无变有 |
 | G3.1 各读路径 | `test_every_read_path_triggers_the_migration`（`load` / `status_snapshot` / `events` / `dirty_flags` 参数化） | **四条读路径都会迁移**——所以任何 Factory 读都不能用来检查原始 v9 库 |
 | G3.1 首次真实写入收敛 | `test_the_first_genuine_write_converges_the_state_generation` | 读之后 `project_state` 仍为 9；`transition()` 之后才变 10 |
-| **G3.2 I8-a** | `test_a_structurally_incomplete_v9_database_is_silently_promoted` | **特征化，未修**：删掉 v9 自带的 `stage_checkpoint_history` 后仍被静默重建并提升到 10。该测试当前**故意通过**，I8-a 落地时应被反向 |
+| **G3.2 I8-a** | `test_a_v9_database_missing_a_required_table_is_refused_before_any_ddl`、`test_a_v9_database_missing_a_required_column_is_refused_before_any_ddl`、`test_the_v9_contract_matches_what_the_old_code_actually_creates`、`test_the_real_v9_production_databases_pass_the_precheck` | **已实现并收口**，见 §5.3 |
 | **G3.3 I8-b** | `test_a_production_database_is_audited_read_only_and_migrated_in_a_copy`（6 库参数化） | 原始库只用原始 SQLite 读（sha256 / mtime / 三元组 / 事件数）；副本内迁移动；**复核原始库 sha256 与 mtime 均未变** |
 | **G3.4 downgrade** | `test_the_old_code_refuses_a_schema_10_database` + `test_the_old_interpreter_is_really_the_old_schema_version` | 旧代码报 `unsupported workflow schema 10`；DB sha256 未变。后者是**防空转守卫**：若旧解释器哪天解析成 10，首个测试即失效 |
 | **G3.5 v9→10→旧解释器** | `test_v9_migrated_then_opened_by_the_old_code_fails_closed` | 迁移后旧代码拒绝，且 sha256 与全部 raw 事实不变（fail-closed，零业务写） |
@@ -470,7 +470,59 @@ ReplayIntegrityError: event stream contains no versioned replay snapshot
 
 即：**恰好一个**生产库（296 条事件，0 条带 envelope）早于 versioned-event 代次，其余全部自 revision 1 起完整覆盖。因此 replay 与 aggregate-root 契约对该库**不适用**——这与"校验失败"是两回事，审计据**数据**分支而非一刀切：`enveloped == 0` 时断言 `event_replay_valid is False`（并确认流非空），`enveloped > 0` 时才断言其为 `True`。静默 skip 会把这一区分藏起来，故不采用。
 
-**影响**：该库的审计链无法被 replay 校验（设计使然）。它不应作为任何"旧事件可全量 replay"结论的证据——G3 阶段的 replay 结论本就只基于 A/B/R（三者均完整带 envelope）。## 6. Gate 4 — driver 退役
+**影响**：该库的审计链无法被 replay 校验（设计使然）。它不应作为任何"旧事件可全量 replay"结论的证据——G3 阶段的 replay 结论本就只基于 A/B/R（三者均完整带 envelope）。
+
+### 5.3 I8-a 已实现：v9 → v10 前置结构合同
+
+**范围**：只定义**一份** v9 → v10 的前置结构合同，不建立 v1–v10 的逐代 schema 清单。理由：`bde49712` 就是真实 v9 解释器，而 9 → 10 迁移按设计**只新增 `dirty_cause_classification` 这一侧表**，现有 v9 表结构不应被修补。因此当 `schema_info=9` 时，迁移前完全可以要求"这个库至少真的是一个完整 v9"。
+
+**产品代码 diff（窄）**：`domain.py` +4 行（`SchemaPreconditionError(FactoryCoreError)`）、`storage.py` +122 行（两份常量 + 只读 validator + 调用点）。
+
+```python
+if current not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
+    raise RuntimeError(f"unsupported workflow schema {current}; expected {SCHEMA_VERSION}")
+# I8-a: generation 9 is the one generation where the upgrade boundary is a
+# known, frozen contract, so a database claiming it is checked before any DDL
+# runs.  Earlier generations keep the historical path.
+if current == 9:
+    self._validate_v9_pre_upgrade_schema(connection)
+connection.execute("BEGIN IMMEDIATE")
+```
+
+`_validate_v9_pre_upgrade_schema` 只执行 `sqlite_master` 与 `PRAGMA table_info(...)`，**全程不写数据库**，且位于 `BEGIN IMMEDIATE` 之前——所以拒绝时文件保持字节不变。失败抛 `SchemaPreconditionError("schema 9 database is structurally incomplete: missing table X")`。
+
+**范围边界**：
+- `current == 9` → 走新预检；
+- `current < 9` → 保持历史迁移路径（早年代次本来就允许迁移器建表补列）；
+- `current == 10` → 继续走既有 `_validate_schema()`。
+
+**两层判据**：
+- 第一层：19 张表必须全部存在。该集合**由 `bde49712` 真实生成 fixture 的 `sqlite_master` 导出，不是凭记忆列**——覆盖你列的 16 张，另加 `project_config`、`dirty_classifier_rebases`、`prompt_attempt_inputs` 这三个由 helper 创建、参与既有 domain / receipt 语义的表。
+- 第二层：仅 5 张表的关键列（`project_state` / `events` / `stage_checkpoint_history` / `dirty_causes` / `solver_jobs`）。**不冻结**每个 TEXT/INTEGER 类型、索引 SQL 与 nullable 属性——I8-a 要防的是"声称自己可以从 v9 升级、实际已缺失关键历史结构"的库；逐字节比对 `sqlite_master.sql` 只会增加无谓的兼容性风险。
+
+**未采用**默认关闭的严格模式开关：这里涉及 schema 升级安全边界，默认关闭会让已确认的缺口继续存在，Gate 3 也就没有真正闭合。
+
+**G3.2 已反转**（这是本次可复查的 diff）：
+
+```text
+旧：删 stage_checkpoint_history → load() → 静默重建 → schema_info=10 → 测试记录 gap
+新：删 stage_checkpoint_history → load() → SchemaPreconditionError
+    → schema_info 仍为 9 → DB sha256 不变 → events/revision 不变 → 该表未被重建
+```
+
+**防漂移 oracle**：`test_the_v9_contract_matches_what_the_old_code_actually_creates` 用 `bde49712` 现场生成 v9 fixture，断言 `V9_REQUIRED_TABLES` 与其真实表集合**完全相等**、`V9_REQUIRED_COLUMNS` 为真实列的子集，并断言 validator 接受它。由于 `bde49712` 不可变，这等价于把合同钉在**唯一产生过 v9 的那个实现**上——因此无需维护任何"历史 schema 文档"，只维护当前唯一存在升级边界的一份 v9 precondition。
+
+**真实数据验证**：`test_the_real_v9_production_databases_pass_the_precheck` 对三个仍为 `phys=9` 的生产库（`cumcm_2020_a_codex_luna`、`stability_run2`、`stability_run3`）的**副本**直接调用 validator（只读、不迁移），全部通过；原始库仍只用原始 SQLite 读，事后复核 sha256 与 mtime 未变。
+
+### 5.4 三道"广泛删旧层"门槛已全部关闭
+
+| 门槛 | 状态 |
+|---|---|
+| I8-b（只读 migration / domain 漂移审计） | **已达成**（6 库审计 + 预版本化流的发现） |
+| 真实 `bde49712` downgrade 回归 | **已达成**（真实旧解释器 + 防空转守卫） |
+| I8-a（只读 v9 前置校验器） | **已达成**（§5.3） |
+
+Gate 3 关闭。**下一步：冻结最后一份 pre-driver 基线，然后进入 Gate 4（driver 退役）。**## 6. Gate 4 — driver 退役
 
 | 编号 | 动作 | 通过判据 |
 |---|---|---|
