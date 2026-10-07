@@ -291,6 +291,43 @@ bounded track: 0dbc5c3 + FactoryEngine.run_bounded(...)
 
 另有：`test_smoke_seed_is_reproducible_and_restorable`（种子可复现且字节级可恢复）、`test_smoke_stale_revision_is_refused_before_any_write`（CAS 零业务事件）、`test_smoke_repeated_boundary_reports_needs_inspection`（真实无进展 boundary → `NEEDS_INSPECTION`）、`test_smoke_both_entries_leave_a_paused_project_alone`（两入口对 boundary 判断一致），以及两项比较器对照。
 
+### 3.5 canary 发现的产品侧确定性缺口（本轮实测）
+
+**现象**：`test_stage_v1_dirty_obligations_are_carried_equivalently` 在单文件隔离时 13 passed，在**全量套件**下失败，差异只有一处：
+
+```
+events[5].payload._workflow.event_id: "dfa66316..." != "901a3198..."
+```
+
+**定位**：`event_id = hash({project_id, revision, event_type, created_at})`（`workflow_events.build_event_payload`）。payload 其余字段与 `state_hash_after` 全部相同，说明只有 `created_at` 不同。实测两条轨每条事件的 `created_at`：
+
+```
+[5] rev=6 PROMPT_INPUT_BOUND  created_at=1791367180   <- 真实 wall clock
+其余事件                       created_at=1700000000   <- 注入的恒定时钟
+```
+
+**根因**：`factory_core/steps/prompt_step.py` 在**方法内部**自行构造 store——
+
+```python
+from ..storage import SQLiteStateStore      # 第 286 行，方法内导入
+store = SQLiteStateStore(context.project_dir)   # 第 288 行，未传 clock
+```
+
+（同类构造另见第 130、175、384 行；`specialized.py:353,412`、`gates.py:116-167` 亦然。）于是 `PROMPT_INPUT_BOUND` 的 `created_at` 来自默认时钟 `time.time`，**绕过了引擎注入的 store 时钟**。
+
+**为什么此前没被发现**：两条轨若落在同一秒内，`int(time.time())` 相等 → 差异被掩盖。机器空载时通过、满载时失败——最坏的失败形态。
+
+**补充细节（Harness 实现要点）**：仅 monkeypatch `time.time` **无效**，因为 `SQLiteStateStore.__init__` 的 `clock: Callable = time.time` 是**定义时绑定的默认参数**，`self._clock` 已持有原函数对象。因此 `frozen_time()` 必须同时替换 `factory_core.storage.SQLiteStateStore` 为默认时钟为常量的子类；`prompt_step.py` 在方法内 `from ..storage import SQLiteStateStore`，所以替换模块属性可以生效。
+
+**处置**：
+
+1. harness 增加 `frozen_time()`，在两轨运行期间同时钉住 `time.time` 与内部 store 的默认时钟；
+2. 新增 `test_every_event_is_stamped_with_the_pinned_clock`，**逐事件断言 `created_at == CONSTANT_EPOCH`**，把「不允许存在未注入时间源」固化为回归护栏——未来任何新时间源会在此显式失败，而不是变成偶发；
+3. `collect()` 现在显式采集并比较 `event_created_at`；
+4. 由于时钟被真正钉住，`heartbeat_at` 从归一化清单**移出**，改为精确比较。归一化清单收窄为三项：`runner_lease_id` / `lease_id` / `runner_pid`。
+
+**未处置（需你决定）**：产品侧 `prompt_step.py` 等内部 store 构造不继承注入时钟，属**可测试性缺口**而非正确性缺陷（`created_at` 不在 `_REPLAY_FIELDS`，不影响 `state_hash` 与 replay 校验）。修它需要改产品代码，超出 Gate 1「不改基线」的范围，因此本轮只在 harness 侧中和，并记录在此。
+
 ---
 
 ## 4. Gate 2 — bounded contract 失败语义
