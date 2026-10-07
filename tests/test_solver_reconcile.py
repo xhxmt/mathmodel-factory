@@ -31,6 +31,8 @@ from factory_core.solver_reconcile import (
 )
 from factory_core.storage import SQLiteStateStore
 
+import _gate_projects
+
 _JOB = {
     "job_id": "job-under-test",
     "job_revision": 2,
@@ -258,15 +260,11 @@ def test_effective_state_serialises_without_dataclass_junk(tmp_path):
 
 
 # -------------------------------------------------- real-history regression
-_REAL = {
-    "A": "/home/tfisher/paper_factory/ongoing/cumcm_2026_a_fable_pro_20260910",
-    "B": "/home/tfisher/paper_factory/ongoing/cumcm_2025_b_gpt_formal_20260908t153023z",
-    "R": "/home/tfisher/paper_factory/ongoing/cumcm_2025_b_codex_luna_stability_20260817_run4",
-}
-
-
-@pytest.mark.parametrize("name,path", sorted(_REAL.items()))
-def test_real_history_regression(name, path):
+#: The rule-level coverage above is hermetic (``tmp_path``); this layer re-asserts
+#: the answers recorded on the machine that produced the projects, and skips where
+#: the trees are absent.  Point it elsewhere with ``PF_GATE_PROJECTS_ROOT``.
+@pytest.mark.parametrize("name", sorted(_gate_projects.PROJECTS))
+def test_real_history_regression(name):
     """The real projects must land on the answers established when S5 was built.
 
     A: two ownerless jobs whose relevance cannot be proven -> UNRESOLVED.
@@ -274,10 +272,7 @@ def test_real_history_regression(name, path):
     R: every job is behind the committed cursor -> no blocker.
     """
 
-    if not Path(path).is_dir():
-        pytest.skip("project tree unavailable")
-
-    states = evaluate_solver_jobs(path)
+    states = evaluate_solver_jobs(_gate_projects.require(name))
     blockers = [s for s in states if s.blocks_completion]
     assert states, name
 

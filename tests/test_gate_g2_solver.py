@@ -30,11 +30,13 @@ from factory_core.solver_reconcile import (
     evaluate_solver_jobs,
 )
 
-_REAL = {
-    "A": "/home/tfisher/paper_factory/ongoing/cumcm_2026_a_fable_pro_20260910",
-    "B": "/home/tfisher/paper_factory/ongoing/cumcm_2025_b_gpt_formal_20260908t153023z",
-    "R": "/home/tfisher/paper_factory/ongoing/cumcm_2025_b_codex_luna_stability_20260817_run4",
-}
+import _gate_projects
+
+#: Real-history projects, resolved through the shared locator so this layer can be
+#: pointed at another checkout with ``PF_GATE_PROJECTS_ROOT`` and skips cleanly when
+#: the trees are absent (the invariants are asserted hermetically in
+#: ``tests/test_gate_hermetic.py``).
+_REAL = {name: str(_gate_projects.real_path(name)) for name in _gate_projects.PROJECTS}
 
 _ANOMALIES = {
     "A": "local_python_20260910154426_560c138e",
@@ -43,10 +45,7 @@ _ANOMALIES = {
 
 
 def _requires(name: str) -> str:
-    path = _REAL[name]
-    if not Path(path).is_dir():
-        pytest.skip(f"project {name} unavailable")
-    return path
+    return str(_gate_projects.require(name))
 
 
 # --------------------------------------------------------- the two anomalies

@@ -30,22 +30,19 @@ from factory_core.workflow_events import (
     replay_state,
 )
 
-_REAL = {
-    "A": "/home/tfisher/paper_factory/ongoing/cumcm_2026_a_fable_pro_20260910",
-    "B": "/home/tfisher/paper_factory/ongoing/cumcm_2025_b_gpt_formal_20260908t153023z",
-    "R": "/home/tfisher/paper_factory/ongoing/cumcm_2025_b_codex_luna_stability_20260817_run4",
-}
+import _gate_projects
+
+_REAL = {name: str(_gate_projects.real_path(name)) for name in _gate_projects.PROJECTS}
 
 
 def _requires(name: str) -> Path:
-    path = Path(_REAL[name])
-    if not path.is_dir():
-        pytest.skip(f"project {name} unavailable")
-    return path
+    return _gate_projects.require(name)
 
 
 def _db(name: str) -> Path:
-    return _requires(name) / ".factory" / "state.db"
+    # goes through _requires so an absent project skips rather than stat()-ing
+    # a path that does not exist
+    return _gate_projects.require(name) / ".factory" / "state.db"
 
 
 @pytest.mark.parametrize("name", sorted(_REAL))
@@ -203,10 +200,25 @@ def test_gate_reading_real_history_mutates_nothing(name):
 
 
 def test_the_gate_actually_exercises_all_three_streams():
-    """Guard against the whole gate skipping if the trees move."""
+    """Real-history sanity check; non-vacuity itself lives in the hermetic layer.
 
-    available = [name for name in _REAL if Path(_REAL[name]).is_dir()]
-    assert available, "no real project available; the gate would pass vacuously"
-    for name in available:
-        store = SQLiteStateStore(_requires(name))
+    This test used to assert that at least one production tree was present, so it
+    failed on every machine without ``ongoing/`` - including CI runners - even
+    though the invariants were fully testable there.  The anti-vacuity duty moved
+    to ``tests/test_gate_hermetic.py``, which builds a hash-bearing stream of more
+    than 100 events from scratch and so can discharge it anywhere.
+
+    What remains here is the real-history demand, kept so a moved tree cannot
+    quietly degrade this layer into asserting nothing: when the projects *are*
+    present they must be large enough to be evidence.
+    """
+
+    names = _gate_projects.available()
+    if not names:
+        pytest.skip(
+            "no real project available; the gate invariants are asserted "
+            "hermetically in tests/test_gate_hermetic.py"
+        )
+    for name in names:
+        store = SQLiteStateStore(_gate_projects.require(name))
         assert len(store.events()) > 100, name
