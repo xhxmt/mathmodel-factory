@@ -274,6 +274,23 @@ bounded track: 0dbc5c3 + FactoryEngine.run_bounded(...)
 - `test_the_comparator_is_silent_on_the_same_inputs`：两次相同输入必须全等（replay hash 与 aggregate root 均可复现）。
 - 该负对照在本次实现中**确实抓到过一个真实缺陷**：`compare()` 原先只从右侧剥离 `bounded_run`，对两次 bounded 运行不对称，导致误报。已改为两侧同时剥离。
 
+**G1.1 – G1.10 逐条覆盖映射**（`tests/test_gate_g1_entry_equivalence.py`，13 项）
+
+| 判据 | 覆盖方式 | 非空转保证 |
+|---|---|---|
+| G1.1 双轨推进 | `test_smoke_step_scheduler_advances_one_step_on_both_tracks`、`test_stage_v1_advances_one_subtask_equivalently_on_both_tracks` | 断言 `completed_subtasks == 1`、`made_progress is True`、`last_completed_step == 0` |
+| G1.2 checkpoint | `test_stage_v1_checkpoint_and_cursor_are_identical`；闭包 `tables.stage_checkpoints` / `stage_checkpoint_history` | 种子无 checkpoint，运行后必须出现并逐行相等 |
+| G1.3 最终 cursor | 同上（`last_completed_stage` / `active_stage` / `active_subtask` / `source_step_id` 四元组） | 断言推进确实发生 |
+| G1.4 dirty obligations | `test_stage_v1_dirty_obligations_are_carried_equivalently` | **种子预置一条 `MATH_DIRTY`**，并断言种子与 legacy 轨均非空——避免"相等但都为空" |
+| G1.5 solver 归属 | `test_stage_v1_solver_ownership_is_carried_equivalently` | 预置同槽位 durable job，断言 `len(solver_jobs) == 1`、`owner_stage == 4`、`status == "completed"` 未被改写 |
+| G1.6 关键产物 fingerprint | 闭包 `files`（除 DB 及其 journal 外全部文件的 sha256） | 路径 canonical 化，两轨文件集必须逐一相等 |
+| G1.7 replay 自洽 | 闭包 `replayed_matches_state` / `event_replay_valid` / `state_hashes`；`test_the_comparator_is_silent_on_the_same_inputs` | `state_hashes` 逐条相等且可复现 |
+| G1.8 domain root | 闭包 `aggregate_domain_root`；`test_the_comparator_is_silent_on_the_same_inputs` | 两次相同运行必须给出相同 root |
+| G1.9 版本收敛观测 | **本层 N/A** | hermetic 种子由当前代码创建，两轨均为 schema 10，不存在 9→10 收敛。该观测需 v9 宿主（Gate 3 / `pf-canary-staging` 的 paused v9 样本） |
+| G1.10 身份记录 | `test_smoke_bounded_track_binds_its_authorisation`；`test_smoke_legacy_track_carries_no_authorisation` | 断言 `bounded_run_id == contract_sha256[:32]`、绑定出现在 `RUN_STARTED`、legacy 轨无该块 |
+
+另有：`test_smoke_seed_is_reproducible_and_restorable`（种子可复现且字节级可恢复）、`test_smoke_stale_revision_is_refused_before_any_write`（CAS 零业务事件）、`test_smoke_repeated_boundary_reports_needs_inspection`（真实无进展 boundary → `NEEDS_INSPECTION`）、`test_smoke_both_entries_leave_a_paused_project_alone`（两入口对 boundary 判断一致），以及两项比较器对照。
+
 ---
 
 ## 4. Gate 2 — bounded contract 失败语义

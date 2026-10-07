@@ -546,3 +546,65 @@ def test_the_comparator_is_silent_on_the_same_inputs():
     assert first["state_hashes"] == second["state_hashes"], "replay hashes must reproduce"
     assert first["aggregate_domain_root"] == second["aggregate_domain_root"]
     assert not {area: d for area, d in canary.compare(first, second).items() if d}
+
+
+# ================================================ G1.4 with obligations present
+def _stage_seed_with_dirty(root: Path) -> None:
+    """A Stage project carrying a live dirty obligation.
+
+    A clean one-subtask advance leaves the dirty tables empty, so comparing them
+    would prove nothing - the "equal because both are empty" failure mode.  This
+    seed records a real obligation against a later stage's artifact, so the
+    comparison has rows on both sides.
+    """
+
+    from factory_core.current_dirty import classifier_contract_sha256
+
+    store = canary.store_at(root)
+    state = store.initialize(
+        project_id="g1-canary",
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
+    store.transition(
+        expected_revision=state.revision,
+        event_type="MATH_CHANGED_FOR_TEST",
+        changes={},
+        dirty_changes=[
+            {
+                "flag": "MATH_DIRTY",
+                "owner_stage": 8,
+                "cause_artifact": "canary_paper.tex",
+                "baseline_fingerprint": "a" * 64,
+                "current_fingerprint": "b" * 64,
+                "classifier_contract_sha256": classifier_contract_sha256(),
+            }
+        ],
+    )
+
+
+def test_stage_v1_dirty_obligations_are_carried_equivalently():
+    """G1.4 asserted on a non-empty obligation set."""
+
+    evidence = canary.build_seed(_stage_seed_with_dirty)
+
+    # the seed itself must carry the obligation, or the test below is vacuous
+    assert evidence["counts"]["dirty_flags"] == 1
+
+    legacy = _legacy_track(_stage_registry)
+    bounded = _bounded_track(
+        _stage_registry,
+        expected_revision=evidence["project_state"]["revision"],
+        max_subtasks=1,
+        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+    )
+
+    assert len(legacy["tables"]["dirty_flags"]) >= 1, "the obligation vanished from the legacy track"
+    assert legacy["tables"]["dirty_flags"] == bounded["tables"]["dirty_flags"]
+    assert legacy["tables"]["dirty_causes"] == bounded["tables"]["dirty_causes"]
+    assert (
+        legacy["tables"]["dirty_flag_clear_receipts"]
+        == bounded["tables"]["dirty_flag_clear_receipts"]
+    )
+
+    _assert_equivalent(legacy, bounded)
