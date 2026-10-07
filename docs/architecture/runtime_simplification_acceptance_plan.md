@@ -537,29 +537,37 @@ artifact：`docs/architecture/runtime_simplification_driver_inventory_v2.json`�
 
 **此后引用任何数字都必须带范围与口径。**
 
-#### 52 个调用里只有 31 个是真实驱动
+#### 三次收敛：52 → 31 → **20 个真实驱动**
 
-| kind | 数量 | 说明 |
+| 步骤 | 数量 | 排除掉什么 |
 |---|---|---|
-| `driver` | **31** | 一次性驱动脚本 |
-| `backup_copy` | 15 | `.before.py` / `.original.py` 备份，不是驱动 |
-| `framework_variant` | 5 | `framework_before/` 下的、或 stem 以某 core 模块名结尾的 |
-| `framework_copy` | 1 | `validators.py` 的副本 |
+| 朴素 `\.run\(` 正则 | 52 | — |
+| 排除备份/框架文件 | 31 | 15 个 `.before.py`/`.original.py` 备份、5 个 framework variant、1 个 framework copy |
+| **精确工作流推进检测** | **25** | 再排除 **19 个 `subprocess.run(`**，以及 8 个 `self.run(`/`self.runner.run(`/`self.supervisor.run(`/`release_qN.run(` |
+| **真实驱动（去掉 5 个备份）** | **20** | — |
 
-把备份当驱动会**虚增 68%** 的工作量。退役备份与退役驱动是两件事。
+**朴素正则会误报 32 个文件中的 60%**（52 里只有 25 是真推进，20 是真驱动）。退役集合是 **20**，不是 52——前两个数字分别高估了 160% 和 55%。两个 false positive 来源都已分类记录：
+
+- `subprocess.run(` 类 19 个（如 `collect_status.py`：它只是轮询 solver 状态并打印 JSON，**根本不推进工作流**）；
+- 普通方法调用 8 个。
+
+| kind（精确集合内） | 数量 |
+|---|---|
+| `driver` | **20** |
+| `backup_copy` | 5 |
 
 #### 行为分族（仅 31 个真实驱动）
 
 | 族 | 数量 | 迁移规则 |
 |---|---|---|
-| `pure_advance_wrapper` | 8 | 机械替换：`run_bounded(expected_revision, expected_cursor, max_subtasks=1, run_policy=bounded_subtasks)`，无其他职责需承接 |
-| `advance_with_protection` | 8 | 追加 `protected_manifest`（摘要预先算好并冻进合同；**不再把 manifest 写盘**） |
-| `recovery_boundary` | 8 | 追加 `previous_boundary_fingerprint`；手写循环改为**若干次显式 bounded 调用**；无进展 → `NEEDS_INSPECTION` 取代自定义停止条件 |
+| `advance_with_protection` | 7 | 追加 `protected_manifest`（摘要预先算好并冻进合同；**不再把 manifest 写盘**） |
+| `recovery_boundary` | 6 | 追加 `previous_boundary_fingerprint`；手写循环改为**若干次显式 bounded 调用**；无进展 → `NEEDS_INSPECTION` 取代自定义停止条件 |
 | `registry_limit` | 4 | 追加 `max_attempts_per_step` / `max_reopens_per_step`（已由第一条链证明） |
-| `special_business` | 3 | 追加 `allowed_source_steps`；**最后迁移、逐条处理**——这三条带其他族没有的 step 作用域授权 |
-| `solver_evidence` | **0** | **真实驱动中为空**。其 2 个成员是 `specialized.before*.py` 框架备份 |
+| `special_business` | 3 | 追加 `allowed_source_steps`；**最后迁移、逐条处理** |
+| `pure_advance_wrapper` | **0** | **精确集合下为空**——其成员全是 `subprocess.run(` 误报 |
+| `solver_evidence` | **0** | **为空**——其成员是 `specialized.before*.py` 框架备份 |
 
-> **对原计划的修正**：你建议的"优先挑一条有 solver/evidence 行为的"在真实驱动里**不存在**。`work/` 下有 28 个文件触及 solver API，但只有 2 个是驱动、且那 2 个是备份。**该族不需要任何合同扩展。**
+> **对原计划的两处修正**：你建议优先挑"有 solver/evidence 行为的"和"结构最简单的"各一条。精确检测后 **`solver_evidence` 与 `pure_advance_wrapper` 两族皆空**——solver 工作全在框架代码与非驱动脚本里（28 个文件触及 solver API，2 个是驱动且都是备份），而"最简单"的那条原本是 `subprocess.run(` 误报。**两族都不需要任何合同扩展。**
 
 #### 删除判据（含实测结果）
 
@@ -621,6 +629,43 @@ migrated 轨：engine.run_bounded(...) + 合同的 max_attempts_per_step / max_r
 **结构化结果承接了驱动 journal 的全部信息**：`start_revision`/`end_revision`/`completed_subtasks`/`stop_reason`/`boundary_fingerprint`/两项 verification；且授权块（含 `max_attempts_per_step`、`max_reopens_per_step`）可从事件流回查。
 
 **驱动原有的腐烂已被证实**：它断言 A 处于 `ready / active_step=5`，而 A 已完成（revision 561）。迁移后的形式把同一期望表达为**授权**——陈旧的授权会被拒绝并给出理由，而不是在脚本里抛 `AssertionError`。测试同时断言了 revision 与 cursor 两种拒绝路径。
+
+### 6.5 G4.5b：代表链迁移结果与新发现的合同缺口
+
+`tests/test_gate_g4_driver_migration.py` 由 5 项扩展到 11 项。
+
+**已迁移并证明等价（2 条）**
+
+| 代表 | 族 | 结果 |
+|---|---|---|
+| `run_step12_m6.py`（21L，最小真实驱动） | `advance_with_protection` | 与 legacy 轨语义闭包无差异；`assert state.revision == 306` 这一**已腐烂**的断言被授权取代（实测拒绝并给出实际 revision，零事件写入） |
+| `continue_adopted_model.py`（48L） | `advance_with_protection` | 同上；其 `for step in (3,4)` 循环拆为两次独立 bounded 调用，均证明等价 |
+
+**新发现的合同缺口（需决策）：大文件按"身份"而非哈希保护**
+
+`run_final_workflow_resume.py`（40L，`recovery_boundary` 族）除 sha256 manifest 外，还校验一个大文件的**身份**：
+
+```python
+large = json.loads((W / 'large_manifest_identity.json').read_text())
+stat = (P / large['path']).stat()
+assert stat.st_size == large['size'] and stat.st_mtime_ns == large['mtime_ns'], 'large number manifest drift'
+```
+
+而 `BoundedRunContract.protected_manifest` 是 `Mapping[str, str]`（相对路径 → 小写 sha256），`verify_protected_manifest` 只做 sha256 比较。**合同无法表达"按 (size, mtime_ns) 身份保护大文件、不哈希"**——这不是疏漏，是该驱动为避免对超大文件做完整 sha256 而做的刻意取舍。
+
+按你的判断准则（"先判断它是否属于通用 runner 语义，再决定是否扩合同"），这**确实属于通用语义**：任何保护大产物的调用方都会遇到"哈希成本 vs 身份强度"的取舍。但扩合同需要设计决策，故**未擅自扩**，留待你定。三个方向：
+
+1. 合同新增第二类清单 `protected_identity: Mapping[str, {"size": int, "mtime_ns": int}]` 与 `protected_manifest` 并列、同等校验；
+2. 要求统一走 sha256（实现对但可能对超大文件变慢；语义更强）；
+3. 判定为调用方自身职责（合同只保护哈希可承受的产物），该驱动保留自有校验，接受**部分迁移**。
+
+**canary 保真边界（已记录）**
+
+`build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。
+
+**因此本轮未做**：`run_scope_alignment.py` + `activate_scope_alignment.py` 链。其 patcher 自身会写 `web/model_config.json`、`web/notes.json` 并改写驱动源码，属 `special_business` 量级，留到缺口决策之后。
+
+**合同表面是否已稳定**：`registry_limit`（第一条链）与 `advance_with_protection`（本轮两条）均已证明可表达且等价；`recovery_boundary` 卡在上述身份缺口；`special_business` 未开始。**尚不能宣布稳定**。
 
 ### 5.4 三道"广泛删旧层"门槛已全部关闭
 
