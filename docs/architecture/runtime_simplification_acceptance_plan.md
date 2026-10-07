@@ -164,6 +164,38 @@ CI 中因环境缺失而 skip 的 31 项分布：
 
 **已处置（方案 A）**：见 §7。
 
+### G0 结论：门禁达成（head `54be447`）
+
+| job | 结果 | 耗时 |
+|---|---|---|
+| `core` | **success** | 3m50s |
+| `web` | **success** | 52s |
+| `cloud` | **success** | 26s |
+| `latex` | **success** | 1m57s |
+
+CI 中 `core` 的 pytest 统计：
+
+| 提交 | 结果 |
+|---|---|
+| `1a04400`（gate 改动前） | `1 failed, 2381 passed, 33 skipped, 9 deselected` |
+| `54be447`（gate 改动后） | **`2392 passed, 34 skipped, 9 deselected` in 185.52s** |
+
+差值完全符合预期：`+11 passed` 为 `tests/test_gate_hermetic.py`；`+1 skipped` 为原空转保护由 fail 改为 skip；`0 failed`。
+
+CI 日志中可见的相应 skip 记录：
+
+```
+SKIPPED [1] tests/test_gate_g3_replay.py:218: no real project available;
+            the gate invariants are asserted hermetically in
+            tests/test_gate_hermetic.py
+SKIPPED [n] tests/_gate_projects.py:79: real project {A,B,R} unavailable at
+            ...; set PF_GATE_PROJECTS_ROOT to a directory containing ongoing/
+```
+
+同时反证：本机曾出现的 `test_normal_run_cli_entry` 失败在 CI 中并未复现（`core` 全绿），确认其为本地双检出环境的产物。
+
+**Gate 0 关闭。可进入 Gate 1。**
+
 ---
 
 ## 3. Gate 1 — 入口等价性
