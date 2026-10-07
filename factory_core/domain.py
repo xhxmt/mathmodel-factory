@@ -33,6 +33,10 @@ class RunnerLeaseLost(FactoryCoreError):
     """Raised when a worker no longer owns the project's runner lease."""
 
 
+class SchemaPreconditionError(FactoryCoreError):
+    """A database does not have the structure its recorded generation implies."""
+
+
 class MigrationConflict(FactoryCoreError):
     pass
 

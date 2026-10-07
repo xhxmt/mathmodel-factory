@@ -38,7 +38,12 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.storage import SQLiteStateStore
+from factory_core.domain import SchemaPreconditionError
+from factory_core.storage import (
+    V9_REQUIRED_COLUMNS,
+    V9_REQUIRED_TABLES,
+    SQLiteStateStore,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -295,34 +300,44 @@ def test_the_first_genuine_write_converges_the_state_generation(tmp_path):
     assert after["revision"] == state.revision + 1
 
 
-# ===================================================== G3.2 I8-a: the gap
-def test_a_structurally_incomplete_v9_database_is_silently_promoted(tmp_path):
-    """I8-a, characterised rather than fixed.
-
-    ``_validate_schema`` compares the version *number*; nothing verifies that a
-    database claiming to be v9 actually has the v9 shape.  So a v9 database
-    missing one of its own tables is not refused - the migration recreates the
-    table and promotes the generation, and the caller never learns that the
-    database it just opened was not what it claimed.
-
-    This test pins the current behaviour so the fix has a baseline to flip.  It
-    is deliberately written to pass today: when I8-a lands, this is the test that
-    must be inverted, and inverting it is the reviewable diff.
-    """
-
-    root = make_v9_project(tmp_path / "v9")
-    database = root / ".factory" / "state.db"
-
+# ===================================================== G3.2 I8-a: the contract
+def _drop_table(database: Path, table: str) -> None:
     connection = sqlite3.connect(database)
     try:
-        connection.execute("DROP TABLE stage_checkpoint_history")
+        connection.execute(f"DROP TABLE {table}")
         connection.commit()
     finally:
         connection.close()
 
-    assert raw_facts(database)["physical_schema"] == 9
 
-    SQLiteStateStore(root).load()
+def test_a_v9_database_missing_a_required_table_is_refused_before_any_ddl(tmp_path):
+    """I8-a.  This test is the inversion of the gap it used to characterise.
+
+    Before the pre-validator landed, a generation-9 database missing one of its
+    own tables was silently repaired and promoted: the migration recreated the
+    table, bumped ``schema_info``, and the caller never learned that the database
+    it opened was not what it claimed to be.
+
+    Now it is refused - and refused *before* ``BEGIN IMMEDIATE``, so the file is
+    byte-identical afterwards.  That ordering is the whole point: a refusal that
+    had already rewritten the schema would not be a refusal.
+    """
+
+    root = make_v9_project(tmp_path / "v9")
+    database = root / ".factory" / "state.db"
+    _drop_table(database, "stage_checkpoint_history")
+
+    before = raw_facts(database)
+    before_sha = sha256(database)
+    assert before["physical_schema"] == 9
+
+    with pytest.raises(SchemaPreconditionError, match="missing table stage_checkpoint_history"):
+        SQLiteStateStore(root).load()
+
+    after = raw_facts(database)
+    assert after["physical_schema"] == 9, "the generation must not be promoted"
+    assert after == before, "no raw fact may move"
+    assert sha256(database) == before_sha, "the refusal must not have written anything"
 
     connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     try:
@@ -331,12 +346,87 @@ def test_a_structurally_incomplete_v9_database_is_silently_promoted(tmp_path):
         )}
     finally:
         connection.close()
+    assert "stage_checkpoint_history" not in tables, "it must not be recreated"
 
-    assert raw_facts(database)["physical_schema"] == 10, "silently promoted"
-    assert "stage_checkpoint_history" in tables, "and the missing table was recreated"
 
-    # the gap: an incomplete v9 database was accepted as v9 without complaint.
-    # I8-a's read-only pre-validator must make the line above raise instead.
+def test_a_v9_database_missing_a_required_column_is_refused_before_any_ddl(tmp_path):
+    """The column half of the contract, asserted the same way."""
+
+    root = make_v9_project(tmp_path / "v9")
+    database = root / ".factory" / "state.db"
+
+    # SQLite cannot drop a column before 3.35, so rebuild the table without it
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("ALTER TABLE events RENAME TO events_old")
+        connection.execute(
+            "CREATE TABLE events (revision INTEGER PRIMARY KEY, type TEXT NOT NULL)"
+        )
+        connection.execute("DROP TABLE events_old")
+        connection.commit()
+    finally:
+        connection.close()
+
+    before = raw_facts(database)
+    before_sha = sha256(database)
+
+    with pytest.raises(SchemaPreconditionError, match="events is missing column"):
+        SQLiteStateStore(root).load()
+
+    assert raw_facts(database) == before
+    assert raw_facts(database)["physical_schema"] == 9
+    assert sha256(database) == before_sha
+
+
+# ============================== the baseline is pinned to the real v9 generator
+def test_the_v9_contract_matches_what_the_old_code_actually_creates(tmp_path):
+    """An oracle, so the contract cannot drift away from generation 9.
+
+    ``bde49712`` is the last generation-9 implementation and is immutable, so its
+    fixture is the authority on what generation 9 *is*.  The table set is pinned
+    exactly; the required columns are pinned as a subset, because the contract
+    deliberately does not freeze every declared type and index.
+
+    This is what removes the need to maintain per-generation schema documents:
+    there is one upgrade boundary that matters, and this test holds it against
+    the only implementation that ever produced it.
+    """
+
+    root = make_v9_project(tmp_path / "v9")
+    database = root / ".factory" / "state.db"
+    assert raw_facts(database)["physical_schema"] == 9
+
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        actual_tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        actual_columns = {
+            table: {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            for table in V9_REQUIRED_COLUMNS
+        }
+    finally:
+        connection.close()
+
+    assert set(V9_REQUIRED_TABLES) == actual_tables, (
+        "the v9 contract no longer matches what generation 9 actually created"
+    )
+    for table, required in V9_REQUIRED_COLUMNS.items():
+        assert required <= actual_columns[table], (
+            f"{table}: the contract requires columns generation 9 never had"
+        )
+
+    # and the validator accepts it, which is the property that matters
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        SQLiteStateStore._validate_v9_pre_upgrade_schema(connection)
+    finally:
+        connection.close()
 
 
 # ============================================== G3.4 the real downgrade barrier
@@ -498,4 +588,46 @@ def test_a_production_database_is_audited_read_only_and_migrated_in_a_copy(tmp_p
 
     # and the production database is byte- and mtime-identical
     assert sha256(database) == before_sha, f"{name}: the audit modified the database"
+    assert database.stat().st_mtime == before_mtime
+
+
+#: The production databases that are still generation 9 - the population the
+#: pre-validator can actually reject, and therefore the one worth checking.
+V9_PRODUCTION_DATABASES = {
+    name: path
+    for name, (path, physical) in PRODUCTION_DATABASES.items()
+    if physical == 9
+}
+
+
+@pytest.mark.parametrize("name", sorted(V9_PRODUCTION_DATABASES))
+def test_the_real_v9_production_databases_pass_the_precheck(tmp_path, name):
+    """A contract that rejected real data would be worse than no contract.
+
+    The validator is called directly on a *copy*, read-only and without
+    migrating, so a pass means the contract accepted these databases rather than
+    that some later step happened to succeed.  The originals are read with raw
+    SQLite only, and are re-verified byte- and mtime-identical afterwards -
+    because the pre-validator runs inside ``_upgrade_schema``, which means
+    pointing Factory code at an original would migrate it.
+    """
+
+    database = Path(V9_PRODUCTION_DATABASES[name])
+    if not database.is_file():
+        pytest.skip(f"production database unavailable: {database}")
+
+    before_sha = sha256(database)
+    before_mtime = database.stat().st_mtime
+    assert raw_facts(database)["physical_schema"] == 9
+
+    copy = tmp_path / "state.db"
+    shutil.copy2(database, copy)
+
+    connection = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+    try:
+        SQLiteStateStore._validate_v9_pre_upgrade_schema(connection)
+    finally:
+        connection.close()
+
+    assert sha256(database) == before_sha, f"{name}: the precheck touched the original"
     assert database.stat().st_mtime == before_mtime
