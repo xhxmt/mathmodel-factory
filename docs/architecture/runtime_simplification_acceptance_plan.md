@@ -667,6 +667,73 @@ protected_identity: Mapping[str, tuple[int, int]] | None = None   # 路径 -> (s
 - **弱保证已显式记录并被测试固化**：`(size, mtime_ns)` 相等**不证明内容相等**——测试 `test_identity_protection_is_weaker_than_hashing_and_says_so` 用"等长改写 + `os.utime` 复原 mtime"实际绕过了身份校验，而同一份文件被哈希校验发现。这正是调用方为不对超大文件做完整哈希而接受的取舍，也是两类检查必须分开报告的原因。
 - `recovery_boundary` 代表 `run_final_workflow_resume.py` 已证明等价：其 `verify()` 的两类检查都成为合同字段，`entry_verification.checked == 2`；`while 11 <= active_step <= 15` 循环变为调用方侧的连续 bounded 调用。
 
+### 6.6 `special_business` 族只读分析（最后一块拼图）
+
+3 条驱动同构：`run_native_after_runtime_recovery.py`(44L)、`run_native_final16_recovered.py`(40L)、`run_native_polish_and_final.py`(47L)。
+
+#### 逐项职责分类
+
+| 驱动里的东西 | 归属 |
+|---|---|
+| `allowed_source_steps=scope`（`polish`→`{14,15}`、`final`→`{16}`） | ✅ **合同已有** `allowed_source_steps` |
+| sha256 protected manifest | ✅ **合同已有** `protected_manifest` |
+| 大文件 `(size, mtime_ns)` 身份 | ✅ **合同已有** `protected_identity`（本轮新增） |
+| `assert state.revision == int(sys.argv[1])` | ✅ **合同已有** `expected_revision` |
+| `status=='ready' and active_step==16` | ✅ **合同已有** `expected_cursor` |
+| 无进展停止 `if state.revision == before.revision: break` | ✅ **合同已有** `made_progress` / `unchanged_boundary` |
+| 步数上限停止 `if polish and last_completed_step>=15: break` | ✅ 调用方读取返回的 cursor 即可 |
+| journal（`record` / `save`） | ✅ **合同已有** `BoundedRunResult` |
+| **`checkpoint13` 的 receipt 断言 + 运行后不变性** | ❌ **合同无法表达** ← 唯一缺口 |
+| `sys.executable == /usr/bin/python3`、`find_spec('openpyxl'|'numpy'|'scipy')` | 非 runner 语义（调用方环境前置检查） |
+| `sys.argv[2] in {'polish','final'}` 模式选择 | 调用方 |
+| `original_step13_judgment_before_final16.zip` 存在性 | 调用方 |
+
+#### 唯一缺口：已提交 checkpoint 的不变性
+
+驱动在运行前后各断言一次：
+
+```python
+checkpoint13 = next(c for c in store.stage_checkpoints() if c['source_step_id']==13)
+assert checkpoint13['completed_revision'] == 397
+assert checkpoint13['receipt']['result']['precheck_skipped'] is True
+assert checkpoint13['receipt']['result']['judge_completed'] is False
+# ... run ...
+assert next(c for c in store.stage_checkpoints() if c['source_step_id']==13) == checkpoint13
+```
+
+**这不是冗余检查**：引擎确实有合法的 checkpoint 失效机制（`STAGE_CHECKPOINT_INVALIDATED`，`engine.py:976` 与 `:1039`，当上游产物变化时触发）。驱动是在断言"本次调用不会让 step 13 的已提交结论被改写"。
+
+它与 `protected_manifest` **同类**（"不要动这些已提交的东西"），只是保护对象是 DB 行而非文件：
+
+| 方案 | 说明 |
+|---|---|
+| **A（推荐）** | 合同新增 `protected_checkpoints: frozenset[int] \| None`（source_step_id 集合）：入口快照、提交前比对，与 manifest 同一套两阶段设计。优点是**在 commit 之前阻断**，而驱动只能在事后发现 |
+| B | 不加合同字段：调用方用公开的 `store.stage_checkpoints()` 自行 before/after 比对。**事后**发现，提交已经发生 |
+| C | 判为超出有界合同范围，这 3 条仅在引擎获得显式"checkpoint 不可变"保证后才退役（另一场设计讨论） |
+
+选 A 的理由：合同存在的意义就是把**手写的事后校验**变成**引擎侧的提交前保护**；这正是同一形态，且 20 条真实驱动里有 3 条需要它。
+
+#### 链代表的结论：patcher 不是合同缺口
+
+`activate_scope_alignment.py`（75L，被 `run_scope_alignment.py` 引用）的职责：
+
+1. 备份并改写 `web/model_config.json`、`web/notes.json`（原子替换）
+2. 用候选替换 `quality_contract.json`
+3. 渲染 step-5 prompt 并断言其中含指定 note（**prompt 身份校验**）
+4. **读取 `run_bounded_evidence_repair.py` 的源码文本，做 3 处字符串替换后另存为 `run_scope_alignment.py`**（先 `compile()` 校验）
+5. 写 `activation_verification.json`
+
+第 4 步是关键证据：`run_scope_alignment.py` 与 `run_bounded_evidence_repair.py` **逐字节同构**，仅 `W` 路径与 manifest 推导范围不同。**patcher 存在的原因正是当时没有受支持的方式表达"在这个作用域、带这套保护地推进一次"**——而这恰好就是 `run_bounded()`。
+
+因此：
+
+- 第 1–3、5 步是**产物/合同供给**，不属于 runner 语义，也不进合同；它们会作为普通维护脚本继续存在（第 3 步属 S4.2 prompt identity 范畴，本就不在本 goal 范围内）；
+- **第 4 步随驱动层退役而消失**——它不是需要被合同承接的能力，而是**合同已经堵上的那个缺口的历史证据**。
+
+#### 结论
+
+`special_business` 族的合同需求收敛为**最多一个字段**（`protected_checkpoints`，方案 A）。若采纳，20 条真实驱动所代表的全部手写执行协议即全部归并完毕，可宣布**合同表面稳定**并进入 G4.5c 批量退役；若不采纳而选 B/C，则这 3 条驱动的退役判据须相应改写（B：接受事后校验；C：挂起）。
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。
