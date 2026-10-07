@@ -55,11 +55,17 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
+from .workflow_events import canonical_hash
+
 BOUNDED_RUN_SCHEMA = "factory-bounded-run-contract-v1"
 
 
 class BoundedRunError(ValueError):
     """The contract itself is unusable (bad scope, unsafe manifest, or stale CAS)."""
+
+
+class ProtectedCheckpointViolation(RuntimeError):
+    """A committed checkpoint the contract protects is missing or was rewritten."""
 
 
 class ProtectedManifestViolation(RuntimeError):
@@ -111,6 +117,14 @@ class BoundedRunContract:
     #: between hashing cost and identity strength, and that choice belongs in the
     #: authorisation rather than in a private check the engine cannot see.
     protected_identity: Mapping[str, tuple[int, int]] | None = None
+    #: Source step ids whose *committed* checkpoint must come out of the run
+    #: unchanged.  A committed checkpoint records what a step concluded, so a run
+    #: that silently rewrites one changes history the caller had already accepted.
+    #: The engine does have a legitimate invalidation path
+    #: (``STAGE_CHECKPOINT_INVALIDATED``, for changed upstream artifacts), which is
+    #: why this is a per-invocation authorisation rather than a standing rule.
+    #: Snapshotted at entry and compared again before a checkpoint may commit.
+    protected_checkpoints: frozenset[int] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.expected_revision, int) or self.expected_revision < 0:
@@ -175,6 +189,19 @@ class BoundedRunContract:
                 )
             identity[str(relative)] = (int(size), int(mtime_ns))
         object.__setattr__(self, "protected_identity", identity or None)
+        steps = self.protected_checkpoints
+        if steps is not None:
+            normalised = set()
+            for step in steps:
+                if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+                    raise BoundedRunError(
+                        "protected_checkpoints entries must be non-negative source "
+                        f"step ids, not {step!r}"
+                    )
+                normalised.add(int(step))
+            object.__setattr__(
+                self, "protected_checkpoints", frozenset(normalised) or None
+            )
         for relative in self.protected_manifest:
             _validate_project_relative(relative)
         for digest in self.protected_manifest.values():
@@ -214,6 +241,11 @@ class BoundedRunContract:
                     for path in sorted(self.protected_identity)
                 }
                 if self.protected_identity
+                else None
+            ),
+            "protected_checkpoints": (
+                sorted(self.protected_checkpoints)
+                if self.protected_checkpoints
                 else None
             ),
             "run_policy": self.run_policy,
@@ -260,6 +292,11 @@ class BoundedRunContract:
                     for path in sorted(self.protected_identity)
                 }
                 if self.protected_identity
+                else None
+            ),
+            "protected_checkpoints": (
+                sorted(self.protected_checkpoints)
+                if self.protected_checkpoints
                 else None
             ),
             "protected_manifest_sha256": hashlib.sha256(
@@ -425,6 +462,84 @@ class ProtectedVerification:
         return "; ".join(parts) or "ok"
 
 
+@dataclass(frozen=True)
+class CheckpointVerification:
+    """Whether the protected committed checkpoints are still the ones snapshotted.
+
+    Kept separate from :class:`ProtectedVerification` so a caller can tell a
+    protected *file* from a protected *committed checkpoint* - they fail for
+    different reasons and one is a database row.
+    """
+
+    ok: bool
+    checked: tuple[int, ...] = ()
+    changed: tuple[int, ...] = ()
+    missing: tuple[int, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "checked": list(self.checked),
+            "changed": list(self.changed),
+            "missing": list(self.missing),
+        }
+
+    def describe(self) -> str:
+        parts = []
+        if self.missing:
+            parts.append("missing: " + ", ".join(str(s) for s in self.missing[:4]))
+        if self.changed:
+            parts.append("changed: " + ", ".join(str(s) for s in self.changed[:4]))
+        return "; ".join(parts) or "ok"
+
+
+def _checkpoint_rows_by_step(rows) -> dict[int, str]:
+    """source step id -> a canonical digest of its committed checkpoint row."""
+
+    seen: dict[int, str] = {}
+    for row in rows:
+        step = row.get("source_step_id")
+        if step is None:
+            continue
+        seen[int(step)] = canonical_hash(dict(row))
+    return seen
+
+
+def snapshot_checkpoints(rows, source_steps) -> dict[int, str]:
+    """Freeze the protected checkpoints as they are now."""
+
+    steps = set(int(step) for step in (source_steps or ()))
+    if not steps:
+        return {}
+    return {
+        step: digest
+        for step, digest in _checkpoint_rows_by_step(rows).items()
+        if step in steps
+    }
+
+
+def verify_checkpoints(rows, snapshot: Mapping[int, str]) -> CheckpointVerification:
+    """Compare committed checkpoints against a snapshot taken at entry."""
+
+    snapshot = dict(snapshot or {})
+    if not snapshot:
+        return CheckpointVerification(ok=True)
+    current = _checkpoint_rows_by_step(rows)
+    # mutually exclusive: "present but different" versus "gone"
+    missing = sorted(step for step in snapshot if step not in current)
+    changed = sorted(
+        step
+        for step, digest in snapshot.items()
+        if step in current and current[step] != digest
+    )
+    return CheckpointVerification(
+        ok=not (changed or missing),
+        checked=tuple(sorted(snapshot)),
+        changed=tuple(changed),
+        missing=tuple(missing),
+    )
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -553,6 +668,12 @@ class BoundedRunResult:
     unchanged_boundary: bool
     entry_verification: ProtectedVerification
     final_verification: ProtectedVerification
+    entry_checkpoints: "CheckpointVerification" = field(
+        default_factory=lambda: CheckpointVerification(ok=True)
+    )
+    final_checkpoints: "CheckpointVerification" = field(
+        default_factory=lambda: CheckpointVerification(ok=True)
+    )
     blocked_reason: str = ""
     contract_violation: str | None = None
 
@@ -580,6 +701,8 @@ class BoundedRunResult:
             "contract_violation": self.contract_violation,
             "entry_verification": self.entry_verification.to_dict(),
             "final_verification": self.final_verification.to_dict(),
+            "entry_checkpoints": self.entry_checkpoints.to_dict(),
+            "final_checkpoints": self.final_checkpoints.to_dict(),
         }
 
 

@@ -23,9 +23,13 @@ from .bounded_run import (
     BoundedRunContract,
     BoundedRunError,
     BoundedRunResult,
+    CheckpointVerification,
+    ProtectedCheckpointViolation,
     ProtectedManifestViolation,
     ScopedRegistry,
     check_cursor,
+    snapshot_checkpoints,
+    verify_checkpoints,
     verify_protected_manifest,
 )
 from .dirty_classification import classification_sources, source_for
@@ -94,6 +98,9 @@ class FactoryEngine:
         #: Held on the instance so the pre-commit protection check can see it,
         #: and cleared in run()'s finally so it cannot leak between invocations.
         self._bounded_contract: BoundedRunContract | None = None
+        #: Committed checkpoints the running contract asked to protect, frozen
+        #: at entry so the pre-commit check can compare against them.
+        self._protected_checkpoints: dict[int, str] = {}
 
     def run_bounded(self, contract: BoundedRunContract) -> "BoundedRunResult":
         """Execute one authorised, bounded advance and report it structurally.
@@ -131,6 +138,30 @@ class FactoryEngine:
         else:
             entry = verify_protected_manifest(self.project_dir, {}, {})
 
+        # The protected checkpoints are snapshotted here and compared again after
+        # the run.  A caller naming a source step that has no committed checkpoint
+        # is refused up front: there would be nothing to protect.
+        checkpoint_snapshot: dict[int, str] = {}
+        entry_checkpoints = CheckpointVerification(ok=True)
+        if contract.protected_checkpoints:
+            checkpoint_snapshot = snapshot_checkpoints(
+                self.store.stage_checkpoints(), contract.protected_checkpoints
+            )
+            # snapshot_checkpoints only reports what exists, so the request itself
+            # has to be checked: naming a source step with no committed checkpoint
+            # would otherwise protect nothing while looking like protection.
+            absent = sorted(
+                set(contract.protected_checkpoints) - set(checkpoint_snapshot)
+            )
+            if absent:
+                raise ProtectedCheckpointViolation(
+                    "protected checkpoint is absent at entry for source step(s): "
+                    + ", ".join(str(step) for step in absent)
+                )
+            entry_checkpoints = verify_checkpoints(
+                self.store.stage_checkpoints(), checkpoint_snapshot
+            )
+
         start_revision = int(start_state.revision)
         previous_status = str(
             getattr(start_state.status, "value", start_state.status)
@@ -145,6 +176,11 @@ class FactoryEngine:
         completed = len(succeeded)
         final = verify_protected_manifest(
             self.project_dir, contract.protected_manifest, contract.protected_identity
+        )
+        final_checkpoints = (
+            verify_checkpoints(self.store.stage_checkpoints(), checkpoint_snapshot)
+            if checkpoint_snapshot
+            else CheckpointVerification(ok=True)
         )
         blocked_reason = ""
         pending = getattr(end_state, "pending_action", None)
@@ -162,6 +198,9 @@ class FactoryEngine:
         )
         if not final.ok:
             stop_reason = "PROTECTED_MANIFEST_VIOLATED"
+        elif not final_checkpoints.ok:
+            # a distinct reason: this is a database row, not a protected file
+            stop_reason = "PROTECTED_CHECKPOINT_VIOLATED"
         fingerprint = boundary_fingerprint(
             end_state, blocked_reason=blocked_reason
         )
@@ -188,6 +227,8 @@ class FactoryEngine:
             ),
             entry_verification=entry,
             final_verification=final,
+            entry_checkpoints=entry_checkpoints,
+            final_checkpoints=final_checkpoints,
             blocked_reason=blocked_reason,
             contract_violation=violation,
         )
@@ -340,6 +381,14 @@ class FactoryEngine:
         # protection check reads it, and an early return above must not leave it
         # behind for a later invocation.
         self._bounded_contract = contract
+        # Arm the protected-checkpoint snapshot for exactly this loop, next to the
+        # contract reference and cleared with it.  run_bounded() takes its own
+        # snapshot for the entry/final report; that is a pure read of the same
+        # rows and the CAS forbids an interleaving write.
+        if contract is not None and contract.protected_checkpoints:
+            self._protected_checkpoints = snapshot_checkpoints(
+                self.store.stage_checkpoints(), contract.protected_checkpoints
+            )
         # A contract may tighten the Step ceilings the engine reads from a
         # StepDefinition.  Swapping the registry for the loop is how that reaches
         # every resolution path; the swap is skipped entirely when the contract
@@ -359,6 +408,7 @@ class FactoryEngine:
             )
         finally:
             self.registry = previous_registry
+            self._protected_checkpoints = {}
             self._bounded_contract = None
 
     def _advance_loop(
@@ -1281,6 +1331,36 @@ class FactoryEngine:
                         "subtask": task.subtask,
                         "source_step": task.source_step_id,
                         "protected_manifest": verification.to_dict(),
+                        "bounded_run": self._bounded_contract.event_payload(),
+                    },
+                    dirty_changes=dirty_changes,
+                    event_step=task.source_step_id,
+                )
+
+        # A committed checkpoint the contract protects must survive this run.
+        # Checked here, before the success checkpoint commits, for the same reason
+        # the manifest is: afterwards is too late to prevent the rewrite.
+        if self._bounded_contract is not None and self._protected_checkpoints:
+            checkpoints = verify_checkpoints(
+                self.store.stage_checkpoints(), self._protected_checkpoints
+            )
+            if not checkpoints.ok:
+                return self._stage_transition(
+                    state,
+                    lease,
+                    event_type="STEP_FAILED",
+                    changes={
+                        "status": WorkflowStatus.FAILED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "error_class": "PERMANENT_PROTECTED_CHECKPOINT_VIOLATED",
+                        "stage": task.stage_id,
+                        "subtask": task.subtask,
+                        "source_step": task.source_step_id,
+                        "protected_checkpoints": checkpoints.to_dict(),
                         "bounded_run": self._bounded_contract.event_payload(),
                     },
                     dirty_changes=dirty_changes,

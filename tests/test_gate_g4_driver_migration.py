@@ -830,3 +830,151 @@ def test_the_recovery_drivers_loop_becomes_successive_bounded_calls():
     # the second continues from where the first stopped, so it also advances
     assert steps[1] == (1, True)
     assert all(advanced for _, advanced in steps)
+
+
+# ============== the committed-checkpoint protection the last family needs
+def test_protected_checkpoints_are_validated_at_construction():
+    from factory_core.bounded_run import BoundedRunError
+
+    for bad in ({-1}, {True}, {"13"}, {None}):
+        with pytest.raises(BoundedRunError):
+            BoundedRunContract(expected_revision=1, protected_checkpoints=bad)
+    assert BoundedRunContract(
+        expected_revision=1, protected_checkpoints=set()
+    ).protected_checkpoints is None, "an empty set is absent"
+
+
+def test_protected_checkpoints_are_part_of_the_contract_identity():
+    base = BoundedRunContract(expected_revision=1)
+    protected = BoundedRunContract(expected_revision=1, protected_checkpoints={13, 14})
+    assert base.contract_sha256 != protected.contract_sha256
+    assert protected.event_payload()["protected_checkpoints"] == [13, 14]
+    assert base.event_payload()["protected_checkpoints"] is None
+
+
+def test_protecting_a_checkpoint_that_does_not_exist_is_refused_at_entry():
+    """There would be nothing to protect, so the authorisation is unusable."""
+
+    from factory_core.bounded_run import ProtectedCheckpointViolation
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    before = canary.collect(root)
+    state = canary.store_at(root).load()
+
+    with canary.frozen_time(), pytest.raises(
+        ProtectedCheckpointViolation, match="absent at entry"
+    ):
+        engine.run_bounded(
+            BoundedRunContract(
+                expected_revision=state.revision, protected_checkpoints={13}
+            )
+        )
+
+    assert canary.collect(root)["events"] == before["events"]
+
+
+def test_a_run_that_leaves_the_protected_checkpoint_alone_passes():
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+
+    with canary.frozen_time():
+        outcome = engine.run_bounded(
+            BoundedRunContract(
+                expected_revision=state.revision,
+                max_subtasks=1,
+                run_policy=RunPolicy.BOUNDED_SUBTASKS,
+                protected_checkpoints={4},
+            )
+        )
+
+    assert outcome.entry_checkpoints.to_dict() == {
+        "ok": True, "checked": [4], "changed": [], "missing": []
+    }
+    assert outcome.final_checkpoints.ok is True
+    assert outcome.stop_reason != "PROTECTED_CHECKPOINT_VIOLATED"
+
+
+def test_a_checkpoint_rewritten_during_the_run_blocks_the_commit():
+    """The last family's guard, moved from after the run to before the commit.
+
+    The three special_business drivers snapshotted step 13's checkpoint and
+    asserted it was unchanged afterwards.  Here the change happens *during* the
+    step, which is the window a caller-side check cannot cover: the engine sees
+    it before the success checkpoint commits and refuses.
+    """
+
+    import sqlite3
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+
+    def rewrite_the_checkpoint(_request):
+        connection = sqlite3.connect(root / ".factory" / "state.db")
+        try:
+            connection.execute(
+                "UPDATE stage_checkpoints SET receipt_json=? WHERE source_step_id=4",
+                ('{"tampered": true}',),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    engine = FactoryEngine(
+        root,
+        store=canary.store_at(root),
+        registry=canary.stage_registry(
+            dispatcher=canary.HermeticDispatcher(on_execute=rewrite_the_checkpoint)
+        ),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+
+    with canary.frozen_time():
+        outcome = engine.run_bounded(
+            BoundedRunContract(
+                expected_revision=state.revision,
+                max_subtasks=1,
+                run_policy=RunPolicy.BOUNDED_SUBTASKS,
+                protected_checkpoints={4},
+            )
+        )
+
+    # 1. the engine blocked it, and named the checkpoint condition
+    failures = [
+        event
+        for event in canary.collect(root)["events"]
+        if event["type"] == "STEP_FAILED"
+    ]
+    assert failures
+    assert "PERMANENT_PROTECTED_CHECKPOINT_VIOLATED" in [
+        event["payload"].get("error_class") for event in failures
+    ]
+
+    # 2. the structured result agrees, and names the step
+    assert outcome.stop_reason == "PROTECTED_CHECKPOINT_VIOLATED"
+    assert outcome.final_checkpoints.ok is False
+    assert outcome.final_checkpoints.changed == (4,)
+    assert outcome.entry_checkpoints.ok is True, "it was intact at entry"
+
+    # 3. no success checkpoint was committed for the running subtask
+    after = canary.collect(root)
+    assert not any(
+        checkpoint["source_step_id"] == 7
+        for checkpoint in after["tables"]["stage_checkpoints"]
+    )
