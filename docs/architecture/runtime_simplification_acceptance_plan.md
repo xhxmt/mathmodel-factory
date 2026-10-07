@@ -532,6 +532,30 @@ Gate 3 关闭。**下一步：冻结最后一份 pre-driver 基线，然后进�
 | G4.4 | 全量回归 | CI 等价口径 0 failed；`git diff --check` 干净 |
 | G4.5 | 批量迁移 | 每批重复 G4.3–G4.4 |
 
+### 6.1 pre-driver 基线已冻结
+
+`docs/architecture/runtime_simplification_pre_driver_baseline.json`（head `15f24bd`，Gate 0–3 全绿）。
+
+**driver 普查实测**（A 的 `work/`，引用口径；S6 数字并列以便对照）：
+
+| 指标 | S6 记录 | 本次实测 |
+|---|---|---|
+| `.run(` | 52 | **52** |
+| `max_steps=1` | 24 | **23** |
+| 硬编码 `assert revision == N` | 20 | **44** |
+| `protected_files` 引用 | 47 | **54** |
+| `progress.json` 引用 | 29 | **29** |
+| `protected_files.json`（磁盘） | — | 14 |
+| `progress.json`（磁盘） | — | 16 |
+| `run_bounded` 引用 | 0 | **2** |
+| `advance_bounded` 引用 | 0 | 0 |
+
+`max_steps=1` 24→23、硬编码 assert 20→44、`protected_files` 47→54——**S6 的数字不能当删除清单**，以本表为准。
+
+**第一条 driver 链已选定**并做了覆盖分析：`work/run_bounded_evidence_repair.py`（74 行）。它同时体现全部病态，且**名字已声称 `run_bounded` 而正文仍调用 `engine.run(max_steps=1)`**。
+
+**已发现的合同覆盖缺口**（需决策，见 §6.2）。
+
 **普查基线必须重测**，不能用 S6 文档里的数字。A/work 实测为 128 条目 / 979 MB（与 S6 一致），但按引用口径重测：`.run(` 52、`progress.json` 29、`max_steps=1` 23（S6 写 24）、`protected_files` 54（S6 写 47）、硬编码 `assert revision == N` 44（S6 写 20，差异最大，疑似正则/范围不同）。S6 的数是引用口径而非文件口径。
 
 ---
@@ -609,6 +633,20 @@ Gate 3  版本与历史兼容（I8-a / I8-b / bde49712 downgrade / v9 read migra
   ↓
 Gate 4  driver 退役（先 1 条链，再批量）
 ```
+
+### 6.2 Gate 4 已发现的合同覆盖缺口
+
+第一条链的驱动用 `class BoundedRegistry(StepRegistry)` 覆写 `get()`，把 source step 5 的 `max_attempts` 压成 `before.attempt + 1`、`max_reopens=0`。
+
+而 `BoundedRunContract` 的字段只有 `expected_revision` / `expected_cursor` / `allowed_source_steps` / `max_subtasks` / `protected_manifest` / `run_policy` / `actor` / `previous_boundary_fingerprint`——**没有 attempt 上限**。`max_attempts` 来自 `StepDefinition`（`engine.py:393`、`engine.py:766`）。
+
+因此对这一条链而言，**纯替换会静默改变行为**：step 5 会按 registry 的真实 attempt 预算运行，而不是 `attempt + 1`。这正是"统一改成 `run_bounded()`"不能一概而论的地方，必须先决策。三个方向：
+
+1. 给合同加 attempt / scope 上限（产品改动）；
+2. 保留 registry shim，接受**部分迁移**；
+3. 重新定性：把该 shim 读作对引擎重试策略的绕行，改为修引擎而非搬进合同。
+
+**另外**：该驱动的硬编码前置条件已经腐烂——它断言 A 处于 `status=ready, active_step=5`，而 A 现在是 `completed`（revision 561）。即驱动本身**早已不可运行**，这正是 S6 描述的"hard-coded revisions rot silently"。
 
 **暂缓**：生产级 `factory rewind`；`work/*.py` 的批量删除。
 
