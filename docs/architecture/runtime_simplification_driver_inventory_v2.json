@@ -1,0 +1,480 @@
+{
+  "schema": "factory-runtime-simplification-driver-inventory-v2",
+  "project": "cumcm_2026_a_fable_pro_20260910",
+  "counting_method": "files = counts once per file; references = total matches.  Both scopes reported.",
+  "why_two_scopes": "The S6 record and the first census disagreed (revision asserts 20 vs 44, protected_files 47 vs 54) because they counted different populations: every python file under work/, versus only the files that call .run(.  Both scopes are recorded below so neither number can be quoted without its scope.",
+  "scope_a_every_python_file_under_work": {
+    "files_scanned": 212,
+    "features": {
+      "run_call": {
+        "files": 52,
+        "references": 65
+      },
+      "max_steps_1": {
+        "files": 23,
+        "references": 23
+      },
+      "max_steps_other": {
+        "files": 0,
+        "references": 0
+      },
+      "revision_assert": {
+        "files": 48,
+        "references": 52
+      },
+      "cursor_assert": {
+        "files": 45,
+        "references": 50
+      },
+      "status_assert": {
+        "files": 67,
+        "references": 80
+      },
+      "registry_shim": {
+        "files": 4,
+        "references": 13
+      },
+      "registry_subclass": {
+        "files": 4,
+        "references": 4
+      },
+      "attempt_reopen_cap": {
+        "files": 4,
+        "references": 9
+      },
+      "protected_manifest": {
+        "files": 54,
+        "references": 113
+      },
+      "verify_def": {
+        "files": 22,
+        "references": 22
+      },
+      "hash_verify": {
+        "files": 147,
+        "references": 365
+      },
+      "progress_journal": {
+        "files": 29,
+        "references": 35
+      },
+      "save_def": {
+        "files": 23,
+        "references": 23
+      },
+      "allowed_steps": {
+        "files": 3,
+        "references": 5
+      },
+      "multi_run_loop": {
+        "files": 38,
+        "references": 86
+      },
+      "while_loop": {
+        "files": 41,
+        "references": 67
+      },
+      "break_stmt": {
+        "files": 15,
+        "references": 30
+      },
+      "solver_op": {
+        "files": 28,
+        "references": 40
+      },
+      "artifact_mutation": {
+        "files": 142,
+        "references": 358
+      },
+      "human_gate": {
+        "files": 21,
+        "references": 121
+      },
+      "recover_api": {
+        "files": 7,
+        "references": 17
+      },
+      "try_block": {
+        "files": 53,
+        "references": 211
+      },
+      "direct_store_write": {
+        "files": 5,
+        "references": 5
+      },
+      "engine_construct": {
+        "files": 31,
+        "references": 31
+      },
+      "bounded_ref": {
+        "files": 2,
+        "references": 2
+      },
+      "env_hack": {
+        "files": 111,
+        "references": 151
+      },
+      "monkeypatch_registry": {
+        "files": 6,
+        "references": 6
+      }
+    }
+  },
+  "scope_b_drivers_that_call_run": {
+    "files": 52,
+    "features": {
+      "run_call": {
+        "files": 52,
+        "references": 65
+      },
+      "max_steps_1": {
+        "files": 23,
+        "references": 23
+      },
+      "max_steps_other": {
+        "files": 0,
+        "references": 0
+      },
+      "revision_assert": {
+        "files": 12,
+        "references": 12
+      },
+      "cursor_assert": {
+        "files": 21,
+        "references": 24
+      },
+      "status_assert": {
+        "files": 22,
+        "references": 28
+      },
+      "registry_shim": {
+        "files": 4,
+        "references": 13
+      },
+      "registry_subclass": {
+        "files": 4,
+        "references": 4
+      },
+      "attempt_reopen_cap": {
+        "files": 4,
+        "references": 9
+      },
+      "protected_manifest": {
+        "files": 22,
+        "references": 44
+      },
+      "verify_def": {
+        "files": 21,
+        "references": 21
+      },
+      "hash_verify": {
+        "files": 40,
+        "references": 82
+      },
+      "progress_journal": {
+        "files": 23,
+        "references": 28
+      },
+      "save_def": {
+        "files": 17,
+        "references": 17
+      },
+      "allowed_steps": {
+        "files": 3,
+        "references": 5
+      },
+      "multi_run_loop": {
+        "files": 7,
+        "references": 15
+      },
+      "while_loop": {
+        "files": 14,
+        "references": 28
+      },
+      "break_stmt": {
+        "files": 13,
+        "references": 26
+      },
+      "solver_op": {
+        "files": 2,
+        "references": 2
+      },
+      "artifact_mutation": {
+        "files": 40,
+        "references": 71
+      },
+      "human_gate": {
+        "files": 8,
+        "references": 82
+      },
+      "recover_api": {
+        "files": 4,
+        "references": 14
+      },
+      "try_block": {
+        "files": 25,
+        "references": 107
+      },
+      "direct_store_write": {
+        "files": 2,
+        "references": 2
+      },
+      "engine_construct": {
+        "files": 24,
+        "references": 24
+      },
+      "bounded_ref": {
+        "files": 0,
+        "references": 0
+      },
+      "env_hack": {
+        "files": 30,
+        "references": 61
+      },
+      "monkeypatch_registry": {
+        "files": 6,
+        "references": 6
+      }
+    }
+  },
+  "kind_classification": {
+    "note": "52 files call .run(, but only 31 are one-off drivers.  The rest are backup copies (.before.py / .original.py), framework copies, or framework variants living under framework_before/.  Retiring a backup is not the same act as retiring a driver, and counting them together would have inflated the work by 68%.",
+    "driver": 31,
+    "framework_variant": 5,
+    "framework_copy": 1,
+    "backup_copy": 15
+  },
+  "families_real_drivers_only": {
+    "classification_rule": [
+      "solver_evidence",
+      "registry_limit",
+      "special_business",
+      "recovery_boundary",
+      "advance_with_protection",
+      "pure_advance_wrapper",
+      "-- first match wins, in this order"
+    ],
+    "counts_over_all_52": {
+      "advance_with_protection": 8,
+      "pure_advance_wrapper": 18,
+      "recovery_boundary": 11,
+      "registry_limit": 4,
+      "solver_evidence": 2,
+      "special_business": 9
+    },
+    "counts_real_drivers_only": {
+      "advance_with_protection": 8,
+      "pure_advance_wrapper": 8,
+      "recovery_boundary": 8,
+      "registry_limit": 4,
+      "special_business": 3
+    },
+    "members_real_drivers_only": {
+      "advance_with_protection": [
+        "continue_adopted_model.py",
+        "native_handoff/verify_handoff.py",
+        "run_paper_adoption.py",
+        "run_reviewer_entry.py",
+        "run_step11_review.py",
+        "run_step11_revisit.py",
+        "run_step12_m6.py",
+        "run_step12_revision.py"
+      ],
+      "pure_advance_wrapper": [
+        "bounded_evidence_repair_20260911/replay_algebra_evidence.py",
+        "bounded_evidence_repair_20260911/submit_bounded.py",
+        "math_supplement_evidence_20260912/collect_status.py",
+        "math_supplement_evidence_20260912/submit_experiment.py",
+        "prepare_scope_revalidation.py",
+        "pro03_revision/execute_revision.py",
+        "readonly_output_recovery_20260911/replay_recovered_evidence.py",
+        "step10_semantics_20260911/record_profile_closeout.py"
+      ],
+      "recovery_boundary": [
+        "run_final_workflow_resume.py",
+        "run_m6_native_revisit.py",
+        "run_native_final16.py",
+        "run_sensitivity_reuse.py",
+        "run_step10_continuation.py",
+        "step12_revision_20260911/inspect_pdf.py",
+        "step12_root_completion_20260911/inspect_step12_root.py",
+        "step12_root_completion_20260911/run_step12_revisit.py"
+      ],
+      "registry_limit": [
+        "run_bounded_evidence_repair.py",
+        "run_readonly_output_recovery.py",
+        "run_results_adoption.py",
+        "run_scope_alignment.py"
+      ],
+      "special_business": [
+        "run_native_after_runtime_recovery.py",
+        "run_native_final16_recovered.py",
+        "run_native_polish_and_final.py"
+      ]
+    },
+    "caveat": "solver_evidence has two members among the 52 but none among the 31 real drivers: both were specialized.before*.py, i.e. framework files.  So no contract capability is required for a solver-driving family - the solver work lives in framework code and in non-driver scripts (28 files under work/ touch solver APIs, only 2 of them drivers, and those 2 are backups).",
+    "families_absent_from_real_drivers": [
+      "solver_evidence"
+    ]
+  },
+  "deletion_gates_measured": {
+    "helper_name_reference_check": "rejected: grepping a driver's top-level helper names across work/ matched generic names (save, verify, sha, run) in unrelated files and reported 24 of 31 as shared.  Unreliable, so it is recorded here as a rejected method rather than used as a gate.",
+    "path_reference_check": {
+      "method": "does another script name the driver's file (import by path, importlib file loading, or read_text-and-rewrite)",
+      "drivers_referenced": 9,
+      "of": 31,
+      "referenced": {
+        "bounded_evidence_repair_20260911/replay_algebra_evidence.py": [
+          "prepare_execution_assets.py",
+          "prepare_execution_closure.py"
+        ],
+        "readonly_output_recovery_20260911/replay_recovered_evidence.py": [
+          "prepare_execution_assets.py",
+          "prepare_execution_closure.py",
+          "register_reviewed_submission_routes.py"
+        ],
+        "run_bounded_evidence_repair.py": [
+          "activate_scope_alignment.py",
+          "prepare_readonly_output_recovery.py"
+        ],
+        "run_m6_native_revisit.py": [
+          "prepare_direct_final.py"
+        ],
+        "run_readonly_output_recovery.py": [
+          "prepare_readonly_output_recovery.py"
+        ],
+        "run_scope_alignment.py": [
+          "activate_scope_alignment.py"
+        ],
+        "run_step11_revisit.py": [
+          "prepare_step12_m6.py"
+        ],
+        "run_step12_m6.py": [
+          "prepare_m6_native_revisit.py"
+        ],
+        "step12_root_completion_20260911/run_step12_revisit.py": [
+          "prepare_step11_revisit.py"
+        ]
+      }
+    },
+    "non_driver_patchers": {
+      "method": "non-driver scripts that name a driver file AND rewrite source text",
+      "count": 8,
+      "patchers": {
+        "activate_scope_alignment.py": [
+          "run_bounded_evidence_repair",
+          "run_scope_alignment"
+        ],
+        "prepare_direct_final.py": [
+          "run_m6_native_revisit"
+        ],
+        "prepare_execution_assets.py": [
+          "replay_algebra_evidence",
+          "replay_recovered_evidence"
+        ],
+        "prepare_execution_closure.py": [
+          "replay_algebra_evidence",
+          "replay_recovered_evidence"
+        ],
+        "prepare_m6_native_revisit.py": [
+          "run_step12_m6"
+        ],
+        "prepare_readonly_output_recovery.py": [
+          "run_bounded_evidence_repair",
+          "run_readonly_output_recovery"
+        ],
+        "prepare_step11_revisit.py": [
+          "run_step12_revisit"
+        ],
+        "prepare_step12_m6.py": [
+          "run_step11_revisit"
+        ]
+      },
+      "why_it_matters": "these are not in the 52 - they never call .run( - yet they rewrite a driver's source before running it.  A driver cannot be retired without its patcher, so the retirement unit is the chain, not the file."
+    }
+  },
+  "families": {
+    "advance_with_protection": {
+      "count": 8,
+      "paths": [
+        "continue_adopted_model.py",
+        "native_handoff/verify_handoff.py",
+        "run_paper_adoption.py",
+        "run_reviewer_entry.py",
+        "run_step11_review.py",
+        "run_step11_revisit.py",
+        "run_step12_m6.py",
+        "run_step12_revision.py"
+      ]
+    },
+    "pure_advance_wrapper": {
+      "count": 18,
+      "paths": [
+        "bounded_evidence_repair_20260911/replay_algebra_evidence.py",
+        "bounded_evidence_repair_20260911/submit_bounded.py",
+        "final_atomic_delivery_20260912/commands.before.py",
+        "final_execution_closure_20260912/audit_service.before.py",
+        "final_execution_closure_20260912/factory_factory_core_audit_service.py",
+        "final_execution_evidence_20260912/verify_derived_artifacts.py",
+        "final_record_reconciliation_20260911/framework_before/hard_metrics.py",
+        "final_runtime_recovery_20260912/execution_checker.before.py",
+        "final_runtime_recovery_20260912/verify_derived_artifacts.before.py",
+        "final_workflow_resume_20260911/step13_cli_repair/backends.before.py",
+        "math_supplement_evidence_20260912/collect_status.py",
+        "math_supplement_evidence_20260912/submit_experiment.py",
+        "prepare_scope_revalidation.py",
+        "pro03_revision/execute_revision.py",
+        "pro03_revision/run_release.original.py",
+        "pro03_revision/run_release.py",
+        "readonly_output_recovery_20260911/replay_recovered_evidence.py",
+        "step10_semantics_20260911/record_profile_closeout.py"
+      ]
+    },
+    "recovery_boundary": {
+      "count": 11,
+      "paths": [
+        "final_workflow_resume_20260911/entry_freshness_reconciliation/run_controller.before.py",
+        "final_workflow_resume_20260911/step13_cli_repair/controller.before.py",
+        "final_workflow_resume_20260911/user_authorized_step13_skip/controller.before.py",
+        "run_final_workflow_resume.py",
+        "run_m6_native_revisit.py",
+        "run_native_final16.py",
+        "run_sensitivity_reuse.py",
+        "run_step10_continuation.py",
+        "step12_revision_20260911/inspect_pdf.py",
+        "step12_root_completion_20260911/inspect_step12_root.py",
+        "step12_root_completion_20260911/run_step12_revisit.py"
+      ]
+    },
+    "registry_limit": {
+      "count": 4,
+      "paths": [
+        "run_bounded_evidence_repair.py",
+        "run_readonly_output_recovery.py",
+        "run_results_adoption.py",
+        "run_scope_alignment.py"
+      ]
+    },
+    "solver_evidence": {
+      "count": 2,
+      "paths": [
+        "final_layout_closure_20260912/specialized.before_skip_pass.py",
+        "final_workflow_resume_20260911/user_authorized_step13_skip/specialized.before.py"
+      ]
+    },
+    "special_business": {
+      "count": 9,
+      "paths": [
+        "final_audit_packet_backup_20260912/engine.before.py",
+        "final_layout_closure_20260912/validators.before_skip_pass.py",
+        "final_record_reconciliation_20260911/framework_before/evaluate_modeling_project.py",
+        "final_record_reconciliation_20260911/framework_before/validators.py",
+        "final_workflow_resume_20260911/user_authorized_step13_skip/engine.before.py",
+        "final_workflow_resume_20260911/user_authorized_step13_skip/validators.before.py",
+        "run_native_after_runtime_recovery.py",
+        "run_native_final16_recovered.py",
+        "run_native_polish_and_final.py"
+      ]
+    }
+  }
+}

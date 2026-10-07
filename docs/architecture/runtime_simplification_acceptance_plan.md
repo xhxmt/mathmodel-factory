@@ -514,6 +514,83 @@ connection.execute("BEGIN IMMEDIATE")
 
 **真实数据验证**：`test_the_real_v9_production_databases_pass_the_precheck` 对三个仍为 `phys=9` 的生产库（`cumcm_2020_a_codex_luna`、`stability_run2`、`stability_run3`）的**副本**直接调用 validator（只读、不迁移），全部通过；原始库仍只用原始 SQLite 读，事后复核 sha256 与 mtime 未变。
 
+### 6.4 G4.5a：driver inventory v2 + 行为分族 + 迁移规则
+
+artifact：`docs/architecture/runtime_simplification_driver_inventory_v2.json`。
+
+#### 口径歧义已彻底消除（问题的根源是范围不同）
+
+先前"20 对 44""47 对 54"的矛盾**不是漂移，而是两个不同总体**：整个 `work/` 的 212 个 python 文件，与其中真正调用 `.run(` 的文件。两个范围、两种口径全部并列记录：
+
+| 指标 | 范围 A：212 个文件（files / refs） | 范围 B：52 个 `.run(` 文件（files / refs） |
+|---|---|---|
+| `run_call` | 52 / 65 | 52 / 65 |
+| `max_steps=1` | 23 / 23 | 23 / 23 |
+| `revision` 断言 | **48 / 52** | **12 / 12** |
+| cursor 断言 | 45 / 50 | 21 / 24 |
+| status 断言 | 67 / 80 | 22 / 28 |
+| `protected_files` | **54 / 113** | **22 / 44** |
+| `progress.json` | 29 / 35 | 23 / 28 |
+| registry shim | 4 / 13 | 4 / 13 |
+| solver 操作 | 28 / 40 | **2 / 2** |
+| `allowed_steps` | 3 / 5 | 3 / 5 |
+
+**此后引用任何数字都必须带范围与口径。**
+
+#### 52 个调用里只有 31 个是真实驱动
+
+| kind | 数量 | 说明 |
+|---|---|---|
+| `driver` | **31** | 一次性驱动脚本 |
+| `backup_copy` | 15 | `.before.py` / `.original.py` 备份，不是驱动 |
+| `framework_variant` | 5 | `framework_before/` 下的、或 stem 以某 core 模块名结尾的 |
+| `framework_copy` | 1 | `validators.py` 的副本 |
+
+把备份当驱动会**虚增 68%** 的工作量。退役备份与退役驱动是两件事。
+
+#### 行为分族（仅 31 个真实驱动）
+
+| 族 | 数量 | 迁移规则 |
+|---|---|---|
+| `pure_advance_wrapper` | 8 | 机械替换：`run_bounded(expected_revision, expected_cursor, max_subtasks=1, run_policy=bounded_subtasks)`，无其他职责需承接 |
+| `advance_with_protection` | 8 | 追加 `protected_manifest`（摘要预先算好并冻进合同；**不再把 manifest 写盘**） |
+| `recovery_boundary` | 8 | 追加 `previous_boundary_fingerprint`；手写循环改为**若干次显式 bounded 调用**；无进展 → `NEEDS_INSPECTION` 取代自定义停止条件 |
+| `registry_limit` | 4 | 追加 `max_attempts_per_step` / `max_reopens_per_step`（已由第一条链证明） |
+| `special_business` | 3 | 追加 `allowed_source_steps`；**最后迁移、逐条处理**——这三条带其他族没有的 step 作用域授权 |
+| `solver_evidence` | **0** | **真实驱动中为空**。其 2 个成员是 `specialized.before*.py` 框架备份 |
+
+> **对原计划的修正**：你建议的"优先挑一条有 solver/evidence 行为的"在真实驱动里**不存在**。`work/` 下有 28 个文件触及 solver API，但只有 2 个是驱动、且那 2 个是备份。**该族不需要任何合同扩展。**
+
+#### 删除判据（含实测结果）
+
+一条驱动进入退役集合需同时满足：
+
+1. legacy 轨与 bounded 轨语义等价（在版本控制内有测试）；
+2. 手写 journal / manifest 已有合同字段承接；
+3. **不被其他脚本引用**——见下方实测；
+4. 其等价测试进入 CI；
+5. 其硬编码状态是否腐烂已记录。**已腐烂的（如第一条）重点验证历史意图已被合同覆盖，不强行复活旧 revision。**
+
+实测的判据 3：
+
+- **被否决的方法**：把驱动的顶层 helper 名在整个 `work/` 里 grep。`save`/`verify`/`sha`/`run` 这类通用名会在无关文件里命中，误报 31 个里的 24 个。已作为**被否决的方法**记录，不作判据。
+- **采用的方法**：按**文件路径**检测引用（覆盖按路径 import、`importlib` 载入、以及 `read_text()` 后改写源码三种形态）。结果：**31 个真实驱动中 9 个被其他脚本引用**。
+- **新增发现——非驱动 patcher**：`activate_scope_alignment.py`、`prepare_direct_final.py`、`prepare_execution_assets.py`、`prepare_execution_closure.py`、`prepare_m6_native_revisit.py`、`prepare_readonly_output_recovery.py`、`prepare_step11_revisit.py`、`prepare_step12_m6.py` 共 **8 个非驱动脚本会改写驱动源码**（`read_text().replace()` 后写回）。
+
+  **它们不在那 52 个之内**（从不调用 `.run(`），却必须先于/随同其目标一起处置——**退役单元是链，不是文件**。这正是"迁到第 8 个才发现"的那类隐藏耦合，也是本轮 inventory 最大的收获。
+
+#### G4.5b 代表链选择（3–5 条）
+
+| 目的 | 选中 | 理由 |
+|---|---|---|
+| 最简单 | `math_supplement_evidence_20260912/collect_status.py`（19L） | 该族最小值，验证纯机械替换 |
+| 保护 | `continue_adopted_model.py`（48L）| `advance_with_protection` 代表 |
+| 恢复/boundary | `run_final_workflow_resume.py`（40L） | 同时具备 `max_steps=1` + revision/cursor 断言 + protected manifest + journal，最完整 |
+| **链（替代原 solver 族）** | `run_scope_alignment.py` + `activate_scope_alignment.py` | 验证"驱动 + patcher"链的整体退役 |
+| ~~solver/evidence~~ | ~~不存在~~ | 真实驱动中该类为空 |
+
+若这四类不再暴露合同缺口，即可认为合同表面稳定，进入 **G4.5c 批量退役**。
+
 ### 6.3 第一条链已迁移并证明等价
 
 `tests/test_gate_g4_driver_migration.py`（5 项）。
