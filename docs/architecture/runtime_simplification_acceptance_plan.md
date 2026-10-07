@@ -688,7 +688,7 @@ protected_identity: Mapping[str, tuple[int, int]] | None = None   # 路径 -> (s
 | `sys.argv[2] in {'polish','final'}` 模式选择 | 调用方 |
 | `original_step13_judgment_before_final16.zip` 存在性 | 调用方 |
 
-#### 唯一缺口：已提交 checkpoint 的不变性
+#### 唯一缺口：已提交 checkpoint 的不变性（已处置：扩合同）
 
 驱动在运行前后各断言一次：
 
@@ -711,7 +711,18 @@ assert next(c for c in store.stage_checkpoints() if c['source_step_id']==13) == 
 | B | 不加合同字段：调用方用公开的 `store.stage_checkpoints()` 自行 before/after 比对。**事后**发现，提交已经发生 |
 | C | 判为超出有界合同范围，这 3 条仅在引擎获得显式"checkpoint 不可变"保证后才退役（另一场设计讨论） |
 
-选 A 的理由：合同存在的意义就是把**手写的事后校验**变成**引擎侧的提交前保护**；这正是同一形态，且 20 条真实驱动里有 3 条需要它。
+**已按方案 A 实施**：
+
+```python
+protected_checkpoints: frozenset[int] | None = None   # 必须保持不变的 source_step_id 集合
+```
+
+- 入口**快照**（`snapshot_checkpoints`）并在 checkpoint 提交前**比对**（`verify_checkpoints`），与 manifest 同一套两阶段设计 —— 变化会在 commit 之前阻断，而驱动只能在事后发现。
+- 新增独立的 `CheckpointVerification`（`ok` / `checked` / `changed` / `missing`，其中 `changed` 与 `missing` **互斥**）而不是塞进 `ProtectedVerification`：保护文件与保护已提交 checkpoint 是两回事，失败原因不同，其中一个是数据库行。
+- `BoundedRunResult` 增加 `entry_checkpoints` / `final_checkpoints`；`stop_reason` 新增 `PROTECTED_CHECKPOINT_VIOLATED`（与 `PROTECTED_MANIFEST_VIOLATED` 并列，manifest 优先）。
+- 预提交阻断使用 `error_class = "PERMANENT_PROTECTED_CHECKPOINT_VIOLATED"`，与 manifest 的 `PERMANENT_PROTECTED_MANIFEST_VIOLATED` 对称。
+- **保护一个不存在的 checkpoint 在入口即拒绝**：`snapshot_checkpoints` 只报告存在的东西，所以请求本身必须单独检查——否则"保护了一个不存在的 step"会看起来像保护生效了。这一条是我在写测试时发现的实现漏洞，已修。
+- 快照在 `run()` 里与 `_bounded_contract` **同一 `try/finally` 生命周期**启用与清除，因此 `run(contract=...)` 这条直接路径也受保护。
 
 #### 链代表的结论：patcher 不是合同缺口
 
@@ -732,7 +743,17 @@ assert next(c for c in store.stage_checkpoints() if c['source_step_id']==13) == 
 
 #### 结论
 
-`special_business` 族的合同需求收敛为**最多一个字段**（`protected_checkpoints`，方案 A）。若采纳，20 条真实驱动所代表的全部手写执行协议即全部归并完毕，可宣布**合同表面稳定**并进入 G4.5c 批量退役；若不采纳而选 B/C，则这 3 条驱动的退役判据须相应改写（B：接受事后校验；C：挂起）。
+**合同表面稳定**：4 个族的协议已全部归并完毕——`registry_limit`、`advance_with_protection`、`recovery_boundary`、`special_business` 的每一项手写关切都有合同字段或明确的"属调用方/属退役"归属。20 条真实驱动所代表的全部手写执行协议至此**归并完成**。
+
+累计四项合同扩展，全部由真实驱动的真实需求驱动、且都只增强或只收紧语义：
+
+| 扩展 | 触发它的真实驱动 | 语义方向 |
+|---|---|---|
+| `max_attempts_per_step` / `max_reopens_per_step` | `run_bounded_evidence_repair.py` 的 registry shim | 只收紧 |
+| `protected_identity` | `run_final_workflow_resume.py` 的大文件身份 | 新增第二类检查 |
+| `protected_checkpoints` | `run_native_*.py` 三条的 checkpoint 不变性 | 新增第二类保护 |
+
+**下一步：G4.5c 批量退役。**
 
 **canary 保真边界（已记录）**
 
