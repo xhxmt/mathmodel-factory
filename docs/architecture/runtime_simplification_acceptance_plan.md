@@ -641,7 +641,7 @@ migrated 轨：engine.run_bounded(...) + 合同的 max_attempts_per_step / max_r
 | `run_step12_m6.py`（21L，最小真实驱动） | `advance_with_protection` | 与 legacy 轨语义闭包无差异；`assert state.revision == 306` 这一**已腐烂**的断言被授权取代（实测拒绝并给出实际 revision，零事件写入） |
 | `continue_adopted_model.py`（48L） | `advance_with_protection` | 同上；其 `for step in (3,4)` 循环拆为两次独立 bounded 调用，均证明等价 |
 
-**新发现的合同缺口（需决策）：大文件按"身份"而非哈希保护**
+**新发现的合同缺口（已处置：扩合同）：大文件按"身份"而非哈希保护**
 
 `run_final_workflow_resume.py`（40L，`recovery_boundary` 族）除 sha256 manifest 外，还校验一个大文件的**身份**：
 
@@ -655,9 +655,17 @@ assert stat.st_size == large['size'] and stat.st_mtime_ns == large['mtime_ns'], 
 
 按你的判断准则（"先判断它是否属于通用 runner 语义，再决定是否扩合同"），这**确实属于通用语义**：任何保护大产物的调用方都会遇到"哈希成本 vs 身份强度"的取舍。但扩合同需要设计决策，故**未擅自扩**，留待你定。三个方向：
 
-1. 合同新增第二类清单 `protected_identity: Mapping[str, {"size": int, "mtime_ns": int}]` 与 `protected_manifest` 并列、同等校验；
-2. 要求统一走 sha256（实现对但可能对超大文件变慢；语义更强）；
-3. 判定为调用方自身职责（合同只保护哈希可承受的产物），该驱动保留自有校验，接受**部分迁移**。
+**已按方案 1 实施**：合同新增第二类清单
+
+```python
+protected_identity: Mapping[str, tuple[int, int]] | None = None   # 路径 -> (size, mtime_ns)
+```
+
+- 与 `protected_manifest` **并列且同等强制**：入口校验与 checkpoint 提交前校验两处都检查；`ProtectedVerification` 新增 `identity_changed` 字段，使"内容变了"与"身份变了"**在结果里可区分**。
+- 同一路径**不允许同时出现在两类清单里**（一个路径一种检查），构造期拒绝。
+- 路径安全与数值校验（非负整数、拒绝 bool）与哈希清单一致；`protected_identity` 进入合同 SHA 与 `RUN_STARTED` 授权块。
+- **弱保证已显式记录并被测试固化**：`(size, mtime_ns)` 相等**不证明内容相等**——测试 `test_identity_protection_is_weaker_than_hashing_and_says_so` 用"等长改写 + `os.utime` 复原 mtime"实际绕过了身份校验，而同一份文件被哈希校验发现。这正是调用方为不对超大文件做完整哈希而接受的取舍，也是两类检查必须分开报告的原因。
+- `recovery_boundary` 代表 `run_final_workflow_resume.py` 已证明等价：其 `verify()` 的两类检查都成为合同字段，`entry_verification.checked == 2`；`while 11 <= active_step <= 15` 循环变为调用方侧的连续 bounded 调用。
 
 **canary 保真边界（已记录）**
 
@@ -665,7 +673,7 @@ assert stat.st_size == large['size'] and stat.st_mtime_ns == large['mtime_ns'], 
 
 **因此本轮未做**：`run_scope_alignment.py` + `activate_scope_alignment.py` 链。其 patcher 自身会写 `web/model_config.json`、`web/notes.json` 并改写驱动源码，属 `special_business` 量级，留到缺口决策之后。
 
-**合同表面是否已稳定**：`registry_limit`（第一条链）与 `advance_with_protection`（本轮两条）均已证明可表达且等价；`recovery_boundary` 卡在上述身份缺口；`special_business` 未开始。**尚不能宣布稳定**。
+**合同表面状态**：`registry_limit`（第一条链）、`advance_with_protection`（2 条）、`recovery_boundary`（1 条）**均已证明可表达且等价**；三项合同扩展全部由真实驱动的真实需求驱动，且都是**只收紧/只增强**语义。仅剩 `special_business`（3 条，含链形式的 patcher）未开始——**它是否还需要新能力，是合同表面能否宣布稳定的最后一块拼图**。
 
 ### 5.4 三道"广泛删旧层"门槛已全部关闭
 
