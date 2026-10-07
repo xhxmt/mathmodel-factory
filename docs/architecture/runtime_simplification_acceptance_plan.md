@@ -376,6 +376,28 @@ stop_reason：
 
 ---
 
+### 4.1 已实现：bounded contract 失败语义
+
+`tests/test_gate_g2_failure_semantics.py`（23 项），复用 Gate 1 的 harness 与 hermetic Stage 种子。全部为**可执行断言**，无占位。
+
+| 判据 | 承接测试 | 关键断言 |
+|---|---|---|
+| G2.1 stale revision | `test_a_stale_authorisation_is_refused_before_any_write` | 抛 `BoundedRunError`；`events` 与 `revision` 与运行前**逐项相等** |
+| G2.2 cursor 不一致 | `test_a_matching_revision_with_the_wrong_position_is_refused` | 抛错且信息含 `cursor mismatch`，并**断言不含** `expected revision`（可区分） |
+| G2.3 manifest 入口已脏 | `test_an_already_violated_manifest_is_refused_at_entry` | 抛 `ProtectedManifestViolation`（`already violated at entry`），零事件 |
+| G2.4 manifest 运行中被改 | `test_a_manifest_broken_during_the_run_blocks_the_checkpoint` | **双层**：① `STEP_FAILED.payload.error_class == "PERMANENT_PROTECTED_MANIFEST_VIOLATED"` ② `outcome.stop_reason == "PROTECTED_MANIFEST_VIOLATED"`；另断言入口校验为 `ok=True`（脏是运行造成的）、`stage_checkpoints` 与 history 均为空、cursor 未越过被阻断的 subtask |
+| G2.5 重复 boundary | `test_a_repeated_boundary_is_reported_and_needs_inspection` + `test_unchanged_takes_precedence_over_no_further_work` | 前者的四项判据（fingerprint 相同 / `made_progress False` / `unchanged_boundary True` / `outcome == NEEDS_INSPECTION`）**无条件**成立，并断言 `stop_reason` 保留为 `BOUNDARY_OR_SCOPE`；后者为纯函数测试，证明 `ready + same status + completed=0 → UNCHANGED` 优先于 `NO_FURTHER_WORK` |
+| G2.6 参数分歧 | `test_max_steps_may_not_disagree_with_the_contract`、`test_allowed_source_steps_may_not_disagree_with_the_contract` | 抛 `BoundedRunError`，信息分别含 `max_steps disagrees` / `allowed_source_steps disagrees` |
+| G2.7 live runner | `test_a_live_foreign_runner_is_not_taken_over` | 抛 `RunnerBusy`；原始行 `runner_pid` / `runner_lease_id` 未被改写，零事件 |
+| G2.8 manifest 路径安全 | 8 项路径参数化 + 5 项 digest 参数化 + 符号链接 | 绝对路径（POSIX / UNC / 盘符）、`..`、嵌套 `..`、前导 `./`、内部 `.`、空路径、大写/长度错/非 hex 的 sha256 全部在**构造期**拒绝；直接符号链接与父组件符号链接解析到项目外，均在 `verify_protected_manifest` 报 `unsafe` 而非比较 |
+
+**实现中修正的两处测试自身缺陷**（记在此处以备复查）：
+
+1. **G2.7 最初用 PID 1 作为「存活的他人 runner」**，但 `_pid_is_live` 是 `os.kill(pid, 0)` 加 `except OSError: return False`；对属 root 的 pid 1，该调用抛 `PermissionError`（`OSError` 子类）→ 被判为**不存活** → 引擎按「runner 已中断」继续推进，`RunnerBusy` 根本不会触发，测试实际在跑真实步骤。已改用**本进程派生的同用户子进程**（`subprocess.Popen`），并在 `finally` 中回收。
+2. **G2.7 最初用 `collect()` 断言 `runner_pid`**，而 `collect()` 按设计把它归一化为 `<normalised>`，断言必然失败。已改为读取原始 `store.load()`；归一化后仍用于「事件未变」的比较。
+
+**G2.4 的可达性说明**：pre-commit 保护位于 `engine.py:1194 _complete_stage_task`，属 **Stage 路径**，因此必须用 `stage_v1` + `build_native_registry` 才能走到；两步 fake registry 走不到此处。断言的构造方式是由 hermetic dispatcher 的 `on_execute` 钩子在**步骤执行期间**改写受保护文件——这正是事后调用方自检无法覆盖的窗口。
+
 ## 5. Gate 3 — 版本与历史兼容
 
 与 `run_bounded` 正向等价性**完全分离**。
