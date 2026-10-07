@@ -646,6 +646,19 @@ Gate 4  driver 退役（先 1 条链，再批量）
 2. 保留 registry shim，接受**部分迁移**；
 3. 重新定性：把该 shim 读作对引擎重试策略的绕行，改为修引擎而非搬进合同。
 
+**已处置（扩合同）**：`BoundedRunContract` 新增两项**只收紧不放宽**的上限，并纳入合同身份与 `RUN_STARTED` 事件载荷：
+
+```python
+max_attempts_per_step: Mapping[int, int] | None = None   # 每个 source step 的 attempt 上限
+max_reopens_per_step:  Mapping[int, int] | None = None   # 每个 source step 的 reopen 上限
+```
+
+- 生效值取**合同上限与 registry 自身值的较小者**，因此合同**永远不能放宽**目录已授予的授权；`max_reopens` 一并加入，是因为同一条驱动同时对这两个旋钮做了限制，只补一半仍会留下 shim。
+- 强制点：引擎在 bounded 推进期间换入 `ScopedRegistry` 包装（与 `_bounded_contract` 同一个 `try/finally`）。之所以不逐个去改约 11 处 definition 解析点，是因为那样下次新增一处就会漏掉；包装覆盖全部解析路径，且**仅在合同带了上限时才换**，无上限路径保持字节不变。
+- `ScopedRegistry` 对未作用域的属性走 `__getattr__` 委托，registry 后续新增能力不会被静默丢掉。
+
+**行为级验证**（不只是字段回填）：transient 失败的 step 在无上限时按 registry 的 `max_attempts=3` 重试 3 次并产生 `RETRY_SCHEDULED`；上限 `{1: 1}` 时**只调用 1 次且无重试事件**；上限 `{1: 99}`（比 registry 宽松）时行为与无上限完全一致（3 次 + 重试），证明"只收紧不放宽"是行为属性而非字段属性。
+
 **另外**：该驱动的硬编码前置条件已经腐烂——它断言 A 处于 `status=ready, active_step=5`，而 A 现在是 `completed`（revision 561）。即驱动本身**早已不可运行**，这正是 S6 描述的"hard-coded revisions rot silently"。
 
 **暂缓**：生产级 `factory rewind`；`work/*.py` 的批量删除。
