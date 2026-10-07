@@ -514,6 +514,37 @@ connection.execute("BEGIN IMMEDIATE")
 
 **真实数据验证**：`test_the_real_v9_production_databases_pass_the_precheck` 对三个仍为 `phys=9` 的生产库（`cumcm_2020_a_codex_luna`、`stability_run2`、`stability_run3`）的**副本**直接调用 validator（只读、不迁移），全部通过；原始库仍只用原始 SQLite 读，事后复核 sha256 与 mtime 未变。
 
+### 6.3 第一条链已迁移并证明等价
+
+`tests/test_gate_g4_driver_migration.py`（5 项）。
+
+**证明方式**：把驱动**自己的机制**与合同的机制放在同一份种子副本上并排跑。
+
+```
+legacy 轨：engine.run(max_steps=1) + 驱动原有的 BoundedRegistry shim
+migrated 轨：engine.run_bounded(...) + 合同的 max_attempts_per_step / max_reopens_per_step
+```
+
+两轨各自从同一份字节级种子恢复，用 Gate 1 的 `compare()` 比较完整语义闭包。**legacy 轨忠实复现了驱动的 shim**——若拿裸 `run(max_steps=1)` 去比，比的是驱动从未做过的事。结果：除 `RUN_STARTED` 的授权块（迁移的目的本身）外**无任何差异**。
+
+驱动的手写物 → 合同对应物：
+
+| 驱动 | 迁移后 |
+|---|---|
+| `assert status=='ready' and active_step==5`（2 处） | `expected_revision` + `expected_cursor` → `BoundedRunError`，信息可读 |
+| 自制 `protected_files.json` | `contract.protected_manifest` |
+| 手写 `verify()`（运行前后各一次） | `entry_verification` / `final_verification` |
+| 自制 `progress.json` | `BoundedRunResult` |
+| 手写两轮循环 + 自定义停止条件 | 一次 bounded 调用 + `previous_boundary_fingerprint` |
+| 私有 registry 子类 | 合同的两项上限 |
+| 无条件 `protected_files_unchanged: True` | 由校验自动得出 |
+
+**四项产物在迁移后全部不产生**（`progress.json`、`protected_files.json` 及其任意子路径版本）——已断言。
+
+**结构化结果承接了驱动 journal 的全部信息**：`start_revision`/`end_revision`/`completed_subtasks`/`stop_reason`/`boundary_fingerprint`/两项 verification；且授权块（含 `max_attempts_per_step`、`max_reopens_per_step`）可从事件流回查。
+
+**驱动原有的腐烂已被证实**：它断言 A 处于 `ready / active_step=5`，而 A 已完成（revision 561）。迁移后的形式把同一期望表达为**授权**——陈旧的授权会被拒绝并给出理由，而不是在脚本里抛 `AssertionError`。测试同时断言了 revision 与 cursor 两种拒绝路径。
+
 ### 5.4 三道"广泛删旧层"门槛已全部关闭
 
 | 门槛 | 状态 |
