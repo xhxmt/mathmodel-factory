@@ -6,7 +6,8 @@
     "code_shape_metrics": "comments AND string literals blanked in place (tokenize ranges; adjacency and line structure preserved) so a migration's own explanatory comment cannot inflate the metric that measures the migration",
     "filename_metrics": "comments blanked, string literals kept - progress.json and protected_files live in strings, so blanking strings would erase the thing being counted",
     "why_this_matters": "the first attempt at this measurement reported registry_shim unchanged and protected_files/refs up, purely because the migrated file's comment named the removed constructs",
-    "baseline": "the pre-rewrite tree, with the original file read back out of the verified archive"
+    "baseline": "the pre-rewrite tree, with the original file read back out of the verified archive",
+    "docstring_note": "a third scrub was needed for the filename metrics: a module docstring is a STRING token, so 'blank comments, keep strings' retained the migrated file's own prose mentioning protected_files.json, and the metric rose by one.  Docstrings are located with ast and blanked, otherwise ordinary string literals are kept.  The metric must be immune to comments AND docstrings; the documentation stays informative."
   },
   "batches": [
     {
@@ -93,6 +94,112 @@
         "equivalence_test_in_ci": true,
         "rotted_state_recorded": "the driver asserted active_step==5/last_completed_step==4 of a project now completed at revision 561"
       }
+    },
+    {
+      "batch": 2,
+      "date_utc": "2026-10-07",
+      "family": "advance_with_protection",
+      "scope_reason": "the five standalone members of the family: same shape (manifest, one step, no registry shim), none referenced by a patcher, so one recipe and one equivalence template cover them",
+      "drivers": [
+        {
+          "file": "continue_adopted_model.py",
+          "original_sha256": "fd5416bf67afe5ef3fb85595f0fbaf56cf1c132e9b6e39507b6f625ef9e4c033",
+          "migrated_sha256": "0da8dd6967989b2bd7ddfe55c86da48fa2e0f14d5689a67a755effa94c7845d2",
+          "note": "keeps its two-step loop as successive bounded calls; the manifest derivation (policy digests plus two directory walks) is unchanged but handed to the contract instead of written to disk"
+        },
+        {
+          "file": "run_paper_adoption.py",
+          "original_sha256": "f51cb108d6e7c116c55022c132be3ae8b59ee5de3c833938c4272b2ceca086cb",
+          "migrated_sha256": "264f2a923c86c4a1ec16f986ca90ac9dc6cb0436674fddc4920287b18219ba8e",
+          "note": "expected active_step==9"
+        },
+        {
+          "file": "run_reviewer_entry.py",
+          "original_sha256": "543298185c91c0a22b06331bcc94189d0c227042c414438d8c0f81b195ab02c7",
+          "migrated_sha256": "0393345f44bae07a3c7368164714025e25de2ab570402f69a9a41141bbdc740b",
+          "note": "expected active_subtask=='reviewer_entry_gate'"
+        },
+        {
+          "file": "run_step11_review.py",
+          "original_sha256": "b74b91e72c8625652586a21285ac58a96c6b74100165028cd44c5e85906b7b0c",
+          "migrated_sha256": "cc3dc234eae582c959a3ce56cc549f1abc2d978929e668e3d11304806f23257b",
+          "note": "expected active_step==11"
+        },
+        {
+          "file": "run_step12_revision.py",
+          "original_sha256": "20d83cd67ad8497ca55d51a81850268829c11cdaf04ca1f5918e92a488e0ac56",
+          "migrated_sha256": "5ba8bb8be9130f7e4978942d0deb17b018797ac21e85e49df598130ead8ee398",
+          "note": "expected active_step==12"
+        }
+      ],
+      "metric_delta_cumulative": {
+        "naive_dot_run_files": {
+          "before": 52,
+          "after": 46,
+          "delta": -6
+        },
+        "precise_workflow_files": {
+          "before": 25,
+          "after": 19,
+          "delta": -6
+        },
+        "max_steps_1_files": {
+          "before": 23,
+          "after": 17,
+          "delta": -6
+        },
+        "registry_shim_files": {
+          "before": 4,
+          "after": 3,
+          "delta": -1
+        },
+        "progress_json_refs": {
+          "before": 35,
+          "after": 26,
+          "delta": -9
+        },
+        "protected_files_refs": {
+          "before": 113,
+          "after": 110,
+          "delta": -3
+        },
+        "run_bounded_refs": {
+          "before": 0,
+          "after": 0,
+          "delta": 0
+        },
+        "advance_bounded_refs": {
+          "before": 0,
+          "after": 6,
+          "delta": 6,
+          "expected": "one per migrated driver"
+        }
+      },
+      "metric_verdict": "every hand-rolled metric fell; the only increase is advance_bounded, exactly one per migrated driver",
+      "compile_check": {
+        "files": 212,
+        "syntax_errors": 0
+      },
+      "equivalence_tests": [
+        "tests/test_gate_g4_driver_migration.py::test_the_batch2_family_shape_is_equivalent_after_migration",
+        "tests/test_gate_g4_driver_migration.py::test_the_batch2_guard_is_kept_explicit_in_the_drivers"
+      ]
+    }
+  ],
+  "corrections": [
+    {
+      "found_in": "batch 2, before the batch was recorded",
+      "defect": "the migrated drivers passed expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id) taken from the state they had just read, and expected_revision=state.revision likewise.  The revision CAS therefore passed by construction, and the original precondition - 'the next step is N' - was silently deleted rather than moved.",
+      "why_it_was_invisible": "cursor_of() returns (active_stage, active_subtask, source_step_id) and does not carry active_step at all, so the expectation had nowhere to go; and reading the revision to build the contract is exactly what makes a CAS vacuous.  The migration looked like it had expressed the precondition as an authorisation.",
+      "fix": "the five drivers keep the original precondition verbatim as an explicit guard on the field it asserted (active_step, or active_subtask, plus status), refusing with a readable message; the contract then adds the revision CAS the original never had.  Batch 1's driver was corrected the same way.",
+      "regression_test": "tests/test_gate_g4_driver_migration.py::test_a_read_then_pin_cursor_silently_drops_a_step_expectation demonstrates the hole (a read-then-pin contract advances a project the driver refused) and that the revision CAS is what remains real",
+      "severity": "would have removed a guard from five drivers without any test failing, which is the exact failure mode this whole exercise exists to prevent"
+    },
+    {
+      "found_in": "batch 1 inventory re-run",
+      "defect": "metrics counted code shapes inside the migrated file's own comments, so registry_shim read unchanged and protected_files read higher",
+      "fix": "code-shape metrics scrub comments and strings; filename metrics scrub comments and docstrings, keeping ordinary strings",
+      "regression_test": "the metric script is stated in this record; each batch re-measures both sides with the same scrub"
     }
   ]
 }

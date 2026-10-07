@@ -814,6 +814,47 @@ artifact：`runtime_simplification_g45c_work_backup.json`。备份位于仓库�
 
 **尚未改动**：任何被 patcher 引用的驱动（8 条链）与任何 patcher。
 
+### 6.9 G4.5c 第 2 步：批次 2（5 条 `advance_with_protection`）已完成
+
+`continue_adopted_model.py`、`run_paper_adoption.py`、`run_reviewer_entry.py`、`run_step11_review.py`、`run_step12_revision.py` 原地改写。它们形状同构（manifest + 单步推进 + 无 registry shim），且都不被 patcher 引用，因此共用一套 recipe 与等价测试模板。
+
+**累计指标（batch 1 + 2）**
+
+| 指标 | before | after | Δ |
+|---|---|---|---|
+| `.run(` | 52 | **46** | −6 |
+| 精确工作流推进 | 25 | **19** | −6 |
+| `max_steps=1` | 23 | **17** | −6 |
+| registry shim | 4 | **3** | −1 |
+| `progress.json` | 35 | **26** | −9 |
+| `protected_files` | 113 | **110** | −3 |
+| `advance_bounded` | 0 | **6** | **+6（每个迁移驱动各一个）** |
+
+**唯一上升项是预期替代物**，其余全部下降；212 个文件 0 语法错误。
+
+#### 本轮发现并修复的一处真实缺陷（重要）
+
+**迁移后的驱动把 `expected_cursor` 取自刚刚读到的状态**：
+
+```python
+expected_revision=state.revision,
+expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id),
+```
+
+而这一读一回填，使 **revision CAS 恒真**，同时 `cursor_of()` 只返回 `(active_stage, active_subtask, source_step_id)`——**根本不含 `active_step`**。于是原件那条"下一步必须是第 N 步"的前置条件**被静默删除，而不是被搬进合同**。
+
+**为什么此前看不出来**：CASS 用刚读的 revision，位置又用刚读的 cursor，两者都按构造满足；迁移看起来像是把前置条件表达成了授权。
+
+**修复**：五个驱动**逐字保留原前置条件**作为显式守卫（对 `active_step` 或 `active_subtask` 加 `status` 的检查，拒绝时给出可读信息），合同则补上原件从来没有的 revision CAS。批次 1 的驱动同样补上了。
+
+**回归测试**：`test_a_read_then_pin_cursor_silently_drops_a_step_expectation` 直接演示这个洞——read-then-pin 的合同会**推进一条原件本该拒绝的项目**——并断言真正起作用的是 revision CAS。
+
+**严重性**：它会在**没有任何测试失败**的情况下从 5 个驱动上移除守卫，正是这一整轮工作要防的失败形态。
+
+**测量方法的第三层修正**：文件名指标（`progress.json`/`protected_files`）第一次测出 `protected_files` **+1**——因为**模块 docstring 也是 STRING**，而"只抹注释、保留字符串"把迁移文件自己 docstring 里的 `protected_files.json` 保留了下来。现用 `ast` 定位 docstring 并抹除，普通字符串字面量仍保留。**指标必须对注释与 docstring 都免疫**，而文档不必为此缩水。
+
+**尚未改动**：任何被 patcher 引用的驱动（8 条链）与 8 个 patcher。
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。

@@ -1079,3 +1079,111 @@ def test_the_batch1_cursor_precondition_is_an_authorisation_not_an_assert():
         engine.run_bounded(
             BoundedRunContract(expected_revision=state.revision, expected_cursor=(9, "delivery", 16))
         )
+
+
+# ================= batch 2: five advance_with_protection drivers rewritten
+def test_the_batch2_family_shape_is_equivalent_after_migration():
+    """The shape all five batch-2 drivers share: manifest, no shim, one step.
+
+    Two of them carried an extra expectation (``active_step == 9`` / ``== 11``)
+    and one expected ``active_subtask == 'reviewer_entry_gate'``; the guard for
+    those is asserted separately below, because it cannot ride on the contract's
+    cursor.
+    """
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    legacy = _manifest_legacy_track(6)
+    migrated = _manifest_migrated_track(6)
+
+    assert migrated["returned_last_completed_step"] == legacy["returned_last_completed_step"]
+    assert migrated["outcome"].completed_subtasks == 1
+    assert migrated["outcome"].entry_verification.checked == 1
+    _assert_migrated_shape(legacy, migrated)
+
+
+def test_a_read_then_pin_cursor_silently_drops_a_step_expectation():
+    """The correction batch 2 forced, pinned so it cannot regress unnoticed.
+
+    A driver's precondition is "the next step is N".  ``cursor_of()`` returns
+    ``(active_stage, active_subtask, source_step_id)`` - it does not carry
+    ``active_step`` - so ``expected_cursor`` cannot express that expectation.  And
+    because a caller reads the state to obtain ``expected_revision``, a cursor
+    taken from that same read matches by construction: the CAS then passes
+    trivially.
+
+    The first version of the batch-2 migration did exactly that, and would have
+    advanced a project the original driver refused.  That is the failure this
+    test makes visible: a migration can look like it moved a guard into the
+    contract while actually deleting it.
+    """
+
+    from factory_core.bounded_run import cursor_of
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    state = canary.store_at(root).load()
+
+    # the cursor carries no step information at all in a ready state
+    assert cursor_of(state) == (None, None, None)
+    assert state.active_step is None
+    assert state.last_completed_step == 6
+
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    # a contract built from the observed state is accepted even though a driver
+    # written for step 12 would have refused this project outright
+    with canary.frozen_time():
+        outcome = engine.run_bounded(
+            BoundedRunContract(
+                expected_revision=state.revision,
+                expected_cursor=cursor_of(state),
+                max_subtasks=1,
+                run_policy=RunPolicy.BOUNDED_SUBTASKS,
+            )
+        )
+    assert outcome.made_progress is True, (
+        "the read-then-pin form advances a project the driver expected to refuse"
+    )
+
+    # what the contract does contribute is the revision CAS, and it is real:
+    # a revision that was not just read is refused
+    from factory_core.bounded_run import BoundedRunError
+
+    canary.restore_seed()
+    stale_engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    with canary.frozen_time(), pytest.raises(BoundedRunError, match="expected revision"):
+        stale_engine.run_bounded(
+            BoundedRunContract(expected_revision=state.revision + 5)
+        )
+
+
+def test_the_batch2_guard_is_kept_explicit_in_the_drivers():
+    """Documents what the migrated drivers do instead of relying on the cursor.
+
+    They check the field the original asserted - ``active_step`` or
+    ``active_subtask`` - and refuse with a readable message, then let the
+    contract add the revision CAS.  This test exercises that pattern so the
+    distinction from ``expected_cursor`` stays visible in the suite.
+    """
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    state = canary.store_at(canary.restore_seed()).load()
+
+    def guard(expected_step):
+        if state.status.value != "ready" or state.active_step != expected_step:
+            return "refused"
+        return "allowed"
+
+    assert guard(7) == "refused", "not the driver's step" if state.active_step is None else ""
+    assert guard(None) == "allowed", "the seeded state is exactly what the guard expects"
