@@ -755,6 +755,33 @@ protected_checkpoints: frozenset[int] | None = None   # 必须保持不变的 so
 
 **下一步：G4.5c 批量退役。**
 
+### 6.7 G4.5c 第 1 步：`work/` 备份与可复原性验证（已完成）
+
+artifact：`runtime_simplification_g45c_work_backup.json`。备份位于仓库之外：`/home/tfisher/pf-g45c-backup/`。
+
+| 项 | 值 |
+|---|---|
+| 条目 | 1565（1448 文件 / 117 目录 / 0 符号链接） |
+| 文件字节 | 1,021,921,072（979 MiB） |
+| `work.tar.zst` | 894,785,086 B（855 MiB） |
+| `work.tar.zst` sha256 | `fb4acf0c174d8641e6a4838616fa70ffdee4f0e07176fc14b7540381a96f5a4f` |
+| `work_manifest.json` sha256 | `919616cfff0dcb576970fb4e9b8a0343db35bf76845f7823152f3d2dca984b3d` |
+
+**manifest 方法**：`os.walk(followlinks=False)` + 逐条目 `lstat`，每个常规文件算 sha256，记录 size 与 `mtime_ns`，符号链接记录 target，**不排除任何条目**。
+
+**可复原性验证**：仅从归档（`zstd -dc | tar -x`）重建一棵临时树，逐文件重新哈希后与 manifest 比对：
+
+```json
+{"entries_expected": 1565, "entries_restored": 1565,
+ "missing": [], "extra": [], "mismatched": [], "identical": true}
+```
+
+临时副本已删除——归档即备份。
+
+**改写前的编译体检**：每一批改写前后都用分支解释器对 `work/` 下全部驱动做 `compile()` 检查，这样即使某个脚本再也不会被执行，语法破坏也能被当场发现。
+
+**此刻 `work/` 仍未被改动**（本轮只有读取与归档）。
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。

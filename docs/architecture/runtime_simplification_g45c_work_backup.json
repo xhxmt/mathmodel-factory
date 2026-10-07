@@ -1,0 +1,35 @@
+{
+  "schema": "factory-runtime-simplification-g45c-work-backup-v1",
+  "why": "G4.5c rewrites driver scripts in a project directory that is not under version control.  This is the restore point: a full manifest and a verified archive taken before the first rewrite.  Nothing in work/ has been modified.",
+  "project": "cumcm_2026_a_fable_pro_20260910",
+  "source": "/home/tfisher/paper_factory/ongoing/cumcm_2026_a_fable_pro_20260910/work",
+  "backup_root": "/home/tfisher/pf-g45c-backup",
+  "manifest_path": "/home/tfisher/pf-g45c-backup/work_manifest.json",
+  "manifest_sha256": "919616cfff0dcb576970fb4e9b8a0343db35bf76845f7823152f3d2dca984b3d",
+  "archive_path": "/home/tfisher/pf-g45c-backup/work.tar.zst",
+  "archive_sha256": "fb4acf0c174d8641e6a4838616fa70ffdee4f0e07176fc14b7540381a96f5a4f",
+  "archive_bytes": 894785086,
+  "contents": {
+    "entries": 1565,
+    "files": 1448,
+    "dirs": 117,
+    "symlinks": 0,
+    "file_bytes": 1021921072
+  },
+  "manifest_method": "os.walk(followlinks=False), lstat per entry, sha256 of every regular file, mtime_ns and size recorded, symlinks recorded with their target.  No entry is excluded.",
+  "restore_verification": {
+    "entries_expected": 1565,
+    "entries_restored": 1565,
+    "missing": [],
+    "extra": [],
+    "mismatched": [],
+    "identical": true
+  },
+  "restore_method": "the scratch tree was rebuilt from the archive alone (zstd -dc | tar -x), re-hashed file by file, and compared against the manifest: no missing, no extra, no mismatched.  The scratch copy was then deleted; the archive is the backup.",
+  "tooling": {
+    "tar": "tar (GNU tar) 1.35",
+    "zstd": "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***"
+  },
+  "restore_command": "zstd -dc /home/tfisher/pf-g45c-backup/work.tar.zst | tar -C <target-parent> -xf -",
+  "compile_check_before_rewrite": "every driver under work/ is compile-checked with the branch interpreter before and after each rewrite batch, so a syntax break is caught even for scripts that are never executed again."
+}
