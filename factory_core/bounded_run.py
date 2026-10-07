@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
@@ -92,6 +92,17 @@ class BoundedRunContract:
     #: Passing it in avoids persisting a ``seen`` journal while still letting the
     #: caller detect a repeated boundary.
     previous_boundary_fingerprint: str | None = None
+    #: Per-source-step ceilings for this invocation only.  They may only
+    #: *tighten* what the registry already allows - the effective value is the
+    #: stricter of the two - so a contract can never grant more attempts or more
+    #: reopens than the Step catalogue does.
+    #:
+    #: These exist because a hand-written driver was reaching into the registry
+    #: to cap them (``dataclasses.replace(definition, max_attempts=attempt + 1,
+    #: max_reopens=0)``).  That is an authorisation, so it belongs in the
+    #: authorisation rather than in a private copy of the engine's registry.
+    max_attempts_per_step: Mapping[int, int] | None = None
+    max_reopens_per_step: Mapping[int, int] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.expected_revision, int) or self.expected_revision < 0:
@@ -115,6 +126,20 @@ class BoundedRunContract:
             )
             if not self.allowed_source_steps:
                 raise BoundedRunError("allowed_source_steps cannot be empty")
+        object.__setattr__(
+            self,
+            "max_attempts_per_step",
+            _validate_step_ceilings(
+                "max_attempts_per_step", self.max_attempts_per_step, minimum=1
+            ),
+        )
+        object.__setattr__(
+            self,
+            "max_reopens_per_step",
+            _validate_step_ceilings(
+                "max_reopens_per_step", self.max_reopens_per_step, minimum=0
+            ),
+        )
         object.__setattr__(
             self,
             "protected_manifest",
@@ -150,6 +175,8 @@ class BoundedRunContract:
                 key: self.protected_manifest[key]
                 for key in sorted(self.protected_manifest)
             },
+            "max_attempts_per_step": _ceilings_payload(self.max_attempts_per_step),
+            "max_reopens_per_step": _ceilings_payload(self.max_reopens_per_step),
             "run_policy": self.run_policy,
             "actor": self.actor,
         }
@@ -185,6 +212,8 @@ class BoundedRunContract:
                 if self.allowed_source_steps is not None
                 else None
             ),
+            "max_attempts_per_step": _ceilings_payload(self.max_attempts_per_step),
+            "max_reopens_per_step": _ceilings_payload(self.max_reopens_per_step),
             "protected_manifest_sha256": hashlib.sha256(
                 json.dumps(
                     self.canonical_payload()["protected_manifest"],
@@ -192,6 +221,97 @@ class BoundedRunContract:
                 ).encode("utf-8")
             ).hexdigest(),
         }
+
+
+def _validate_step_ceilings(
+    name: str, ceilings: Mapping[int, int] | None, *, minimum: int
+) -> dict[int, int] | None:
+    """Normalise a per-step ceiling mapping, or refuse it.
+
+    An empty mapping is treated as absent: a caller that scoped nothing has not
+    authorised anything extra, and the contract's identity should not depend on
+    the difference between ``None`` and ``{}``.
+    """
+
+    if not ceilings:
+        return None
+    validated: dict[int, int] = {}
+    for step, value in dict(ceilings).items():
+        if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+            raise BoundedRunError(
+                f"{name} keys must be non-negative source step ids, not {step!r}"
+            )
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise BoundedRunError(
+                f"{name}[{step}] must be an integer >= {minimum}, not {value!r}"
+            )
+        validated[int(step)] = int(value)
+    return validated
+
+
+def _ceilings_payload(ceilings: Mapping[int, int] | None) -> dict[str, int] | None:
+    """Canonical, JSON-ready form.  Sorted so the contract hash is stable."""
+
+    if not ceilings:
+        return None
+    return {str(step): ceilings[step] for step in sorted(ceilings)}
+
+
+class ScopedRegistry:
+    """A registry view that tightens Step ceilings for one bounded invocation.
+
+    Installed by the engine around the advance loop when, and only when, the
+    contract carries a ceiling.  Every resolution path goes through it, which is
+    the point: the engine reads ``max_attempts`` and ``max_reopens`` from a
+    ``StepDefinition`` at several sites, and patching each of them would leave
+    the next one added unprotected.
+
+    Both ceilings are strictest-wins, so the wrapper can only ever narrow what
+    the registry already granted - a contract cannot widen an authorisation.
+    """
+
+    def __init__(self, inner, contract: "BoundedRunContract") -> None:
+        self.inner = inner
+        self.contract = contract
+
+    def _scoped(self, definition):
+        if definition is None:
+            return None
+        attempts = (self.contract.max_attempts_per_step or {}).get(definition.id)
+        reopens = (self.contract.max_reopens_per_step or {}).get(definition.id)
+        if attempts is None and reopens is None:
+            return definition
+        return replace(
+            definition,
+            max_attempts=(
+                definition.max_attempts if attempts is None
+                else min(definition.max_attempts, attempts)
+            ),
+            max_reopens=(
+                definition.max_reopens if reopens is None
+                else min(definition.max_reopens, reopens)
+            ),
+        )
+
+    def get(self, step_id: int):
+        return self._scoped(self.inner.get(step_id))
+
+    def next_after(self, completed_step: int):
+        return self._scoped(self.inner.next_after(completed_step))
+
+    def stage_subtask(self, key: str):
+        return self._scoped(self.inner.stage_subtask(key))
+
+    def __iter__(self):
+        return (self._scoped(definition) for definition in self.inner)
+
+    def __getattr__(self, name: str):
+        # only reached when ``inner``/``contract`` are not found, so anything the
+        # registry grows later is delegated rather than silently lost
+        inner = self.__dict__.get("inner")
+        if inner is None:
+            raise AttributeError(name)
+        return getattr(inner, name)
 
 
 def _validate_project_relative(relative: str) -> None:

@@ -396,3 +396,229 @@ def test_a_live_foreign_runner_is_not_taken_over():
     finally:
         child.terminate()
         child.wait(timeout=10)
+
+
+# ============================ contract ceilings (the Gate 4 enabler)
+def test_step_ceilings_are_validated_at_construction():
+    """A ceiling is an authorisation, so a malformed one must not be accepted."""
+
+    for kwargs in (
+        {"max_attempts_per_step": {"5": 1}},
+        {"max_attempts_per_step": {5: 0}},
+        {"max_attempts_per_step": {5: -1}},
+        {"max_attempts_per_step": {-1: 1}},
+        {"max_attempts_per_step": {5: True}},
+        {"max_reopens_per_step": {5: -1}},
+        {"max_reopens_per_step": {"x": 1}},
+    ):
+        with pytest.raises(BoundedRunError):
+            BoundedRunContract(expected_revision=1, **kwargs)
+
+
+def test_an_empty_ceiling_is_absent_so_the_identity_is_stable():
+    empty = BoundedRunContract(expected_revision=1, max_attempts_per_step={})
+    absent = BoundedRunContract(expected_revision=1)
+    assert empty.max_attempts_per_step is None
+    assert empty.contract_sha256 == absent.contract_sha256
+
+
+def test_the_ceilings_are_part_of_the_contract_identity():
+    """Two authorisations that differ in scope must not share a run id."""
+
+    base = BoundedRunContract(expected_revision=1)
+    narrowed = BoundedRunContract(expected_revision=1, max_attempts_per_step={5: 1})
+    reopened = BoundedRunContract(expected_revision=1, max_reopens_per_step={5: 0})
+
+    assert base.contract_sha256 != narrowed.contract_sha256
+    assert base.contract_sha256 != reopened.contract_sha256
+
+    payload = narrowed.event_payload()
+    assert payload["max_attempts_per_step"] == {"5": 1}
+    assert payload["max_reopens_per_step"] is None
+
+
+def _definitions():
+    from factory_core.registry import StepDefinition
+
+    return {
+        step: StepDefinition(
+            id=step, name=f"step{step}", timeout_seconds=30, max_attempts=5,
+            max_reopens=2, step=type("L", (), {
+                "prepare": lambda self, c: None,
+                "execute": lambda self, c: None,
+                "validate": lambda self, c: None,
+                "recover": lambda self, c, e: None,
+            })(),
+        )
+        for step in (4, 5, 6)
+    }
+
+
+def test_the_scoped_registry_tightens_and_never_widens():
+    """Strictest-wins: a contract cannot grant what the catalogue did not."""
+
+    from factory_core.registry import StepRegistry
+    from factory_core.bounded_run import ScopedRegistry
+
+    registry = StepRegistry()
+    for definition in _definitions().values():
+        registry.register(definition)
+
+    scoped = ScopedRegistry(
+        registry,
+        BoundedRunContract(
+            expected_revision=1,
+            # 5 is tightened, 4 is asked to *loosen* (99 > 5), 6 is untouched
+            max_attempts_per_step={5: 1, 4: 99},
+            max_reopens_per_step={5: 0},
+        ),
+    )
+
+    assert scoped.get(5).max_attempts == 1 and scoped.get(5).max_reopens == 0
+    assert scoped.get(4).max_attempts == 5, "a looser ceiling must be ignored"
+    assert scoped.get(4).max_reopens == 2
+    assert scoped.get(6).max_attempts == 5 and scoped.get(6).max_reopens == 2
+
+    # every resolution path is scoped, not just get()
+    assert scoped.next_after(4).max_attempts == 1
+    assert {d.id: d.max_attempts for d in scoped} == {4: 5, 5: 1, 6: 5}
+
+
+def test_the_scoped_registry_delegates_what_it_does_not_scope():
+    from factory_core.registry import StepRegistry
+    from factory_core.bounded_run import ScopedRegistry
+
+    registry = StepRegistry()
+    for definition in _definitions().values():
+        registry.register(definition)
+
+    scoped = ScopedRegistry(registry, BoundedRunContract(expected_revision=1))
+    # nothing scoped, so definitions pass through unchanged
+    assert scoped.get(5) is registry.get(5)
+    assert list(scoped) == list(registry)
+
+
+def test_the_engine_restores_its_registry_after_a_scoped_run():
+    """The swap must not leak, exactly like the contract reference does not."""
+
+    evidence = canary.build_seed(canary.stage_seed)
+    root = canary.restore_seed()
+    engine = _engine(root)
+    original = engine.registry
+
+    contract = BoundedRunContract(
+        expected_revision=evidence["project_state"]["revision"],
+        max_subtasks=1,
+        max_attempts_per_step={5: 1},
+    )
+    with canary.frozen_time():
+        engine.run_bounded(contract)
+
+    assert engine.registry is original, "the scoped registry leaked past the run"
+
+
+def test_the_engine_does_not_swap_the_registry_without_a_ceiling():
+    """An unscoped bounded run must be exactly what it was."""
+
+    evidence = canary.build_seed(canary.stage_seed)
+    root = canary.restore_seed()
+    engine = _engine(root)
+    original = engine.registry
+
+    contract = BoundedRunContract(
+        expected_revision=evidence["project_state"]["revision"], max_subtasks=1
+    )
+    with canary.frozen_time():
+        engine.run_bounded(contract)
+
+    assert engine.registry is original
+
+
+# ==================== the ceilings actually reach the engine's retry decision
+class _TransientFailure:
+    """Fails transiently, so ``max_attempts`` is what decides the outcome."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def execute(self, _context):
+        from factory_core.domain import ExecutionResult
+
+        self.calls += 1
+        return ExecutionResult.failed("TRANSIENT_TEST_FAILURE")
+
+
+class _Accept:
+    def validate(self, _context):
+        from factory_core.domain import ValidationResult
+
+        return ValidationResult.valid()
+
+
+def _retrying_engine(root, handler, registry_max_attempts=3):
+    from factory_core.engine import FactoryEngine
+    from factory_core.registry import StepDefinition, StepRegistry
+
+    registry = StepRegistry()
+    for step_id in (1, 2):
+        registry.register(
+            StepDefinition(
+                id=step_id,
+                name=f"step{step_id}",
+                timeout_seconds=30,
+                max_attempts=registry_max_attempts,
+                handler=handler,
+                validator=_Accept(),
+            )
+        )
+    return FactoryEngine(root, store=canary.store_at(root), registry=registry, sleeper=lambda _: None)
+
+
+def _run_with_ceiling(ceiling):
+    evidence = canary.build_seed(
+        lambda root: canary.store_at(root).initialize(
+            project_id="g1-canary", project_type="modeling"
+        )
+    )
+    root = canary.restore_seed()
+    handler = _TransientFailure()
+    engine = _retrying_engine(root, handler)
+
+    contract = BoundedRunContract(
+        expected_revision=evidence["project_state"]["revision"],
+        max_subtasks=1,
+        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+        max_attempts_per_step=ceiling,
+    )
+    with canary.frozen_time():
+        engine.run_bounded(contract)
+    return handler.calls, [event["type"] for event in canary.collect(root)["events"]]
+
+
+def test_a_ceiling_reaches_the_engines_retry_decision():
+    """The behavioural proof that this is not just a payload field.
+
+    Without a ceiling the registry's budget governs and the run is retried; with
+    a ceiling of one attempt the retry never happens.  Asserting merely that the
+    field round-trips into RUN_STARTED would not show that.
+    """
+
+    calls, events = _run_with_ceiling(None)
+    assert calls == 3, "the registry's max_attempts governs when there is no ceiling"
+    assert "RETRY_SCHEDULED" in events
+
+    calls, events = _run_with_ceiling({1: 1})
+    assert calls == 1, "the ceiling cut the retries off after one attempt"
+    assert "RETRY_SCHEDULED" not in events
+
+
+def test_a_ceiling_looser_than_the_registry_changes_nothing():
+    """Strictest-wins, asserted through behaviour rather than through the field.
+
+    A contract must not be able to buy extra attempts by naming a larger number
+    than the Step catalogue allows.
+    """
+
+    calls, events = _run_with_ceiling({1: 99})
+    assert calls == 3, "the registry's cap still governs"
+    assert "RETRY_SCHEDULED" in events

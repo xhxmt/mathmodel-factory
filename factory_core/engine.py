@@ -24,6 +24,7 @@ from .bounded_run import (
     BoundedRunError,
     BoundedRunResult,
     ProtectedManifestViolation,
+    ScopedRegistry,
     check_cursor,
     verify_protected_manifest,
 )
@@ -333,6 +334,15 @@ class FactoryEngine:
         # protection check reads it, and an early return above must not leave it
         # behind for a later invocation.
         self._bounded_contract = contract
+        # A contract may tighten the Step ceilings the engine reads from a
+        # StepDefinition.  Swapping the registry for the loop is how that reaches
+        # every resolution path; the swap is skipped entirely when the contract
+        # carries no ceiling, so an unscoped run is bit-for-bit what it was.
+        previous_registry = self.registry
+        if contract is not None and (
+            contract.max_attempts_per_step or contract.max_reopens_per_step
+        ):
+            self.registry = ScopedRegistry(previous_registry, contract)
         try:
             return self._advance_loop(
                 state,
@@ -342,6 +352,7 @@ class FactoryEngine:
                 allowed_source_steps=allowed_source_steps,
             )
         finally:
+            self.registry = previous_registry
             self._bounded_contract = None
 
     def _advance_loop(
