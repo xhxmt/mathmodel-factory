@@ -1,6 +1,6 @@
 # Runtime Simplification 验收计划
 
-- **基准 head**：`2c5b6064925040ac9d59e3c1395a79d44be17d93`（`feat/runtime-simplification`，相对 `main` ahead 15 / behind 0）
+- **基准 head**：`0dbc5c39b68c453d49f8c35c932ebee05497088d`（`feat/runtime-simplification`）。Gate 0 已验证的就是这一系列最新 head，两轨均在此基础上执行。
 - **基准 worktree**：`/home/tfisher/paper_factory/.worktrees/runtime-simplification`（tree clean）
 - **配套 PR**：[#35](https://github.com/xhxmt/mathmodel-factory/pull/35)（Draft，仅为触发 CI）
 - **原则**：Gate 0 通过前不改结构；Gate 1 canary 通过前不删除任何 `work/*.py` 驱动层。
@@ -75,7 +75,7 @@ counts          events=404  stage_checkpoints=6  checkpoint_history=51  solver_j
 3. **canonical mount path**：两轨在同一 canonical 路径下**顺序运行**。仅让路径字符串长度相同**不足以**排除绝对路径进入产物内容；对 path-sensitive 输出必须显式列为例外，不能依赖长度相等。
 4. **一次一因子**：除执行入口外，输入、revision、cursor、模型配置、registry 全部一致。
 5. **起点/终点三元组快照**：每次 canary 前后各记录一次 `(pragma user_version, schema_info, project_state.schema_version)`，作为 G1.9 归因与「副本未被另一轨污染」的凭据。
-6. **基线锁定**：所有 canary 在 `2c5b606` 上执行，不边改边测。当前 CI 等价口径收集 **2415 / 2424**（9 项 latex deselected）；阶段记录中的 2459 与当前提交不一致，以实测为准。
+6. **基线锁定**：所有 canary 在 `0dbc5c39b68c453d49f8c35c932ebee05497088d` 上执行，不边改边测。当前 CI 等价口径收集 **2415 / 2424**（9 项 latex deselected）；阶段记录中的 2459 与当前提交不一致，以实测为准。
 
 ---
 
@@ -203,8 +203,8 @@ SKIPPED [n] tests/_gate_projects.py:79: real project {A,B,R} unavailable at
 ### 3.1 硬规则：两轨固定同一 commit
 
 ```text
-legacy  track: 2c5b606 + FactoryEngine.run(max_steps=1)
-bounded track: 2c5b606 + FactoryEngine.run_bounded(...)
+legacy  track: 0dbc5c3 + FactoryEngine.run(max_steps=1)
+bounded track: 0dbc5c3 + FactoryEngine.run_bounded(...)
 ```
 
 `main` / `bde49712` **只允许出现在 Gate 3 的 downgrade 测试中**。若 Gate 1 旧轨用 `main`，则 dirty classification、schema、artifact policy、reason envelope 等代码差异会混入结果，届时无法区分差异来自 `run_bounded` 入口还是代码版本。
@@ -236,6 +236,43 @@ bounded track: 2c5b606 + FactoryEngine.run_bounded(...)
 | G1.10 | 新路径身份记录 | `bounded_run_id`、`bounded_run_contract_sha256` 进入 `RUN_STARTED`；`BoundedRunResult` 各字段可回查，contract SHA 与入参一致（J1-10 收口） |
 
 **G1.9 的重新定义**：若宿主是 `paused` + `phys=9` 的项目，则必须 `resume → advance`。物理升级更早发生在 `load()`；逻辑 `project_state.schema_version` 9→10 很可能在 **`resume` 这次 event-carrying write** 就已完成。因此到达 `run(max_steps=1)` vs `run_bounded()` 时，两边**都已**是逻辑 schema 10。所以只记录收敛发生在哪个 transition，不强行归因。**migration / downgrade 的性质统一放 Gate 3。**
+
+### 3.4 已实现：hermetic ready canary
+
+`tests/_g1_canary.py`（基建）+ `tests/test_gate_g1_entry_equivalence.py`（12 项）。
+
+**固定不变量（两轨完全相同的部分）**
+
+| 变量 | 处置 |
+|---|---|
+| 绝对路径 | 单一 canonical 路径 `/tmp/pf-g1-canary/project`，两轨先后恢复到同一路径。不用 `tmp_path`——绝对路径会进入产物与事件 payload，共用路径比"等长路径"更严格 |
+| 时钟 | 向 `SQLiteStateStore(clock=...)`（`storage.py:82`）注入**恒定**时钟 `1_700_000_000`。因此所有时间戳、以及由 `created_at` 参与哈希的 `event_id`（`workflow_events.build_event_payload`）都变为确定值，可以**逐字节比较**而不是归一化掉 |
+| 种子 | 一次生成，记录 DB sha256、文件 manifest、三元组、aggregate root、各表计数；随后 `copytree` 存为字节级种子。两轨各自 `rmtree` + `copytree` 恢复 |
+
+**显式归一化清单（仅此四项，其余差异一律不得忽略）**
+
+| 键 | 来源 |
+|---|---|
+| `runner_lease_id` / `lease_id` | `engine.py:309` 的 `uuid.uuid4().hex` |
+| `heartbeat_at` | `engine.py:317`、`engine.py:504` 两处直接调用 `time.time()`，未走注入时钟 |
+| `runner_pid` | 拥有进程 |
+
+`worker_pid` / `worker_identity` **故意不归一化**：两轨运行在同一进程内，必须精确相等（`_process_identity` 取自 `/proc/<pid>/stat` 的启动时间 token，进程内稳定）。
+
+**预期差异（单独断言存在，而非静默容忍）**：bounded 轨的 `RUN_STARTED` payload 多出 `bounded_run` 授权块（`engine.py:324`），含 `bounded_run_id` / `bounded_run_contract_sha256` / `run_policy` / `max_subtasks` / `expected_revision` / `protected_manifest_sha256`。比较器对**两侧**同时剥离该块后再比较，使 `compare()` 对称；授权块的存在由 `test_smoke_bounded_track_binds_its_authorisation` 单独断言，legacy 轨不含该块由 `test_smoke_legacy_track_carries_no_authorisation` 断言。
+
+**两层**
+
+- **Layer 1 smoke**（5 项）：step 调度器 + 两 Step fake registry。覆盖 CAS 拒绝（零业务事件）、契约身份、结构化结果、`PROJECT_COMPLETED`/无进展 boundary。**不用于关闭 G1**——`stage_checkpoints`、Stage cursor、Stage dirty ownership 不在此路径上。
+- **Layer 2 正式**（3 项 + 2 项控制）：`scheduler_generation=stage_v1` 的真实 Stage 调度器。registry 用 `build_native_registry()` 的**注入点**（`factory_core/steps/registry.py:27`）：保留全部 17 个真实 Step contract、真实 prompt 模板名（`contract.prompt` 即模板文件名）、真实 Stage subtask 路由与 checkpoint 机制，仅把 dispatcher 换成确定性实现（无模型调用）、`validator_factory` 换成 permissive 实现。实测路径确实经过 `STAGE_SUBTASK_SELECTED` / `PROMPT_INPUT_BOUND` / `STEP_SUCCEEDED`，并产生真实 `stage_checkpoints`。
+  - 场景 A：普通 Stage subtask 推进 1 次
+  - 场景 B：`last_completed_step=4` 把 cursor 置于 Stage 4 / subtask `solve` / source step 5，并预置一个同槽位的 durable local solver job + exit artifact + receipt，使 `solver_jobs` 非空、G1.5 的 owner slot / status 比较**有真实数据**（并断言引擎未改写 `status`）
+
+**比较器负对照**（本轮新增，用于防止"全绿但空转"）
+
+- `test_the_comparator_detects_a_real_divergence`：故意把 bounded 轨放宽到 `max_subtasks=2`，比较器必须报出差异并定位到 `project_state` / `events`。
+- `test_the_comparator_is_silent_on_the_same_inputs`：两次相同输入必须全等（replay hash 与 aggregate root 均可复现）。
+- 该负对照在本次实现中**确实抓到过一个真实缺陷**：`compare()` 原先只从右侧剥离 `bounded_run`，对两次 bounded 运行不对称，导致误报。已改为两侧同时剥离。
 
 ---
 
@@ -394,7 +431,7 @@ G2/G3/S5 的 gate 测试断言的是**真实生产历史的具体事实**（A �
 ```text
 Gate 0  Draft PR CI  [#35；uv.lock 已修（1a04400），剩 G2/G3 环境耦合待决]
   ↓
-Gate 1  入口等价性（两轨固定 1a04400，或用 hermetic ready canary）
+Gate 1  入口等价性（两轨固定 0dbc5c3，或用 hermetic ready canary）
   ↓
 Gate 2  bounded contract 失败语义（8 项）
   ↓
@@ -405,4 +442,4 @@ Gate 4  driver 退役（先 1 条链，再批量）
 
 **暂缓**：生产级 `factory rewind`；`work/*.py` 的批量删除。
 
-**注意**：Gate 1 的硬规则原写「两轨固定 `2c5b606`」，现已因 `uv.lock` 同步顺延为 **`1a04400`**（差异仅 `uv.lock`，S6 代码零改动）。
+**注意**：Gate 1 的两轨基线固定为 **`0dbc5c3`**（即 Gate 0 验证通过的那个 head）。历史沿革：`2c5b606` → `1a04400`（同步 `uv.lock`）→ `108e620`（G2/G3 gate 可在无生产主机上运行）→ `54be447`（冻结本计划）→ `0dbc5c3`（关闭 Gate 0）。
