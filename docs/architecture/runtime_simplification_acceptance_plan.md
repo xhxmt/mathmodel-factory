@@ -428,7 +428,49 @@ domain root
 
 ---
 
-## 6. Gate 4 — driver 退役
+### 5.1 已实现：版本与历史兼容
+
+`tests/test_gate_g3_version_compat.py`（19 项）。
+
+**关键设计：夹具是"生成"的，不是"借来"的。** `bde49712` 是最后一个 `SCHEMA_VERSION = 9` 的提交，因此用 `git archive bde49712 factory_core` 取出它的 `factory_core`，再用**同一个 venv**、`PYTHONPATH` 指向该树、**cwd 设为中立目录**运行，就得到一个真正的"旧解释器"。
+
+> 踩过的坑：`python -c` 会把 **cwd 放在 `sys.path` 首位**，所以若从仓库 cwd 运行，`PYTHONPATH` 会被本分支的 `factory_core` 压过——实测第一次就拿到了 `SCHEMA_VERSION = 10`，等于在拿新代码断言新代码。测试里已用中立 cwd 并在 docstring 中说明。
+
+因此 v9 库与真实 downgrade 都能在 **CI 中复现**，而不是只在有生产库的机器上 skip（CI 的 `core` job 用 `fetch-depth: 0`，历史可用）。
+
+| 判据 | 承接测试 | 关键断言 |
+|---|---|---|
+| G3.1 读触发迁移 | `test_a_read_migrates_the_physical_schema_and_not_the_event_stream` | 实测三元组 `(user_version 0, schema_info 9→10, project_state 9→9)`；events 与 revision 不变；v10 侧表 `dirty_cause_classification` 由无变有 |
+| G3.1 各读路径 | `test_every_read_path_triggers_the_migration`（`load` / `status_snapshot` / `events` / `dirty_flags` 参数化） | **四条读路径都会迁移**——所以任何 Factory 读都不能用来检查原始 v9 库 |
+| G3.1 首次真实写入收敛 | `test_the_first_genuine_write_converges_the_state_generation` | 读之后 `project_state` 仍为 9；`transition()` 之后才变 10 |
+| **G3.2 I8-a** | `test_a_structurally_incomplete_v9_database_is_silently_promoted` | **特征化，未修**：删掉 v9 自带的 `stage_checkpoint_history` 后仍被静默重建并提升到 10。该测试当前**故意通过**，I8-a 落地时应被反向 |
+| **G3.3 I8-b** | `test_a_production_database_is_audited_read_only_and_migrated_in_a_copy`（6 库参数化） | 原始库只用原始 SQLite 读（sha256 / mtime / 三元组 / 事件数）；副本内迁移动；**复核原始库 sha256 与 mtime 均未变** |
+| **G3.4 downgrade** | `test_the_old_code_refuses_a_schema_10_database` + `test_the_old_interpreter_is_really_the_old_schema_version` | 旧代码报 `unsupported workflow schema 10`；DB sha256 未变。后者是**防空转守卫**：若旧解释器哪天解析成 10，首个测试即失效 |
+| **G3.5 v9→10→旧解释器** | `test_v9_migrated_then_opened_by_the_old_code_fails_closed` | 迁移后旧代码拒绝，且 sha256 与全部 raw 事实不变（fail-closed，零业务写） |
+| 样本保全 | `test_the_preserved_v9_specimen_still_matches_its_recorded_digest`、`test_the_specimen_migrates_the_same_way_on_a_copy` | 样本 sha256 恒为 `e7c3e255…`；迁移只在副本内发生，且断言运行后样本 sha256 仍未变 |
+
+### 5.2 Gate 3 实测发现：一个早于 versioned envelope 代次的生产库
+
+I8-b 审计过程中，`event_replay_valid` 断言在 `cumcm_2020_a_codex_luna` 上失败。A/B 对照后确认**不是迁移造成的**，而是该库的事件流本身不带 versioned replay envelope：
+
+```
+ReplayIntegrityError: event stream contains no versioned replay snapshot
+```
+
+6 个生产库的 envelope 覆盖率实测：
+
+| 库 | 物理版本 | 事件数 | 带 envelope | 首个 envelope revision |
+|---|---|---|---|---|
+| `cumcm_2020_a_codex_luna` | 9 | 296 | **0** | — |
+| `stability_run2` | 9 | 189 | 189 | 1 |
+| `stability_run3` | 9 | 12 | 12 | 1 |
+| `stability_run4` | 10 | 2484 | 2484 | 1 |
+| `formal_2025b` | 10 | 1411 | 1411 | 1 |
+| `cumcm_2026_a` | 10 | 561 | 561 | 1 |
+
+即：**恰好一个**生产库（296 条事件，0 条带 envelope）早于 versioned-event 代次，其余全部自 revision 1 起完整覆盖。因此 replay 与 aggregate-root 契约对该库**不适用**——这与"校验失败"是两回事，审计据**数据**分支而非一刀切：`enveloped == 0` 时断言 `event_replay_valid is False`（并确认流非空），`enveloped > 0` 时才断言其为 `True`。静默 skip 会把这一区分藏起来，故不采用。
+
+**影响**：该库的审计链无法被 replay 校验（设计使然）。它不应作为任何"旧事件可全量 replay"结论的证据——G3 阶段的 replay 结论本就只基于 A/B/R（三者均完整带 envelope）。## 6. Gate 4 — driver 退役
 
 | 编号 | 动作 | 通过判据 |
 |---|---|---|
