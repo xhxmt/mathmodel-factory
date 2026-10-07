@@ -103,6 +103,14 @@ class BoundedRunContract:
     #: authorisation rather than in a private copy of the engine's registry.
     max_attempts_per_step: Mapping[int, int] | None = None
     max_reopens_per_step: Mapping[int, int] | None = None
+    #: Path -> ``(size, mtime_ns)`` for artifacts that are too large to hash on
+    #: every entry and pre-commit check.  Checked exactly like
+    #: ``protected_manifest``, but *weaker*: equal size and mtime do not prove
+    #: equal content, and a writer that preserves both can defeat it.  It exists
+    #: because a caller protecting a very large artifact faces a real tradeoff
+    #: between hashing cost and identity strength, and that choice belongs in the
+    #: authorisation rather than in a private check the engine cannot see.
+    protected_identity: Mapping[str, tuple[int, int]] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.expected_revision, int) or self.expected_revision < 0:
@@ -145,6 +153,28 @@ class BoundedRunContract:
             "protected_manifest",
             {str(k): str(v) for k, v in dict(self.protected_manifest).items()},
         )
+        identity: dict[str, tuple[int, int]] = {}
+        for relative, expectation in dict(self.protected_identity or {}).items():
+            _validate_project_relative(str(relative))
+            try:
+                size, mtime_ns = expectation  # type: ignore[misc]
+            except (TypeError, ValueError) as exc:
+                raise BoundedRunError(
+                    f"protected_identity[{relative!r}] must be (size, mtime_ns)"
+                ) from exc
+            for label, value in (("size", size), ("mtime_ns", mtime_ns)):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise BoundedRunError(
+                        f"protected_identity[{relative!r}] {label} must be a "
+                        f"non-negative integer, not {value!r}"
+                    )
+            if str(relative) in self.protected_manifest:
+                raise BoundedRunError(
+                    f"{relative!r} appears in both protected_manifest and "
+                    "protected_identity; one path gets one kind of check"
+                )
+            identity[str(relative)] = (int(size), int(mtime_ns))
+        object.__setattr__(self, "protected_identity", identity or None)
         for relative in self.protected_manifest:
             _validate_project_relative(relative)
         for digest in self.protected_manifest.values():
@@ -177,6 +207,15 @@ class BoundedRunContract:
             },
             "max_attempts_per_step": _ceilings_payload(self.max_attempts_per_step),
             "max_reopens_per_step": _ceilings_payload(self.max_reopens_per_step),
+            "protected_identity": (
+                {
+                    path: {"size": self.protected_identity[path][0],
+                           "mtime_ns": self.protected_identity[path][1]}
+                    for path in sorted(self.protected_identity)
+                }
+                if self.protected_identity
+                else None
+            ),
             "run_policy": self.run_policy,
             "actor": self.actor,
         }
@@ -214,6 +253,15 @@ class BoundedRunContract:
             ),
             "max_attempts_per_step": _ceilings_payload(self.max_attempts_per_step),
             "max_reopens_per_step": _ceilings_payload(self.max_reopens_per_step),
+            "protected_identity": (
+                {
+                    path: {"size": self.protected_identity[path][0],
+                           "mtime_ns": self.protected_identity[path][1]}
+                    for path in sorted(self.protected_identity)
+                }
+                if self.protected_identity
+                else None
+            ),
             "protected_manifest_sha256": hashlib.sha256(
                 json.dumps(
                     self.canonical_payload()["protected_manifest"],
@@ -350,6 +398,9 @@ class ProtectedVerification:
     missing: tuple[str, ...] = ()
     changed: tuple[str, ...] = ()
     unsafe: tuple[str, ...] = ()
+    #: Paths whose (size, mtime_ns) no longer matches.  Kept apart from
+    #: ``changed`` so a caller can tell a content change from an identity change.
+    identity_changed: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -358,6 +409,7 @@ class ProtectedVerification:
             "missing": list(self.missing),
             "changed": list(self.changed),
             "unsafe": list(self.unsafe),
+            "identity_changed": list(self.identity_changed),
         }
 
     def describe(self) -> str:
@@ -368,6 +420,8 @@ class ProtectedVerification:
             parts.append("missing: " + ", ".join(self.missing[:4]))
         if self.changed:
             parts.append("changed: " + ", ".join(self.changed[:4]))
+        if self.identity_changed:
+            parts.append("identity changed: " + ", ".join(self.identity_changed[:4]))
         return "; ".join(parts) or "ok"
 
 
@@ -380,7 +434,9 @@ def _sha256_file(path: Path) -> str:
 
 
 def verify_protected_manifest(
-    project_dir, manifest: Mapping[str, str]
+    project_dir,
+    manifest: Mapping[str, str],
+    identity: Mapping[str, tuple[int, int]] | None = None,
 ) -> ProtectedVerification:
     """Compare the project's current bytes against the contract's expectations.
 
@@ -395,6 +451,30 @@ def verify_protected_manifest(
     missing: list[str] = []
     changed: list[str] = []
     unsafe: list[str] = []
+    identity_changed: list[str] = []
+    identity = dict(identity or {})
+    for relative in sorted(identity):
+        candidate = project / relative
+        try:
+            if candidate.is_symlink():
+                unsafe.append(relative)
+                continue
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            missing.append(relative)
+            continue
+        if not resolved.is_file():
+            missing.append(relative)
+            continue
+        try:
+            resolved.relative_to(project)
+        except ValueError:
+            unsafe.append(relative)
+            continue
+        stat = resolved.stat()
+        size, mtime_ns = identity[relative]
+        if stat.st_size != size or stat.st_mtime_ns != mtime_ns:
+            identity_changed.append(relative)
     for relative in sorted(manifest):
         candidate = project / relative
         try:
@@ -416,11 +496,12 @@ def verify_protected_manifest(
         if _sha256_file(resolved) != manifest[relative]:
             changed.append(relative)
     return ProtectedVerification(
-        ok=not (missing or changed or unsafe),
-        checked=len(manifest),
+        ok=not (missing or changed or unsafe or identity_changed),
+        checked=len(manifest) + len(identity),
         missing=tuple(missing),
         changed=tuple(changed),
         unsafe=tuple(unsafe),
+        identity_changed=tuple(identity_changed),
     )
 
 

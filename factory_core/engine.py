@@ -116,8 +116,12 @@ class FactoryEngine:
         )
 
         start_state = self.store.load()
-        if contract.protected_manifest:
-            entry = verify_protected_manifest(self.project_dir, contract.protected_manifest)
+        if contract.protected_manifest or contract.protected_identity:
+            entry = verify_protected_manifest(
+                self.project_dir,
+                contract.protected_manifest,
+                contract.protected_identity,
+            )
             if not entry.ok:
                 # Refuse before writing anything: the caller's own expectation is
                 # already violated, so advancing would build on a broken premise.
@@ -125,7 +129,7 @@ class FactoryEngine:
                     "protected manifest is already violated at entry: " + entry.describe()
                 )
         else:
-            entry = verify_protected_manifest(self.project_dir, {})
+            entry = verify_protected_manifest(self.project_dir, {}, {})
 
         start_revision = int(start_state.revision)
         previous_status = str(
@@ -139,7 +143,9 @@ class FactoryEngine:
             if event.type == "STEP_SUCCEEDED"
         ]
         completed = len(succeeded)
-        final = verify_protected_manifest(self.project_dir, contract.protected_manifest)
+        final = verify_protected_manifest(
+            self.project_dir, contract.protected_manifest, contract.protected_identity
+        )
         blocked_reason = ""
         pending = getattr(end_state, "pending_action", None)
         if pending is not None:
@@ -1249,9 +1255,14 @@ class FactoryEngine:
         # commit instead of being discovered by the caller afterwards.  The entry
         # check answers a different question (was the state already as expected),
         # so both are needed.
-        if self._bounded_contract is not None and self._bounded_contract.protected_manifest:
+        if self._bounded_contract is not None and (
+            self._bounded_contract.protected_manifest
+            or self._bounded_contract.protected_identity
+        ):
             verification = verify_protected_manifest(
-                self.project_dir, self._bounded_contract.protected_manifest
+                self.project_dir,
+                self._bounded_contract.protected_manifest,
+                self._bounded_contract.protected_identity,
             )
             if not verification.ok:
                 return self._stage_transition(

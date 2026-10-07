@@ -519,3 +519,314 @@ def test_the_hermetic_registry_reaches_step_eight_and_no_further():
     assert advances[7] == 8
     # and the gate is where the reach ends
     assert advances[8] == 8, "step 8.5 onward needs real gate evidence"
+
+
+# ===================== the identity protection the recovery driver needed
+def _identity_of(root, relative):
+    stat = (root / relative).stat()
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+def test_protected_identity_is_validated_at_construction():
+    """Same path safety and shape checks as the hash manifest."""
+
+    from factory_core.bounded_run import BoundedRunError
+
+    for kwargs in (
+        {"protected_identity": {"../escape": (1, 2)}},
+        {"protected_identity": {"/abs": (1, 2)}},
+        {"protected_identity": {"./dot": (1, 2)}},
+        {"protected_identity": {"ok": 5}},
+        {"protected_identity": {"ok": (-1, 2)}},
+        {"protected_identity": {"ok": (1, -2)}},
+        {"protected_identity": {"ok": (True, 2)}},
+    ):
+        with pytest.raises(BoundedRunError):
+            BoundedRunContract(expected_revision=1, **kwargs)
+
+
+def test_a_path_cannot_be_protected_two_ways_at_once():
+    """One path, one kind of check - otherwise the weaker one is ambiguous."""
+
+    from factory_core.bounded_run import BoundedRunError
+
+    with pytest.raises(BoundedRunError, match="both protected_manifest and"):
+        BoundedRunContract(
+            expected_revision=1,
+            protected_manifest={"canary_protected.txt": "a" * 64},
+            protected_identity={"canary_protected.txt": (3, 4)},
+        )
+
+
+def test_identity_is_part_of_the_contract_identity():
+    base = BoundedRunContract(expected_revision=1)
+    with_identity = BoundedRunContract(
+        expected_revision=1, protected_identity={"big.bin": (10, 20)}
+    )
+    assert base.contract_sha256 != with_identity.contract_sha256
+    assert with_identity.event_payload()["protected_identity"] == {
+        "big.bin": {"size": 10, "mtime_ns": 20}
+    }
+    assert BoundedRunContract(
+        expected_revision=1, protected_identity={}
+    ).contract_sha256 == base.contract_sha256, "an empty mapping is absent"
+
+
+def test_identity_is_enforced_at_entry_and_before_commit():
+    """The two checks the driver hand-rolled, both now engine-side."""
+
+    from factory_core.bounded_run import ProtectedManifestViolation
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    identity = {canary.PROTECTED_FILE: _identity_of(root, canary.PROTECTED_FILE)}
+
+    # clean at entry: the run must proceed and commit
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    with canary.frozen_time():
+        outcome = engine.run_bounded(
+            BoundedRunContract(
+                expected_revision=state.revision,
+                max_subtasks=1,
+                run_policy=RunPolicy.BOUNDED_SUBTASKS,
+                protected_identity=identity,
+            )
+        )
+    assert outcome.entry_verification.ok is True
+    assert outcome.final_verification.ok is True
+    assert outcome.entry_verification.checked == 1
+
+    # broken at entry: refused before anything runs
+    canary.restore_seed()
+    (root / canary.PROTECTED_FILE).write_text("tampered\n", encoding="utf-8")
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    with canary.frozen_time(), pytest.raises(ProtectedManifestViolation):
+        engine.run_bounded(
+            BoundedRunContract(expected_revision=state.revision, protected_identity=identity)
+        )
+
+
+def test_an_identity_break_during_the_run_is_reported_separately():
+    """A size/mtime change must not be confused with a hash change."""
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    identity = {canary.PROTECTED_FILE: _identity_of(root, canary.PROTECTED_FILE)}
+
+    def break_it(_request):
+        (root / canary.PROTECTED_FILE).write_text("a much longer replacement\n", encoding="utf-8")
+
+    engine = FactoryEngine(
+        root,
+        store=canary.store_at(root),
+        registry=canary.stage_registry(
+            dispatcher=canary.HermeticDispatcher(on_execute=break_it)
+        ),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    with canary.frozen_time():
+        outcome = engine.run_bounded(
+            BoundedRunContract(
+                expected_revision=state.revision,
+                max_subtasks=1,
+                run_policy=RunPolicy.BOUNDED_SUBTASKS,
+                protected_identity=identity,
+            )
+        )
+
+    assert outcome.final_verification.ok is False
+    assert canary.PROTECTED_FILE in outcome.final_verification.identity_changed
+    assert outcome.final_verification.changed == ()
+    assert outcome.stop_reason == "PROTECTED_MANIFEST_VIOLATED"
+
+
+def test_identity_protection_is_weaker_than_hashing_and_says_so():
+    """The documented weakness, asserted so it cannot be discovered by surprise.
+
+    Equal size and mtime do not prove equal content: a writer that rewrites the
+    file with the same length and then restores the mtime passes the identity
+    check.  That is the tradeoff the caller accepts in exchange for not hashing a
+    very large artifact, and it is why the two checks are reported separately.
+    """
+
+    import os
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    path = root / canary.PROTECTED_FILE
+    original = path.read_bytes()
+    identity = {canary.PROTECTED_FILE: _identity_of(root, canary.PROTECTED_FILE)}
+
+    replacement = b"X" * len(original)
+    assert replacement != original
+    path.write_bytes(replacement)
+    os.utime(path, ns=(identity[canary.PROTECTED_FILE][1], identity[canary.PROTECTED_FILE][1]))
+
+    from factory_core.bounded_run import verify_protected_manifest
+
+    as_identity = verify_protected_manifest(root, {}, identity)
+    assert as_identity.ok is True, "identity alone cannot see this"
+
+    as_hash = verify_protected_manifest(
+        root, {canary.PROTECTED_FILE: canary.protected_digest(canary.PROTECTED_CONTENT)}
+    )
+    assert as_hash.ok is False, "a hash can"
+
+
+# ------------------------- representative: the recovery/boundary family
+LARGE_FILE = "canary_large_manifest.json"
+LARGE_CONTENT = "{\"value\": 1}\n"
+
+
+def _recovery_seed(root):
+    """The recovery driver's stance: hash the small things, identify the big one.
+
+    ``run_final_workflow_resume.py`` loaded both a sha256 manifest and a
+    ``large_manifest_identity.json`` carrying a path, a size and an mtime_ns, and
+    checked both.  The seed reproduces that shape.
+    """
+
+    canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    (root / LARGE_FILE).write_text(LARGE_CONTENT, encoding="utf-8")
+
+
+def _recovery_contract_fields(root):
+    stat = (root / LARGE_FILE).stat()
+    return {
+        "protected_manifest": _protected(),
+        "protected_identity": {LARGE_FILE: (stat.st_size, stat.st_mtime_ns)},
+    }
+
+
+def _recovery_legacy_track():
+    """The driver as written: verify both kinds, run, verify both again."""
+
+    import hashlib
+
+    root = canary.restore_seed()
+    fields = _recovery_contract_fields(root)
+
+    def verify():
+        for relative, expected in fields["protected_manifest"].items():
+            with (root / relative).open("rb") as handle:
+                assert hashlib.file_digest(handle, "sha256").hexdigest() == expected
+        stat = (root / LARGE_FILE).stat()
+        size, mtime_ns = fields["protected_identity"][LARGE_FILE]
+        assert stat.st_size == size and stat.st_mtime_ns == mtime_ns
+
+    verify()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    with canary.frozen_time():
+        state = engine.run(max_steps=1)
+    verify()
+    result = canary.collect(root)
+    result["returned_last_completed_step"] = state.last_completed_step
+    return result
+
+
+def _recovery_migrated_track():
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    contract = BoundedRunContract(
+        expected_revision=state.revision,
+        expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id),
+        max_subtasks=1,
+        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+        **_recovery_contract_fields(root),
+    )
+    with canary.frozen_time():
+        outcome = engine.run_bounded(contract)
+    result = canary.collect(root)
+    result["returned_last_completed_step"] = result["project_state"]["last_completed_step"]
+    result["outcome"] = outcome
+    return result
+
+
+def test_the_recovery_driver_migrates_with_both_kinds_of_protection():
+    """``work/run_final_workflow_resume.py``, 40 lines, the recovery family.
+
+    Its verify() checked a sha256 manifest *and* a large file's identity, and its
+    while loop ran bounded steps until the position left a range.  Both kinds of
+    check are now contract fields, checked at entry and before the commit.
+    """
+
+    canary.build_seed(_recovery_seed)
+    legacy = _recovery_legacy_track()
+    migrated = _recovery_migrated_track()
+
+    assert legacy["returned_last_completed_step"] == migrated["returned_last_completed_step"]
+    findings = canary.compare(legacy, migrated)
+    non_empty = {area: diff for area, diff in findings.items() if diff}
+    assert not non_empty, "\n".join(
+        f"{area}:\n  " + "\n  ".join(diff[:10]) for area, diff in non_empty.items()
+    )
+
+    outcome = migrated["outcome"]
+    assert outcome.entry_verification.ok is True
+    assert outcome.final_verification.ok is True
+    assert outcome.entry_verification.checked == 2, "one hash plus one identity"
+    assert not any(p.endswith("progress.json") for p in migrated["files"])
+    assert not any(p.endswith("large_manifest_identity.json") for p in migrated["files"])
+
+
+def test_the_recovery_drivers_loop_becomes_successive_bounded_calls():
+    """Its ``while 11 <= active_step <= 15`` becomes caller-side repetition.
+
+    The stop condition is the difference: the driver inspected the state itself
+    and broke out; the migrated form asks each invocation what happened, and a
+    repeat with no progress is NEEDS_INSPECTION rather than a silent exit.
+    """
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+
+    steps = []
+    fingerprint = None
+    for _ in range(2):
+        state = canary.store_at(root).load()
+        contract = BoundedRunContract(
+            expected_revision=state.revision,
+            max_subtasks=1,
+            run_policy=RunPolicy.BOUNDED_SUBTASKS,
+            protected_manifest=_protected(),
+            previous_boundary_fingerprint=fingerprint,
+        )
+        with canary.frozen_time():
+            outcome = engine.run_bounded(contract)
+        steps.append((outcome.completed_subtasks, outcome.made_progress))
+        fingerprint = outcome.boundary_fingerprint
+        if not outcome.made_progress:
+            break
+
+    assert steps[0] == (1, True), "the first invocation advanced"
+    # the second continues from where the first stopped, so it also advances
+    assert steps[1] == (1, True)
+    assert all(advanced for _, advanced in steps)
