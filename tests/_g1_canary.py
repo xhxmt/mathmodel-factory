@@ -438,6 +438,17 @@ FACTORY_ROOT = Path(tempfile.gettempdir()) / "pf-g1-factory"
 SOLVER_JOB_ID = "local_python_g1_canary_0001"
 
 
+#: Prompt templates the registry asks for that are not Step contract prompts.
+_EXTRA_PROMPTS = (
+    "step2_modeling_proposal.txt",
+    "step2_modeling_critic.txt",
+    "step8_5_reviewer_entry.txt",
+    "execution_auditor.txt",
+    "math_auditor.txt",
+    "paper_reviewer.txt",
+)
+
+
 def ensure_factory() -> Path:
     """A factory root carrying the real prompt template names.
 
@@ -455,6 +466,15 @@ def ensure_factory() -> Path:
                 "hermetic prompt for __BASE_NAME__ at __PROJECT_PATH__\n",
                 encoding="utf-8",
             )
+    # build_native_registry also registers Stage subtasks whose prompts are not
+    # Step contracts (step 8.5's reviewer entry gate, and step 2's two proposal
+    # prompts), and the judge prompts live outside the catalogue too.  Names
+    # taken from the templates factory_core/steps and stages.py actually ask for.
+    for extra in _EXTRA_PROMPTS:
+        (prompts / extra).write_text(
+            "hermetic prompt for __BASE_NAME__ at __PROJECT_PATH__\n",
+            encoding="utf-8",
+        )
     return FACTORY_ROOT
 
 
@@ -526,6 +546,26 @@ def paused_seed(root: Path) -> None:
         changes={"status": WorkflowStatus.PAUSED},
         payload={"reason": {"code": "PAUSED", "subcode": "OPERATOR", "actor": "operator"}},
     )
+
+
+def stage_seed_ready_for_step(root: Path, completed_step: int) -> None:
+    """A Stage v1 project whose next subtask is ``completed_step + 1``.
+
+    Drivers hard-code the step they were written for; seeds express the same
+    position without the rotted revision.
+    """
+
+    store_at(root).initialize(
+        project_id="g1-canary",
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+        last_completed_step=completed_step,
+    )
+
+
+def stage_seed_ready_for_step_with_protected_file(root: Path, completed_step: int) -> None:
+    stage_seed_ready_for_step(root, completed_step)
+    (root / PROTECTED_FILE).write_text(PROTECTED_CONTENT, encoding="utf-8")
 
 
 def stage_seed_at_step_5(root: Path) -> None:

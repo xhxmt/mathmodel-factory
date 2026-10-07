@@ -95,7 +95,10 @@ def _migrated_track(limit, *, actor="operator") -> dict:
     """The driver migrated: one bounded invocation, no shim, no journals."""
 
     root = canary.restore_seed()
-    engine = FactoryEngine(root, store=canary.store_at(root), registry=canary.stage_registry())
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
     state = canary.store_at(root).load()
     contract = BoundedRunContract(
         expected_revision=state.revision,
@@ -262,7 +265,10 @@ def test_the_drivers_hard_coded_precondition_is_no_longer_needed():
 
     evidence = _seed()
     root = canary.restore_seed()
-    engine = FactoryEngine(root, store=canary.store_at(root), registry=canary.stage_registry())
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
 
     stale = BoundedRunContract(
         expected_revision=evidence["project_state"]["revision"] + 100,
@@ -277,3 +283,239 @@ def test_the_drivers_hard_coded_precondition_is_no_longer_needed():
     )
     with canary.frozen_time(), pytest.raises(BoundedRunError, match="cursor mismatch"):
         engine.run_bounded(wrong_position)
+
+
+# ============================ generic manifest-only driver shape
+# The two representatives below are the plain "protect, advance one step,
+# re-protect" drivers.  They differ from the first chain only in that they carry
+# no registry shim, so the legacy form needs no shim reproduction either.
+def _protected() -> dict:
+    return {
+        canary.PROTECTED_FILE: canary.protected_digest(canary.PROTECTED_CONTENT)
+    }
+
+
+def _verify(root):
+    import hashlib
+
+    for relative, expected in _protected().items():
+        with (root / relative).open("rb") as handle:
+            assert hashlib.file_digest(handle, "sha256").hexdigest() == expected, relative
+
+
+def _manifest_legacy_track(completed_step):
+    """The driver as written: verify, run(max_steps=1), verify again."""
+
+    root = canary.restore_seed()
+    _verify(root)
+    engine = FactoryEngine(
+        root,
+        store=canary.store_at(root),
+        registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    with canary.frozen_time():
+        state = engine.run(max_steps=1)
+    _verify(root)
+    result = canary.collect(root)
+    result["returned_last_completed_step"] = state.last_completed_step
+    return result
+
+
+def _manifest_migrated_track(completed_step):
+    """The migrated form: one bounded invocation carrying the same manifest."""
+
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root,
+        store=canary.store_at(root),
+        registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    contract = BoundedRunContract(
+        expected_revision=state.revision,
+        expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id),
+        max_subtasks=1,
+        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+        protected_manifest=_protected(),
+    )
+    with canary.frozen_time():
+        outcome = engine.run_bounded(contract)
+    result = canary.collect(root)
+    result["returned_last_completed_step"] = result["project_state"]["last_completed_step"]
+    result["outcome"] = outcome
+    return result
+
+
+def _assert_migrated_shape(legacy, migrated):
+    assert legacy["returned_last_completed_step"] == migrated["returned_last_completed_step"]
+    findings = canary.compare(legacy, migrated)
+    non_empty = {area: diff for area, diff in findings.items() if diff}
+    assert not non_empty, "\n".join(
+        f"{area}:\n  " + "\n  ".join(diff[:10]) for area, diff in non_empty.items()
+    )
+    written = set(migrated["files"])
+    assert not any(p.endswith("progress.json") for p in written)
+    assert not any(p.endswith("protected_files.json") for p in written)
+    assert migrated["outcome"].entry_verification.ok is True
+    assert migrated["outcome"].final_verification.ok is True
+
+
+# ---------------------------------------------- representative: the simplest one
+def test_the_simplest_driver_migrates():
+    """``work/run_step12_m6.py``, 21 lines, the smallest real driver.
+
+    Its whole body is: assert a hard-coded revision and step, load a manifest,
+    verify, run one step, verify again, journal twice.  Everything except the
+    advance is a contract field.
+    """
+
+    # The driver targeted step 12.  The hermetic registry cannot reach it: the
+    # reviewer entry gate at step 8.5 needs real gate evidence (an entry_gate.md
+    # verdict), which a permissive validator does not produce, so every seed at
+    # or beyond step 8 stops there.  Steps 0-8 are covered cleanly, so the proof
+    # runs at a reachable position instead - the migration claim is about the
+    # entry point, not about which step the historical driver happened to pick.
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    legacy = _manifest_legacy_track(6)
+    migrated = _manifest_migrated_track(6)
+
+    _assert_migrated_shape(legacy, migrated)
+    assert migrated["returned_last_completed_step"] == 7
+
+
+def test_the_simplest_drivers_hard_coded_revision_is_now_an_authorisation():
+    """``assert state.revision == 306`` - the rotted assertion, replaced.
+
+    The driver pinned revision 306 of a project that has since reached 561, so
+    the assertion is dead.  As an authorisation it is refused with the actual
+    revision in the message, and nothing is written.
+    """
+
+    from factory_core.bounded_run import BoundedRunError
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root,
+        store=canary.store_at(root),
+        registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    before = canary.collect(root)
+
+    with canary.frozen_time(), pytest.raises(BoundedRunError) as raised:
+        engine.run_bounded(
+            BoundedRunContract(expected_revision=306, max_subtasks=1)
+        )
+    assert "expected revision 306" in str(raised.value)
+
+    assert canary.collect(root)["events"] == before["events"]
+
+
+# --------------------------------------------- representative: protection family
+def test_the_protection_driver_migrates():
+    """``work/continue_adopted_model.py``, 48 lines, the protection family.
+
+    It additionally derives part of its manifest by hashing two directories and
+    loops over two steps.  The migrated form folds the manifest into the
+    contract and expresses each step as its own invocation - the loop becomes
+    the caller's, and the repeated boundary is what
+    ``previous_boundary_fingerprint`` is for.
+    """
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 2)
+    )
+    legacy = _manifest_legacy_track(2)
+    migrated = _manifest_migrated_track(2)
+
+    _assert_migrated_shape(legacy, migrated)
+    assert migrated["returned_last_completed_step"] == 3
+
+
+def test_the_protection_driver_migrates_a_second_step():
+    """The driver's ``for step in (3, 4)`` loop, as successive invocations."""
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 3)
+    )
+    legacy = _manifest_legacy_track(3)
+    migrated = _manifest_migrated_track(3)
+
+    _assert_migrated_shape(legacy, migrated)
+    assert migrated["returned_last_completed_step"] == 4
+
+
+def test_a_repeated_invocation_reports_an_unchanged_boundary():
+    """What replaced the driver's ad-hoc stop condition.
+
+    The driver broke out of its loop when the state no longer matched, and
+    recorded ``protected_hashes_unchanged: True`` unconditionally.  The migrated
+    form asks the engine: the same boundary with no progress is reported as
+    NEEDS_INSPECTION rather than silently looking like success.
+    """
+
+    canary.build_seed(canary.paused_seed)
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root,
+        store=canary.store_at(root),
+        registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    revision = canary.store_at(root).load().revision
+
+    first = engine.run_bounded(BoundedRunContract(expected_revision=revision))
+    second = engine.run_bounded(
+        BoundedRunContract(
+            expected_revision=revision,
+            previous_boundary_fingerprint=first.boundary_fingerprint,
+        )
+    )
+
+    assert second.made_progress is False
+    assert second.unchanged_boundary is True
+    assert second.to_dict()["outcome"] == "NEEDS_INSPECTION"
+
+
+# ============================ the hermetic registry's documented reach
+def test_the_hermetic_registry_reaches_step_eight_and_no_further():
+    """A fidelity boundary, asserted rather than discovered later.
+
+    ``build_native_registry`` gates step 8.5 on the reviewer entry gate's real
+    evidence - an entry_gate.md verdict and its two companion maps.  A hermetic
+    validator that accepts anything does not produce them, so seeds at or beyond
+    step 8 stop at the gate instead of advancing.  Recording the boundary keeps
+    it from being mistaken for a driver difference, and marks where a fixture
+    would have to grow if a future representative needs step 8.5 or later.
+    """
+
+    advances = {}
+    for completed in range(3, 9):
+        canary.build_seed(
+            lambda root, c=completed: canary.stage_seed_ready_for_step_with_protected_file(root, c)
+        )
+        root = canary.restore_seed()
+        engine = FactoryEngine(
+            root,
+            store=canary.store_at(root),
+            registry=canary.stage_registry(),
+            sleeper=lambda _: None,
+        )
+        with canary.frozen_time():
+            state = engine.run(max_steps=1)
+        advances[completed] = state.last_completed_step
+
+    # clean one-subtask advances below the gate
+    assert advances[3] == 4
+    assert advances[4] == 5
+    assert advances[6] == 7
+    assert advances[7] == 8
+    # and the gate is where the reach ends
+    assert advances[8] == 8, "step 8.5 onward needs real gate evidence"
