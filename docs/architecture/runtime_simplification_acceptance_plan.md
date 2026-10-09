@@ -855,6 +855,31 @@ expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id)
 
 **尚未改动**：任何被 patcher 引用的驱动（8 条链）与 8 个 patcher。
 
+### 6.10 G4.5c 第 2 步：批次 3（4 条独立 `recovery_boundary`）已完成
+
+`run_final_workflow_resume.py`、`run_native_final16.py`、`run_sensitivity_reuse.py`、`run_step10_continuation.py` 原地改写。这一族把**大文件身份保护**与**重复循环**配在一起用，正好把批次 2 修正的守卫模式在另一族上再验一遍。
+
+**累计指标（批次 1–3）**
+
+| 指标 | before | after | Δ |
+|---|---|---|---|
+| `.run(` | 52 | **42** | −10 |
+| 精确工作流推进 | 25 | **15** | −10 |
+| `max_steps=1` | 23 | **13** | −10 |
+| registry shim | 4 | **3** | −1 |
+| **手写 `seen` 重复计数器** | 4 | **2** | −2（新增指标） |
+| `progress.json` | 35 | **22** | −13 |
+| `protected_files` | 113 | **112** | −1 |
+| `advance_bounded` | 0 | **10** | **+10（每驱动一个）** |
+
+**唯一上升项仍是预期替代物**；212 个文件 0 语法错误。
+
+**本族最值得记的一点**：`run_sensitivity_reuse.py` 与 `run_step10_continuation.py` 各自维护一个私有 `seen` 计数器——按 `(active_step, active_subtask, last_completed_step)` 记数，**累计到第 3 次**才停，并附自写原因字符串。改用 `previous_boundary_fingerprint` 后，引擎在**第 2 次相同 boundary** 就给出结论，且结论来自引擎（`NEEDS_INSPECTION`）而非手写字符串。测试同时断言两半：引擎在第 2 次报告，而驱动自己的规则**在那一刻还没到阈值**。
+
+**一次近乎漏掉的副作用（已修）**：批次 3 的第一版生成器丢掉了 `run_native_final16.py` 在循环前创建的 ZIP 备份（3 个 judge 文件），也丢掉了异常时记录部分结果的行为。发现方式是**逐条拿原件对照生成结果**，而不是信任模板。备份块已逐字保留并注明"这是调用方供给，不是 runner 语义"；循环改为在异常传播前打印已有结果（有两个驱动本来就有 try/finally，另两个现在也有了）。
+
+**尚未改动**：7 条链式驱动与 8 个 patcher。
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。

@@ -1187,3 +1187,74 @@ def test_the_batch2_guard_is_kept_explicit_in_the_drivers():
 
     assert guard(7) == "refused", "not the driver's step" if state.active_step is None else ""
     assert guard(None) == "allowed", "the seeded state is exactly what the guard expects"
+
+
+# ============== batch 3: the private repeat counter becomes a fingerprint
+def test_the_batch3_boundary_fingerprint_replaces_a_private_repeat_counter():
+    """Two of the batch-3 drivers kept their own `seen` counter.
+
+    They keyed on (active_step, active_subtask, last_completed_step) and stopped
+    only once the same key had been seen THREE times, with a hand-written reason
+    string.  The contract answers the same question on the second identical
+    boundary, because it compares the boundary fingerprint rather than counting
+    occurrences - so the caller stops one iteration earlier and the verdict comes
+    from the engine as NEEDS_INSPECTION.
+
+    This asserts both halves: the engine reports on call 2, and the driver's own
+    rule had not yet reached its threshold at that point.
+    """
+
+    evidence = canary.build_seed(canary.paused_seed)
+    revision = evidence["project_state"]["revision"]
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+
+    seen: dict = {}
+    calls = 0
+    fingerprint = None
+    outcome = None
+    while calls < 5:
+        state = canary.store_at(root).load()
+        key = (state.active_step, state.active_subtask, state.last_completed_step)
+        seen[key] = seen.get(key, 0) + 1
+        calls += 1
+        with canary.frozen_time():
+            outcome = engine.run_bounded(
+                BoundedRunContract(
+                    expected_revision=state.revision,
+                    previous_boundary_fingerprint=fingerprint,
+                )
+            )
+        fingerprint = outcome.boundary_fingerprint
+        if outcome.unchanged_boundary:
+            break
+        if seen[key] > 2:
+            break
+
+    assert calls == 2, "the engine stops on the second identical boundary"
+    assert outcome.unchanged_boundary is True
+    assert outcome.needs_inspection is True
+    assert outcome.to_dict()["outcome"] == "NEEDS_INSPECTION"
+    assert seen[key] == 2, "the driver's own rule needed >2 and had not fired"
+    assert revision is not None
+
+
+def test_the_batch3_identity_and_loop_shape_is_already_covered():
+    """Batch 3's representative is the recovery driver batch 2 proved.
+
+    ``run_final_workflow_resume.py`` is where the large-file identity and the
+    step-range loop came from, and
+    ``test_the_recovery_driver_migrates_with_both_kinds_of_protection`` already
+    asserts that shape end to end.  This test records the mapping so the batch's
+    coverage cannot be mistaken for missing.
+    """
+
+    canary.build_seed(_recovery_seed)
+    migrated = _recovery_migrated_track()
+
+    assert migrated["outcome"].entry_verification.checked == 2
+    assert migrated["outcome"].final_verification.ok is True
+    assert not any(p.endswith("large_manifest_identity.json") for p in migrated["files"])

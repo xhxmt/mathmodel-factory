@@ -184,6 +184,101 @@
         "tests/test_gate_g4_driver_migration.py::test_the_batch2_family_shape_is_equivalent_after_migration",
         "tests/test_gate_g4_driver_migration.py::test_the_batch2_guard_is_kept_explicit_in_the_drivers"
       ]
+    },
+    {
+      "batch": 3,
+      "date_utc": "2026-10-07",
+      "family": "recovery_boundary",
+      "scope_reason": "the four standalone members of the family; they pair the large-file identity with a repetition loop, so they re-exercise the guard pattern batch 2 corrected on a different family",
+      "drivers": [
+        {
+          "file": "run_final_workflow_resume.py",
+          "original_sha256": "38aea8637e75dad6192d5d2555725b195545ccde91a22958b9aa741ecd22b1e5",
+          "migrated_sha256": "5e96589feac60b88a2f788c999f96ce5dfa6f7a8250f81959719ad5f91c2c55b",
+          "note": "manifest + large identity; entry guard status=='retrying' and active_step==11 kept verbatim, the rotted revision==383 dropped in favour of the revision CAS"
+        },
+        {
+          "file": "run_native_final16.py",
+          "original_sha256": "271657b6b4188005113d1ad2bebe06e58c163be72e9b667e5572097e3b33c3ac",
+          "migrated_sha256": "e4fd14f891990786cd8dea03ab45e38cfda753ffe0177a25e490195388ef5d55",
+          "note": "manifest + large identity + a ZIP backup of three judge files; the backup is caller-side provisioning and is kept exactly as it was"
+        },
+        {
+          "file": "run_sensitivity_reuse.py",
+          "original_sha256": "9ebb50f3500591f3ba321b3a9ccebb0aa7b8e976178c725e6a566726378a2448",
+          "migrated_sha256": "19eaa0f868d17595c457ebb97799c3c831c2d6f38816eb9aacff8964d00dd005",
+          "note": "manifest only; its private `seen` counter (threshold >2) is replaced by previous_boundary_fingerprint"
+        },
+        {
+          "file": "run_step10_continuation.py",
+          "original_sha256": "7766fc446c22f071b879b8d03d96f30a3ac1d44f437f697958607f3d4f5a87be",
+          "migrated_sha256": "c5d4efcb9a8dc24f498ac43e656ffd18402b9a15efa77198262f3f16f43c5d50",
+          "note": "manifest only; same private `seen` counter replaced, and the two drivers that had no try/finally now print partial results when the loop raises"
+        }
+      ],
+      "metric_delta_cumulative": {
+        "naive_dot_run_files": {
+          "before": 52,
+          "after": 42,
+          "delta": -10
+        },
+        "precise_workflow_files": {
+          "before": 25,
+          "after": 15,
+          "delta": -10
+        },
+        "max_steps_1_files": {
+          "before": 23,
+          "after": 13,
+          "delta": -10
+        },
+        "registry_shim_files": {
+          "before": 4,
+          "after": 3,
+          "delta": -1
+        },
+        "hand_rolled_seen_journal": {
+          "before": 4,
+          "after": 2,
+          "delta": -2,
+          "new_metric": "files with a private seen[]/seen.get() repetition counter"
+        },
+        "progress_json_refs": {
+          "before": 35,
+          "after": 22,
+          "delta": -13
+        },
+        "protected_files_refs": {
+          "before": 113,
+          "after": 112,
+          "delta": -1
+        },
+        "run_bounded_refs": {
+          "before": 0,
+          "after": 0,
+          "delta": 0
+        },
+        "advance_bounded_refs": {
+          "before": 0,
+          "after": 10,
+          "delta": 10,
+          "expected": "one per migrated driver"
+        }
+      },
+      "metric_verdict": "every hand-rolled metric fell, including a new one for the private repeat counters; the only increase is advance_bounded",
+      "compile_check": {
+        "files": 212,
+        "syntax_errors": 0
+      },
+      "equivalence_tests": [
+        "tests/test_gate_g4_driver_migration.py::test_the_batch3_boundary_fingerprint_replaces_a_private_repeat_counter",
+        "tests/test_gate_g4_driver_migration.py::test_the_batch3_identity_and_loop_shape_is_already_covered"
+      ],
+      "near_miss": {
+        "what": "the first generator for this batch dropped the ZIP backup that run_native_final16.py creates before the loop, and dropped the partial-results-on-failure behaviour",
+        "how_caught": "by re-reading the original against the generated file rather than trusting the template",
+        "fix": "the backup block is preserved verbatim with a comment saying why it is caller-side and not runner semantics; the loop is wrapped so partial results print before an exception propagates, which the two drivers with try/finally already did and the other two now do as well"
+      }
     }
   ],
   "corrections": [
