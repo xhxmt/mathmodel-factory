@@ -187,6 +187,25 @@ def test_completed_projection_preserves_imported_last_completed_step(tmp_path):
     assert (tmp_path / ".heartbeat").read_text(encoding="utf-8").startswith("2 ")
 
 
+def _physical_schema_version(store) -> int:
+    """The DDL generation, which is what a read-triggered migration may upgrade.
+
+    0.7.2: project_state.schema_version is a _REPLAY_FIELDS member, so it records
+    the generation the event stream was authored under and is only moved by an
+    event-carrying write.  schema_info.schema_version records the physical schema.
+    """
+
+    connection = sqlite3.connect(store.path)
+    try:
+        return int(
+            connection.execute(
+                "SELECT schema_version FROM schema_info WHERE singleton=1"
+            ).fetchone()[0]
+        )
+    finally:
+        connection.close()
+
+
 def test_v1_database_upgrades_in_place_without_rewriting_events(tmp_path):
     store = SQLiteStateStore(tmp_path)
     store.path.parent.mkdir(parents=True)
@@ -240,7 +259,12 @@ def test_v1_database_upgrades_in_place_without_rewriting_events(tmp_path):
 
     state = store.load()
 
-    assert state.schema_version == SCHEMA_VERSION
+    # 0.7.2: a read-triggered DDL migration upgrades the PHYSICAL schema
+    # only. project_state.schema_version is a replay field, so it keeps the
+    # generation recorded in the event stream until a write converges it;
+    # moving it here would desynchronise replay from current state.
+    assert _physical_schema_version(store) == SCHEMA_VERSION
+    assert state.schema_version == 1
     assert state.runtime_generation == "legacy_adapter"
     assert state.last_completed_step == 4
     assert [event.type for event in store.events()] == ["PROJECT_CREATED"]
@@ -288,7 +312,12 @@ def test_v3_database_adds_independent_solver_job_revision(tmp_path):
         }
     finally:
         connection.close()
-    assert state.schema_version == SCHEMA_VERSION
+    # 0.7.2: a read-triggered DDL migration upgrades the PHYSICAL schema
+    # only. project_state.schema_version is a replay field, so it keeps the
+    # generation recorded in the event stream until a write converges it;
+    # moving it here would desynchronise replay from current state.
+    assert _physical_schema_version(store) == SCHEMA_VERSION
+    assert state.schema_version == 3
     assert "job_revision" in columns
     assert {
         "idempotency_key",
@@ -366,7 +395,12 @@ def test_v8_database_upgrades_dirty_identity_to_owner_scoped_keys(tmp_path):
         ]
     finally:
         connection.close()
-    assert state.schema_version == SCHEMA_VERSION
+    # 0.7.2: a read-triggered DDL migration upgrades the PHYSICAL schema
+    # only. project_state.schema_version is a replay field, so it keeps the
+    # generation recorded in the event stream until a write converges it;
+    # moving it here would desynchronise replay from current state.
+    assert _physical_schema_version(store) == SCHEMA_VERSION
+    assert state.schema_version == 8
     assert dirty_pk == ["flag", "owner_stage"]
     assert clear_pk == ["revision", "flag", "owner_stage"]
     assert store.dirty_flags()[0]["owner_stage"] == 1

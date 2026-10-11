@@ -1,0 +1,76 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "0.7.2",
+  "title": "Separate physical schema version from the replay-recorded generation; name the integrity components",
+  "recorded_at": "2026-09-26T09:33:38Z",
+  "branch": "feat/runtime-simplification",
+  "trigger": "External review Major 1/2/3 + I2 addition + I9. Review verdict: add a 0.7.2 before S1-A.",
+  "major_1_replay_divergence": {
+    "claim_verified": true,
+    "evidence": "workflow_events._REPLAY_FIELDS line 18 is 'schema_version'; _state_from_row reads project_state.schema_version. A read-triggered 9->10 migration wrote project_state.schema_version=10 with no event, while the stream replays to 9.",
+    "measured_on_real_copies": {
+      "A": {
+        "current": 10,
+        "replayed": 9,
+        "aggregate_valid_before_fix": true
+      },
+      "B": {
+        "current": 10,
+        "replayed": 9,
+        "aggregate_valid_before_fix": true
+      },
+      "R": {
+        "current": 10,
+        "replayed": 9,
+        "aggregate_valid_before_fix": true
+      },
+      "note": "the old aggregate_valid did not catch it - that is exactly the overloading I9 describes"
+    },
+    "fix": "physical vs workflow-state version are now separate: schema_info.schema_version is the DDL generation (written by _upgrade_schema), project_state.schema_version is the generation recorded in the event stream and is only moved by an event-carrying write. transition() converges it, so the change lands in that event's state_patch.",
+    "new_gate": "status_snapshot() now exposes event_replay_valid: replay_events(events) must equal replay_state(current) across every _REPLAY_FIELDS member.",
+    "verified_after_fix": "all three real copies: replay_diff == {} , event_replay_valid True, schema_info 9->10, project_state.schema_version 9->9, revision and event count unchanged, aggregate_valid True"
+  },
+  "major_2_second_rebase_path": {
+    "claim_verified": true,
+    "evidence": "transition(clear_dirty_stage=...) calls rebase_dirty_classifier_state at storage.py:3068 inside its own business transaction. It is a legitimate second rebase path and emitted no DIRTY_CLASSIFIER_REBASED event, so its receipt was recorded nowhere in the event stream.",
+    "fix": "the embedded rebase receipt (rebase_id, schema_version, obligation_count, bound_by='dirty_clear_transaction') is bound into that transition's payload. Test name corrected from 'the only writer' to reflect two paths.",
+    "note": "does not affect the read-path guarantee: this one runs inside a business write."
+  },
+  "major_3_provenance_contract_too_narrow": {
+    "claim_verified": true,
+    "evidence": "classification_contract_sha256() hashed only schema name + dirty_classification.py bytes, while the derivation also depends on ADDITIONAL_OWNERSHIP, the frozen registry and the globstar matcher.",
+    "fix": "the contract now covers dirty_classification.py, dirty.py (the mirrored branch order), artifact_ownership.py, current_artifact_ownership.py and paper_sources.py, each name-tagged before its bytes.",
+    "still_separate_from_classifier_identity": true,
+    "note": "Q14 preserved: a provenance-only change still does not produce a new classifier identity. This was done BEFORE any real project can produce a v10 cause, as the review required."
+  },
+  "i2_addition": {
+    "gap": "the monotonicity loop skipped events whose effect_hashes_after was not a dict.",
+    "fix": "an event that carries aggregate_root_hash_after must also carry a dict effect_hashes_after, otherwise effect_domain_generation_valid=False.",
+    "test": "test_attestation_without_domain_map_fails_closed"
+  },
+  "i9_integrity_components": {
+    "before": "one aggregate_valid flag",
+    "after": [
+      "latest_effect_attestation_valid",
+      "effect_domain_generation_valid",
+      "event_replay_valid"
+    ],
+    "aggregate_valid": "the conjunction of the three; the components remain individually readable"
+  },
+  "test_baseline": {
+    "before_0_7_2": "1788 passed / 0 failed / 0 collection errors",
+    "after_0_7_2": "1793 passed / 0 failed / 0 collection errors",
+    "delta": "+5; zero regressions"
+  },
+  "tests_changed_beyond_additions": {
+    "tests/test_factory_state_store.py": "3 tests asserted state.schema_version == SCHEMA_VERSION after a read-triggered migration. They now assert the physical version (_physical_schema_version helper) and the unchanged replay-recorded generation, which is the 0.7.2 semantics.",
+    "tests/test_dirty_cause_classification.py": "_rewind_to_v9 is now replay-aware: a faithful v9 fixture must also record 9 in the events' state_patch and recompute state_hash_after, otherwise the fixture itself violates the new replay gate."
+  },
+  "open_items": [
+    "True binary/code-version downgrade regression still pending (run bde49712's code against a schema-10 fixture).",
+    "I8: a read-only v9 precondition validator is not yet implemented; a 'schema_info=9 but incomplete' database would still be promoted to 10 by the DDL migration.",
+    "I8: read-only migration/domain drift audit across the 6 state DBs still pending.",
+    "I9: UI/doc consumers still read aggregate_valid; they should migrate to the three named components.",
+    "Review also asks for S6 item 10 (durable bounded-run contract identity) -- planned, not implemented."
+  ]
+}

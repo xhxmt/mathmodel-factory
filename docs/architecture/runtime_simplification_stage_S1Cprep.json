@@ -1,0 +1,101 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "S1-C-prep",
+  "title": "Migrate every ownership consumer onto the policy layer (still a no-op)",
+  "recorded_at": "2026-09-26T13:49:29Z",
+  "branch": "feat/runtime-simplification",
+  "commit": "dda04ce9b6d67ca53147f87a34dfcd4dafe988f6",
+  "commit_subject": "S1-C-prep: migrate every ownership consumer onto the policy layer",
+  "diffstat": "10 files changed, 319 insertions(+), 27 deletions(-)",
+  "problem": "The collection points decide what ships and what the final audit consumes. They asked artifact_ownership() whether a path is registered, and that returns None for a path with no Stage owner - so once S1-B registers the 21 fallback paths as policy-only entries, iter_owned_artifacts() would skip them and both submission_bundle gates would still call them uncovered. Migrating AFTER S1-B would have been a behaviour change hidden inside a classification change; migrating now is reviewable as a no-op.",
+  "new_helpers": {
+    "iter_policy_artifacts": "policy-aware twin of iter_owned_artifacts; mirrors its walk and skip order exactly, membership decided by artifact_policy",
+    "policy_ownership_rule": "the legacy routing rule behind a path, or None (also None for policy-only)",
+    "reopen_after_step_for_policy_artifact": "policy-aware reopen target"
+  },
+  "call_sites_migrated": {
+    "total_in_plan": 13,
+    "migrated": 12,
+    "intentionally_not_migrated": [
+      "factory_core/dirty.py:404 - frozen trust root; its bytes are hashed into classifier_contract_sha256",
+      "factory_core/dirty_classification.py:192 - deliberately mirrors the frozen classifier's branch order"
+    ],
+    "by_file": {
+      "factory_core/finalization.py": "iterator (57) + reopen target (167)",
+      "factory_core/submission_bundle.py": "iterator (141) + coverage gates (168, 190) + member lookup (217)",
+      "scripts/cleanup_project_artifacts.py": "protected-set iterator (166)",
+      "scripts/claim_graph.py": "rule lookup (602) + resume step (614)",
+      "factory_core/steps/validators.py": "reopen target (509)",
+      "factory_core/dirty_rebase.py": "rule lookup (183)",
+      "factory_core/final_evidence_recovery.py": "rule lookup (51)",
+      "web/backend/diagnostics_service.py": "owner-stage lookup (245)"
+    }
+  },
+  "reachability_finding": {
+    "claim_graph.py": "REACHABLE and gate-relevant: claim_binding_issues is called by factory_core/steps/validators.py:203 and scripts/judge_packet.py:957 - a validator path",
+    "diagnostics_service.py": "REACHABLE but read-only reporting: used by web/backend/project_api.py:25",
+    "conclusion": "neither could be skipped; the plan's original 'four consumers' would have missed both"
+  },
+  "latent_bug_fixed": {
+    "where": "web/backend/diagnostics_service.py",
+    "what": "it imported artifact_owner_stage from the FROZEN module (83 rules) instead of the current one (88 rules), so the Web diagnostics payload disagreed with the rest of the system",
+    "measured": {
+      "judge_evidence.json": "frozen None -> current 10",
+      "models/reporting_scope/scope_review_manifest.json": "frozen 3 -> current 10",
+      "STEP5_RECEIPT.json": "frozen None -> current 4",
+      "method_fit_suggestions.json": "frozen None -> current 1"
+    },
+    "fix": "resolve through artifact_policy_owner_stage; a test asserts both the corrected values and that the frozen lookup genuinely differed (so the test cannot go vacuous)"
+  },
+  "equivalence_evidence": {
+    "real_project_trees": {
+      "A cumcm_2026_a_fable_pro_20260910": {
+        "all": 400,
+        "final_input": 374,
+        "submission": 347
+      },
+      "B cumcm_2025_b_gpt_formal_20260908t153023z": {
+        "all": 1146,
+        "final_input": 1044,
+        "submission": 643
+      },
+      "R cumcm_2025_b_codex_luna_stability_20260817_run4": {
+        "all": 938,
+        "final_input": 923,
+        "submission": 201
+      }
+    },
+    "configurations": [
+      "{}",
+      "{final_input_only}",
+      "{submission_only}",
+      "{final_input_only, include_symlinks}",
+      "{submission_only, include_symlinks}"
+    ],
+    "result": "all 15 combinations set-identical between iter_owned_artifacts and iter_policy_artifacts",
+    "note": "B and R are symlinks resolving outside the repo; both iterators resolve the project dir internally, so the comparison must resolve too (a script bug caught during this stage, not a code bug)"
+  },
+  "tests_added": [
+    "test_policy_iterator_is_set_identical_to_the_ownership_iterator (6 parametrisations)",
+    "test_policy_iterator_mirrors_the_walk_and_skip_order",
+    "test_policy_ownership_rule_matches_the_legacy_lookup (corpus)",
+    "test_policy_reopen_target_matches_the_legacy_one (corpus)",
+    "test_submission_coverage_gate_accepts_exactly_the_same_paths",
+    "test_diagnostics_owner_stage_now_uses_the_current_registry",
+    "test_every_ownership_consumer_is_migrated_except_the_frozen_classifier (source-level guard, alias-aware)"
+  ],
+  "source_level_guard": "the last test scans factory_core/apps/scripts/web for calls to the four legacy lookups and fails unless the name is bound by an import from artifact_policy; only the two intentionally-unchanged modules are allowlisted",
+  "test_baseline": {
+    "before": "2178 passed / 0 failed / 0 collection errors",
+    "after": "2424 passed / 0 failed / 0 collection errors",
+    "delta": "+246",
+    "regressions": 0
+  },
+  "next_stage": "S1-D (extend the provenance source mapping to policy semantics; CI invariant #4 hash extension already landed in 0.7.2; replay regression)",
+  "open_items": [
+    "I8-a read-only v9 precondition validator still pending",
+    "I8-b read-only migration/domain drift audit across the 6 state DBs still pending",
+    "true code-version downgrade regression still pending",
+    "S1-B-activate remains the only step that changes classification behaviour"
+  ]
+}

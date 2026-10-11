@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .current_artifact_ownership import (
-    ARTIFACT_OWNERSHIP_SCHEMA,
-    iter_owned_artifacts,
-    reopen_after_step_for_artifact,
+from .artifact_policy import (
+    iter_policy_artifacts,
+    reopen_after_step_for_policy_artifact,
 )
+from .current_artifact_ownership import ARTIFACT_OWNERSHIP_SCHEMA
 
 
 FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v4"
@@ -54,7 +54,10 @@ def _input_paths(project: Path) -> list[Path]:
     paths = set(
         submission_bundle_paths(project, project.name, require_pdf=False)
     )
-    paths.update(iter_owned_artifacts(project, final_input_only=True))
+    # S1-C: policy-aware collection. While NATIVE_POLICY is empty this yields the
+    # identical set; once S1-B registers policy-only entries they are visible here
+    # instead of being silently skipped for having no Stage owner.
+    paths.update(iter_policy_artifacts(project, final_input_only=True))
     from .solver_input_coverage import solver_declared_input_coverage
 
     solver_coverage = solver_declared_input_coverage(project)
@@ -164,6 +167,6 @@ def reopen_after_for_changed_paths(paths: list[str]) -> int:
     for relative in paths:
         target = min(
             target,
-            reopen_after_step_for_artifact(relative, default_stage=3),
+            reopen_after_step_for_policy_artifact(relative, default_stage=3),
         )
     return target

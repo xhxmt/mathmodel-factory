@@ -1,0 +1,70 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "S1-A",
+  "title": "Artifact policy layer as a compatibility facade (no behaviour change)",
+  "recorded_at": "2026-09-26T10:58:24Z",
+  "branch": "feat/runtime-simplification",
+  "commit": "36733b8bd09d7a71d249304056064abd070f5b34",
+  "commit_subject": "S1-A: add the artifact policy layer as a compatibility façade",
+  "files": {
+    "added": [
+      "factory_core/artifact_policy.py",
+      "tests/test_artifact_policy.py"
+    ],
+    "modified": [],
+    "diffstat": "2 files changed, 563 insertions(+), 0 deletions(-)",
+    "note": "zero modifications to existing code is the strongest available evidence of 'no behaviour change'"
+  },
+  "what_it_adds": {
+    "ArtifactPolicy": "pattern, role, invalidation_mode, final_input, submission_member, ownership_rule (None => policy-only), blocker",
+    "ArtifactRole": "closed 12-value vocabulary (assigned to registered paths in S1-B)",
+    "InvalidationMode": "UPSTREAM_RECOMPUTE / EVIDENCE_SUFFICIENCY / PRESENTATION_ONLY / EXPLICIT_ONLY / FAIL_CLOSED",
+    "compatibility_policy()": "derives a policy from one legacy ownership rule, copying every delivery field verbatim",
+    "artifact_policy()": "same matching semantics as artifact_ownership (case-insensitive, normalized, globstar, first match)",
+    "artifact_policy_owner_stage()": "Stage routing via the policy layer",
+    "shadowed_ownership_rules()": "detects a policy-only entry stealing a path from an ownership rule (CI invariant 3)",
+    "NATIVE_POLICY": "empty in S1-A; S1-B populates it with the 21 observed paths"
+  },
+  "why_it_is_a_no_op": [
+    "current_artifact_ownership.py untouched, so artifact_ownership() is byte-for-byte unchanged",
+    "NATIVE_POLICY is empty, so every policy today is ownership-backed",
+    "compatibility policies copy owner_stage/dirty_flag/final_input/submission_member verbatim",
+    "artifact_policy() returns None exactly when artifact_ownership() does"
+  ],
+  "ci_invariants": {
+    "1_ownership_rule_consistency": "PASS - strengthened to IDENTITY (is), not equality: the policy carries the very object the legacy API returns, so the two registries cannot drift for one path",
+    "2_field_by_field_equality": "PASS - compatibility_policy copies pattern, semantic_domain and both delivery flags verbatim from the rule",
+    "3_no_policy_only_shadowing": "PASS - vacuous while NATIVE_POLICY is empty, so a second test feeds the detector a deliberately shadowing policy to prove it is not a no-op"
+  },
+  "real_data_verification": {
+    "source": "A cumcm_2026_a_fable_pro_20260910, read-only, its real dirty_causes history",
+    "real_artifact_paths": 192,
+    "resolve_to_identical_ownership_object_via_both_apis": 171,
+    "still_unregistered": 21,
+    "disagreements": 0,
+    "synthetic_keys": "7 @protected:/@paper: keys (separate early branch)",
+    "conclusion": "reproduces the S1 baseline exactly (192 paths / 21 gap paths) and proves the policy layer introduces no divergence"
+  },
+  "policy_only_mechanism": {
+    "purpose": "a policy-only entry (ownership_rule=None) describes and classifies a path without claiming a Stage owner; such entries do NOT appear in artifact_ownership()",
+    "why_it_matters": "this is how S1-B registers the 21 fallback paths without inventing Stage owners for diagnostic/exploratory files, and without a second ownership registry",
+    "non_blocking_semantics": "is_non_blocking = EXPLICIT_ONLY + final_input False + submission_member False + no named blocker (the S1.3 closure); declares_blocker separates that positive declaration from a missing consumer"
+  },
+  "identity_separation_preserved": {
+    "Q14": "artifact_policy is NOT part of classifier_contract_sha256(); a test asserts that hash still equals c451a9d0be64fabd185c7561b67093956e663db6e845915cd320fea1cbabc515 after the import",
+    "provenance_contract": "remains dirty_classification.classification_contract_sha256()"
+  },
+  "test_baseline": {
+    "before_S1_A": "1793 passed / 0 failed / 0 collection errors",
+    "after_S1_A": "2178 passed / 0 failed / 0 collection errors",
+    "delta": "+385 (the new module is heavily parametrized over a 118-path corpus)",
+    "regressions": 0
+  },
+  "next_stage": "S1-C-prep (migrate the 13 ownership call sites to the policy-aware collector, still consuming only compatibility policies, so collections stay identical)",
+  "open_items": [
+    "I8-a read-only v9 precondition validator still pending (guards the migration path, not S1)",
+    "I8-b read-only migration/domain drift audit across the 6 state DBs still pending",
+    "true code-version downgrade regression still pending",
+    "S1-C-prep must migrate scripts/claim_graph.py and web/backend/diagnostics_service.py, which the original plan had omitted"
+  ]
+}

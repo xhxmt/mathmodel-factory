@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Callable, Any
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class FactoryCoreError(RuntimeError):
@@ -31,6 +31,10 @@ class RunnerBusy(FactoryCoreError):
 
 class RunnerLeaseLost(FactoryCoreError):
     """Raised when a worker no longer owns the project's runner lease."""
+
+
+class SchemaPreconditionError(FactoryCoreError):
+    """A database does not have the structure its recorded generation implies."""
 
 
 class MigrationConflict(FactoryCoreError):
@@ -254,3 +258,6 @@ class StepContext:
     timeout_seconds: int
     revision: int
     deadline_epoch: int | None = None
+    #: The clock the engine's store was built with, so a step that opens its own
+    #: store for the same project can inherit it rather than use the wall clock.
+    clock: Callable[[], float] | None = None

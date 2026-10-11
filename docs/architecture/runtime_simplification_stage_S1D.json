@@ -1,0 +1,52 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "S1-D",
+  "title": "Policy-aware provenance derivation; contract extended over the policy layer",
+  "recorded_at": "2026-09-26T14:10:15Z",
+  "branch": "feat/runtime-simplification",
+  "parent_commit": "dda04ce9b6d67ca53147f87a34dfcd4dafe988f6",
+  "contract_identity": {
+    "provenance_contract_sha256_after_S1_D": "ac4a4feac49c49879093a5a64cc971e13f52eafd9fc3065fc0604eb0a6b2ba8b",
+    "classifier_contract_sha256_after_S1_D": "22d365b0d9c0a84cdc153353c5e2291494683476a06f8b95437365809664fdf9",
+    "classifier_unchanged_from_frozen": "c451a9d0be64fabd185c7561b67093956e663db6e845915cd320fea1cbabc515",
+    "note": "S1-D intentionally moves the PROVENANCE identity because artifact_policy.py joined the contract; the CLASSIFIER identity does not move, so no dirty rebase is triggered (Q14). New v10 causes from here on carry the S1-D policy sha; that is expected and recorded."
+  },
+  "changes": {
+    "derivation_routes_through_policy": "classification_sources now resolves each authored path via artifact_policy() instead of the raw ownership tables",
+    "new_source_value": "policy_only - a path described by a policy entry with no Stage owner",
+    "contract_members_added": "artifact_policy.py (the derivation now depends on it)",
+    "helper_extracted": "_authored_source() / _policy_flag() so each branch is unit-addressable"
+  },
+  "why_it_is_still_a_no_op": "NATIVE_POLICY is empty, so every policy has an ownership_rule and the policy_only branch is unreachable; the derivation output is identical to the pre-S1-D ownership-based derivation",
+  "equivalence_evidence": {
+    "unit_corpus": "15 paths covering frozen_rule / current_rule / fallback / format / paper / protected compared against a reference oracle reproducing the pre-S1-D derivation verbatim",
+    "real_history": "A's 199 distinct cause_artifact values, all 199 identical (0 differences)"
+  },
+  "replay_regression": {
+    "requirement": "the 0.7.2 replay gate must still hold after S1-D",
+    "hermetic": "test_s1d_replay_regression_on_v9_fixture - read leaves the replay generation at 9 while the physical schema goes to 10, event_replay_valid and aggregate_valid stay true, and a genuine write converges the generation to 10 with replay still equal to current state",
+    "real_history": "A/B/R copies: revision and event counts unchanged, replay_diff empty, event_replay_valid True, aggregate_valid True"
+  },
+  "vocabulary": [
+    "frozen_rule",
+    "current_rule",
+    "paper_semantic",
+    "protected",
+    "fallback",
+    "explicit_fail_closed",
+    "bespoke_recovery",
+    "policy_only"
+  ],
+  "tests_added": 23,
+  "test_baseline": {
+    "before": "2424 passed / 0 failed / 0 collection errors",
+    "after": "2447 passed / 0 failed / 0 collection errors",
+    "delta": "+23",
+    "regressions": 0
+  },
+  "next_stage": "S1-B-activate: register the 21 observed fallback paths as explicit policies. This is the only step that changes classification behaviour, and the one that removes the evidence-file -> solve rewind.",
+  "open_items": [
+    "the S1-D provenance sha must be recorded alongside existing rows; old rows keep their own sha",
+    "I8-a / I8-b / true downgrade regression still pending"
+  ]
+}

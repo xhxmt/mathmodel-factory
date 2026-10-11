@@ -589,7 +589,10 @@ def claim_binding_issues(project: Path, *, through_stage: int = 10) -> list[dict
     Future-stage declarations are plans, not bindings. Once their owner stage
     runs, the actual file and optional JSON field must exist.
     """
-    from factory_core.current_artifact_ownership import artifact_ownership, reopen_after_step_for_artifact
+    from factory_core.artifact_policy import (
+        policy_ownership_rule,
+        reopen_after_step_for_policy_artifact,
+    )
     from scripts.verify_numbers import _resolve_dotted_json_path
 
     registry = load_declared_registry(project)
@@ -599,7 +602,7 @@ def claim_binding_issues(project: Path, *, through_stage: int = 10) -> list[dict
     for claim in registry["claims"]:
         for artifact in claim["artifacts"]:
             relative = artifact["path"]
-            owner = artifact_ownership(relative)
+            owner = policy_ownership_rule(relative)
             if owner is not None and owner.owner_stage > through_stage:
                 continue
             try:
@@ -611,7 +614,7 @@ def claim_binding_issues(project: Path, *, through_stage: int = 10) -> list[dict
             except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
                 issues.append({"claim_id": claim["id"], "path": relative,
                     "field": artifact.get("field"), "reason": str(exc),
-                    "resume_after_step": reopen_after_step_for_artifact(relative)})
+                    "resume_after_step": reopen_after_step_for_policy_artifact(relative)})
     return issues
 
 

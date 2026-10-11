@@ -1,0 +1,62 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "S1-B-activate",
+  "title": "Register the 21 observed fallback paths; remove the spurious solve rewind",
+  "recorded_at": "2026-09-26T14:26:59Z",
+  "branch": "feat/runtime-simplification",
+  "parent_commit": "645731f9638268c909cab930ca9d07c709580faf",
+  "this_is_the_behaviour_change": "S1-A/S1-C-prep/S1-D were all no-ops by construction. S1-B-activate is the single step that changes what a change to a registered path means.",
+  "registration": {
+    "entries": 18,
+    "paths_covered": 21,
+    "all_policy_only": true,
+    "all_gained_an_owner": false,
+    "final_input_all_false": true,
+    "submission_member_all_false": true,
+    "why_no_delivery_flag_flips": "Promoting any of these into the final-input or submission closure would change what the audit consumes or what ships. That is a separate, explicitly reviewed decision, not a side effect of removing a misclassification (Q2: default submission_member=False)."
+  },
+  "producer_consumer_reading": {
+    "requirement": "Q2 forbids guessing the delivery flags; each path was read",
+    "no_python_producer": "none of the 21 basenames appears anywhere in factory_core/apps/scripts/web, so they are agent-authored artifacts",
+    "canonical_results_evidence_closure": "results/canonical_results.json lists m1_solver_evidence.json and m4_solver_evidence.json among its evidence files -> those two keep the result rewind (RESULT@4). Dropping it would let a genuine result-evidence change pass unnoticed.",
+    "model_source_map": "referenced by model.md and step4_reuse_gap_record.md; structurally an index (schema/scope/primary/auxiliary/files/implementation_locators/canonical_plan/derived_plan) -> EVIDENCE_INDEX, routed RESULT@4",
+    "derived_verification_chain": "derived_artifacts_verification.latest.json binds results_values.tex by byte comparison with 'matches_regenerated': true -> the two .tex artifacts and the appendix generator are PRESENTATION_ONLY (FORMAT@9) and rely on that chain instead of a rewind",
+    "exploratory": "pro01/** including input_arrays.npz is EXPLORATORY + EXPLICIT_ONLY with both delivery flags false, so NON_BLOCKING_BY_POLICY applies (Q3)"
+  },
+  "measured_effect_on_real_history": {
+    "project": "A cumcm_2026_a_fable_pro_20260910, read-only",
+    "real_artifact_paths": 192,
+    "paths_in_fail_closed_pair_before": 21,
+    "paths_in_fail_closed_pair_after": 0,
+    "paths_with_no_obligation_after": 15,
+    "note": "an unknown path still yields the pair, so the fail-closed default is intact"
+  },
+  "identity_changes": {
+    "classifier_contract_sha256_after": "b4f5f1fc130e10c8f91250b09213b8330726c5a8ca1d414ce2a0ce40d8c74fc0",
+    "provenance_contract_sha256_after": "d5d771b7789463a887d9217a3bdd0f4399f2689f879dbfd0ab49b5b0ed3abbfa",
+    "frozen_classifier_sha256_unchanged": "c451a9d0be64fabd185c7561b67093956e663db6e845915cd320fea1cbabc515",
+    "why_the_classifier_identity_moves": "NATIVE_POLICY decides which DirtyChange a path produces, so the registry holding it joined classifier_contract_sha256() - this is exactly Q14's rule: what a change PRODUCES belongs to the classifier identity; WHY it was attributed belongs to the provenance identity.",
+    "consequence": "existing obligations keep their recorded identity until an explicit `factory rebase-classifier` runs - 0.7.1 removed the automatic read-triggered rebase, so no project is mutated merely by being opened"
+  },
+  "history_integrity": {
+    "verified_on_copies": "A/B/R opened read-only: revision, event count, dirty_causes and dirty_flags counts all unchanged; replay_diff empty; aggregate_valid true",
+    "originals_untouched": "the real A/B/R .factory/state.db files were never opened by v10 code"
+  },
+  "test_baseline": {
+    "before": "2447 passed / 0 failed / 0 collection errors",
+    "after": "2459 passed / 0 failed / 0 collection errors",
+    "delta": "+12 net",
+    "regressions": 0
+  },
+  "tests_updated_not_relaxed": [
+    "test_observed_gap_paths_are_still_unregistered_in_s1a -> renamed and inverted: the 21 are now registered AND still have no Stage owner",
+    "test_policy_presence_matches_ownership_presence -> the relationship is now coverage plus extension, not equality; a policy-only entry must remain invisible to artifact_ownership",
+    "test_compatibility_phase_registers_nothing_new -> asserts the exact 18-entry/21-path registration and that nothing shadowed the legacy registry",
+    "test_policy_aware_derivation_matches_the_legacy_oracle -> restricted to paths with no native policy; the registered paths are asserted against their intended new behaviour instead"
+  ],
+  "next_stage": "G1 (synthetic project gate over the four collection paths), then S5",
+  "open_items": [
+    "the four delivery flags are all false by design; promoting any path is a separate reviewed decision",
+    "I8-a / I8-b / true downgrade regression still pending"
+  ]
+}

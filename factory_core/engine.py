@@ -19,6 +19,21 @@ from .current_dirty import (
     semantic_flags,
     solver_receipt_job_id,
 )
+from .bounded_run import (
+    BoundedRunContract,
+    BoundedRunError,
+    BoundedRunResult,
+    CheckpointVerification,
+    ProtectedCheckpointViolation,
+    ProtectedManifestViolation,
+    ScopedRegistry,
+    check_cursor,
+    snapshot_checkpoints,
+    verify_checkpoints,
+    verify_protected_manifest,
+)
+from .dirty_classification import classification_sources, source_for
+from .liveness import pid_is_live
 from .domain import (
     ExecutionResult,
     InvalidTransition,
@@ -80,6 +95,144 @@ class FactoryEngine:
         self._transitions = TransitionCoordinator(
             self.project_dir, self.store, self._projector
         )
+        #: The bounded-run contract this invocation is executing under, if any.
+        #: Held on the instance so the pre-commit protection check can see it,
+        #: and cleared in run()'s finally so it cannot leak between invocations.
+        self._bounded_contract: BoundedRunContract | None = None
+        #: Committed checkpoints the running contract asked to protect, frozen
+        #: at entry so the pre-commit check can compare against them.
+        self._protected_checkpoints: dict[int, tuple[str, ...]] = {}
+
+    def run_bounded(self, contract: BoundedRunContract) -> "BoundedRunResult":
+        """Execute one authorised, bounded advance and report it structurally.
+
+        This is the supported replacement for the hand-written ``work/*.py``
+        drivers: it verifies the protected manifest at entry, runs the existing
+        continuous runner under the contract, verifies the manifest again, and
+        returns a structured outcome instead of leaving the caller to journal its
+        own progress file and guess at the stop reason.
+
+        It adds no second runner - ``run`` is the same loop, invoked under a
+        contract.
+        """
+
+        from .bounded_run import (
+            BoundedRunResult,
+            boundary_fingerprint,
+            classify_stop_reason,
+            reconcile_contract_violation,
+        )
+
+        start_state = self.store.load()
+        if contract.protected_manifest or contract.protected_identity:
+            entry = verify_protected_manifest(
+                self.project_dir,
+                contract.protected_manifest,
+                contract.protected_identity,
+            )
+            if not entry.ok:
+                # Refuse before writing anything: the caller's own expectation is
+                # already violated, so advancing would build on a broken premise.
+                raise ProtectedManifestViolation(
+                    "protected manifest is already violated at entry: " + entry.describe()
+                )
+        else:
+            entry = verify_protected_manifest(self.project_dir, {}, {})
+
+        # The protected checkpoints are snapshotted here and compared again after
+        # the run.  A caller naming a source step that has no committed checkpoint
+        # is refused up front: there would be nothing to protect.
+        checkpoint_snapshot: dict[int, str] = {}
+        entry_checkpoints = CheckpointVerification(ok=True)
+        if contract.protected_checkpoints:
+            checkpoint_snapshot = snapshot_checkpoints(
+                self.store.stage_checkpoints(), contract.protected_checkpoints
+            )
+            # snapshot_checkpoints only reports what exists, so the request itself
+            # has to be checked: naming a source step with no committed checkpoint
+            # would otherwise protect nothing while looking like protection.
+            absent = sorted(
+                set(contract.protected_checkpoints) - set(checkpoint_snapshot)
+            )
+            if absent:
+                raise ProtectedCheckpointViolation(
+                    "protected checkpoint is absent at entry for source step(s): "
+                    + ", ".join(str(step) for step in absent)
+                )
+            entry_checkpoints = verify_checkpoints(
+                self.store.stage_checkpoints(), checkpoint_snapshot
+            )
+
+        start_revision = int(start_state.revision)
+        previous_status = str(
+            getattr(start_state.status, "value", start_state.status)
+        )
+        end_state = self.run(contract=contract)
+
+        succeeded = [
+            event
+            for event in self.store.events(since_revision=start_revision)
+            if event.type == "STEP_SUCCEEDED"
+        ]
+        completed = len(succeeded)
+        final = verify_protected_manifest(
+            self.project_dir, contract.protected_manifest, contract.protected_identity
+        )
+        final_checkpoints = (
+            verify_checkpoints(self.store.stage_checkpoints(), checkpoint_snapshot)
+            if checkpoint_snapshot
+            else CheckpointVerification(ok=True)
+        )
+        blocked_reason = ""
+        pending = getattr(end_state, "pending_action", None)
+        if pending is not None:
+            blocked_reason = str(
+                getattr(pending, "type", None)
+                or getattr(pending, "kind", None)
+                or "PENDING_ACTION"
+            )
+        stop_reason = classify_stop_reason(
+            end_state,
+            previous_status=previous_status,
+            completed=completed,
+            bounded=contract.max_subtasks,
+        )
+        if not final.ok:
+            stop_reason = "PROTECTED_MANIFEST_VIOLATED"
+        elif not final_checkpoints.ok:
+            # a distinct reason: this is a database row, not a protected file
+            stop_reason = "PROTECTED_CHECKPOINT_VIOLATED"
+        fingerprint = boundary_fingerprint(
+            end_state, blocked_reason=blocked_reason
+        )
+        made_progress = int(end_state.revision) > start_revision
+        violation = reconcile_contract_violation(
+            contract, end_state, start_revision=start_revision, completed=completed
+        )
+        return BoundedRunResult(
+            run_id=contract.run_id,
+            contract_sha256=contract.contract_sha256,
+            run_policy=contract.run_policy,
+            actor=contract.actor,
+            start_revision=start_revision,
+            end_revision=int(end_state.revision),
+            status=str(getattr(end_state.status, "value", end_state.status)),
+            stop_reason=stop_reason,
+            completed_subtasks=completed,
+            made_progress=made_progress,
+            boundary_fingerprint=fingerprint,
+            unchanged_boundary=(
+                contract.previous_boundary_fingerprint is not None
+                and contract.previous_boundary_fingerprint == fingerprint
+                and not made_progress
+            ),
+            entry_verification=entry,
+            final_verification=final,
+            entry_checkpoints=entry_checkpoints,
+            final_checkpoints=final_checkpoints,
+            blocked_reason=blocked_reason,
+            contract_violation=violation,
+        )
 
     def get_state(self) -> WorkflowState:
         return self.store.load()
@@ -87,8 +240,43 @@ class FactoryEngine:
     def run(
         self, *, max_steps: int | None = None,
         allowed_source_steps: frozenset[int] | None = None,
+        contract: "BoundedRunContract | None" = None,
     ) -> WorkflowState:
+        """Advance the project.
+
+        ``contract`` is optional and additive: when given, it pins the revision
+        and cursor this invocation was authorised against, records the
+        authorisation in ``RUN_STARTED``, and makes the protected manifest part of
+        the pre-commit check.  Callers that pass nothing keep the old behaviour.
+        """
+
+        if contract is not None:
+            if contract.allowed_source_steps is not None:
+                # The contract is the authorisation; the explicit kwarg is the
+                # lower-level form of the same thing and must not disagree.
+                if (
+                    allowed_source_steps is not None
+                    and frozenset(allowed_source_steps) != contract.allowed_source_steps
+                ):
+                    raise BoundedRunError(
+                        "allowed_source_steps disagrees with the bounded run contract"
+                    )
+                allowed_source_steps = contract.allowed_source_steps
+            if contract.max_subtasks is not None:
+                if max_steps is not None and max_steps != contract.max_subtasks:
+                    raise BoundedRunError(
+                        "max_steps disagrees with the bounded run contract"
+                    )
+                max_steps = contract.max_subtasks
         state = self.store.load()
+        if contract is not None:
+            # Compare-and-swap first: a stale authorisation must be refused before
+            # any event is written, not discovered afterwards.
+            if int(state.revision) != int(contract.expected_revision):
+                raise BoundedRunError(
+                    f"expected revision {contract.expected_revision}, found {state.revision}"
+                )
+            check_cursor(state, contract.expected_cursor)
         if state.scheduler_generation not in {
             STEP_SCHEDULER_GENERATION,
             STAGE_SCHEDULER_GENERATION,
@@ -108,79 +296,139 @@ class FactoryEngine:
             raise RunnerBusy(
                 f"project {state.project_id} already has live runner {state.runner_pid}"
             )
-        if state.status in TERMINAL_STATUSES:
-            return state
-        if state.status in {
-            WorkflowStatus.AWAITING_SELECTION,
-            WorkflowStatus.AWAITING_CONSULTATION,
-            WorkflowStatus.PAUSED,
-            WorkflowStatus.FAILED,
-        }:
-            return state
-
-        # An already exhausted step schedule must not write RUN_STARTED before
-        # the production-state completion boundary is classified.  This path
-        # is also used by service.run() for a migrated Step-16 project.
-        if (
-            not stage_mode
-            and state.active_step is None
-            and state.runner_pid is None
-            and self.registry.next_after(state.last_completed_step) is None
+        # Arm the contract before anything below can write.  This has to happen
+        # here rather than just around the advance loop, because the recovery
+        # branch further down reaches _complete_stage_task through its COMPLETE
+        # disposition - the same commit path the advance loop uses - and all three
+        # of these attributes are read by that path:
+        #
+        #   _bounded_contract      the pre-commit manifest/identity check
+        #   _protected_checkpoints the pre-commit committed-checkpoint check
+        #   the scoped registry    the Step ceilings recovery's reopen decision reads
+        #
+        # Arming them only for the loop would let a recovered commit land and be
+        # reported afterwards, which is the opposite of a pre-commit check.
+        previous_registry = self.registry
+        previous_contract = self._bounded_contract
+        previous_checkpoints = self._protected_checkpoints
+        self._bounded_contract = contract
+        if contract is not None and contract.protected_checkpoints:
+            self._protected_checkpoints = snapshot_checkpoints(
+                self.store.stage_checkpoints(), contract.protected_checkpoints
+            )
+        # A contract may tighten the Step ceilings the engine reads from a
+        # StepDefinition.  Swapping the registry is how that reaches every
+        # resolution path, including recovery's; the swap is skipped entirely when
+        # the contract carries no ceiling, so an unscoped run is unchanged.
+        if contract is not None and (
+            contract.max_attempts_per_step or contract.max_reopens_per_step
         ):
-            return self._commit_project_completed(state, stage_mode=False)
-
-        if state.runner_pid is not None and not runner_is_live:
-            state = self._transition(
-                expected_revision=state.revision,
-                event_type="RUNNER_INTERRUPTED",
-                changes={
-                    "status": WorkflowStatus.INTERRUPTED,
-                    "runner_pid": None,
-                    "runner_lease_id": None,
-                    "heartbeat_at": None,
-                },
-                payload={"reason": "recorded runner is no longer live"},
-            )
-        elif (
-            state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
-            and state.runner_pid is None
-        ):
-            state = self._transition(
-                expected_revision=state.revision,
-                event_type="RUNNER_INTERRUPTED",
-                changes={"status": WorkflowStatus.INTERRUPTED},
-                payload={"reason": "active run has no recorded runner"},
-            )
-        if state.active_step is not None and (not stage_mode or state.attempt > 0):
-            enforce_recovery_lease = state.runner_pid == os.getpid()
-            state = self.recover(
-                expected_runner_pid=state.runner_pid,
-                expected_runner_lease_id=state.runner_lease_id,
-                enforce_lease=enforce_recovery_lease,
-            )
+            self.registry = ScopedRegistry(previous_registry, contract)
+        try:
+            if state.status in TERMINAL_STATUSES:
+                return state
             if state.status in {
                 WorkflowStatus.AWAITING_SELECTION,
                 WorkflowStatus.AWAITING_CONSULTATION,
-                WorkflowStatus.FAILED,
                 WorkflowStatus.PAUSED,
-                WorkflowStatus.KILLED,
-                WorkflowStatus.COMPLETED,
+                WorkflowStatus.FAILED,
             }:
                 return state
-        lease = uuid.uuid4().hex
-        state = self._transition(
-            expected_revision=state.revision,
-            event_type="RUN_STARTED",
-            changes={
-                "status": WorkflowStatus.RUNNING,
-                "runner_pid": os.getpid(),
-                "runner_lease_id": lease,
-                "heartbeat_at": int(time.time()),
-            },
-            payload={"lease_id": lease, "worker_pid": os.getpid(), "worker_identity": _process_identity(os.getpid())},
-            expected_runner_pid=state.runner_pid,
-            expected_runner_lease_id=state.runner_lease_id,
-        )
+
+            # An already exhausted step schedule must not write RUN_STARTED before
+            # the production-state completion boundary is classified.  This path
+            # is also used by service.run() for a migrated Step-16 project.
+            if (
+                not stage_mode
+                and state.active_step is None
+                and state.runner_pid is None
+                and self.registry.next_after(state.last_completed_step) is None
+            ):
+                return self._commit_project_completed(state, stage_mode=False)
+
+            if state.runner_pid is not None and not runner_is_live:
+                state = self._transition(
+                    expected_revision=state.revision,
+                    event_type="RUNNER_INTERRUPTED",
+                    changes={
+                        "status": WorkflowStatus.INTERRUPTED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={"reason": "recorded runner is no longer live"},
+                )
+            elif (
+                state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
+                and state.runner_pid is None
+            ):
+                state = self._transition(
+                    expected_revision=state.revision,
+                    event_type="RUNNER_INTERRUPTED",
+                    changes={"status": WorkflowStatus.INTERRUPTED},
+                    payload={"reason": "active run has no recorded runner"},
+                )
+            if state.active_step is not None and (not stage_mode or state.attempt > 0):
+                enforce_recovery_lease = state.runner_pid == os.getpid()
+                state = self.recover(
+                    expected_runner_pid=state.runner_pid,
+                    expected_runner_lease_id=state.runner_lease_id,
+                    enforce_lease=enforce_recovery_lease,
+                )
+                if state.status in {
+                    WorkflowStatus.AWAITING_SELECTION,
+                    WorkflowStatus.AWAITING_CONSULTATION,
+                    WorkflowStatus.FAILED,
+                    WorkflowStatus.PAUSED,
+                    WorkflowStatus.KILLED,
+                    WorkflowStatus.COMPLETED,
+                }:
+                    return state
+            lease = uuid.uuid4().hex
+            state = self._transition(
+                expected_revision=state.revision,
+                event_type="RUN_STARTED",
+                changes={
+                    "status": WorkflowStatus.RUNNING,
+                    "runner_pid": os.getpid(),
+                    "runner_lease_id": lease,
+                    "heartbeat_at": int(time.time()),
+                },
+                payload={
+                    "lease_id": lease,
+                    "worker_pid": os.getpid(),
+                    "worker_identity": _process_identity(os.getpid()),
+                    **(
+                        {"bounded_run": contract.event_payload()}
+                        if contract is not None
+                        else {}
+                    ),
+                },
+                expected_runner_pid=state.runner_pid,
+                expected_runner_lease_id=state.runner_lease_id,
+            )
+            return self._advance_loop(
+                state,
+                lease=lease,
+                stage_mode=stage_mode,
+                max_steps=max_steps,
+                allowed_source_steps=allowed_source_steps,
+            )
+
+        finally:
+            self.registry = previous_registry
+            self._bounded_contract = previous_contract
+            self._protected_checkpoints = previous_checkpoints
+
+    def _advance_loop(
+        self,
+        state: WorkflowState,
+        *,
+        lease: str,
+        stage_mode: bool,
+        max_steps: int | None,
+        allowed_source_steps: frozenset[int] | None,
+    ) -> WorkflowState:
         completed_this_run = 0
         while True:
             stage_task: ScheduledStageTask | None = None
@@ -271,6 +519,7 @@ class FactoryEngine:
                 timeout_seconds=timeout_seconds,
                 revision=state.revision,
                 deadline_epoch=self._contest_deadline(definition),
+                clock=self.store.clock,
             )
             try:
                 with deadline_scope(preview_context.deadline_epoch):
@@ -563,6 +812,25 @@ class FactoryEngine:
                     }:
                         return state
                     continue
+                # The Step-scheduler path commits Step success directly, without
+                # going through _complete_stage_task, so it has to enforce the
+                # contract's protection itself.  run_bounded() accepts a Step
+                # project as readily as a Stage one; a check on only the Stage
+                # path would let a contract on a Step project be a no-op.
+                violation = self._contract_protection_violation()
+                if violation is not None:
+                    return self._owned_transition(
+                        state,
+                        lease,
+                        event_type="STEP_FAILED",
+                        changes={
+                            "status": WorkflowStatus.FAILED,
+                            "runner_pid": None,
+                            "runner_lease_id": None,
+                            "heartbeat_at": None,
+                        },
+                        payload={**violation, "source_step": completed_step},
+                    )
                 state = self._owned_transition(
                     state,
                     lease,
@@ -841,6 +1109,7 @@ class FactoryEngine:
                 timeout_seconds=definition.timeout_seconds,
                 revision=state.revision,
                 deadline_epoch=None,
+                clock=self.store.clock,
             )
             validation = definition.lifecycle.validate(context)
             if classifier_stale or not validation.is_valid:
@@ -895,6 +1164,9 @@ class FactoryEngine:
                     "baseline_fingerprint": "MISSING",
                     "current_fingerprint": output_fingerprint,
                     "classifier_contract_sha256": classifier_contract_sha256(),
+                    # Not derived from a rule: constructed deliberately to fail
+                    # closed when the stage baseline is absent.
+                    "classification_source": "explicit_fail_closed",
                 },
                 {
                     "flag": DirtyFlag.RESULT.value,
@@ -903,15 +1175,23 @@ class FactoryEngine:
                     "baseline_fingerprint": "MISSING",
                     "current_fingerprint": output_fingerprint,
                     "classifier_contract_sha256": classifier_contract_sha256(),
+                    "classification_source": "explicit_fail_closed",
                 },
             ]
             return "MISSING", output_fingerprint, after, dirty_changes
         before = dict(baseline["manifest"])
         dirty_changes = []
+        # Schema v10 provenance: derived outside the frozen classifier module so
+        # that dirty.py's bytes (part of the frozen classifier contract identity)
+        # stay untouched.
+        sources = classification_sources(before, after)
         for change in classify_manifest_changes(before, after):
             record = {
                 **change.to_dict(),
                 "classifier_contract_sha256": classifier_contract_sha256(),
+                "classification_source": source_for(
+                    sources, change.flag.value, change.cause_artifact
+                ),
             }
             receipt_owner = self._solver_receipt_owner_stage(change.cause_artifact)
             if receipt_owner is not None:
@@ -1008,6 +1288,47 @@ class FactoryEngine:
             == result.metadata.get("prompt_inputs_sha256")
         )
 
+    def _contract_protection_violation(self) -> dict[str, Any] | None:
+        """The contract's pre-commit protection check, as a payload or ``None``.
+
+        Called immediately before a Step-success commit on **every** path.  There
+        are two: the Stage path commits through :meth:`_complete_stage_task`, and
+        the Step path commits directly in ``_advance_loop``.  Only the first used
+        to check, so a contract on a Step-scheduler project promised protection
+        that never ran.  ``run_bounded`` accepts both, so both have to enforce it.
+
+        Returns the violation's payload rather than raising, because each path
+        needs to add its own context (a Stage task adds its stage and subtask) and
+        commit the same terminal failure the rest of the engine uses.
+        """
+
+        contract = self._bounded_contract
+        if contract is None:
+            return None
+        if contract.protected_manifest or contract.protected_identity:
+            verification = verify_protected_manifest(
+                self.project_dir,
+                contract.protected_manifest,
+                contract.protected_identity,
+            )
+            if not verification.ok:
+                return {
+                    "error_class": "PERMANENT_PROTECTED_MANIFEST_VIOLATED",
+                    "protected_manifest": verification.to_dict(),
+                    "bounded_run": contract.event_payload(),
+                }
+        if self._protected_checkpoints:
+            checkpoints = verify_checkpoints(
+                self.store.stage_checkpoints(), self._protected_checkpoints
+            )
+            if not checkpoints.ok:
+                return {
+                    "error_class": "PERMANENT_PROTECTED_CHECKPOINT_VIOLATED",
+                    "protected_checkpoints": checkpoints.to_dict(),
+                    "bounded_run": contract.event_payload(),
+                }
+        return None
+
     def _complete_stage_task(
         self,
         state: WorkflowState,
@@ -1045,6 +1366,33 @@ class FactoryEngine:
                     "source_step": task.source_step_id,
                     "prompt_input_receipt_id": receipt_id,
                     "prompt_input_attempt_key": attempt_key_value,
+                },
+                dirty_changes=dirty_changes,
+                event_step=task.source_step_id,
+            )
+
+        # S6: the contract's protected manifest and committed checkpoints are
+        # verified here, immediately before a successful checkpoint can commit, so
+        # a violation blocks the commit instead of being discovered by the caller
+        # afterwards.  The entry check answers a different question (was the state
+        # already as expected), so both are needed.
+        violation = self._contract_protection_violation()
+        if violation is not None:
+            return self._stage_transition(
+                state,
+                lease,
+                event_type="STEP_FAILED",
+                changes={
+                    "status": WorkflowStatus.FAILED,
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={
+                    **violation,
+                    "stage": task.stage_id,
+                    "subtask": task.subtask,
+                    "source_step": task.source_step_id,
                 },
                 dirty_changes=dirty_changes,
                 event_step=task.source_step_id,
@@ -1697,10 +2045,28 @@ class FactoryEngine:
             **kwargs,
         )
 
-    def pause(self, *, expected_revision: int) -> WorkflowState:
-        return self._control_transition(expected_revision, "PAUSED", WorkflowStatus.PAUSED)
+    def pause(
+        self,
+        *,
+        expected_revision: int,
+        subcode: str = "OPERATOR",
+        actor: str = "operator",
+    ) -> WorkflowState:
+        return self._control_transition(
+            expected_revision,
+            "PAUSED",
+            WorkflowStatus.PAUSED,
+            subcode=subcode,
+            actor=actor,
+        )
 
-    def resume(self, *, expected_revision: int) -> WorkflowState:
+    def resume(
+        self,
+        *,
+        expected_revision: int,
+        subcode: str = "OPERATOR",
+        actor: str = "operator",
+    ) -> WorkflowState:
         state = self.store.load()
         if state.runner_pid is not None and self._pid_is_live(state.runner_pid):
             raise InvalidTransition(
@@ -1739,6 +2105,7 @@ class FactoryEngine:
             expected_revision=expected_revision,
             event_type="RESUMED",
             changes=changes,
+            payload={"reason": {"code": "RESUMED", "subcode": subcode, "actor": actor}},
         )
 
     def _stop_at_gate2(self, state, lease, result, validation):
@@ -1766,8 +2133,20 @@ class FactoryEngine:
         )
 
     def _control_transition(
-        self, expected_revision: int, event: str, status: WorkflowStatus
+        self,
+        expected_revision: int,
+        event: str,
+        status: WorkflowStatus,
+        *,
+        subcode: str = "",
+        actor: str = "",
     ) -> WorkflowState:
+        """A control transition, with a structured reason (S4.1).
+
+        ``subcode`` and ``actor`` record *why* and *who* without adding a new
+        top-level event type: the canonical ``code`` stays the discriminator.
+        """
+
         return self._transition(
             expected_revision=expected_revision,
             event_type=event,
@@ -1777,6 +2156,7 @@ class FactoryEngine:
                 "runner_lease_id": None,
                 "heartbeat_at": None,
             },
+            payload={"reason": {"code": event, "subcode": subcode, "actor": actor}},
         )
 
     def deactivate(self, *, expected_revision: int, legacy_inferred_step: int | None = None) -> WorkflowState:
@@ -1967,6 +2347,7 @@ class FactoryEngine:
             ),
             revision=state.revision,
             deadline_epoch=self._contest_deadline(definition),
+            clock=self.store.clock,
         )
 
     def _contest_deadline(self, definition: StepDefinition) -> int | None:
@@ -2091,8 +2472,12 @@ class FactoryEngine:
 
     @staticmethod
     def _pid_is_live(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+        """Whether the recorded runner still exists.
+
+        Delegates to :func:`factory_core.liveness.pid_is_live`, which is the one
+        implementation: ``engine`` and ``service`` had drifted apart, and both read
+        EPERM as death, which would let a second runner start on a project another
+        user's runner is still advancing.
+        """
+
+        return pid_is_live(pid)

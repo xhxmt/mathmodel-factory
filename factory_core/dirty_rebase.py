@@ -150,7 +150,7 @@ def rebase_dirty_classifier_state(
         if current is None or int(current["cause_revision"]) < int(record["cause_revision"]):
             source_obligations[key] = record
 
-    from .current_artifact_ownership import artifact_ownership
+    from .artifact_policy import policy_ownership_rule
 
     semantic_paper_flags = {
         "MATH_DIRTY",
@@ -180,7 +180,7 @@ def rebase_dirty_classifier_state(
             ).fetchone()
             if job is not None and job["owner_stage"] is not None:
                 return ("RESULT_DIRTY", int(job["owner_stage"]))
-        ownership = artifact_ownership(artifact)
+        ownership = policy_ownership_rule(artifact)
         if ownership is None:
             return source_key
         return (str(ownership.dirty_flag), int(ownership.owner_stage))

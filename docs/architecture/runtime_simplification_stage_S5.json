@@ -1,0 +1,87 @@
+{
+  "schema": "factory-runtime-simplification-stage-record-v1",
+  "stage": "S5",
+  "title": "Solver reconciliation: execution / evidence / workflow relevance",
+  "recorded_at": "2026-09-26T14:48:35Z",
+  "branch": "feat/runtime-simplification",
+  "parent_commit": "f6ea929ed9426f1177213ecd3e25b5eccdfb3086",
+  "module": "factory_core/solver_reconcile.py (new)",
+  "is_shadow": "This is a pure read that REPORTS. It does not gate anything yet and persists nothing; the plan calls for the evaluator to stabilise before a runner preflight writes reconciliation events. It never rewrites solver_jobs.status and never appends an event.",
+  "three_questions": {
+    "execution_state": "RUNNING | TERMINAL_SUCCESS | TERMINAL_FAILURE | UNKNOWN. The job's own exit artifact settles it; without one a stale `running` row stays RUNNING because there is no per-job liveness signal, and a db-terminal row with no artifact is UNKNOWN rather than trusted.",
+    "evidence_state": "COMPLETE | INCOMPLETE | INVALID | NOT_REQUIRED, using the same two helpers and the same fail-closed shape as cli.solver_evidence_payload (receipt_ready=False, claim_limit=LEGACY_JOB_METADATA_ONLY) rather than a second notion of 'evidence complete'.",
+    "workflow_relevance": "REQUIRED | SUPERSEDED | ORPHANED | HISTORICAL | ADVISORY | UNRESOLVED."
+  },
+  "positive_proof_rule": {
+    "blocks": [
+      "REQUIRED",
+      "UNRESOLVED"
+    ],
+    "ignorable_only_with_proof": [
+      "SUPERSEDED",
+      "ORPHANED",
+      "HISTORICAL",
+      "ADVISORY"
+    ],
+    "proofs_implemented": {
+      "SUPERSEDED": "a later job (higher job_revision) in the same owner slot reached terminal success",
+      "HISTORICAL": "the job is provably terminal and the project's committed cursor has passed the stage that owned it",
+      "ADVISORY": "provably terminal and the cursor has completed its own stage"
+    },
+    "why_cursor_counts_as_proof": "project_state.last_completed_stage only advances through committed checkpoints, so it is evidence about the workflow rather than an inference about the job",
+    "everything_else": "UNRESOLVED - notably a job with no owner slot at all, which is the case where a guess would be most tempting and most wrong"
+  },
+  "design_fix_found_while_building": "relevance first consulted the database's status claim, which made a stale `running` row report REQUIRED even though its exit artifact proved successful execution. Relevance now reads the reconciled execution state; the db claim is exposed only for diagnostics.",
+  "design_fix_performance": "the first implementation called cli.solver_evidence_payload per job, which re-reads the whole event stream each time - quadratic on R (2484 events, 361 jobs) and it timed out. The event list is now read once.",
+  "real_history_result": {
+    "A": {
+      "jobs": 14,
+      "relevance_counts": {
+        "UNRESOLVED": 2,
+        "HISTORICAL": 12
+      },
+      "blockers": [
+        {
+          "job_id": "local_python_20260910151111_183973a7",
+          "db_status": "failed",
+          "execution_state": "TERMINAL_FAILURE",
+          "evidence_state": "INVALID",
+          "workflow_relevance": "UNRESOLVED"
+        },
+        {
+          "job_id": "local_python_20260910154426_560c138e",
+          "db_status": "running",
+          "execution_state": "TERMINAL_SUCCESS",
+          "evidence_state": "INVALID",
+          "workflow_relevance": "UNRESOLVED"
+        }
+      ]
+    },
+    "B": {
+      "jobs": 202,
+      "relevance_counts": {
+        "SUPERSEDED": 3,
+        "HISTORICAL": 185,
+        "ADVISORY": 14
+      },
+      "blockers": []
+    },
+    "R": {
+      "jobs": 361,
+      "relevance_counts": {
+        "HISTORICAL": 361
+      },
+      "blockers": []
+    }
+  },
+  "interpretation": {
+    "A": "two ownerless jobs whose relevance cannot be proven -> UNRESOLVED, and they BLOCK. This is a genuine finding: A's completion rests on jobs the workflow cannot account for. The shadow evaluator reports it rather than inventing an answer.",
+    "B": "the residual stale `running` row is provably SUPERSEDED by a later success in the same owner slot -> no blocker.",
+    "R": "every job sits behind the committed cursor -> no blocker."
+  },
+  "next_stage": "G2 (A/B read-only anomalies + synthetic required/superseded/unresolved jobs), then S4.1",
+  "open_items": [
+    "checkpoint receipts still do not bind job_id, which is why HISTORICAL needs the cursor as its proof; future receipts should bind the adopted completion receipt so UNRESOLVED narrows naturally",
+    "persisting the reconciliation is deliberately deferred until the evaluator is reviewed"
+  ]
+}

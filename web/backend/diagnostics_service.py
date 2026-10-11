@@ -13,7 +13,11 @@ if str(SCRIPTS) not in sys.path:
 
 from project_diagnostics import load_recent_events, load_status
 from factory_core.storage import SQLiteStateStore
-from factory_core.artifact_ownership import artifact_owner_stage
+# S1-C: policy-aware routing. This previously imported the FROZEN registry, so it
+# reported owner_stage=None for judge_evidence.json / STEP5_RECEIPT.json and
+# owner_stage=3 for scope_review_manifest.json while the rest of the system
+# reported 10 / 4 / 10. The policy layer resolves through the current registry.
+from factory_core.artifact_policy import artifact_policy_owner_stage as artifact_owner_stage
 from factory_core.selection_projection import (
     step3_projection_required,
     verify_step3_projections,
