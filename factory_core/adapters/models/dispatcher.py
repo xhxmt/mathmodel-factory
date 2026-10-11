@@ -22,6 +22,7 @@ _BUILTINS = {
     "codex": {"backend": "codex", "model": "", "effort": "xhigh", "base_url": "", "key_env": ""},
     "claude": {"backend": "claude", "model": "", "effort": "max", "base_url": "", "key_env": ""},
     "agy": {"backend": "agy", "model": "gemini-3.1-pro-preview", "effort": "", "base_url": "", "key_env": "GEMINI_API_KEY"},
+    "dsh-deepseek": {"backend": "dsh", "model": "deepseek-flash", "effort": "", "base_url": "", "key_env": "DEEPSEEK_API_KEY"},
     "deepseek-chat": {"backend": "openai", "model": "deepseek-chat", "effort": "", "base_url": "https://api.deepseek.com", "key_env": "DEEPSEEK_API_KEY"},
 }
 

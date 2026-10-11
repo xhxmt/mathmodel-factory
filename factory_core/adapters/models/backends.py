@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import re
+import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field, replace
@@ -179,6 +182,135 @@ class ClaudeCliBackend(_ProcessModelBackend):
         return self._run(request, argv, "claude")
 
 
+class DshBackend(_ProcessModelBackend):
+    """Drive one workflow step with a DeepSeek Harness headless run.
+
+    ``dsh --profile headless`` answers one task with the same agentic agent as the
+    interactive surfaces - file tools, shell, the project as its workspace - prints
+    the final answer, and exits.  Unlike the HTTP API route it can therefore *create*
+    a step's artefacts, which is what every prompt step needs.
+
+    Three facts about the launcher decide whether a run happened at all, and each
+    fails quietly if it is assumed rather than checked:
+
+    * the launcher's only dispatch is ``if (import.meta.main) await runCli()``, an
+      expression Node older than 24 does not have.  On an older Node the process
+      exits **0 having done nothing** - a step that looks successful and produced no
+      artefacts.  The major version is verified before the run.
+    * the mounted route reads its credential from ``DEEPSEEK_API_KEY``; a missing
+      key is reported as such instead of surfacing later as an empty step.
+    * the model is a property of the profile, so an explicit model is applied as a
+      ``--patch`` overlay rather than as an argv flag.
+
+    The task travels on stdin: a rendered step prompt is far larger than a
+    comfortable argv element, and ``-`` is the launcher's documented spelling for
+    "read the task from stdin".
+    """
+
+    name = "dsh"
+
+    def _node_and_cli(self) -> tuple[str, str] | ExecutionResult:
+        node = os.getenv("DSH_NODE", "").strip() or (shutil.which("node") or "")
+        if not node:
+            return ExecutionResult.failed(
+                "PERMANENT_BACKEND_UNAVAILABLE", returncode=127,
+                reason="no node executable found for the DeepSeek Harness launcher",
+            )
+        cli = os.getenv("DSH_CLI", "").strip()
+        if not cli:
+            found = shutil.which("dsh")
+            if found:
+                # The PATH entry is a symlink into the package; resolve it so the
+                # argv names the launcher the version check was made against.
+                cli = str(Path(found).resolve())
+        if not cli or not Path(cli).is_file():
+            return ExecutionResult.failed(
+                "PERMANENT_BACKEND_UNAVAILABLE", returncode=127,
+                reason=(
+                    "the DeepSeek Harness launcher was not found; install it and set "
+                    "DSH_CLI to its lib/bin.js (or put dsh on PATH)"
+                ),
+            )
+        major = self._node_major(node)
+        if major is not None and major < 24:
+            return ExecutionResult.failed(
+                "PERMANENT_BACKEND_UNAVAILABLE", returncode=127,
+                reason=(
+                    f"the DeepSeek Harness launcher needs node >= 24, found {major}: its "
+                    "only dispatch is gated by `import.meta.main`, which an older node "
+                    "does not have, so it exits 0 having run nothing"
+                ),
+            )
+        return node, cli
+
+    @staticmethod
+    def _node_major(node: str) -> int | None:
+        """The node major version, or None when it cannot be read."""
+
+        try:
+            completed = subprocess.run(
+                [node, "--version"], capture_output=True, text=True, timeout=30
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        match = re.fullmatch(r"v?(\d+)\..*", completed.stdout.strip())
+        return int(match.group(1)) if match else None
+
+    def command(self, request: ModelRequest):
+        if request.image_files:
+            # The harness can read an image only when a vision model and an
+            # attachment path are wired for it; silently dropping the pages would
+            # produce a confident answer about evidence the model never saw.
+            return ExecutionResult.failed(
+                "PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
+                reason="the dsh adapter has no verified image transport",
+            )
+        resolved = self._node_and_cli()
+        if isinstance(resolved, ExecutionResult):
+            return resolved
+        node, cli = resolved
+        key_env = (
+            request.key_env or os.getenv("DSH_API_KEY_ENV", "") or "DEEPSEEK_API_KEY"
+        ).strip()
+        if not (request.env.get(key_env) or os.getenv(key_env)):
+            return ExecutionResult.failed(
+                "PERMANENT_MODEL_CONFIG", returncode=2, missing_key_env=key_env,
+                reason=f"{key_env} is required by the mounted route and is not in the environment",
+            )
+        logs = request.project_dir / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        stem = f"step_{request.step_id}_dsh_{os.getpid()}_{uuid4().hex}"
+        prompt_file = logs / f"{stem}.prompt.txt"
+        prompt_file.write_text(request.prompt, encoding="utf-8")
+        argv = [
+            node,
+            cli,
+            "--profile",
+            os.getenv("DSH_PROFILE", "").strip() or "headless",
+        ]
+        model = (request.model or "").strip()
+        if model:
+            provider = os.getenv("DSH_PROVIDER", "").strip() or "deepseek-official"
+            patch_file = logs / f"{stem}.model.yml"
+            patch_file.write_text(
+                "- id: agent-default-model\n"
+                "  config:\n"
+                f"    provider: {provider}\n"
+                f"    model: {model}\n",
+                encoding="utf-8",
+            )
+            argv.extend(["--patch", str(patch_file)])
+        argv.append("-")
+        return replace(request, stdin_file=prompt_file), argv
+
+    def execute(self, request: ModelRequest) -> ExecutionResult:
+        command = self.command(request)
+        if isinstance(command, ExecutionResult):
+            return command
+        configured, argv = command
+        return self._run(configured, argv, "dsh")
+
+
 class AgyBackend(_ProcessModelBackend):
     name = "agy"
 
@@ -295,6 +427,7 @@ def build_model_backends(factory_root: str | Path) -> ModelBackendRegistry:
     registry.register("codex", CodexCliBackend(root))
     registry.register("claude", ClaudeCliBackend(root))
     registry.register("agy", AgyBackend(root))
+    registry.register("dsh", DshBackend(root))
     registry.register("openai", ApiAgentBackend(root))
     registry.register("deepseek", ApiAgentBackend(root))
     registry.register("gemini", ApiAgentBackend(root))
