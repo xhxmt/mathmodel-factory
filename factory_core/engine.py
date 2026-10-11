@@ -296,110 +296,117 @@ class FactoryEngine:
             raise RunnerBusy(
                 f"project {state.project_id} already has live runner {state.runner_pid}"
             )
-        if state.status in TERMINAL_STATUSES:
-            return state
-        if state.status in {
-            WorkflowStatus.AWAITING_SELECTION,
-            WorkflowStatus.AWAITING_CONSULTATION,
-            WorkflowStatus.PAUSED,
-            WorkflowStatus.FAILED,
-        }:
-            return state
-
-        # An already exhausted step schedule must not write RUN_STARTED before
-        # the production-state completion boundary is classified.  This path
-        # is also used by service.run() for a migrated Step-16 project.
-        if (
-            not stage_mode
-            and state.active_step is None
-            and state.runner_pid is None
-            and self.registry.next_after(state.last_completed_step) is None
-        ):
-            return self._commit_project_completed(state, stage_mode=False)
-
-        if state.runner_pid is not None and not runner_is_live:
-            state = self._transition(
-                expected_revision=state.revision,
-                event_type="RUNNER_INTERRUPTED",
-                changes={
-                    "status": WorkflowStatus.INTERRUPTED,
-                    "runner_pid": None,
-                    "runner_lease_id": None,
-                    "heartbeat_at": None,
-                },
-                payload={"reason": "recorded runner is no longer live"},
-            )
-        elif (
-            state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
-            and state.runner_pid is None
-        ):
-            state = self._transition(
-                expected_revision=state.revision,
-                event_type="RUNNER_INTERRUPTED",
-                changes={"status": WorkflowStatus.INTERRUPTED},
-                payload={"reason": "active run has no recorded runner"},
-            )
-        if state.active_step is not None and (not stage_mode or state.attempt > 0):
-            enforce_recovery_lease = state.runner_pid == os.getpid()
-            state = self.recover(
-                expected_runner_pid=state.runner_pid,
-                expected_runner_lease_id=state.runner_lease_id,
-                enforce_lease=enforce_recovery_lease,
-            )
-            if state.status in {
-                WorkflowStatus.AWAITING_SELECTION,
-                WorkflowStatus.AWAITING_CONSULTATION,
-                WorkflowStatus.FAILED,
-                WorkflowStatus.PAUSED,
-                WorkflowStatus.KILLED,
-                WorkflowStatus.COMPLETED,
-            }:
-                return state
-        lease = uuid.uuid4().hex
-        state = self._transition(
-            expected_revision=state.revision,
-            event_type="RUN_STARTED",
-            changes={
-                "status": WorkflowStatus.RUNNING,
-                "runner_pid": os.getpid(),
-                "runner_lease_id": lease,
-                "heartbeat_at": int(time.time()),
-            },
-            payload={
-                "lease_id": lease,
-                "worker_pid": os.getpid(),
-                "worker_identity": _process_identity(os.getpid()),
-                **(
-                    {"bounded_run": contract.event_payload()}
-                    if contract is not None
-                    else {}
-                ),
-            },
-            expected_runner_pid=state.runner_pid,
-            expected_runner_lease_id=state.runner_lease_id,
-        )
-        # Set only for the duration of the advance loop: the pre-commit
-        # protection check reads it, and an early return above must not leave it
-        # behind for a later invocation.
+        # Arm the contract before anything below can write.  This has to happen
+        # here rather than just around the advance loop, because the recovery
+        # branch further down reaches _complete_stage_task through its COMPLETE
+        # disposition - the same commit path the advance loop uses - and all three
+        # of these attributes are read by that path:
+        #
+        #   _bounded_contract      the pre-commit manifest/identity check
+        #   _protected_checkpoints the pre-commit committed-checkpoint check
+        #   the scoped registry    the Step ceilings recovery's reopen decision reads
+        #
+        # Arming them only for the loop would let a recovered commit land and be
+        # reported afterwards, which is the opposite of a pre-commit check.
+        previous_registry = self.registry
+        previous_contract = self._bounded_contract
+        previous_checkpoints = self._protected_checkpoints
         self._bounded_contract = contract
-        # Arm the protected-checkpoint snapshot for exactly this loop, next to the
-        # contract reference and cleared with it.  run_bounded() takes its own
-        # snapshot for the entry/final report; that is a pure read of the same
-        # rows and the CAS forbids an interleaving write.
         if contract is not None and contract.protected_checkpoints:
             self._protected_checkpoints = snapshot_checkpoints(
                 self.store.stage_checkpoints(), contract.protected_checkpoints
             )
         # A contract may tighten the Step ceilings the engine reads from a
-        # StepDefinition.  Swapping the registry for the loop is how that reaches
-        # every resolution path; the swap is skipped entirely when the contract
-        # carries no ceiling, so an unscoped run is bit-for-bit what it was.
-        previous_registry = self.registry
+        # StepDefinition.  Swapping the registry is how that reaches every
+        # resolution path, including recovery's; the swap is skipped entirely when
+        # the contract carries no ceiling, so an unscoped run is unchanged.
         if contract is not None and (
             contract.max_attempts_per_step or contract.max_reopens_per_step
         ):
             self.registry = ScopedRegistry(previous_registry, contract)
         try:
+            if state.status in TERMINAL_STATUSES:
+                return state
+            if state.status in {
+                WorkflowStatus.AWAITING_SELECTION,
+                WorkflowStatus.AWAITING_CONSULTATION,
+                WorkflowStatus.PAUSED,
+                WorkflowStatus.FAILED,
+            }:
+                return state
+
+            # An already exhausted step schedule must not write RUN_STARTED before
+            # the production-state completion boundary is classified.  This path
+            # is also used by service.run() for a migrated Step-16 project.
+            if (
+                not stage_mode
+                and state.active_step is None
+                and state.runner_pid is None
+                and self.registry.next_after(state.last_completed_step) is None
+            ):
+                return self._commit_project_completed(state, stage_mode=False)
+
+            if state.runner_pid is not None and not runner_is_live:
+                state = self._transition(
+                    expected_revision=state.revision,
+                    event_type="RUNNER_INTERRUPTED",
+                    changes={
+                        "status": WorkflowStatus.INTERRUPTED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={"reason": "recorded runner is no longer live"},
+                )
+            elif (
+                state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
+                and state.runner_pid is None
+            ):
+                state = self._transition(
+                    expected_revision=state.revision,
+                    event_type="RUNNER_INTERRUPTED",
+                    changes={"status": WorkflowStatus.INTERRUPTED},
+                    payload={"reason": "active run has no recorded runner"},
+                )
+            if state.active_step is not None and (not stage_mode or state.attempt > 0):
+                enforce_recovery_lease = state.runner_pid == os.getpid()
+                state = self.recover(
+                    expected_runner_pid=state.runner_pid,
+                    expected_runner_lease_id=state.runner_lease_id,
+                    enforce_lease=enforce_recovery_lease,
+                )
+                if state.status in {
+                    WorkflowStatus.AWAITING_SELECTION,
+                    WorkflowStatus.AWAITING_CONSULTATION,
+                    WorkflowStatus.FAILED,
+                    WorkflowStatus.PAUSED,
+                    WorkflowStatus.KILLED,
+                    WorkflowStatus.COMPLETED,
+                }:
+                    return state
+            lease = uuid.uuid4().hex
+            state = self._transition(
+                expected_revision=state.revision,
+                event_type="RUN_STARTED",
+                changes={
+                    "status": WorkflowStatus.RUNNING,
+                    "runner_pid": os.getpid(),
+                    "runner_lease_id": lease,
+                    "heartbeat_at": int(time.time()),
+                },
+                payload={
+                    "lease_id": lease,
+                    "worker_pid": os.getpid(),
+                    "worker_identity": _process_identity(os.getpid()),
+                    **(
+                        {"bounded_run": contract.event_payload()}
+                        if contract is not None
+                        else {}
+                    ),
+                },
+                expected_runner_pid=state.runner_pid,
+                expected_runner_lease_id=state.runner_lease_id,
+            )
             return self._advance_loop(
                 state,
                 lease=lease,
@@ -407,10 +414,11 @@ class FactoryEngine:
                 max_steps=max_steps,
                 allowed_source_steps=allowed_source_steps,
             )
+
         finally:
             self.registry = previous_registry
-            self._protected_checkpoints = {}
-            self._bounded_contract = None
+            self._bounded_contract = previous_contract
+            self._protected_checkpoints = previous_checkpoints
 
     def _advance_loop(
         self,

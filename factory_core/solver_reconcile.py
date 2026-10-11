@@ -217,6 +217,7 @@ def _relevance(
     project_state_active: tuple[int | None, str | None],
     project_cursor: tuple[int | None, str | None],
     execution_state: str,
+    sibling_execution: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """Answer only: does the workflow still need this job?
 
@@ -224,13 +225,21 @@ def _relevance(
     read from committed state rather than inferred:
 
       SUPERSEDED  a later job (higher ``job_revision``) in the same owner slot
-                  reached terminal success
+                  reached terminal success - where "success" means the job's own
+                  exit artifact says so, not merely that its row does
       HISTORICAL  the job is terminal and the project's committed cursor has
                   already passed the stage that owned it
       ADVISORY    the job is terminal and the cursor has completed its own stage
 
     Anything else is UNRESOLVED - including a job with no owner slot at all,
     which is precisely the case where a guess would be tempting and wrong.
+
+    ``sibling_execution`` maps job id to that job's reconciled execution state.
+    It is required for the SUPERSEDED proof and its absence is treated as "not
+    proven", because the alternative is trusting a status column this module
+    refuses to trust everywhere else: ``_execution`` returns UNKNOWN with the
+    reason "db row says completed but no exit artifact exists to confirm it", and
+    a proof that then accepted the same row would contradict it.
     """
 
     owner_stage = job.get("owner_stage")
@@ -254,10 +263,18 @@ def _relevance(
             continue
         if str(other.get("status") or "").lower() != "completed":
             continue
+        # The row is a claim; the exit artifact is the execution's own record.
+        # Requiring both is strictly tighter than requiring the row alone, so no
+        # job becomes ignorable that was not ignorable before.
+        other_id = str(other.get("job_id"))
+        proven = (sibling_execution or {}).get(other_id)
+        if proven != ExecutionState.TERMINAL_SUCCESS:
+            continue
         return (
             WorkflowRelevance.SUPERSEDED,
-            f"later job {other.get('job_id')} succeeded in the same owner slot "
-            f"(revision {other.get('job_revision')} > {revision})",
+            f"later job {other_id} succeeded in the same owner slot "
+            f"(revision {other.get('job_revision')} > {revision}); "
+            f"confirmed by its exit artifact",
         )
 
     active_stage, active_subtask = project_state_active
@@ -346,10 +363,22 @@ def evaluate_solver_jobs(project_dir) -> list[SolverEffectiveState]:
     except Exception:  # pragma: no cover - defensive
         active = (None, None)
         cursor = (None, None)
+
+    # Every job's execution evidence is resolved once, from its own exit artifact.
+    # The SUPERSEDED proof consults this instead of a sibling's status column: a
+    # row that says ``completed`` with no artifact behind it is exactly the case
+    # ``_execution`` reports as UNKNOWN, and one proof must not contradict another.
+    sibling_execution: dict[str, str] = {}
+    for job in jobs:
+        job_id = str(job.get("job_id"))
+        evidence_state, _ = _execution(job, _exit_artifact(project, job_id))
+        sibling_execution[job_id] = evidence_state
+
     return [
         evaluate_solver_job(
             project, job, siblings=jobs, events=events,
             project_state_active=active, project_cursor=cursor,
+            sibling_execution=sibling_execution,
         )
         for job in jobs
     ]
@@ -363,8 +392,16 @@ def evaluate_solver_job(
     events=None,
     project_state_active: tuple[int | None, str | None] = (None, None),
     project_cursor: tuple[int | None, str | None] = (None, None),
+    sibling_execution: dict[str, str] | None = None,
 ) -> SolverEffectiveState:
-    """Effective state for one job.  Pure read: no writes, no events appended."""
+    """Effective state for one job.  Pure read: no writes, no events appended.
+
+    ``sibling_execution`` is the reconciled execution state of the other jobs,
+    keyed by job id.  The SUPERSEDED proof needs it; see ``_relevance``.
+    ``evaluate_solver_jobs`` resolves the whole set once and passes it, which is
+    linear; a caller that omits it gets it resolved here instead, so the proof is
+    never silently unavailable and never rests on a status column alone.
+    """
 
     project = Path(project_dir).resolve()
     job_id = str(job.get("job_id"))
@@ -374,10 +411,21 @@ def evaluate_solver_job(
         events = _Store(project).events()
     exit_record = _exit_artifact(project, job_id)
     execution, execution_reason = _execution(job, exit_record)
+    if sibling_execution is None:
+        # Resolved on demand rather than left absent: an absent map would turn
+        # every supersede proof into UNRESOLVED, which is safe but silently
+        # degrades a direct caller.  evaluate_solver_jobs passes the batch result.
+        sibling_execution = {
+            str(other.get("job_id")): _execution(
+                other, _exit_artifact(project, str(other.get("job_id")))
+            )[0]
+            for other in siblings
+        }
     evidence, ready, claim_limit, errors = _evidence(project, job, events)
     relevance, relevance_reason = _relevance(
         job, siblings=list(siblings), project_state_active=project_state_active,
         project_cursor=project_cursor, execution_state=execution,
+        sibling_execution=sibling_execution,
     )
     exit_status = None
     exit_returncode = None

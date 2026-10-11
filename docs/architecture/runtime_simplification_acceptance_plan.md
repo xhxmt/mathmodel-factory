@@ -1095,6 +1095,48 @@ None / 0 / <0 / 非整数 -> 不存活（持久化的 0 或负值是损坏而非
 
 **结论：没有任何原始库被改动**（修复前后都是）。但修复把"没出事"从**偶然**变成了**结构上不可能**——三个 v9 库的世代现在是测试层保证的，而不是碰巧的。
 
+### 6.17 PR 审查阶段发现的两处正确性缺陷（已修）
+
+评审指出两处，都在**我自己提交的代码**里，且同属"保护/证明看起来成立、实则没覆盖到"。
+
+#### 缺陷 1：合同保护未覆盖全部提交路径
+
+`run()` 的执行顺序是：
+
+1. `RUNNER_INTERRUPTED` 转换（写）
+2. **`self.recover(...)`**
+3. `RUN_STARTED`
+4. **`self._bounded_contract = contract`** ← 保护**此时才装上**
+
+而 `recover()` **不是只读前奏**：它的 `RecoveryDisposition.COMPLETE` 分支会调用 **`_complete_stage_task`**——正是存放两个 pre-commit 检查的函数；它还要通过 registry 解析 Step 以决定 reopen，而该判定读的是 **`max_reopens`**。
+
+于是三项保护对恢复路径**全部不可见**：恢复的提交**完全跳过** manifest 与 checkpoint 检查，违规只能由 `run_bounded` 在 `run()` 返回后从 final verification 报出——**提交已经落地**；恢复的 reopen 判定读的是**未收紧的** ceilings，合同里 `max_reopens=0` **管不住它**。
+
+**修复**：三者（`_bounded_contract`、`_protected_checkpoints` 快照、`ScopedRegistry` 交换）提前到**任何写入之前**，用 `try/finally` 覆盖整个函数体；`finally` 恢复**先前的**值而非清成 `None`，使合同内嵌合同的调用也正确。
+
+**回归测试**：`test_the_contract_is_armed_before_recovery_runs` 用 spy 在**进入 `recover()` 的那一刻**断言三者齐备。**已验证它在修复前的引擎上失败**（`the contract was not armed when recovery ran`），修复后通过。
+
+> `test_recovery_cannot_commit_a_step_the_contract_protects` 断言"恢复改写受保护文件后不得提交"，但它**修复前后都通过**——恢复还要先过 prompt-input receipt 检查，该检查更早拦下、掩盖了顺序问题。docstring 已如实说明，不把它冒充为判别性测试。
+
+#### 缺陷 2：solver 的"被替代"判定只信一行状态
+
+`solver_reconcile._relevance` 的 SUPERSEDED 证明原先只读数据库那一行（`status == "completed"`）。而**同一个文件**的 `_execution` 明确拒绝这样做：
+
+```python
+if db_status in {"completed", "failed"}:
+    return ExecutionState.UNKNOWN, f"db row says {db_status} but no exit artifact exists to confirm it"
+```
+
+即**一个证明信任了另一个证明明确拒绝信任的东西**——而该模块的立意正是"只依正面证明"。
+
+**修复**：SUPERSEDED 现在**同时**要求后继 job 的 **execution evidence** 为 `TERMINAL_SUCCESS`（由其自身 exit 产物核对）。`evaluate_solver_jobs` 一次解析全部证据并下发（线性）；直接调用 `evaluate_solver_job` 的路径**按需自行解析**，避免静默降级为 UNRESOLVED。
+
+**只收紧不放宽**：要求"行说 completed" **且**"产物确认"，因此**没有**任何 job 比修复前更容易被忽略。
+
+**真实数据核实**（A/B/R）：B 的 3 个 SUPERSEDED 其替代者**全部**经产物确认为 `TERMINAL_SUCCESS`；A、R 为 0。**修复不改变任何真实结论**，只消除潜在漏洞。
+
+**回归测试**（4 项）：合法场景（有产物）仍 SUPERSEDED 且理由含 "exit artifact"；**行说 completed 但无产物 → UNRESOLVED 且 blocks_completion**（旧测试把这个漏洞当成了预期行为，已修正）；后继是**失败** → UNRESOLVED；显式证据映射被尊重且映射里非成功仍拒绝。
+
 > 顺带说明：我一度也给 `audit/service.py` 的 `StepContext` 传了时钟，但那条路径没有引擎 store 可继承，`SQLiteStateStore(project).clock` 恰好**等于默认时钟**——那行不带来任何东西却暗示了它做不到的事，已撤回，该文件回到原状。
 
 

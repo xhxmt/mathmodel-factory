@@ -72,10 +72,14 @@ def _write_exit(root: Path, job_id: str, *, status: str, returncode: int) -> Non
     )
 
 
-def _eval(root, job, *, siblings=(), active=(None, None), cursor=(None, None)):
+def _eval(
+    root, job, *, siblings=(), active=(None, None), cursor=(None, None),
+    sibling_execution=None,
+):
     return evaluate_solver_job(
         root, job, siblings=list(siblings),
         project_state_active=active, project_cursor=cursor,
+        sibling_execution=sibling_execution,
     )
 
 
@@ -138,12 +142,84 @@ def test_ownerless_job_is_unresolved_and_blocks(tmp_path):
 
 
 def test_superseded_requires_a_later_success_in_the_same_slot(tmp_path):
+    """A later job that really finished supersedes this one."""
+
     root = _project(tmp_path)
     later = {**_JOB, "job_id": "later", "job_revision": 3, "status": "completed"}
+    _write_exit(root, "later", status="completed", returncode=0)
     state = _eval(root, _JOB, siblings=[_JOB, later], cursor=(3, None))
     assert state.workflow_relevance == WorkflowRelevance.SUPERSEDED
     assert state.blocks_completion is False
     assert "later" in state.reason
+    assert "exit artifact" in state.reason
+
+
+def test_a_completed_row_without_an_exit_artifact_proves_nothing(tmp_path):
+    """The row is a claim; only the execution's own record settles it.
+
+    This is the hole the module's own ``_execution`` already refuses to fall into:
+    it answers UNKNOWN with "db row says completed but no exit artifact exists to
+    confirm it".  The supersede proof used to accept that same row, so one proof
+    contradicted the other and a job could be dropped on a status column alone.
+    """
+
+    root = _project(tmp_path)
+    later = {**_JOB, "job_id": "later", "job_revision": 3, "status": "completed"}
+    # deliberately no exit artifact for "later"
+    state = _eval(root, _JOB, siblings=[_JOB, later], cursor=(3, None))
+
+    assert state.workflow_relevance == WorkflowRelevance.UNRESOLVED
+    assert state.blocks_completion is True
+    assert "no owner slot" not in state.reason
+
+
+def test_a_superseding_failure_does_not_prove_supersession(tmp_path):
+    """Terminal is not enough - it has to be terminal success."""
+
+    root = _project(tmp_path)
+    later = {**_JOB, "job_id": "later", "job_revision": 3, "status": "completed"}
+    _write_exit(root, "later", status="failed", returncode=2)
+    state = _eval(root, _JOB, siblings=[_JOB, later], cursor=(3, None))
+
+    assert state.workflow_relevance == WorkflowRelevance.UNRESOLVED
+
+
+def test_a_supplied_sibling_map_is_honoured(tmp_path):
+    """The batch entry point resolves the map once and passes it down.
+
+    Pinned here directly so the parameter cannot be dropped without a failure.
+    ``evaluate_solver_jobs`` builds it from every job's exit artifact in one pass,
+    which is why the real-history assertions in ``test_gate_g2_solver`` - B's
+    stale rows staying SUPERSEDED - still hold.
+    """
+
+    from factory_core.solver_reconcile import ExecutionState
+
+    root = _project(tmp_path)
+    later = {**_JOB, "job_id": "later", "job_revision": 3, "status": "completed"}
+    state = _eval(
+        root, _JOB, siblings=[_JOB, later], cursor=(3, None),
+        sibling_execution={"later": ExecutionState.TERMINAL_SUCCESS},
+    )
+
+    assert state.workflow_relevance == WorkflowRelevance.SUPERSEDED
+    assert state.blocks_completion is False
+
+
+def test_a_supplied_map_that_is_not_success_still_refuses(tmp_path):
+    """Supplying the map does not weaken the proof."""
+
+    from factory_core.solver_reconcile import ExecutionState
+
+    root = _project(tmp_path)
+    later = {**_JOB, "job_id": "later", "job_revision": 3, "status": "completed"}
+    _write_exit(root, "later", status="completed", returncode=0)
+    state = _eval(
+        root, _JOB, siblings=[_JOB, later], cursor=(3, None),
+        sibling_execution={"later": ExecutionState.UNKNOWN},
+    )
+
+    assert state.workflow_relevance == WorkflowRelevance.UNRESOLVED
 
 
 def test_earlier_or_failed_sibling_does_not_prove_supersession(tmp_path):

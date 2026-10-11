@@ -622,3 +622,192 @@ def test_a_ceiling_looser_than_the_registry_changes_nothing():
     calls, events = _run_with_ceiling({1: 99})
     assert calls == 3, "the registry's cap still governs"
     assert "RETRY_SCHEDULED" in events
+
+
+
+# ============ the arming must precede recovery, because recovery commits too
+def test_the_contract_is_armed_before_recovery_runs():
+    """All three protections have to be installed before ``recover()``.
+
+    ``recover()`` is not a read-only prelude.  On its COMPLETE disposition it
+    calls ``_complete_stage_task`` - the function holding both pre-commit checks -
+    and it resolves a Step through the registry to decide whether a reopen is
+    allowed, which reads ``max_reopens``.  The contract, the checkpoint snapshot
+    and the scoped registry used to be installed only around the advance loop, so
+    all three were invisible to recovery:
+
+      * a recovered commit skipped the manifest and checkpoint checks entirely,
+        leaving ``run_bounded``'s final verification to report the violation
+        after the commit had landed;
+      * recovery's reopen decision read the untightened Step ceilings, so a
+        contract that set ``max_reopens`` to zero did not bind it.
+
+    The state is asserted at the moment ``recover()`` is entered, because that is
+    the ordering under test.  Whether a particular recovery then commits depends
+    on the Step's own receipt state, which would mask the ordering.
+    """
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    assert canary.store_at(root).stage_checkpoints(), (
+        "the seed must commit checkpoints for the arming to be observable"
+    )
+
+    seen: dict = {}
+    original_recover = FactoryEngine.recover
+
+    def spy(self, **kwargs):
+        seen["contract"] = self._bounded_contract
+        seen["checkpoints"] = dict(self._protected_checkpoints)
+        seen["registry"] = type(self.registry).__name__
+        return original_recover(self, **kwargs)
+
+    FactoryEngine.recover = spy
+    try:
+        # leave a Step selected and uncommitted, so the next run recovers
+        def fail_the_step(request):
+            raise RuntimeError("deliberate step failure")
+
+        first = FactoryEngine(
+            root, store=canary.store_at(root),
+            registry=canary.stage_registry(
+                dispatcher=canary.HermeticDispatcher(on_execute=fail_the_step)
+            ),
+            sleeper=lambda _: None,
+        )
+        state = canary.store_at(root).load()
+        with pytest.raises(RuntimeError):
+            with canary.frozen_time():
+                first.run_bounded(
+                    BoundedRunContract(
+                        expected_revision=state.revision,
+                        max_subtasks=1,
+                        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+                    )
+                )
+
+        interrupted = canary.store_at(root).load()
+        assert interrupted.active_step is not None, "recovery needs a selected Step"
+
+        second = FactoryEngine(
+            root, store=canary.store_at(root), registry=canary.stage_registry(),
+            sleeper=lambda _: None,
+        )
+        second.run_bounded(
+            BoundedRunContract(
+                expected_revision=interrupted.revision,
+                max_subtasks=1,
+                run_policy=RunPolicy.BOUNDED_SUBTASKS,
+                max_reopens_per_step={0: 0},
+                protected_checkpoints={4},
+            )
+        )
+    finally:
+        FactoryEngine.recover = original_recover
+
+    assert seen, "recovery must have run for this test to mean anything"
+    assert seen["contract"] is not None, (
+        "the contract was not armed when recovery ran, so a recovered commit "
+        "would skip the pre-commit protection checks"
+    )
+    assert seen["checkpoints"], (
+        "the protected-checkpoint snapshot was not armed when recovery ran"
+    )
+    assert seen["registry"] == "ScopedRegistry", (
+        "recovery resolved its Step through the untightened registry"
+    )
+
+
+def test_recovery_cannot_commit_a_step_the_contract_protects():
+    """No commit lands when the contract's manifest is violated during recovery.
+
+    Weaker than the ordering test above, and deliberately so: recovery also has to
+    satisfy its own prompt-input receipt before the manifest is consulted, so this
+    asserts what is observable - the recovery hook really rewrote the protected
+    file, no ``STEP_SUCCEEDED`` was written, and the run reports the violation
+    rather than advancing on top of it.
+    """
+
+    import dataclasses
+
+    from factory_core.domain import RecoveryDecision, RecoveryDisposition
+
+    canary.build_seed(canary.stage_seed)
+    root = canary.restore_seed()
+    target = root / canary.PROTECTED_FILE
+    target.write_text(canary.PROTECTED_CONTENT, encoding="utf-8")
+
+    class RecoveryRewritesProtectedFile:
+        def __init__(self, inner, path):
+            self._inner = inner
+            self._path = path
+
+        def recover(self, context, error):
+            self._path.write_text("rewritten by recovery\n", encoding="utf-8")
+            return RecoveryDecision(
+                disposition=RecoveryDisposition.COMPLETE,
+                reason="hermetic recovery that rewrites a protected file",
+                completed_through_step=context.step_id,
+            )
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    registry = canary.stage_registry()
+    definition = registry.get(0)
+    wrapped = dataclasses.replace(
+        definition, step=RecoveryRewritesProtectedFile(definition.step, target)
+    )
+    registry._steps[0] = wrapped
+    for key, value in list(registry._stage_subtasks.items()):
+        if value.id == 0:
+            registry._stage_subtasks[key] = wrapped
+
+    def fail_the_step(request):
+        raise RuntimeError("deliberate step failure")
+
+    first = FactoryEngine(
+        root, store=canary.store_at(root),
+        registry=canary.stage_registry(
+            dispatcher=canary.HermeticDispatcher(on_execute=fail_the_step)
+        ),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    with pytest.raises(RuntimeError):
+        with canary.frozen_time():
+            first.run_bounded(
+                BoundedRunContract(
+                    expected_revision=state.revision,
+                    max_subtasks=1,
+                    run_policy=RunPolicy.BOUNDED_SUBTASKS,
+                )
+            )
+
+    interrupted = canary.store_at(root).load()
+    second = FactoryEngine(
+        root, store=canary.store_at(root), registry=registry, sleeper=lambda _: None
+    )
+    before = canary.collect(root)
+    outcome = second.run_bounded(
+        BoundedRunContract(
+            expected_revision=interrupted.revision,
+            max_subtasks=1,
+            run_policy=RunPolicy.BOUNDED_SUBTASKS,
+            protected_manifest={
+                canary.PROTECTED_FILE: canary.protected_digest(canary.PROTECTED_CONTENT)
+            },
+        )
+    )
+    new_events = canary.collect(root)["events"][len(before["events"]):]
+
+    assert target.read_text(encoding="utf-8") == "rewritten by recovery\n", (
+        "the recovery hook must have run for this test to mean anything"
+    )
+    assert "STEP_SUCCEEDED" not in [event["type"] for event in new_events], (
+        "a step committed while the contract's protected file was violated"
+    )
+    assert outcome.final_verification.ok is False
+    assert outcome.stop_reason == "PROTECTED_MANIFEST_VIOLATED"
