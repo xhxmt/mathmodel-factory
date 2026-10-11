@@ -366,6 +366,33 @@ def _short(value: Any, limit: int = 60) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
+#: The canary's own internal-consistency answers.
+INTEGRITY_KEYS = ("event_replay_valid", "aggregate_valid", "replayed_matches_state")
+
+
+def integrity_of(collected: dict) -> dict:
+    """The three consistency answers, as one comparable group.
+
+    They were recorded and never compared, so both tracks could be internally
+    broken - a stream that does not replay, an aggregate root that does not
+    verify - while every equivalence assertion passed.  "These two runs agree" is
+    worth little if neither is coherent.
+    """
+
+    return {key: collected.get(key) for key in INTEGRITY_KEYS}
+
+
+def assert_integrity(collected: dict) -> None:
+    """Require a track to be internally valid, not merely equal to the other."""
+
+    problems = [
+        f"{key}={value!r}"
+        for key, value in integrity_of(collected).items()
+        if value is not True
+    ]
+    assert not problems, "the canary's own integrity checks failed: " + ", ".join(problems)
+
+
 def compare(legacy: dict[str, Any], bounded: dict[str, Any]) -> dict[str, list[str]]:
     """Differences by area, with the one expected difference separated out."""
 
@@ -380,6 +407,9 @@ def compare(legacy: dict[str, Any], bounded: dict[str, Any]) -> dict[str, list[s
             legacy["aggregate_domain_root"],
             bounded["aggregate_domain_root"],
         ),
+        # compared as well as asserted, so a track that is valid in one run and
+        # invalid in the other is a finding rather than a silence
+        "integrity": (integrity_of(legacy), integrity_of(bounded)),
         "files": (legacy["files"], bounded["files"]),
     }
     findings = {

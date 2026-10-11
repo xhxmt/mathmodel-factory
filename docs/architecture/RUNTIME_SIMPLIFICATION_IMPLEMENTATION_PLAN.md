@@ -4,6 +4,16 @@
 > **性质：** **自包含**实施级方案 + 0.5/0.6/**0.7**/**0.7.1**/**0.7.2** 执行记录。**本版不依赖任何早期版本。**
 > 分支：`feat/runtime-simplification`（worktree `/home/tfisher/paper_factory/.worktrees/runtime-simplification`）
 > 已完成：`aaea7f8`（0.6）→ `bbed84c`（0.7）→ `ed69234`（0.7.1）→ `5568d01`（0.7.2）→ `36733b8`（**S1-A**）→ `dda04ce`（**S1-C-prep**）→ **下一步 S1-D**
+>
+> **⚠️ 本节是历史快照，写于 S1-D 之前，状态线已过期。** 它写"下一步 S1-D"，而
+> PR #35 的 head 上 S1-D、S5、S6 与 G4.5c 都已完成（S1-D 见 `645731f`，
+> bounded-run 见 `65ad13e`，驱动层退役见 `99aceef`…`d656171a`）。评审据本条指出
+> "方案的阶段与顺序与被验证的代码相矛盾"。
+>
+> **以哪份文件为准**：阶段与 gate 的**当前**状态只在
+> [`runtime_simplification_acceptance_plan.md`](runtime_simplification_acceptance_plan.md)
+> §6 及其各节。本文件保留其写作时刻的计划与修订记录，**不是**现状来源；改动它以便
+> 追认已完成的工作会让执行记录失去价值。
 
 ---
 

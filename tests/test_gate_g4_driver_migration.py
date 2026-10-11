@@ -1166,27 +1166,38 @@ def test_a_read_then_pin_cursor_silently_drops_a_step_expectation():
         )
 
 
-def test_the_batch2_guard_is_kept_explicit_in_the_drivers():
-    """Documents what the migrated drivers do instead of relying on the cursor.
+def test_the_explicit_guard_exists_because_a_cursor_cannot_carry_active_step():
+    """The justification for the guard, as a property of production code.
 
-    They check the field the original asserted - ``active_step`` or
-    ``active_subtask`` - and refuse with a readable message, then let the
-    contract add the revision CAS.  This test exercises that pattern so the
-    distinction from ``expected_cursor`` stays visible in the suite.
+    The migrated drivers keep the original's positional precondition - status plus
+    ``active_step`` - rather than folding it into ``expected_cursor``, because the
+    cursor has no room for it.  That is a fact about *this* repository, and it is
+    what is checked here.  The drivers themselves live under ``work/`` and are not
+    in this repository, so "each migrated driver keeps the guard" is verified on
+    the server by ``scripts/check_no_hand_written_drivers.py`` and recorded per
+    batch in ``runtime_simplification_g45c_batches.json``.
+
+    The test this replaces defined its own local ``guard()`` and asserted that
+    ``guard(None)`` allowed the seeded state.  That seed satisfies it precisely
+    because its ``active_step`` *is* ``None``, so the assertion passed for a reason
+    unrelated to the drivers and exercised no production code at all.
     """
 
-    canary.build_seed(
-        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    from factory_core.bounded_run import cursor_of
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+        active_step = 12
+
+    cursor = cursor_of(_State())
+    assert cursor == (8, "revision", 12)
+    assert len(cursor) == 3, "there is nowhere in the cursor for active_step"
+    assert _State.active_step == 12, (
+        "active_step is a separately carried field, so a contract that wants to "
+        "pin it has to say so explicitly - which is what the drivers do"
     )
-    state = canary.store_at(canary.restore_seed()).load()
-
-    def guard(expected_step):
-        if state.status.value != "ready" or state.active_step != expected_step:
-            return "refused"
-        return "allowed"
-
-    assert guard(7) == "refused", "not the driver's step" if state.active_step is None else ""
-    assert guard(None) == "allowed", "the seeded state is exactly what the guard expects"
 
 
 # ============== batch 3: the private repeat counter becomes a fingerprint
@@ -1462,7 +1473,7 @@ def test_the_batch5_naming_scripts_need_no_change():
     criterion is visible: naming a file is not the same as rewriting it.
     """
 
-    import re
+    from scripts.check_no_hand_written_drivers import rewrites_driver_source
 
     naming_only = "assert not any('run_step12_m6.py' in s for s in ps_output)\n"
     rewriting = (
@@ -1470,10 +1481,9 @@ def test_the_batch5_naming_scripts_need_no_change():
         "runner = runner.replace('a', 'b')\n"
         "(P / 'work/run_step12_m6.py').write_text(runner)\n"
     )
-    reads_and_replaces = re.compile(r"\.py['\"]\s*\)\s*\.read_text\(\)[\s\S]{0,200}?\.replace\(")
 
-    assert not reads_and_replaces.search(naming_only)
-    assert reads_and_replaces.search(rewriting)
+    assert rewrites_driver_source(naming_only) == []
+    assert rewrites_driver_source(rewriting) == ["work/run_step12_m6.py"]
 
 
 # ============== batch 6: three clones become three contracts
@@ -1549,7 +1559,7 @@ def test_the_batch6_the_difference_is_data_not_a_second_program():
     requires editing source to change behaviour is the thing being removed.
     """
 
-    import re
+    from scripts.check_no_hand_written_drivers import rewrites_driver_source
 
     clone = (
         "runner = (P/'work/run_bounded_evidence_repair.py').read_text()\n"
@@ -1561,9 +1571,6 @@ def test_the_batch6_the_difference_is_data_not_a_second_program():
         "contract = BoundedRunContract(protected_manifest=manifest, "
         "max_attempts_per_step={5: state.attempt + 1, 4: 1}, actor='operator')\n"
     )
-    reads_source = re.compile(r"\.py['\"]\s*\)\s*\.read_text\(\)")
-    writes_source = re.compile(r"\.py['\"]\s*\)\s*\.write_text\(")
 
-    assert reads_source.search(clone) and writes_source.search(clone)
-    assert not reads_source.search(parameterise)
-    assert not writes_source.search(parameterise)
+    assert rewrites_driver_source(clone) == ["work/run_bounded_evidence_repair.py"]
+    assert rewrites_driver_source(parameterise) == []

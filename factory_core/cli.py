@@ -193,9 +193,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     advance.add_argument("project_dir")
     advance.add_argument("--expected-revision", type=int, required=True)
+    # A cursor component left unset is not constrained, so --expected-stage alone
+    # is a usable expectation; the source step cannot be named from the CLI.
     advance.add_argument("--expected-stage", type=int)
     advance.add_argument("--expected-subtask")
-    advance.add_argument("--allowed-source-steps", type=int, nargs="*")
+    advance.add_argument(
+        "--allowed-source-steps",
+        type=int,
+        nargs="*",
+        help=(
+            "restrict the advance to these source Steps; the option must carry at "
+            "least one value, because an empty allowlist permits nothing"
+        ),
+    )
     advance.add_argument("--max-subtasks", type=int)
     advance.add_argument("--protected-manifest", type=Path)
     advance.add_argument("--actor", default="operator")
@@ -443,14 +453,22 @@ def main(argv: list[str] | None = None) -> int:
                     args.expected_subtask,
                     None,
                 )
+            allowed_source_steps = None
+            if args.allowed_source_steps is not None:
+                if not args.allowed_source_steps:
+                    # An empty allowlist is not "no restriction": it says nothing
+                    # is permitted.  Reading it as None would silently drop the
+                    # restriction the operator asked for.
+                    raise FactoryCoreError(
+                        "--allowed-source-steps was given with no values; an empty "
+                        "allowlist permits nothing, so refusing rather than "
+                        "treating it as no restriction"
+                    )
+                allowed_source_steps = frozenset(args.allowed_source_steps)
             contract = BoundedRunContract(
                 expected_revision=int(args.expected_revision),
                 expected_cursor=expected_cursor,
-                allowed_source_steps=(
-                    frozenset(args.allowed_source_steps)
-                    if args.allowed_source_steps
-                    else None
-                ),
+                allowed_source_steps=allowed_source_steps,
                 max_subtasks=args.max_subtasks,
                 protected_manifest=manifest,
                 run_policy=args.run_policy,

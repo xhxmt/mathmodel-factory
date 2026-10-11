@@ -80,6 +80,26 @@ FORBIDDEN = [
         id="engine-run-max-steps",
     ),
     pytest.param(
+        "bound_service_variable.py",
+        """
+        from factory_core.service import FactoryService
+        service = FactoryService(ROOT)
+        state = service.engine(P).run(max_steps=1)
+        """,
+        "workflow_advance",
+        id="bound-service-variable",
+    ),
+    pytest.param(
+        "bound_engine_variable.py",
+        """
+        from factory_core.service import FactoryService
+        engine = FactoryService(ROOT).engine(P)
+        state = engine.run(max_steps=1)
+        """,
+        "workflow_advance",
+        id="bound-engine-variable",
+    ),
+    pytest.param(
         "private_registry.py",
         """
         from factory_core.registry import StepRegistry
@@ -142,6 +162,15 @@ ALLOWED = [
         outcome = service.advance_bounded(P, contract)
         ''',
         id="a-migrated-drivers-own-documentation",
+    ),
+    pytest.param(
+        "bound_service_but_bounded.py",
+        """
+        from factory_core.service import FactoryService
+        service = FactoryService(ROOT)
+        outcome = service.advance_bounded(P, contract)
+        """,
+        id="a-bound-service-used-correctly",
     ),
     pytest.param(
         "advance_bounded_only.py",

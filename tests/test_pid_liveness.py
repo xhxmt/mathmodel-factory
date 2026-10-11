@@ -81,15 +81,42 @@ def test_an_unreadable_answer_fails_closed(monkeypatch):
     assert pid_is_live(4242) is True
 
 
-@pytest.mark.parametrize("pid", [None, 0, -1, "not-a-pid", ""])
-def test_a_value_that_is_not_a_process_id_is_not_live(pid):
-    """A persisted 0 or negative value is corrupt, not a runner.
+def test_no_recorded_runner_is_not_live():
+    """The one answer that really is "no runner".
 
-    Probing it would be worse than meaningless: ``os.kill(-1, 0)`` addresses every
-    process the caller may signal.
+    ``None`` is an absent recording, not a corrupt one, and every caller guards
+    with ``runner_pid is not None`` before asking.
     """
 
-    assert pid_is_live(pid) is False
+    assert pid_is_live(None) is False
+
+
+@pytest.mark.parametrize("pid", [0, -1, "not-a-pid", "", 10**30])
+def test_a_corrupt_pid_fails_closed(pid):
+    """A value that cannot be probed counts as alive, not as dead.
+
+    Deciding a runner is gone is what permits a second writer, so it needs
+    positive evidence - ESRCH and nothing else.  A corrupt recording is
+    unreadable, and unreadable must not be read as "gone".  ``10**30`` is the case
+    that would otherwise escape entirely: ``os.kill`` raises ``OverflowError`` for
+    a pid wider than the platform's ``pid_t`` rather than ``OSError``, so an
+    uncaught one aborts runner startup.
+
+    0 and negative values are in the same class and are never probed:
+    ``os.kill(-1, 0)`` addresses every process the caller may signal.
+    """
+
+    assert pid_is_live(pid) is True
+
+
+def test_an_oversized_pid_does_not_escape(monkeypatch):
+    """Pinned directly, because it is an exception rather than a return value."""
+
+    def overflow(_pid, _signal):
+        raise OverflowError("Python int too large to convert to C long")
+
+    monkeypatch.setattr(liveness.os, "kill", overflow)
+    assert pid_is_live(2**64) is True
 
 
 # ------------------------------------------------- the policy reaches the engine

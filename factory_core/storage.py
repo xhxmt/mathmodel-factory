@@ -1618,11 +1618,23 @@ class SQLiteStateStore:
         latest_effect_attestation_valid = True
         if expected is not None:
             prior = expected.get("effect_hashes_after")
-            latest_effect_attestation_valid = (
-                all(effects.get(k) == v for k, v in prior.items())
-                if isinstance(prior, dict) and set(prior) != set(effects)
-                else canonical_hash(effects) == expected["aggregate_root_hash_after"]
-            )
+            if isinstance(prior, dict) and set(prior) != set(effects):
+                # The key sets differ because a domain was added since (schema 10
+                # introduced dirty_cause_classification).  Tolerate that, but keep
+                # the attestation self-consistent: the recorded root was computed
+                # over exactly this recorded map when the event was written, so it
+                # must still hash to it.  Without this the differing-key branch
+                # checked the map against the current projection and never against
+                # the root the event claims, which is the one link a stale or
+                # inconsistent attestation would hide behind.
+                latest_effect_attestation_valid = (
+                    canonical_hash(prior) == expected["aggregate_root_hash_after"]
+                    and all(effects.get(k) == v for k, v in prior.items())
+                )
+            else:
+                latest_effect_attestation_valid = (
+                    canonical_hash(effects) == expected["aggregate_root_hash_after"]
+                )
 
         # Effect-domain generation must be monotonic: once an event records a
         # domain key, no later event may omit it.  Without this the key-set

@@ -183,6 +183,16 @@ def classification_sources(before: dict, after: dict) -> dict[tuple[str, str], s
             # only when no @paper:<artifact>:* key itself changed.
             if not any(key.startswith(f"@paper:{artifact}:") for key in changed):
                 sources[("FORMAT_DIRTY", artifact)] = "paper_semantic"
+            else:
+                # A @paper: key did change, but the classifier still emits its own
+                # FORMAT_DIRTY obligation for the artifact - that happens for any
+                # changed paper domain, not only ``format``.  The synthetic loop
+                # above recorded the changed domain's flag; the FORMAT_DIRTY
+                # obligation was left unattributed and read back as
+                # ``legacy_unrecorded``.  setdefault, so a ``format`` change keeps
+                # the more specific paper_semantic attribution it already has.
+                for key, value in _authored_source(artifact).items():
+                    sources.setdefault(key, value)
             continue
         sources.update(_authored_source(artifact))
 

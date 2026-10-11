@@ -38,13 +38,41 @@ import sys
 import tokenize
 from pathlib import Path
 
-#: A workflow advance through the engine, in any of the spellings the drivers used.
+#: A workflow advance through the engine, in any of the inline spellings.
 WORKFLOW_ADVANCE = re.compile(
     r"(?:FactoryService|FactoryEngine)\s*\([^)]*\)\s*\.engine\([^)]*\)\s*\.run\("
-    r"|(?:service|engine)\s*\([^)]*\)\s*\.engine\([^)]*\)\s*\.run\("
+    r"|\.engine\([^)]*\)\s*\.run\("
     r"|\bengine\.run\("
-    r"|\bengine\s*=\s*[^\n]*\.engine\([^\n]*\)[\s\S]{0,400}?\bengine\.run\("
 )
+
+#: A name bound to a factory, a service or an engine.  ``service =
+#: FactoryService(ROOT)`` followed by ``service.engine(P).run(...)`` is a workflow
+#: advance that no inline pattern sees, and the first version of this checker
+#: reported such a file as clean.
+SERVICE_BINDING = re.compile(
+    r"^\s*(\w+)\s*=\s*[^\n]*(?:FactoryService|FactoryEngine|\.engine\s*\(|Engine\s*\()[^\n]*$",
+    re.MULTILINE,
+)
+
+
+def workflow_advance_sites(text: str) -> list[re.Match]:
+    """Every workflow-advance expression in one file's source.
+
+    The inline spellings plus any advance reached through a name bound to a
+    factory or an engine.  Both are needed: the bound form is how a script
+    written in two statements gets past a checker that only knows one-liners.
+    """
+
+    matches = list(WORKFLOW_ADVANCE.finditer(text))
+    names = sorted({match.group(1) for match in SERVICE_BINDING.finditer(text)})
+    if names:
+        bound = re.compile(
+            r"\b(?:"
+            + "|".join(re.escape(name) for name in names)
+            + r")\s*\.\s*(?:engine\([^)]*\)\s*\.\s*)?run\("
+        )
+        matches.extend(bound.finditer(text))
+    return sorted(matches, key=lambda match: match.start())
 
 #: A private registry whose Step ceilings are rewritten - the driver idiom.
 REGISTRY_SHIM = re.compile(
@@ -61,6 +89,36 @@ PROGRESS_JOURNAL = re.compile(r"['\"]progress\.json['\"]\s*\)\s*\.write_text\(")
 #: Files whose name marks them as a preserved copy rather than live code.  They
 #: are enumerated by the caller so the exemption list cannot grow silently.
 BACKUP_MARKERS = (".before", "original", "_before.py")
+
+
+#: A script that reads a driver's source and writes modified source back.  This is
+#: the clone idiom the two retired patchers used, and the reason the retirement
+#: unit was the chain rather than the file: rewriting a driver breaks the patcher
+#: that generates it.  Named here so a test can exercise the definition instead of
+#: restating the pattern in its own regex.
+DRIVER_SOURCE_REWRITE = re.compile(
+    r"\.py['\"]\s*\)\s*\.read_text\(\)[\s\S]{0,400}?\.write_text\("
+)
+
+
+def rewrites_driver_source(text: str) -> list[str]:
+    """The driver files a script reads and writes back, if any.
+
+    The match begins at the ``.py`` itself, so the window reaches back far enough
+    to include the path that precedes it; otherwise the first filename found is
+    the one being *written*, and the answer names the output instead of the input.
+    """
+
+    files: list[str] = []
+    for match in DRIVER_SOURCE_REWRITE.finditer(text):
+        # Only the text before the ``.py`` that is read: the match runs on to the
+        # ``.write_text(`` of the *output*, so the write target appears inside it
+        # and naming that would answer a different question.
+        window = text[max(0, match.start() - 160) : match.start() + 3]
+        for name in re.findall(r"([\w./-]+\.py)", window):
+            if name not in files:
+                files.append(name)
+    return files
 
 
 def is_backup(relative: str) -> bool:
@@ -110,12 +168,20 @@ def scan(root: Path, *, exemptions: frozenset[str] = frozenset()) -> dict:
         def ignored(position: int) -> bool:
             return any(start <= position < end for start, end in spans)
 
-        def record(pattern: re.Pattern, kind: str, violation: bool, *, at_end: bool = False) -> None:
+        def record(
+            pattern: re.Pattern | list,
+            kind: str,
+            violation: bool,
+            *,
+            at_end: bool = False,
+        ) -> None:
             """``at_end`` for patterns whose match begins inside a string but ends in
             code - the progress.json journal, where the code is the ``.write_text(``
-            that follows the filename."""
+            that follows the filename.  A list is accepted so a rule can combine
+            several patterns (see ``workflow_advance_sites``)."""
 
-            for match in pattern.finditer(text):
+            matches = pattern if isinstance(pattern, list) else list(pattern.finditer(text))
+            for match in matches:
                 position = match.end() - 1 if at_end else match.start()
                 if ignored(position):
                     residual.append({"file": relative, "kind": "in_comment_or_string"})
@@ -131,9 +197,9 @@ def scan(root: Path, *, exemptions: frozenset[str] = frozenset()) -> dict:
                 else:
                     residual.append(entry)
 
-        record(WORKFLOW_ADVANCE, "workflow_advance", True)
+        record(workflow_advance_sites(text), "workflow_advance", True)
         record(REGISTRY_SHIM, "registry_shim", True)
-        if WORKFLOW_ADVANCE.search(text) and PROGRESS_JOURNAL.search(text):
+        if workflow_advance_sites(text) and PROGRESS_JOURNAL.search(text):
             record(PROGRESS_JOURNAL, "progress_journal_with_advance", True, at_end=True)
 
     return {

@@ -463,3 +463,70 @@ def test_a_successful_advance_does_not_require_a_progress_journal(tmp_path):
     # and nothing was written outside the workflow's own state
     assert not (root / "progress.json").exists()
     assert not (root / "protected_files.json").exists()
+
+# ================================== every Step-success commit path enforces it
+def test_the_step_scheduler_path_also_enforces_the_contract(tmp_path):
+    """A contract on a Step project has to protect it too.
+
+    There are two Step-success commit paths.  The Stage path goes through
+    ``_complete_stage_task``, which held the pre-commit protection checks; the
+    Step path commits ``STEP_SUCCEEDED`` directly in ``_advance_loop``.  A
+    ``step_v2`` project takes the second one, and ``run_bounded`` accepts such a
+    project as readily as a Stage one - so checking only the Stage path made a
+    contract on a Step project protect nothing at all, while ``run_bounded``'s
+    entry and final verification still reported a reassuring answer.
+    """
+
+    root = _project(tmp_path)
+    protected = root / "protected.txt"
+    protected.write_text("original\n", encoding="utf-8")
+    digest = _sha(protected)
+
+    class Rewriting:
+        def execute(self, context):
+            protected.write_text("rewritten by the step\n", encoding="utf-8")
+            return ExecutionResult.succeeded()
+
+    engine = _engine(root, handler=Rewriting())
+    state = SQLiteStateStore(root).load()
+    outcome = engine.run_bounded(
+        BoundedRunContract(
+            expected_revision=state.revision,
+            max_subtasks=1,
+            run_policy=RunPolicy.BOUNDED_SUBTASKS,
+            protected_manifest={"protected.txt": digest},
+        )
+    )
+
+    events = SQLiteStateStore(root).events()
+    kinds = [event.type for event in events]
+    assert "STEP_SUCCEEDED" not in kinds, (
+        "the Step path committed a Step whose protected file it had just rewritten"
+    )
+    assert any(
+        (event.payload or {}).get("error_class")
+        == "PERMANENT_PROTECTED_MANIFEST_VIOLATED"
+        for event in events
+    ), "the refusal must be reported, not merely a failed status"
+    assert outcome.stop_reason == "PROTECTED_MANIFEST_VIOLATED"
+    assert outcome.final_verification.ok is False
+
+
+def test_the_stage_and_step_paths_share_one_check(tmp_path):
+    """One helper, so the two paths cannot drift apart again.
+
+    The Stage path adds its stage and subtask to the payload and the Step path
+    adds the source step, but the verdict itself comes from the same method.
+    """
+
+    import inspect
+
+    assert hasattr(FactoryEngine, "_contract_protection_violation")
+    assert (
+        "_contract_protection_violation()"
+        in inspect.getsource(FactoryEngine._complete_stage_task)
+    )
+    assert (
+        "_contract_protection_violation()"
+        in inspect.getsource(FactoryEngine._advance_loop)
+    )

@@ -47,6 +47,10 @@ class EvidenceState:
     NOT_REQUIRED = "NOT_REQUIRED"
 
 
+class SolverReconcileError(RuntimeError):
+    """A reconciliation that cannot be answered without changing the project."""
+
+
 class WorkflowRelevance:
     REQUIRED = "REQUIRED"
     SUPERSEDED = "SUPERSEDED"
@@ -347,12 +351,60 @@ def db_status_is_terminal(job: dict) -> bool | None:
     return None
 
 
+def _require_current_generation(project: Path) -> None:
+    """Refuse a database that is not already at the current physical generation.
+
+    The store's read paths - ``solver_jobs``, ``events``, ``load`` - all call
+    ``_upgrade_schema``, which runs DDL and commits.  A function documented as a
+    pure read must not do that, and S5.2 says this reconciliation specifically
+    must not ("不升 schema").  Reading the generation over a read-only connection
+    first is what makes the claim true instead of merely stated: a generation-9
+    project is refused with the migration named, rather than silently rewritten.
+    """
+
+    import sqlite3
+
+    from .storage import SCHEMA_VERSION
+
+    database = project / ".factory" / "state.db"
+    if not database.is_file():
+        return
+    try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return
+    try:
+        row = connection.execute(
+            "SELECT schema_version FROM schema_info"
+        ).fetchone()
+    except sqlite3.Error:
+        # No schema_info at all: the store will refuse it with its own message.
+        return
+    finally:
+        connection.close()
+    if row is None:
+        return
+    generation = int(row[0])
+    if generation != SCHEMA_VERSION:
+        raise SolverReconcileError(
+            f"project is at physical schema generation {generation}, not "
+            f"{SCHEMA_VERSION}: this reconciliation is a pure read and will not "
+            "migrate it.  Run the store's own migration first."
+        )
+
+
 def evaluate_solver_jobs(project_dir) -> list[SolverEffectiveState]:
-    """Effective state for every solver job, in job order.  Pure read."""
+    """Effective state for every solver job, in job order.
+
+    Pure read: no events appended and no schema upgrade.  ``_require_current_
+    generation`` enforces the second half, because every store read path would
+    otherwise migrate the project as a side effect of being asked a question.
+    """
 
     from .storage import SQLiteStateStore
 
     project = Path(project_dir).resolve()
+    _require_current_generation(project)
     store = SQLiteStateStore(project)
     jobs = store.solver_jobs()
     events = store.events()          # read once, not once per job

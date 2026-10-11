@@ -114,6 +114,9 @@ def _bounded_track(registry_factory, *, expected_revision: int, **contract_kwarg
 
 
 def _assert_equivalent(legacy: dict, bounded: dict) -> None:
+    # Coherence first: agreement between two broken tracks is not equivalence.
+    canary.assert_integrity(legacy)
+    canary.assert_integrity(bounded)
     findings = canary.compare(legacy, bounded)
     non_empty = {area: diff for area, diff in findings.items() if diff}
     assert not non_empty, "\n".join(

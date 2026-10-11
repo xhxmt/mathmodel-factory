@@ -101,7 +101,7 @@ class FactoryEngine:
         self._bounded_contract: BoundedRunContract | None = None
         #: Committed checkpoints the running contract asked to protect, frozen
         #: at entry so the pre-commit check can compare against them.
-        self._protected_checkpoints: dict[int, str] = {}
+        self._protected_checkpoints: dict[int, tuple[str, ...]] = {}
 
     def run_bounded(self, contract: BoundedRunContract) -> "BoundedRunResult":
         """Execute one authorised, bounded advance and report it structurally.
@@ -812,6 +812,25 @@ class FactoryEngine:
                     }:
                         return state
                     continue
+                # The Step-scheduler path commits Step success directly, without
+                # going through _complete_stage_task, so it has to enforce the
+                # contract's protection itself.  run_bounded() accepts a Step
+                # project as readily as a Stage one; a check on only the Stage
+                # path would let a contract on a Step project be a no-op.
+                violation = self._contract_protection_violation()
+                if violation is not None:
+                    return self._owned_transition(
+                        state,
+                        lease,
+                        event_type="STEP_FAILED",
+                        changes={
+                            "status": WorkflowStatus.FAILED,
+                            "runner_pid": None,
+                            "runner_lease_id": None,
+                            "heartbeat_at": None,
+                        },
+                        payload={**violation, "source_step": completed_step},
+                    )
                 state = self._owned_transition(
                     state,
                     lease,
@@ -1269,6 +1288,47 @@ class FactoryEngine:
             == result.metadata.get("prompt_inputs_sha256")
         )
 
+    def _contract_protection_violation(self) -> dict[str, Any] | None:
+        """The contract's pre-commit protection check, as a payload or ``None``.
+
+        Called immediately before a Step-success commit on **every** path.  There
+        are two: the Stage path commits through :meth:`_complete_stage_task`, and
+        the Step path commits directly in ``_advance_loop``.  Only the first used
+        to check, so a contract on a Step-scheduler project promised protection
+        that never ran.  ``run_bounded`` accepts both, so both have to enforce it.
+
+        Returns the violation's payload rather than raising, because each path
+        needs to add its own context (a Stage task adds its stage and subtask) and
+        commit the same terminal failure the rest of the engine uses.
+        """
+
+        contract = self._bounded_contract
+        if contract is None:
+            return None
+        if contract.protected_manifest or contract.protected_identity:
+            verification = verify_protected_manifest(
+                self.project_dir,
+                contract.protected_manifest,
+                contract.protected_identity,
+            )
+            if not verification.ok:
+                return {
+                    "error_class": "PERMANENT_PROTECTED_MANIFEST_VIOLATED",
+                    "protected_manifest": verification.to_dict(),
+                    "bounded_run": contract.event_payload(),
+                }
+        if self._protected_checkpoints:
+            checkpoints = verify_checkpoints(
+                self.store.stage_checkpoints(), self._protected_checkpoints
+            )
+            if not checkpoints.ok:
+                return {
+                    "error_class": "PERMANENT_PROTECTED_CHECKPOINT_VIOLATED",
+                    "protected_checkpoints": checkpoints.to_dict(),
+                    "bounded_run": contract.event_payload(),
+                }
+        return None
+
     def _complete_stage_task(
         self,
         state: WorkflowState,
@@ -1311,72 +1371,32 @@ class FactoryEngine:
                 event_step=task.source_step_id,
             )
 
-        # S6: the contract's protected manifest is verified here, immediately
-        # before a successful checkpoint can commit, so a violation blocks the
-        # commit instead of being discovered by the caller afterwards.  The entry
-        # check answers a different question (was the state already as expected),
-        # so both are needed.
-        if self._bounded_contract is not None and (
-            self._bounded_contract.protected_manifest
-            or self._bounded_contract.protected_identity
-        ):
-            verification = verify_protected_manifest(
-                self.project_dir,
-                self._bounded_contract.protected_manifest,
-                self._bounded_contract.protected_identity,
+        # S6: the contract's protected manifest and committed checkpoints are
+        # verified here, immediately before a successful checkpoint can commit, so
+        # a violation blocks the commit instead of being discovered by the caller
+        # afterwards.  The entry check answers a different question (was the state
+        # already as expected), so both are needed.
+        violation = self._contract_protection_violation()
+        if violation is not None:
+            return self._stage_transition(
+                state,
+                lease,
+                event_type="STEP_FAILED",
+                changes={
+                    "status": WorkflowStatus.FAILED,
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={
+                    **violation,
+                    "stage": task.stage_id,
+                    "subtask": task.subtask,
+                    "source_step": task.source_step_id,
+                },
+                dirty_changes=dirty_changes,
+                event_step=task.source_step_id,
             )
-            if not verification.ok:
-                return self._stage_transition(
-                    state,
-                    lease,
-                    event_type="STEP_FAILED",
-                    changes={
-                        "status": WorkflowStatus.FAILED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
-                    payload={
-                        "error_class": "PERMANENT_PROTECTED_MANIFEST_VIOLATED",
-                        "stage": task.stage_id,
-                        "subtask": task.subtask,
-                        "source_step": task.source_step_id,
-                        "protected_manifest": verification.to_dict(),
-                        "bounded_run": self._bounded_contract.event_payload(),
-                    },
-                    dirty_changes=dirty_changes,
-                    event_step=task.source_step_id,
-                )
-
-        # A committed checkpoint the contract protects must survive this run.
-        # Checked here, before the success checkpoint commits, for the same reason
-        # the manifest is: afterwards is too late to prevent the rewrite.
-        if self._bounded_contract is not None and self._protected_checkpoints:
-            checkpoints = verify_checkpoints(
-                self.store.stage_checkpoints(), self._protected_checkpoints
-            )
-            if not checkpoints.ok:
-                return self._stage_transition(
-                    state,
-                    lease,
-                    event_type="STEP_FAILED",
-                    changes={
-                        "status": WorkflowStatus.FAILED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
-                    payload={
-                        "error_class": "PERMANENT_PROTECTED_CHECKPOINT_VIOLATED",
-                        "stage": task.stage_id,
-                        "subtask": task.subtask,
-                        "source_step": task.source_step_id,
-                        "protected_checkpoints": checkpoints.to_dict(),
-                        "bounded_run": self._bounded_contract.event_payload(),
-                    },
-                    dirty_changes=dirty_changes,
-                    event_step=task.source_step_id,
-                )
 
         from .final_judge_projection import classify_delivery_report
 

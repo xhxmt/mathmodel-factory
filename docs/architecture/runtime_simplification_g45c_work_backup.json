@@ -221,5 +221,12 @@
       }
     ],
     "interpretation": "exactly 22 files changed and nothing was added or removed: the twenty migrated drivers and the two patching scripts whose clone steps were retired.  The other 1543 entries are byte-identical, which is what makes the migration auditable rather than merely described."
+  },
+  "portability": {
+    "warning": "These anchors live on one developer's machine and are NOT tracked by git, so they cannot restore the untracked work/ tree from a checkout.  They are a recovery point for that host, not an artefact of this repository.",
+    "backup_root": "/home/tfisher/pf-g45c-backup",
+    "what_this_file_is": "the record of what those archives contain and how they were verified - the digests, the entry counts and the restore evidence - so the anchors can be checked wherever the files are copied to",
+    "to_make_them_durable": "copy both archives to shared storage the project can reach, verify them against the manifest digests recorded here, and update backup_root",
+    "review_note": "raised in review: presenting developer-local files as a recovery anchor overstates them.  The digests above are the portable part; the paths are not."
   }
 }

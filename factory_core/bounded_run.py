@@ -493,19 +493,30 @@ class CheckpointVerification:
         return "; ".join(parts) or "ok"
 
 
-def _checkpoint_rows_by_step(rows) -> dict[int, str]:
-    """source step id -> a canonical digest of its committed checkpoint row."""
+def _checkpoint_rows_by_step(rows) -> dict[int, tuple[str, ...]]:
+    """source step id -> a canonical digest of *every* checkpoint row for it.
 
-    seen: dict[int, str] = {}
+    A source step can own more than one committed checkpoint: the real projects
+    have two rows for step 8 and two for step 16, distinguished by ``subtask``
+    (``visualization`` and ``reviewer_entry_gate``, for instance).  Keying on the
+    step alone and keeping one digest would protect whichever row happened to be
+    read last and silently miss a change to the other - the "looks like
+    protection, protects less" failure this module exists to prevent.
+
+    The digests are sorted so that a change in read order is not a change, while
+    a row appearing or disappearing is.
+    """
+
+    seen: dict[int, list[str]] = {}
     for row in rows:
         step = row.get("source_step_id")
         if step is None:
             continue
-        seen[int(step)] = canonical_hash(dict(row))
-    return seen
+        seen.setdefault(int(step), []).append(canonical_hash(dict(row)))
+    return {step: tuple(sorted(digests)) for step, digests in seen.items()}
 
 
-def snapshot_checkpoints(rows, source_steps) -> dict[int, str]:
+def snapshot_checkpoints(rows, source_steps) -> dict[int, tuple[str, ...]]:
     """Freeze the protected checkpoints as they are now."""
 
     steps = set(int(step) for step in (source_steps or ()))
@@ -518,7 +529,9 @@ def snapshot_checkpoints(rows, source_steps) -> dict[int, str]:
     }
 
 
-def verify_checkpoints(rows, snapshot: Mapping[int, str]) -> CheckpointVerification:
+def verify_checkpoints(
+    rows, snapshot: Mapping[int, tuple[str, ...]]
+) -> CheckpointVerification:
     """Compare committed checkpoints against a snapshot taken at entry."""
 
     snapshot = dict(snapshot or {})
@@ -719,15 +732,31 @@ def cursor_of(state) -> tuple[int | None, str | None, int | None]:
 def check_cursor(
     state, expected_cursor: tuple[int | None, str | None, int | None] | None
 ) -> None:
-    """Refuse a cursor mismatch even when the revision happens to match."""
+    """Refuse a cursor mismatch even when the revision happens to match.
+
+    A component left as ``None`` means "not constrained", so a caller can pin the
+    stage and subtask without also having to name the source step.  Comparing the
+    tuples exactly made ``expected_cursor`` unusable from the CLI, which has no way
+    to name a source step: every ordinary Stage cursor carries one, so every
+    partial expectation was rejected.  The drivers pass all three components, and
+    for them nothing changes - a component that is not ``None`` is still compared
+    exactly.
+    """
 
     if expected_cursor is None:
         return
     actual = cursor_of(state)
-    if tuple(expected_cursor) != tuple(actual):
+    expected = tuple(expected_cursor)
+    mismatch = [
+        (name, want, got)
+        for name, want, got in zip(("stage", "subtask", "source_step"), expected, actual)
+        if want is not None and want != got
+    ]
+    if mismatch:
+        detail = ", ".join(f"{name}: expected {want!r} but found {got!r}" for name, want, got in mismatch)
         raise BoundedRunError(
             "cursor mismatch: contract expects "
-            f"(stage, subtask, source_step)={tuple(expected_cursor)} but the project is at {actual}"
+            f"(stage, subtask, source_step)={expected} but the project is at {actual} ({detail})"
         )
 
 

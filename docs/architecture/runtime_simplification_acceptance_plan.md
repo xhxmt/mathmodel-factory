@@ -1,9 +1,11 @@
 # Runtime Simplification 验收计划
 
-- **基准 head**：`0dbc5c39b68c453d49f8c35c932ebee05497088d`（`feat/runtime-simplification`）。Gate 0 已验证的就是这一系列最新 head，两轨均在此基础上执行。
+- **基准 head**：`0dbc5c39b68c453d49f8c35c932ebee05497088d` 是**验收开始时**的 head；Gate 0 验证的就是它。
+- **当前 head**：见 PR #35（下）。§6 各节按时间顺序记录 Gate 0–4 与 G4.5c 的推进与收尾；**状态以 §6 与 PR 为准，本条以上的基准行是起点而不是现状**。
 - **基准 worktree**：`/home/tfisher/paper_factory/.worktrees/runtime-simplification`（tree clean）
-- **配套 PR**：[#35](https://github.com/xhxmt/mathmodel-factory/pull/35)（Draft，仅为触发 CI）
+- **配套 PR**：[#35](https://github.com/xhxmt/mathmodel-factory/pull/35)（Ready for review；CI 已全绿）
 - **原则**：Gate 0 通过前不改结构；Gate 1 canary 通过前不删除任何 `work/*.py` 驱动层。
+- **当前状态一览**：Gate 0 关闭（`0dbc5c3`）→ Gate 1（14 项）→ Gate 2（32 项）→ Gate 3（24 项）→ Gate 4（39 项 + 12 项 hermetic/guard）全部关闭；**G4.5c 完成**，20/20 驱动迁移、双向归档锚点、残留 closeout、永久 guard 均已就位；两项开放项已处置（§6.15）；评审发现的问题已逐条处置（§6.16–6.17）。
 
 ---
 
@@ -1136,6 +1138,33 @@ if db_status in {"completed", "failed"}:
 **真实数据核实**（A/B/R）：B 的 3 个 SUPERSEDED 其替代者**全部**经产物确认为 `TERMINAL_SUCCESS`；A、R 为 0。**修复不改变任何真实结论**，只消除潜在漏洞。
 
 **回归测试**（4 项）：合法场景（有产物）仍 SUPERSEDED 且理由含 "exit artifact"；**行说 completed 但无产物 → UNRESOLVED 且 blocks_completion**（旧测试把这个漏洞当成了预期行为，已修正）；后继是**失败** → UNRESOLVED；显式证据映射被尊重且映射里非成功仍拒绝。
+
+### 6.18 外部评审（codex + cubic）全部发现的处置
+
+PR #35 上有两个自动评审。它们提出的问题**多于**转述的两条，且多数与那两条同属一类："保护/判定看起来成立、实则没覆盖到"。逐条处置如下。
+
+#### 已修的代码缺陷（均补回归测试）
+
+| # | 位置 | 问题 | 修法 | 判别性测试 |
+|---|---|---|---|---|
+| 1 | `engine.py` | **Step 模式（`step_v2`）的成功提交完全绕过合同保护**：Stage 路径经 `_complete_stage_task`（含检查），Step 路径在 `_advance_loop` **直接提交 `STEP_SUCCEEDED`**，而 `run_bounded` 同样接受 step 模式项目 | 提取共享的 `_contract_protection_violation()`，**两条路径都调用** | ✅ **修复前失败**（`STEP_SUCCEEDED` 确实出现） |
+| 2 | `engine.py` | 合同在 `recover()` **之后**才装上，而恢复的 `COMPLETE` 会走同一个提交函数；`ScopedRegistry` 同理，使 `max_reopens=0` 管不住恢复的 reopen | 三者提前到任何写入之前 + 全函数 `try/finally` | ✅ **修复前失败** |
+| 3 | `liveness.py` | 非整数/≤0 的 pid 返回 `False`（=死亡），与自身 docstring 的 fail-closed 规则矛盾；**超大 pid 抛 `OverflowError` 逃逸**并中断启动 | 不可探测一律视为存活；捕获 `OverflowError` | 旧测试编码了错误语义，已按 fail-closed 重写 |
+| 4 | `bounded_run.py` | `snapshot_checkpoints` 按 `source_step_id` 建映射会**覆盖同一步的多行**（真实项目 step 8/16 各有 2 行），受保护步的另一行变化**不可见** | 每步 digest **全部行**的有序元组 | 真实数据核实 + G2 测试 |
+| 5 | `bounded_run.py` `cli.py` | `check_cursor` 全等比较使 `--expected-stage/--expected-subtask` 实际不可用（Stage 游标恒带 source_step） | 分量为 `None` 即"不约束"；驱动传全量三元组，行为不变 | 新增部分期望用例 |
+| 6 | `cli.py` | 空 `--allowed-source-steps` **被当成"无限制"**（fail-open） | 显式拒绝空允许集 | 新增 |
+| 7 | `solver_reconcile.py` | 声称 "Pure read"，但 `solver_jobs/load/events` 都会 `_upgrade_schema`，与 S5.2"不升 schema"矛盾 | 先用只读连接取物理世代，**非当前世代即拒**并点名迁移 | 新增 |
+| 8 | `storage.py` | 键集不同的分支只逐键子集核对，**从不校验记录的 `prior` 是否哈希成它声称的根** | 该分支同时校验 `canonical_hash(prior) == aggregate_root_hash_after`（写入时必然成立，故为严格收紧） | 新增 |
+| 9 | `dirty_classification.py` | `.tex` 的 `@paper:` 键变化时，分类器仍发出自身的 `FORMAT_DIRTY` 义务，而溯源不记录该键 → `source_for` 读回 **`legacy_unrecorded`** | `setdefault(_authored_source(...))`，不覆盖更具体的 `paper_semantic` | ✅ 实测复现（math/prose 落空、format 侥幸正确）+ 新增不变量测试 |
+| 10 | `scripts/check_no_hand_written_drivers.py` | 检查器**漏掉被赋值的 service/engine 变量**（`service = FactoryService(ROOT)` 后 `service.engine(P).run(`） | `workflow_advance_sites()` 先收集绑定名再匹配 | 新增两种禁止形态 + 一种允许形态 |
+| 11 | `tests/test_gate_g3_version_compat.py` | 旧代码归档只有 `factory_core`，而它从 `scripts.*` 导入**二十余处**；`PYTHONPATH` 只指向该目录 → 任何触及那些模块的片段会以 `ModuleNotFoundError` 失败 | 归档**同时含 `scripts`**（不能把仓库根加进 `PYTHONPATH`，那会导入本分支的 `factory_core`，正是该 fixture 要避免的） | 旧 dispatcher 导入已验证 |
+
+#### 诚实性修正
+
+- **canary 的完整性标志被记录却从不比较**：`event_replay_valid`/`aggregate_valid`/`replayed_matches_state` 现在进入 `compare()` 的比较面，且 `_assert_equivalent` **先要求两条轨道内部自洽**——两份损坏记录的"一致"不是等价。
+- **测试不能捕获生产守卫被删**：批次 2 的测试原先**自定义了一个 `guard()`** 并断言 `guard(None)`，而种子状态的 `active_step` 恰好是 `None`，**为错误的理由通过且未触及生产代码**。已改为断言真正的生产事实（`cursor_of` 三元组无 `active_step`，故必须显式守卫）。批次 5/6 的合成字符串检查改为调用仓库内新命名的 `rewrites_driver_source()`，而非各自重写正则。
+- **文档陈旧**：`RUNTIME_SIMPLIFICATION_IMPLEMENTATION_PLAN.md` 明确标注为**历史快照**（它写"下一步 S1-D"，而 S1-D/S5/S6/G4.5c 均已完成），并指明现状以本验收计划 §6 为准；本验收计划的头部不再把**起始** head 当作现状。
+- **归档锚点的可移植性**：`g45c_work_backup.json` 增记 `portability` 段——两个归档位于单一开发机、未被 git 跟踪，**无法从 checkout 恢复**，是"该主机的恢复点"而非仓库产物；可移植的部分是其中的摘要。
 
 > 顺带说明：我一度也给 `audit/service.py` 的 `StepContext` 传了时钟，但那条路径没有引擎 store 可继承，`SQLiteStateStore(project).clock` 恰好**等于默认时钟**——那行不带来任何东西却暗示了它做不到的事，已撤回，该文件回到原状。
 

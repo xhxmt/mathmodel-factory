@@ -1118,6 +1118,7 @@ def _legacy_derivation(before: dict, after: dict) -> dict[tuple[str, str], str]:
         ADDITIONAL_OWNERSHIP,
         artifact_pattern_matches,
     )
+    from factory_core.dirty_classification import _authored_source
 
     changed = sorted(
         path for path in set(before) | set(after) if before.get(path) != after.get(path)
@@ -1136,6 +1137,9 @@ def _legacy_derivation(before: dict, after: dict) -> dict[tuple[str, str], str]:
         if artifact.endswith(".tex") and _paper_key_present(artifact, before, after):
             if not any(key.startswith(f"@paper:{artifact}:") for key in changed):
                 sources[("FORMAT_DIRTY", artifact)] = "paper_semantic"
+            else:
+                for key, value in _authored_source(artifact).items():
+                    sources.setdefault(key, value)
             continue
         current_rule = next(
             (rule for rule in ADDITIONAL_OWNERSHIP
@@ -1249,6 +1253,35 @@ def test_derivation_covers_every_emitted_change_for_the_corpus():
                 source_for(sources, change.flag.value, change.cause_artifact)
                 != LEGACY_UNRECORDED
             ), f"underived: {change.flag.value} {change.cause_artifact}"
+
+
+def test_every_emitted_change_is_attributed_for_paper_key_changes():
+    """The corpus varies only the artifact itself, so it never built the pair that
+    breaks this: a ``.tex`` whose ``@paper:`` key changed.
+
+    The frozen classifier diverts such a path into paper_raw_changes and emits its
+    own FORMAT_DIRTY obligation for it, whichever domain changed.  The synthetic
+    loop records the changed domain's flag, and the FORMAT_DIRTY obligation ended
+    up with no entry at all - so ``source_for`` read it back as
+    ``legacy_unrecorded`` for an obligation the classifier had definitely emitted.
+    Only the ``format`` domain happened to work, because there the synthetic flag
+    and the emitted flag are the same key.
+    """
+
+    for domain in ("math", "citation", "prose", "format"):
+        before: dict = {}
+        after = {"tables.tex": "x", f"@paper:tables.tex:{domain}": "y"}
+        sources = classification_sources(before, after)
+        emitted = classify_manifest_changes(before, after)
+        assert emitted, f"precondition: the {domain} pair emits a change"
+        for change in emitted:
+            assert (
+                source_for(sources, change.flag.value, change.cause_artifact)
+                != LEGACY_UNRECORDED
+            ), (
+                f"underived after a changed {domain} key: "
+                f"{change.flag.value} {change.cause_artifact}"
+            )
 
 
 def test_policy_only_entry_is_attributed_as_policy_only(monkeypatch):

@@ -98,9 +98,23 @@ _V10_SIDE_TABLE = "dirty_cause_classification"
 
 # --------------------------------------------------------------- old interpreter
 def old_code_root() -> Path:
-    """bde49712's ``factory_core``, extracted once."""
+    """bde49712's ``factory_core`` and ``scripts``, extracted once.
 
-    if (OLD_CODE_ROOT / "factory_core" / "domain.py").is_file():
+    ``scripts`` is archived with it because the old ``factory_core`` imports from
+    that package in two dozen places - ``scripts.model_dispatch_config`` from both
+    the model dispatcher and the effective-prompt layer, among others - and
+    ``run_with_old_code`` puts only this directory on ``PYTHONPATH``.  Extracting
+    ``factory_core`` alone therefore works for the snippets that exist today, none
+    of which reaches those modules, and fails with a bare
+    ``ModuleNotFoundError: No module named 'scripts'`` the moment one does.  The
+    repository root cannot simply be added to ``PYTHONPATH`` instead: that would
+    import *this* branch's ``factory_core`` and the fixture would be built by the
+    new code, which is the one thing the fixture exists to avoid.
+    """
+
+    if (OLD_CODE_ROOT / "factory_core" / "domain.py").is_file() and (
+        OLD_CODE_ROOT / "scripts"
+    ).is_dir():
         return OLD_CODE_ROOT
 
     OLD_CODE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -108,7 +122,7 @@ def old_code_root() -> Path:
     try:
         with archive.open("wb") as handle:
             subprocess.run(
-                ["git", "archive", OLD_CODE_COMMIT, "factory_core"],
+                ["git", "archive", OLD_CODE_COMMIT, "factory_core", "scripts"],
                 cwd=REPO_ROOT,
                 stdout=handle,
                 stderr=subprocess.PIPE,
@@ -128,6 +142,10 @@ def old_code_root() -> Path:
 
     if not (OLD_CODE_ROOT / "factory_core" / "domain.py").is_file():
         pytest.skip(f"{OLD_CODE_COMMIT} extraction produced no factory_core")
+    if not (OLD_CODE_ROOT / "scripts").is_dir():
+        # `git archive` omits a path the commit does not have, so this only fires
+        # if the extraction is incomplete rather than if scripts/ never existed.
+        pytest.skip(f"{OLD_CODE_COMMIT} extraction produced no scripts package")
     return OLD_CODE_ROOT
 
 

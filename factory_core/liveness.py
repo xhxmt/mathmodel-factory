@@ -41,24 +41,34 @@ def pid_is_live(pid: int | None) -> bool:
     """
 
     if pid is None:
+        # No runner recorded at all, which is a real answer rather than a corrupt
+        # one: every caller guards with ``runner_pid is not None`` before asking.
         return False
     try:
-        pid = int(pid)
+        numeric = int(pid)
     except (TypeError, ValueError):
-        return False
-    if pid <= 0:
-        # Not a process id.  A persisted 0 or negative value is corrupt rather
-        # than a runner, and probing it would be meaningless - os.kill(-1, 0)
+        # A persisted value that is not a number is unreadable, and unreadable is
+        # treated as alive.  Answering "dead" here would clear the recording and
+        # let a second writer in, which is the outcome this module exists to
+        # prevent - so the fail-closed rule has to cover the corrupt case too.
+        return True
+    if numeric <= 0:
+        # Likewise unreadable rather than dead, and never probed: os.kill(-1, 0)
         # addresses every process the caller may signal.
-        return False
+        return True
 
     try:
-        os.kill(pid, 0)
+        os.kill(numeric, 0)
     except ProcessLookupError:
         # ESRCH: no such process.
         return False
     except PermissionError:
         # EPERM: it exists; we simply may not signal it.
+        return True
+    except (OverflowError, ValueError):
+        # A pid too large for the platform's pid_t.  os.kill raises OverflowError
+        # rather than OSError, so it would otherwise escape and abort runner
+        # startup; unreadable means alive.
         return True
     except OSError:
         # Unreadable.  Fail closed: refuse to call a runner dead on a bad answer.
