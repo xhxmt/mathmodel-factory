@@ -165,8 +165,7 @@ def read_only_uri(path: "Path | str") -> str:
     failure is quiet - the query simply reports no such table - which is how a
     read-only probe can end up approving a database it never looked at.
 
-    ``as_uri`` percent-encodes both.  ``state_lease`` already did this; the tests
-    interpolated the path instead, in thirteen places.
+    ``as_uri`` percent-encodes both.
     """
 
     from pathlib import Path as _Path

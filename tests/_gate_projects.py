@@ -84,7 +84,12 @@ def snapshot(name: str, destination: Path) -> Path:
     projects' generations nobody has checked.
 
     Only ``.factory/`` is copied, which is everything the store and the solver
-    evaluator read.
+    evaluator read.  It is not a small copy - 20 to 44 MiB per project, because
+    ``.factory/`` holds the audits, decisions and solver artifacts as well as the
+    database - and it is taken per test so that each test's assertion is against a
+    pristine tree.  On a host where ``/tmp`` is a small tmpfs that matters: three
+    retained pytest runs of the real-history layer are a few gigabytes.  CI is not
+    affected; the developer host is.
     """
 
     source = require(name)

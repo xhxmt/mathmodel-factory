@@ -467,3 +467,10 @@ def test_an_absent_database_is_not_this_functions_business(tmp_path):
 
     with pytest.raises(StateNotInitialized):
         evaluate_solver_jobs(root)
+
+    # and it must not have created one on the way: opening the store would create
+    # the database (in WAL mode, with its sidecars) before raising, so a "pure
+    # read" would leave a database behind.
+    assert not (root / ".factory").exists(), sorted(
+        str(p.relative_to(root)) for p in root.rglob("*")
+    )

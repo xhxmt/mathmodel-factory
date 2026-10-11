@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.storage import read_only_uri
 from factory_core.solver_reconcile import (
     EvidenceState,
     ExecutionState,
@@ -30,6 +29,7 @@ from factory_core.solver_reconcile import (
     completion_blockers,
     evaluate_solver_jobs,
 )
+from factory_core.storage import read_only_uri
 
 import _gate_projects
 

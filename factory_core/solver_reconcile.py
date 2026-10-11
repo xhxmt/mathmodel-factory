@@ -374,8 +374,15 @@ def _require_current_generation(project: Path) -> None:
 
     database = project / ".factory" / "state.db"
     if not database.is_file():
-        # Nothing to migrate; the store refuses a missing database itself.
-        return
+        # Abort here rather than letting the store refuse it: opening the store
+        # creates the database file (in WAL mode, with its sidecars) and *then*
+        # raises StateNotInitialized, so a function documented as a pure read would
+        # leave a database behind.  The side effect is the problem, not the error.
+        from .domain import StateNotInitialized
+
+        raise StateNotInitialized(
+            f"workflow state is not initialized: {database}"
+        )
     try:
         connection = sqlite3.connect(read_only_uri(database), uri=True)
     except sqlite3.Error as exc:
