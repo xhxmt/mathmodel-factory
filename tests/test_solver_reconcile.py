@@ -24,12 +24,13 @@ from factory_core.solver_reconcile import (
     EvidenceState,
     ExecutionState,
     SolverEffectiveState,
+    SolverReconcileError,
     WorkflowRelevance,
     completion_blockers,
     evaluate_solver_job,
     evaluate_solver_jobs,
 )
-from factory_core.storage import SQLiteStateStore
+from factory_core.storage import SQLiteStateStore, read_only_uri
 
 import _gate_projects
 
@@ -298,7 +299,7 @@ def test_reconciliation_never_writes(tmp_path):
     database = root / ".factory" / "state.db"
 
     def snapshot():
-        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        connection = sqlite3.connect(read_only_uri(database), uri=True)
         try:
             return (
                 connection.execute("SELECT revision FROM project_state").fetchone()[0],
@@ -375,3 +376,94 @@ def test_real_history_regression(tmp_path, name):
         assert residual.workflow_relevance == WorkflowRelevance.SUPERSEDED
     else:
         assert blockers == [], [s.job_id for s in blockers]
+
+# ===================== the read-only guarantee, including awkward paths
+@pytest.mark.parametrize("name", ["project", "pro?ject", "pro#ject", "a?b#c", "100%done"])
+def test_a_path_with_uri_characters_still_resolves_to_the_real_database(tmp_path, name):
+    """``file:{path}?mode=ro`` names the wrong file when the path has a ? or a #.
+
+    The path was interpolated into the URI unencoded, so "?" truncated the
+    filename and "#" began a fragment: the probe read a database that was not the
+    one under test, failed, and - because a failed probe used to be a pass - left
+    the project to be opened writably afterwards.  Percent-encoding the path is
+    what makes the probe answer about the database the caller means.
+    """
+
+    root = tmp_path / name
+    root.mkdir(parents=True)
+    SQLiteStateStore(root).initialize(project_id="p", project_type="modeling")
+
+    assert evaluate_solver_jobs(root) == []
+
+
+def test_a_v9_database_at_an_awkward_path_is_refused_and_left_alone(tmp_path):
+    """Both halves of the guarantee, on the case that used to defeat them.
+
+    A generation-9 database at a path containing "?" is exactly where the old
+    probe failed and waved the caller through, after which the store opened the
+    project writably and migrated it - the mutation this function exists to
+    prevent.  It must now be refused *and* still be generation 9 afterwards.
+    """
+
+    from tests.test_gate_g3_version_compat import make_v9_project, raw_facts
+
+    root = make_v9_project(tmp_path / "v9?fixture")
+    database = root / ".factory" / "state.db"
+    assert raw_facts(database)["physical_schema"] == 9, "the fixture must be a real v9"
+
+    with pytest.raises(SolverReconcileError, match="generation 9"):
+        evaluate_solver_jobs(root)
+
+    assert raw_facts(database)["physical_schema"] == 9, (
+        "the refused reconciliation migrated the database it refused to touch"
+    )
+
+
+def test_a_generation_that_cannot_be_read_aborts_rather_than_proceeding(tmp_path):
+    """Not knowing the generation is not permission to proceed.
+
+    A failed probe used to ``return``, which meant an unreadable database was
+    treated as a safe one and then opened writably.  Fail-closed again: the answer
+    is refused, not assumed.
+    """
+
+    root = tmp_path / "broken"
+    (root / ".factory").mkdir(parents=True)
+    (root / ".factory" / "state.db").write_bytes(b"this is not a sqlite database")
+
+    with pytest.raises(SolverReconcileError, match="cannot read the schema generation"):
+        evaluate_solver_jobs(root)
+
+
+def test_a_database_with_no_recorded_generation_aborts(tmp_path):
+    """An empty schema_info is an unknown generation, not a current one."""
+
+    import sqlite3
+
+    root = tmp_path / "empty"
+    (root / ".factory").mkdir(parents=True)
+    database = root / ".factory" / "state.db"
+    connection = sqlite3.connect(database)
+    connection.executescript("CREATE TABLE schema_info (schema_version INTEGER);")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(SolverReconcileError, match="records no schema generation"):
+        evaluate_solver_jobs(root)
+
+
+def test_an_absent_database_is_not_this_functions_business(tmp_path):
+    """No database is nothing to migrate, so the generation probe stays out of it.
+
+    The store refuses a missing project itself, with its own message; this
+    function's job is only to keep the store from *opening* a database it might
+    migrate, which cannot arise when there is no database.
+    """
+
+    from factory_core.domain import StateNotInitialized
+
+    root = tmp_path / "absent"
+    root.mkdir()
+
+    with pytest.raises(StateNotInitialized):
+        evaluate_solver_jobs(root)

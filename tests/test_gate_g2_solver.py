@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from factory_core.storage import read_only_uri
 from factory_core.solver_reconcile import (
     EvidenceState,
     ExecutionState,
@@ -131,7 +132,7 @@ def test_gate_reading_a_real_project_mutates_nothing(tmp_path, name):
     path = Path(_snapshot(tmp_path, name))
     database = path / ".factory" / "state.db"
     before = database.stat()
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         before_rows = (
             connection.execute("SELECT revision FROM project_state").fetchone()[0],
@@ -145,7 +146,7 @@ def test_gate_reading_a_real_project_mutates_nothing(tmp_path, name):
     completion_blockers(path)
 
     after = database.stat()
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         after_rows = (
             connection.execute("SELECT revision FROM project_state").fetchone()[0],

@@ -156,6 +156,24 @@ V9_REQUIRED_COLUMNS = {
 }
 
 
+def read_only_uri(path: "Path | str") -> str:
+    """A SQLite read-only URI for a filesystem path.
+
+    Building it as ``file:{path}?mode=ro`` is wrong whenever the path contains
+    ``?`` or ``#``: the first truncates the filename and the second begins a
+    fragment, so the connection names a different file, or none at all.  The
+    failure is quiet - the query simply reports no such table - which is how a
+    read-only probe can end up approving a database it never looked at.
+
+    ``as_uri`` percent-encodes both.  ``state_lease`` already did this; the tests
+    interpolated the path instead, in thirteen places.
+    """
+
+    from pathlib import Path as _Path
+
+    return _Path(path).resolve().as_uri() + "?mode=ro"
+
+
 class SQLiteStateStore:
     def __init__(self, project_dir: str | Path, *, clock: Callable[[], float] = time.time):
         self.project_dir = Path(project_dir).resolve()

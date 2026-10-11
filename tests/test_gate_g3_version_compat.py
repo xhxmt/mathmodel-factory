@@ -43,6 +43,7 @@ from factory_core.storage import (
     V9_REQUIRED_COLUMNS,
     V9_REQUIRED_TABLES,
     SQLiteStateStore,
+    read_only_uri,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -193,7 +194,7 @@ def make_v9_project(root: Path, *, project_id: str = "v9-fixture") -> Path:
 def raw_facts(database: Path) -> dict:
     """Everything readable without touching Factory code - no migration."""
 
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -229,7 +230,7 @@ def enveloped_events(database: Path) -> int:
     statement from "it failed validation", and the audit must not conflate them.
     """
 
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         total = 0
         for (payload,) in connection.execute("SELECT payload_json FROM events"):
@@ -357,7 +358,7 @@ def test_a_v9_database_missing_a_required_table_is_refused_before_any_ddl(tmp_pa
     assert after == before, "no raw fact may move"
     assert sha256(database) == before_sha, "the refusal must not have written anything"
 
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -415,7 +416,7 @@ def test_the_v9_contract_matches_what_the_old_code_actually_creates(tmp_path):
     database = root / ".factory" / "state.db"
     assert raw_facts(database)["physical_schema"] == 9
 
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         actual_tables = {
             row[0]
@@ -440,7 +441,7 @@ def test_the_v9_contract_matches_what_the_old_code_actually_creates(tmp_path):
         )
 
     # and the validator accepts it, which is the property that matters
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         SQLiteStateStore._validate_v9_pre_upgrade_schema(connection)
     finally:
@@ -641,7 +642,7 @@ def test_the_real_v9_production_databases_pass_the_precheck(tmp_path, name):
     copy = tmp_path / "state.db"
     shutil.copy2(database, copy)
 
-    connection = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(copy), uri=True)
     try:
         SQLiteStateStore._validate_v9_pre_upgrade_schema(connection)
     finally:

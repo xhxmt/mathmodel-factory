@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 from factory_core.solver_reconcile import BLOCKING_RELEVANCE, PROVEN_RELEVANCE
-from factory_core.storage import SQLiteStateStore
+from factory_core.storage import SQLiteStateStore, read_only_uri
 from factory_core.workflow_events import (
     ENVELOPE_KEY,
     REPLAY_FIELDS,
@@ -204,7 +204,7 @@ def test_reading_the_stream_mutates_nothing(hermetic_project):
 
     def observe():
         stat = database.stat()
-        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        connection = sqlite3.connect(read_only_uri(database), uri=True)
         try:
             rows = (
                 connection.execute("SELECT revision FROM project_state").fetchone()[0],

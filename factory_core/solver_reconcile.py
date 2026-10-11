@@ -352,38 +352,55 @@ def db_status_is_terminal(job: dict) -> bool | None:
 
 
 def _require_current_generation(project: Path) -> None:
-    """Refuse a database that is not already at the current physical generation.
+    """Refuse anything whose generation cannot be shown to be current.
 
     The store's read paths - ``solver_jobs``, ``events``, ``load`` - all call
     ``_upgrade_schema``, which runs DDL and commits.  A function documented as a
-    pure read must not do that, and S5.2 says this reconciliation specifically
-    must not ("不升 schema").  Reading the generation over a read-only connection
-    first is what makes the claim true instead of merely stated: a generation-9
-    project is refused with the migration named, rather than silently rewritten.
+    pure read must not do that, and S5.2 says this reconciliation specifically must
+    not ("不升 schema").  Reading the generation over a read-only connection first
+    is what makes the claim true rather than merely stated: a generation-9 project
+    is refused with the migration named, instead of being silently rewritten.
+
+    Every failure mode here **aborts**.  An earlier version returned on a failed
+    check, which was the opposite of the guarantee it was added to provide: a path
+    containing ``?`` made the probe name the wrong file, the probe failed, the
+    caller was waved through, and the store then opened the project writably and
+    migrated it.  Not knowing the generation is not permission to proceed.
     """
 
     import sqlite3
 
-    from .storage import SCHEMA_VERSION
+    from .storage import SCHEMA_VERSION, read_only_uri
 
     database = project / ".factory" / "state.db"
     if not database.is_file():
+        # Nothing to migrate; the store refuses a missing database itself.
         return
     try:
-        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-    except sqlite3.Error:
-        return
+        connection = sqlite3.connect(read_only_uri(database), uri=True)
+    except sqlite3.Error as exc:
+        raise SolverReconcileError(
+            f"cannot open {database} read-only to check its schema generation "
+            f"({type(exc).__name__}: {exc}); this reconciliation will not open the "
+            "project writably on an unknown generation"
+        ) from exc
     try:
         row = connection.execute(
             "SELECT schema_version FROM schema_info"
         ).fetchone()
-    except sqlite3.Error:
-        # No schema_info at all: the store will refuse it with its own message.
-        return
+    except sqlite3.Error as exc:
+        raise SolverReconcileError(
+            f"cannot read the schema generation of {database} "
+            f"({type(exc).__name__}: {exc}); this reconciliation will not open the "
+            "project writably on an unknown generation"
+        ) from exc
     finally:
         connection.close()
     if row is None:
-        return
+        raise SolverReconcileError(
+            f"{database} records no schema generation, so it cannot be shown to be "
+            "current; this reconciliation will not open the project writably"
+        )
     generation = int(row[0])
     if generation != SCHEMA_VERSION:
         raise SolverReconcileError(

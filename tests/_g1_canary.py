@@ -53,7 +53,7 @@ from factory_core.registry import StepRegistry
 from factory_core.stages import STAGE_SCHEDULER_GENERATION
 from factory_core.steps import build_native_registry
 from factory_core.steps.catalog import STEP_CONTRACTS
-from factory_core.storage import SQLiteStateStore
+from factory_core.storage import SQLiteStateStore, read_only_uri
 from factory_core.workflow_events import ENVELOPE_KEY, replay_events, replay_state
 
 #: A fixed instant.  A constant clock (rather than a counter) keeps timestamps
@@ -183,7 +183,7 @@ def describe_seed(root: Path) -> dict[str, Any]:
     """Everything that pins the seed: bytes, triple, counts and root hash."""
 
     database = root / ".factory" / "state.db"
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         connection.row_factory = sqlite3.Row
         project_state = dict(
@@ -213,7 +213,7 @@ def describe_seed(root: Path) -> dict[str, Any]:
 
 
 def _user_version(database: Path) -> int:
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         return connection.execute("PRAGMA user_version").fetchone()[0]
     finally:
@@ -268,7 +268,7 @@ def collect(root: Path) -> dict[str, Any]:
 
     store = store_at(root)
     database = root / ".factory" / "state.db"
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         connection.row_factory = sqlite3.Row
         project_state = dict(connection.execute("SELECT * FROM project_state").fetchone())

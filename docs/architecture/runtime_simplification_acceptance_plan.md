@@ -1166,6 +1166,22 @@ PR #35 上有两个自动评审。它们提出的问题**多于**转述的两条
 - **文档陈旧**：`RUNTIME_SIMPLIFICATION_IMPLEMENTATION_PLAN.md` 明确标注为**历史快照**（它写"下一步 S1-D"，而 S1-D/S5/S6/G4.5c 均已完成），并指明现状以本验收计划 §6 为准；本验收计划的头部不再把**起始** head 当作现状。
 - **归档锚点的可移植性**：`g45c_work_backup.json` 增记 `portability` 段——两个归档位于单一开发机、未被 git 跟踪，**无法从 checkout 恢复**，是"该主机的恢复点"而非仓库产物；可移植的部分是其中的摘要。
 
+#### 补修：只读预检查的 URI 转义与失败放行（评审第二轮）
+
+`_require_current_generation` 有两处缺陷，合起来使**只读保证在最需要它的路径上恰好失效**：
+
+1. **URI 未转义**：`f"file:{database}?mode=ro"` 在路径含 `?` 或 `#` 时指向**另一个文件**（`?` 截断文件名，`#` 开始 fragment），查询只会报 `no such table: schema_info`——一个**安静**的失败。
+2. **失败即放行**：预检查在 `sqlite3.Error` 上 `return`，于是上面那种路径**被挥手放行**，随后 `SQLiteStateStore(project)` 以**可写**方式打开并触发 `_upgrade_schema`——正是这个检查存在的理由被反过来利用。
+
+**实测复现**：把 v9 库放在含 `?` 的路径下，旧代码的 `evaluate_solver_jobs` 返回 **ok**。
+
+**修复**：
+- `factory_core/storage.py` 新增 `read_only_uri(path)`，用 `Path(...).resolve().as_uri()` 百分号转义后拼接 `?mode=ro`（`state_lease.py` 本来就是这么写的——**正确习惯已存在，只是没被沿用**）；
+- **每一个探测失败都中止**：连接失败、查询失败、以及 `schema_info` 无记录，一律抛 `SolverReconcileError`。**不知道世代不等于可以继续。**
+- 顺带修掉同一写法在 **6 个测试文件里的 15 处**（含 G3 fixture 的 `raw_facts`——这个 bug 是被复制传播的）。
+
+**回归测试（9 项）**：含 `?`/`#`/`%` 的路径仍解析到真实库；**v9 库放在含 `?` 的路径下被拒且事后仍为 v9**（同时验证两半）；不可读库中止；`schema_info` 无记录中止；无库不归本函数管。
+
 > 顺带说明：我一度也给 `audit/service.py` 的 `StepContext` 传了时钟，但那条路径没有引擎 store 可继承，`SQLiteStateStore(project).clock` 恰好**等于默认时钟**——那行不带来任何东西却暗示了它做不到的事，已撤回，该文件回到原状。
 
 

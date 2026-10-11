@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.storage import SQLiteStateStore
+from factory_core.storage import SQLiteStateStore, read_only_uri
 from factory_core.workflow_events import (
     ENVELOPE_KEY,
     REPLAY_FIELDS,
@@ -177,7 +177,7 @@ def test_gate_reading_real_history_mutates_nothing(tmp_path, name):
 
     database = _db(name)
     before = database.stat()
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         rows_before = (
             connection.execute("SELECT revision FROM project_state").fetchone()[0],
@@ -194,7 +194,7 @@ def test_gate_reading_real_history_mutates_nothing(tmp_path, name):
     store.events()
 
     after = database.stat()
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
     try:
         rows_after = (
             connection.execute("SELECT revision FROM project_state").fetchone()[0],
