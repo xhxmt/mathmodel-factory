@@ -19,6 +19,21 @@ import pytest
 SOURCE = Path(__file__).resolve().parents[1]
 
 
+def worker_log(project: Path) -> str:
+    """The worker's own output, for when the assertion below fails.
+
+    ``FactoryService.spawn`` sends the child's stdout and stderr to
+    ``logs/worker_*.log`` rather than to the test, so an assertion on the child's
+    exit code reported nothing but the number.  A failure there is a real worker
+    failure and its reason is in this file.
+    """
+
+    logs = sorted((project / "logs").glob("worker_*.log"))
+    if not logs:
+        return "(no worker log was written)"
+    return f"--- {logs[-1].name} ---\n" + logs[-1].read_text(errors="replace")[-4000:]
+
+
 def paused_project(tmp_path):
     service = FactoryService(tmp_path)
     state, _ = service.create_project('audit_demo', 'A paused local control fixture.', start=False)
@@ -96,7 +111,7 @@ def test_real_normal_entry_completes_initialization_when_pause_arrives(tmp_path,
             result = project_actions.run_action(tmp_path, 'resume', project.name)
             assert result.ok, result.stderr
             assert json.loads(result.stdout)['worker_pid'] == children[0].pid
-        assert children[0].wait(timeout=5) == 0
+        assert children[0].wait(timeout=5) == 0, worker_log(project)
     finally:
         for child in children:
             if child.poll() is None:
