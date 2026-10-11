@@ -1,0 +1,96 @@
+{
+  "schema": "factory-runtime-simplification-g45c-closeout-v1",
+  "scope": "every residual `.run(` and `max_steps=1` occurrence under work/ after the twenty drivers were migrated, classified by what it actually is.  Nothing here is migrated: the point is to show that the driver layer is gone and that the remainder is not drivers.",
+  "counting": {
+    "residual_rows": 86,
+    "distinct_patterns": [
+      ".run(",
+      "max_steps=1"
+    ],
+    "kinds": {
+      "subprocess_or_library_run": 25,
+      "string_or_documentation": 38,
+      "ordinary_method_call": 13,
+      "internal_pipeline_or_service": 4,
+      "WORKFLOW_ADVANCE_BACKUP": 3,
+      "max_steps_1_in_backup": 3
+    },
+    "note": "rows, not files: a file can contain several occurrences of either pattern.  The earlier '32 .run( and 3 max_steps=1' figures were file counts from a different scope; this table is the occurrence-level closeout."
+  },
+  "classification": {
+    "string_or_documentation": {
+      "count": 38,
+      "why_allowed": "the occurrence is inside a comment, docstring or string literal - most are the migrated drivers explaining the pattern they replaced"
+    },
+    "subprocess_or_library_run": {
+      "count": 25,
+      "why_allowed": "subprocess.run and similar; not a workflow advance.  collect_status.py is the archetype: it polls solver status and prints JSON"
+    },
+    "ordinary_method_call": {
+      "count": 13,
+      "why_allowed": "self.run, self.runner.run, self.supervisor.run, release_qN.run - methods on domain objects"
+    },
+    "internal_pipeline_or_service": {
+      "count": 4,
+      "why_allowed": "self._pipeline.run and audit_service.run - inside the engine, not an entry point"
+    },
+    "WORKFLOW_ADVANCE_BACKUP": {
+      "count": 3,
+      "why_present": "three .before.py copies under work/final_workflow_resume_20260911/ preserve the pre-migration source of drivers that have since been migrated",
+      "files": [
+        "final_workflow_resume_20260911/entry_freshness_reconciliation/run_controller.before.py",
+        "final_workflow_resume_20260911/step13_cli_repair/controller.before.py",
+        "final_workflow_resume_20260911/user_authorized_step13_skip/controller.before.py"
+      ],
+      "disposition": "frozen exemption, enumerated in scripts/check_no_hand_written_drivers.py's caller and in tests/test_no_hand_written_drivers.py.  Their content is redundant with the verified PRE archive; they were not renamed because that would invalidate the POST archive sealing the migrated tree"
+    },
+    "max_steps_1_in_backup": {
+      "count": 3,
+      "files": [
+        "final_workflow_resume_20260911/entry_freshness_reconciliation/run_controller.before.py",
+        "final_workflow_resume_20260911/step13_cli_repair/controller.before.py",
+        "final_workflow_resume_20260911/user_authorized_step13_skip/controller.before.py"
+      ],
+      "disposition": "same three files, same exemption"
+    }
+  },
+  "semantic_criterion": {
+    "statement": "workflow-advance calls (FactoryEngine.run / FactoryService(...).engine(...).run) in executable scripts = 0",
+    "executable_scripts": 0,
+    "backups": 3,
+    "verdict": "MET for executable scripts.  The three backup copies are enumerated and exempted rather than migrated, and the exemption list is frozen in code so it cannot grow silently."
+  },
+  "permanent_guard": {
+    "script": "scripts/check_no_hand_written_drivers.py",
+    "test": "tests/test_no_hand_written_drivers.py",
+    "forbidden": [
+      "FactoryService(...).engine(...).run(...) / FactoryEngine(...).run(...)",
+      "service.engine(...).run(...) / engine.run(max_steps=...)",
+      "a private StepRegistry subclass, or dataclasses.replace(definition, max_attempts=...)",
+      "a progress.json journal written beside a workflow advance"
+    ],
+    "allowed": [
+      "subprocess.run and other library run calls",
+      "ordinary method calls (self.run, self.runner.run, self.supervisor.run, release_qN.run)",
+      "the engine's internal pipeline and service calls",
+      "anything inside a comment, docstring or string literal",
+      "the supported entry point: service.advance_bounded"
+    ],
+    "enforcement": "the detection logic is exercised against synthetic sources in CI, so it runs everywhere; the assertion against the real tree runs wherever work/ exists.  Run it before and after any new driver work on the server.",
+    "self_test_result": {
+      "tests": 12,
+      "passed": 12
+    },
+    "run_against_the_real_tree": {
+      "files_scanned": 212,
+      "violations_without_exemptions": 4,
+      "violations_with_exemptions": 0,
+      "exempted": [
+        "final_workflow_resume_20260911/entry_freshness_reconciliation/run_controller.before.py",
+        "final_workflow_resume_20260911/step13_cli_repair/controller.before.py",
+        "final_workflow_resume_20260911/user_authorized_step13_skip/controller.before.py"
+      ]
+    }
+  },
+  "how_to_run": "uv run python scripts/check_no_hand_written_drivers.py <factory>/ongoing/<project>/work --exempt <each listed backup>"
+}

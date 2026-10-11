@@ -1,35 +1,225 @@
 {
-  "schema": "factory-runtime-simplification-g45c-work-backup-v1",
-  "why": "G4.5c rewrites driver scripts in a project directory that is not under version control.  This is the restore point: a full manifest and a verified archive taken before the first rewrite.  Nothing in work/ has been modified.",
+  "schema": "factory-runtime-simplification-g45c-work-backup-v2",
+  "why": "G4.5c rewrote driver scripts in a directory that is not under version control, so the commits that describe the migration cannot restore it.  Two archives give a restore anchor in both directions: PRE is the tree with the twenty hand-written drivers, POST is the same tree with all twenty advancing through service.advance_bounded.  Either state can be rebuilt from its archive alone.",
   "project": "cumcm_2026_a_fable_pro_20260910",
   "source": "/home/tfisher/paper_factory/ongoing/cumcm_2026_a_fable_pro_20260910/work",
   "backup_root": "/home/tfisher/pf-g45c-backup",
-  "manifest_path": "/home/tfisher/pf-g45c-backup/work_manifest.json",
-  "manifest_sha256": "919616cfff0dcb576970fb4e9b8a0343db35bf76845f7823152f3d2dca984b3d",
-  "archive_path": "/home/tfisher/pf-g45c-backup/work.tar.zst",
-  "archive_sha256": "fb4acf0c174d8641e6a4838616fa70ffdee4f0e07176fc14b7540381a96f5a4f",
-  "archive_bytes": 894785086,
-  "contents": {
-    "entries": 1565,
-    "files": 1448,
-    "dirs": 117,
-    "symlinks": 0,
-    "file_bytes": 1021921072
+  "anchors": {
+    "PRE": {
+      "stage": "pre-G4.5c",
+      "archive_path": "/home/tfisher/pf-g45c-backup/work.tar.zst",
+      "archive_sha256": "fb4acf0c174d8641e6a4838616fa70ffdee4f0e07176fc14b7540381a96f5a4f",
+      "archive_bytes": 894785086,
+      "manifest_path": "/home/tfisher/pf-g45c-backup/work_manifest.json",
+      "manifest_sha256": "919616cfff0dcb576970fb4e9b8a0343db35bf76845f7823152f3d2dca984b3d",
+      "contents": {
+        "entries": 1565,
+        "files": 1448,
+        "dirs": 117,
+        "symlinks": 0,
+        "file_bytes": 1021921072
+      },
+      "restore_verification": {
+        "entries_expected": 1565,
+        "entries_restored": 1565,
+        "missing": [],
+        "extra": [],
+        "mismatched": [],
+        "identical": true
+      },
+      "describes": "the twenty hand-written drivers, each re-implementing revision, cursor, manifest, journal, attempt limits and stop conditions"
+    },
+    "POST": {
+      "stage": "post-G4.5c",
+      "archive_path": "/home/tfisher/pf-g45c-backup/work.post-g45c.tar.zst",
+      "archive_sha256": "60ed7c4a6d9d4218ba1274a27959080525e198a8f6934f85abb358219c79ad0b",
+      "archive_bytes": 894868153,
+      "manifest_path": "/home/tfisher/pf-g45c-backup/work.post-g45c_manifest.json",
+      "manifest_sha256": "bb2ddb58cc0946b5d74afea9007e58e5aad623ad9001ded5d30da16666d987c1",
+      "contents": {
+        "entries": 1565,
+        "files": 1448,
+        "dirs": 117,
+        "symlinks": 0,
+        "file_bytes": 1021968562
+      },
+      "restore_verification": {
+        "entries_expected": 1565,
+        "entries_restored": 1565,
+        "missing": [],
+        "extra": [],
+        "mismatched": [],
+        "identical": true
+      },
+      "describes": "all twenty drivers advancing through service.advance_bounded, and the two clone steps retired"
+    }
   },
-  "manifest_method": "os.walk(followlinks=False), lstat per entry, sha256 of every regular file, mtime_ns and size recorded, symlinks recorded with their target.  No entry is excluded.",
-  "restore_verification": {
-    "entries_expected": 1565,
-    "entries_restored": 1565,
-    "missing": [],
-    "extra": [],
-    "mismatched": [],
-    "identical": true
-  },
-  "restore_method": "the scratch tree was rebuilt from the archive alone (zstd -dc | tar -x), re-hashed file by file, and compared against the manifest: no missing, no extra, no mismatched.  The scratch copy was then deleted; the archive is the backup.",
-  "tooling": {
-    "tar": "tar (GNU tar) 1.35",
-    "zstd": "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***"
-  },
-  "restore_command": "zstd -dc /home/tfisher/pf-g45c-backup/work.tar.zst | tar -C <target-parent> -xf -",
-  "compile_check_before_rewrite": "every driver under work/ is compile-checked with the branch interpreter before and after each rewrite batch, so a syntax break is caught even for scripts that are never executed again."
+  "manifest_method": "os.walk(followlinks=False), lstat per entry, sha256 of every regular file, size and mtime_ns recorded, symlinks recorded with their target.  Nothing is excluded, so a manifest is a complete description of the tree.",
+  "restore_method": "the scratch tree was rebuilt from the archive alone (zstd -dc | tar -x), re-hashed file by file, and compared against the manifest.  Both anchors report identical: true with no missing, extra or mismatched entry.  Each scratch copy was deleted afterwards; the archive is the backup.",
+  "restore_command": "zstd -dc /home/tfisher/pf-g45c-backup/<archive> | tar -C <target-parent> -xf -",
+  "pre_to_post": {
+    "entries_before": 1565,
+    "entries_after": 1565,
+    "added": [],
+    "removed": [],
+    "unchanged": 1543,
+    "changed_count": 22,
+    "changed": [
+      {
+        "path": "activate_scope_alignment.py",
+        "before_sha256": "6533cae37a927763acdfb80c026269e62e6d07d346b007df4bffc909dd62cdfc",
+        "after_sha256": "17e860ef2b715f78ecedf43c5d7fa3e05764137c9b3415a510afbde0e3933d25",
+        "before_bytes": 6915,
+        "after_bytes": 6509
+      },
+      {
+        "path": "continue_adopted_model.py",
+        "before_sha256": "fd5416bf67afe5ef3fb85595f0fbaf56cf1c132e9b6e39507b6f625ef9e4c033",
+        "after_sha256": "0da8dd6967989b2bd7ddfe55c86da48fa2e0f14d5689a67a755effa94c7845d2",
+        "before_bytes": 2323,
+        "after_bytes": 4631
+      },
+      {
+        "path": "prepare_readonly_output_recovery.py",
+        "before_sha256": "7ff18e43d84c2e8d6492ae21b1124f5557480247efc07575a0c3690c64fa1163",
+        "after_sha256": "17f6c44189cfa27f77befe442066242ef3388931c1ffd2482e18dba54a8a4125",
+        "before_bytes": 7024,
+        "after_bytes": 7029
+      },
+      {
+        "path": "run_bounded_evidence_repair.py",
+        "before_sha256": "24add5ba38833aa7e10d25e2a441844b5a0f47477cfeb62e1777f3b359637095",
+        "after_sha256": "7a9d4b7b0d21d11ae31c0ccc31497afbc08d682ff1098022f26c64313493cc4c",
+        "before_bytes": 3421,
+        "after_bytes": 5085
+      },
+      {
+        "path": "run_final_workflow_resume.py",
+        "before_sha256": "38aea8637e75dad6192d5d2555725b195545ccde91a22958b9aa741ecd22b1e5",
+        "after_sha256": "5e96589feac60b88a2f788c999f96ce5dfa6f7a8250f81959719ad5f91c2c55b",
+        "before_bytes": 2175,
+        "after_bytes": 5204
+      },
+      {
+        "path": "run_m6_native_revisit.py",
+        "before_sha256": "a895d2fbaa43972f37a5d181f348b22a6b46088354951bc0000f9aae3776b39e",
+        "after_sha256": "6a7f118c4780ba9fd8c7e575d0fcd5147cc922a8cf392484d345c23d9768f254",
+        "before_bytes": 1911,
+        "after_bytes": 4898
+      },
+      {
+        "path": "run_native_after_runtime_recovery.py",
+        "before_sha256": "ee119fe1e6cecaf49cf4ebb53ce244474671ab0e43c54ad599df74c382d5e871",
+        "after_sha256": "184dfe8ad32691454e24690f57c4ec7fb31f8626fecd45c9f94fd1a4fd35233f",
+        "before_bytes": 2752,
+        "after_bytes": 6840
+      },
+      {
+        "path": "run_native_final16.py",
+        "before_sha256": "271657b6b4188005113d1ad2bebe06e58c163be72e9b667e5572097e3b33c3ac",
+        "after_sha256": "e4fd14f891990786cd8dea03ab45e38cfda753ffe0177a25e490195388ef5d55",
+        "before_bytes": 2215,
+        "after_bytes": 5615
+      },
+      {
+        "path": "run_native_final16_recovered.py",
+        "before_sha256": "20c37c5d75af7dc1d1520a7f49ae1b7f23a465081ce4bd5cba9e1d93636573e9",
+        "after_sha256": "9bd26b4f7893ad26025bb862fec483d1c9d54fca4bec18d38a83140b6d660311",
+        "before_bytes": 2095,
+        "after_bytes": 6048
+      },
+      {
+        "path": "run_native_polish_and_final.py",
+        "before_sha256": "14bfbff1ead352ec5d91b29110ca787036d7aa0f5e238d04339f28a818d7d50c",
+        "after_sha256": "6678f95ed5d16fb0a3a0c966e6fd86fe9dee2afa54154a6a166c75d4b1d22b72",
+        "before_bytes": 2580,
+        "after_bytes": 6370
+      },
+      {
+        "path": "run_paper_adoption.py",
+        "before_sha256": "f51cb108d6e7c116c55022c132be3ae8b59ee5de3c833938c4272b2ceca086cb",
+        "after_sha256": "264f2a923c86c4a1ec16f986ca90ac9dc6cb0436674fddc4920287b18219ba8e",
+        "before_bytes": 1277,
+        "after_bytes": 3221
+      },
+      {
+        "path": "run_readonly_output_recovery.py",
+        "before_sha256": "053699b3e6a66726261242c07830186270219bba5cbb0ba0b00d6a93b53632d8",
+        "after_sha256": "5058d3d0e0ee855ec73d0852901c361434b5b6f4d401a6a99ac6216f783f5ec1",
+        "before_bytes": 3435,
+        "after_bytes": 5099
+      },
+      {
+        "path": "run_results_adoption.py",
+        "before_sha256": "7ae5a2f86b1b0a6c84de73050e1d17a20c1a4faa1781b6c714aa4b633cc9faba",
+        "after_sha256": "1ac8aafec506d451a58c6067a98a8d52bdd18ca4652d938c40f8665c5c5d1cf2",
+        "before_bytes": 2755,
+        "after_bytes": 3726
+      },
+      {
+        "path": "run_reviewer_entry.py",
+        "before_sha256": "543298185c91c0a22b06331bcc94189d0c227042c414438d8c0f81b195ab02c7",
+        "after_sha256": "0393345f44bae07a3c7368164714025e25de2ab570402f69a9a41141bbdc740b",
+        "before_bytes": 1394,
+        "after_bytes": 3293
+      },
+      {
+        "path": "run_scope_alignment.py",
+        "before_sha256": "6827c1d0c3ee1cd216f4bc01e35cc490d60cd4d6a576fe993488bf20997c9f48",
+        "after_sha256": "e97160ea7ff372d4ee841422558eaacc34ea35ddeb7c3f89df0465bafbe69159",
+        "before_bytes": 3685,
+        "after_bytes": 5569
+      },
+      {
+        "path": "run_sensitivity_reuse.py",
+        "before_sha256": "9ebb50f3500591f3ba321b3a9ccebb0aa7b8e976178c725e6a566726378a2448",
+        "after_sha256": "19eaa0f868d17595c457ebb97799c3c831c2d6f38816eb9aacff8964d00dd005",
+        "before_bytes": 2042,
+        "after_bytes": 4314
+      },
+      {
+        "path": "run_step10_continuation.py",
+        "before_sha256": "7766fc446c22f071b879b8d03d96f30a3ac1d44f437f697958607f3d4f5a87be",
+        "after_sha256": "c5d4efcb9a8dc24f498ac43e656ffd18402b9a15efa77198262f3f16f43c5d50",
+        "before_bytes": 1772,
+        "after_bytes": 4339
+      },
+      {
+        "path": "run_step11_review.py",
+        "before_sha256": "b74b91e72c8625652586a21285ac58a96c6b74100165028cd44c5e85906b7b0c",
+        "after_sha256": "cc3dc234eae582c959a3ce56cc549f1abc2d978929e668e3d11304806f23257b",
+        "before_bytes": 1398,
+        "after_bytes": 3285
+      },
+      {
+        "path": "run_step11_revisit.py",
+        "before_sha256": "a9ead9102cd81629827c99daa8a59ee6eb46bb825804f889069e872a3da2cc71",
+        "after_sha256": "2871fa08cb664b954b56810e7aac5094a2f76ff394a358af1d71588af5604d9a",
+        "before_bytes": 1437,
+        "after_bytes": 3066
+      },
+      {
+        "path": "run_step12_m6.py",
+        "before_sha256": "2926c1dde58633bb1d325fcc6932a9653f96ed2812cda8f45e9f453abafa24a6",
+        "after_sha256": "e99ec6c369d08c5c28e18024a54949558a3338344b4c16776f6259c63850ed90",
+        "before_bytes": 1377,
+        "after_bytes": 3109
+      },
+      {
+        "path": "run_step12_revision.py",
+        "before_sha256": "20d83cd67ad8497ca55d51a81850268829c11cdaf04ca1f5918e92a488e0ac56",
+        "after_sha256": "5ba8bb8be9130f7e4978942d0deb17b018797ac21e85e49df598130ead8ee398",
+        "before_bytes": 1397,
+        "after_bytes": 3285
+      },
+      {
+        "path": "step12_root_completion_20260911/run_step12_revisit.py",
+        "before_sha256": "f277da1083245171f4b51792ac89453da9f346b5fa1a4566f0308d4ba5d4a77f",
+        "after_sha256": "6d6515b0b7807928605d626a83847c30da15aefcb3938baeab632eaba4022c1e",
+        "before_bytes": 1852,
+        "after_bytes": 4187
+      }
+    ],
+    "interpretation": "exactly 22 files changed and nothing was added or removed: the twenty migrated drivers and the two patching scripts whose clone steps were retired.  The other 1543 entries are byte-identical, which is what makes the migration auditable rather than merely described."
+  }
 }

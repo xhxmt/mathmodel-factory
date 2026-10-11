@@ -988,6 +988,52 @@ expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id)
 
 **每一次合同扩展都由真实驱动的真实需求驱动，没有一项是猜测出来的。**
 
+### 6.14 G4.5c 收尾封存与关闭
+
+#### 双向可复原锚点
+
+`runtime_simplification_g45c_work_backup.json` 现记录**两个**锚点。20 条驱动的生产改写存在于 untracked 树里，**Git 提交无法恢复它**——只有归档可以。
+
+| 锚点 | 归档 | sha256 | 内容 |
+|---|---|---|---|
+| **PRE** | `work.tar.zst` | `fb4acf0c174d8641…` | 20 条手写驱动（迁移前） |
+| **POST** | `work.post-g45c.tar.zst` | `60ed7c4a6d9d4218…` | 20 条驱动全部走 `service.advance_bounded` |
+
+两者都用同一方法生成与验证：`os.walk(followlinks=False)` + 逐条目 `lstat` + 每文件 sha256 + size + `mtime_ns`，**不排除任何条目**；随后**仅从归档**重建临时树、逐文件重新哈希比对——两份均 `identical: true`（1565/1565，0 缺失、0 多余、0 不符）。
+
+**pre → post 差异**：两侧均 1565 项，**0 增 0 删**，**恰好 22 个文件变化**（20 条驱动 + 2 个克隆 patcher），其余 **1543 项逐字节不变**。这让迁移成为**可审计**的事实而非描述。
+
+#### 残留 closeout（86 行，逐项分类）
+
+artifact：`runtime_simplification_g45c_closeout.json`。
+
+| 类型 | 数量 | 说明 |
+|---|---|---|
+| 注释/docstring/字符串 | 38 | 多为迁移后驱动解释"被替换掉的模式" |
+| `subprocess.run` 及同类 | 25 | 非工作流推进（`collect_status.py` 是典型：只轮询 solver 状态并打印 JSON） |
+| 普通方法调用 | 13 | `self.run` / `self.runner.run` / `self.supervisor.run` / `release_qN.run` |
+| 引擎内部 pipeline/service | 4 | `self._pipeline.run` / `audit_service.run` |
+| **工作流推进（备份中）** | **3** | 全部是 `final_workflow_resume_20260911/` 下的 `.before.py` 副本 |
+| **`max_steps=1`（备份中）** | **3** | 同上三个文件 |
+
+**语义级判据**：**可执行脚本中工作流推进调用 = 0**（`max_steps=1` 同样为 0）。
+
+**必须如实说明的一点**：你给的判据字面上是"`work/` 中剩余工作流推进调用数 = 0"，实测是 **3**——全部在 `.before.py` **备份**里。我**没有迁移也没有改名它们**，因为任何改动都会**让刚封存的 POST 锚点失效**。这 3 个文件的内容与已验证的 PRE 归档**冗余**，故以**枚举式冻结豁免**处理（豁免清单写在代码里，无法静默增长）。
+
+#### 永久 guard：把一次性迁移变成持续约束
+
+`scripts/check_no_hand_written_drivers.py` + `tests/test_no_hand_written_drivers.py`（12 项）。
+
+- **禁止**：`FactoryService(...).engine(...).run(...)` / `engine.run(max_steps=...)`；私有 `StepRegistry` 子类或 `dataclasses.replace(definition, max_attempts=...)`；与工作流推进并存的 `progress.json` 日志。
+- **允许**（明确白名单）：`subprocess.run` 等库调用、普通方法调用、引擎内部 pipeline/service、注释/docstring/字符串中的出现、以及受支持入口 `service.advance_bounded`。
+- **两层执行**：**检测逻辑**用合成用例在 CI 中跑（每个禁止模式必须被捕获、每个允许模式必须不被误报）；**对真实树的断言**在树存在时跑（CI 中 skip）。服务器上任何新的驱动工作前后都应运行它。
+
+自测结果：合成用例 12/12 通过；真实树 212 文件，无豁免时 4 处命中（3 处工作流推进 + 1 处 journal，全在 3 个豁免文件内），加豁免后 **0 违规**。**零误报**——20 条迁移驱动的 docstring、25 处 `subprocess.run`、13 处普通方法调用均未被误判。
+
+#### G4.5c 状态：**CLOSED**
+
+20/20 驱动迁移完成、双向锚点已封存、残留已分类、语义判据对可执行脚本成立、永久 guard 已生效。
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。
