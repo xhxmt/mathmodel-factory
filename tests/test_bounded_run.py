@@ -530,3 +530,199 @@ def test_the_stage_and_step_paths_share_one_check(tmp_path):
         "_contract_protection_violation()"
         in inspect.getsource(FactoryEngine._advance_loop)
     )
+
+
+# ===================== the authorisation parameters are validated as well
+@pytest.mark.parametrize(
+    "value",
+    [
+        [True],           # bool is an int in Python; a flag is not a step id
+        [False],
+        [-1],             # no such source step
+        [1, True],        # one good id does not excuse one bad one
+        [1, -1],
+        ["16"],           # a string is not a step id
+        [None],
+    ],
+)
+def test_allowed_source_steps_refuses_anything_that_is_not_a_step_id(value):
+    """The scope of an authorisation has to be ids, not values that resemble them.
+
+    ``allowed_source_steps=[True]`` used to be accepted and behave as ``{1}``,
+    because ``bool`` is an ``int``: a caller passing a flag where a step id belongs
+    would get a plausible-looking authorisation to step 1 instead of a refusal.
+    The Step ceilings already refused bool keys - the same concept was simply
+    stricter in one place than in the other.
+    """
+
+    with pytest.raises(BoundedRunError, match="allowed_source_steps"):
+        BoundedRunContract(expected_revision=1, allowed_source_steps=value)
+
+
+@pytest.mark.parametrize("value", [[1], [1, 2], [0], {16}, frozenset({5, 6})])
+def test_allowed_source_steps_still_accepts_real_step_ids(value):
+    """The control: refusing more must not become refusing everything."""
+
+    contract = BoundedRunContract(expected_revision=1, allowed_source_steps=value)
+    assert contract.allowed_source_steps == frozenset(int(step) for step in value)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        (),                       # constrains nothing, so every check is skipped
+        (8, "revision", 12, 99),  # used to be truncated, its 4th component ignored
+        (True,),                  # a bool stage would pin the stage to 1
+        (8, 12),                  # subtask must be a string
+        (8, "revision", True),
+        (-1,),
+        (8, "revision", -5),
+    ],
+)
+def test_expected_cursor_refuses_a_shape_it_cannot_honour(cursor):
+    """A cursor the comparison cannot honour must be refused, not truncated.
+
+    An empty tuple made the component comparison iterate zero times, so a caller
+    who passed one had every cursor check skipped; a four-component tuple was
+    silently cut to three.  Both are the same failure as elsewhere in this module:
+    the check reports agreement because it never looked.
+    """
+
+    with pytest.raises(BoundedRunError, match="expected_cursor"):
+        BoundedRunContract(expected_revision=1, expected_cursor=cursor)
+
+
+@pytest.mark.parametrize(
+    "cursor", [(None,), (None, None), (None, None, None)]
+)
+def test_a_cursor_with_no_constrained_component_is_recorded_as_no_cursor(cursor):
+    """All-``None`` is the documented "no cursor expectation", not a constraint.
+
+    A ready state - the state every migrated driver requires on entry - has
+    ``active_stage``, ``active_subtask`` and ``source_step_id`` all cleared, so
+    ``cursor_of(state)`` *is* ``(None, None, None)`` there, and the twenty migrated
+    G4.5c drivers pass exactly that as ``expected_cursor``.  Refusing it would break
+    every one of them, so the contract normalises it instead - and normalising is
+    the honest fix anyway: recorded as ``[null, null, null]`` the run would read as
+    "entry was pinned" when no component was ever compared.
+    """
+
+    contract = BoundedRunContract(expected_revision=1, expected_cursor=cursor)
+
+    assert contract.expected_cursor is None, (
+        "a cursor that constrains nothing must be recorded as no cursor, not as a "
+        "constraint with empty components"
+    )
+    assert contract.canonical_payload()["expected_cursor"] is None, (
+        "the authorising payload is the audit record: it must not claim a cursor "
+        "expectation that compared nothing"
+    )
+
+
+def test_normalising_a_vacuous_cursor_keeps_the_rest_of_the_authorisation():
+    """The control: only the vacuous cursor is dropped, nothing else moves."""
+
+    contract = BoundedRunContract(
+        expected_revision=7,
+        expected_cursor=(None, None, None),
+        actor="operator",
+        max_subtasks=1,
+    )
+
+    assert contract.expected_revision == 7
+    assert contract.max_subtasks == 1
+    assert contract.actor == "operator"
+    assert contract.expected_cursor is None
+
+
+@pytest.mark.parametrize("cursor", [(), (None,), (None, None), (None, None, None), (None,) * 5])
+def test_check_cursor_refuses_a_cursor_that_constrains_nothing(cursor):
+    """The direct-caller path refuses the shape a contract normalises away."""
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+
+    with pytest.raises(BoundedRunError, match="constrain at least one component"):
+        check_cursor(_State(), cursor)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [(None, None, None, 99), (8, "revision", 12, 99)],
+)
+def test_check_cursor_refuses_a_cursor_longer_than_the_position_it_compares(cursor):
+    """``zip`` truncates to the shortest input, so extra components were dropped.
+
+    ``(None, None, None, 99)`` is the sharp case: its only non-``None`` value sits
+    past the three compared components, so the all-``None`` guard does not fire and
+    the comparison looked at nothing while appearing to pin stage/subtask/step.
+    """
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+
+    with pytest.raises(BoundedRunError, match="between 1 and 3 components"):
+        check_cursor(_State(), cursor)
+
+
+def test_check_cursor_still_accepts_one_constrained_component():
+    """The control: a partial expectation remains usable."""
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+
+    check_cursor(_State(), (None, None, 12))
+    check_cursor(_State(), (8, None, None))
+    check_cursor(_State(), None)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [(8,), (8, "revision"), (8, "revision", 12), (None, None, 12), (8, None, None)],
+)
+def test_expected_cursor_still_accepts_a_usable_authorisation(cursor):
+    """Partial expectations stay legal: a component left out or None is unconstrained."""
+
+    contract = BoundedRunContract(expected_revision=1, expected_cursor=cursor)
+    assert contract.expected_cursor == tuple(cursor)
+
+
+def test_check_cursor_refuses_an_empty_expectation_directly(tmp_path):
+    """Defence in depth: the contract refuses it, and so does the comparison.
+
+    ``check_cursor`` is reachable without a contract, and an empty expectation
+    there would iterate zero components and report agreement with everything.
+    """
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+
+    check_cursor(_State(), (8, "revision", 12))
+
+    with pytest.raises(BoundedRunError, match="constrains nothing"):
+        check_cursor(_State(), ())
+
+
+def test_the_ceilings_and_the_allowlist_now_agree_on_bool():
+    """One rule, three call sites - the inconsistency that produced the gap."""
+
+    from factory_core.bounded_run import _is_source_step
+
+    with pytest.raises(BoundedRunError):
+        BoundedRunContract(expected_revision=1, max_attempts_per_step={True: 1})
+    with pytest.raises(BoundedRunError):
+        BoundedRunContract(expected_revision=1, allowed_source_steps=[True])
+    with pytest.raises(BoundedRunError):
+        BoundedRunContract(expected_revision=1, expected_cursor=(True,))
+
+    assert _is_source_step(0) and _is_source_step(16)
+    assert not _is_source_step(True) and not _is_source_step(-1)
+    assert not _is_source_step("16") and not _is_source_step(None)

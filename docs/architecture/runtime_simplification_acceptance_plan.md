@@ -1346,3 +1346,42 @@ max_reopens_per_step:  Mapping[int, int] | None = None   # 每个 source step �
 **暂缓**：生产级 `factory rewind`；`work/*.py` 的批量删除。
 
 **注意**：Gate 1 的两轨基线固定为 **`0dbc5c3`**（即 Gate 0 验证通过的那个 head）。历史沿革：`2c5b606` → `1a04400`（同步 `uv.lock`）→ `108e620`（G2/G3 gate 可在无生产主机上运行）→ `54be447`（冻结本计划）→ `0dbc5c3`（关闭 Gate 0）。
+
+
+### 6.19 PR #36 两条审查线程的处置（第二轮外部评审）
+
+cubic 在 `fix/post-merge-runtime-hardening` 上留下两条未解决线程。第一条按审查所述修复；第二条的判断成立，但**不能按字面修**——按字面修会打断生产。处置如下。
+
+#### 线程 1（P1，`workflow_events.py:496`）：损坏的 `event_version` 打断审计时间线
+
+失败链比"时间线报错"更糟，因为 `project_audit_timeline` 正是**已知流损坏时**两个调用方要去的地方：
+
+1. `status_snapshot()` 捕获 `ReplayIntegrityError` 并置 `event_replay_valid = False`（**报告**损坏）；
+2. 紧接着 `authoritative_status()` → `project_runtime_diagnostics()` → `project_audit_timeline()` → `event_version_of()` 对**同一条流**抛同型异常（**硬失败**）；
+3. `web/backend/diagnostics_service.py:196` 在**自己的 `except ReplayIntegrityError` 分支里**调用 `project_audit_timeline`——于是"用来解释损坏流的那个响应"从它自己的处理器里抛了出去。
+
+**修法**：`project_audit_timeline` 对版本不可解析的事件回退到 v1 字段名，并在该条记录上写 `event_version_readable: false`；完整性判定位置不变（`replay_events` 仍拒绝，`status_snapshot` 仍置 `event_replay_valid = False`）。
+
+**回归（3 项，修复前均失败）**：时间线仍被产出且标注不可读条目；`authoritative_status()` 返回且 `event_replay_valid is False`；`build_project_diagnostics()` 返回 `WORKFLOW_REPLAY_MISMATCH` 而非抛出。
+
+#### 线程 2（P2，`bounded_run.py:149`）：全 `None` 游标不比较任何分量
+
+审查的判断成立（该形状确实一个分量都没比），但**"构造期一律拒绝"会打断生产**：
+
+- **ready 状态下游标天然是全 `None`**：`active_stage`/`active_subtask`/`source_step_id` 均已清空，故 `cursor_of(state) == (None, None, None)`。仓库自己已把这条事实钉住：`test_a_read_then_pin_cursor_silently_drops_a_step_expectation` 直接断言 `cursor_of(state) == (None, None, None)`。
+- **20 个已迁移驱动全部传这个形状**：`expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id)`（逐一核对 `ongoing/cumcm_2026_a_fable_pro_20260910/work/` 下的实例，如 `run_results_adoption.py:51`）。改为拒绝后，它们会在**入口构造处**全部抛 `BoundedRunError`。
+- **实测后果**：`tests/test_gate_g4_driver_migration.py` **14 项失败**，全部失败在构造处。
+
+同时审查的实质担忧也成立：记录成 `[null, null, null]`，这次运行**读起来像"入口被钉住"**，而实际一个分量都没比。
+
+**修法（只改记录口径，不改比较行为）**：合同把"无受约束分量"的游标**归一化为 `None`**，使 `canonical_payload()["expected_cursor"]` 为 `null` 而不是 `[null, null, null]`；其余授权字段一律不动。`check_cursor` 对直接调用路径仍**显式拒绝**该形状（空元组同样拒绝）；归一化之后该路径在生产不可达。
+
+**回归（4 项）**：三种全 `None` 形状归一化且 `canonical_payload()` 为 `null`；归一化不动 `expected_revision`/`max_subtasks`/`actor`；`check_cursor` 直接路径拒绝四种"什么都不约束"的形状；部分期望（`(None,None,12)`、`(8,None,None)`）仍可用。
+
+**第三种绕过（cubic 在修好前两条之后又发现，同轮修掉）**：`check_cursor` 直调路径上，四分量游标 `(None, None, None, 99)` 会让"全为 `None`"判断为假，随后 `zip(("stage","subtask","source_step"), expected, actual)` **在第四个分量前停下**——于是"只有一个真期望、却一个分量都没比"的静默通过又多了一条路。修法：全 `None` 判断之后再加长度 1–3 的拒绝（与 `__post_init__` 同规则）。回归：`(None,None,None,99)`、`(8,"revision",12,99)` 在直调路径被拒；`(None,)*5` 由"全 `None`"规则拒绝。
+
+**若坚持构造期一律拒绝**：前置条件是先迁移那 20 个驱动，而改动它们会变更 sha256，使已封存的 G4.5c 批次记录（逐驱动摘要）与 POST 锚点过期。这是独立决策，不在本 PR 内做。
+
+#### 测试口径
+
+CI 同款 core 全量（`-m "not latex"` + 8 个 `--ignore`）：**2649 passed / 0 failed / 9 deselected**。本轮改动过程中，"构造期拒绝全 `None` 游标"这一版曾使该口径出现 **14 项失败**；改为归一化后归零。

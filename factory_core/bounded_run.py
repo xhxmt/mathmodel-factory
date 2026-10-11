@@ -88,7 +88,13 @@ class BoundedRunContract:
     """One authorised, bounded invocation of the existing runner."""
 
     expected_revision: int
-    expected_cursor: tuple[int | None, str | None, int | None] | None = None
+    #: 1 to 3 components: (stage, subtask, source step).  A component left
+    #: as ``None`` is not constrained, and a shorter tuple constrains only its
+    #: prefix.  An empty tuple is refused; a cursor with *no* constrained
+    #: component is normalised to ``None``, because that is what it means - and
+    #: it is what ``cursor_of`` yields for the ready state every migrated driver
+    #: starts from (see ``__post_init__``).
+    expected_cursor: tuple[int | None, ...] | None = None
     allowed_source_steps: frozenset[int] | None = None
     max_subtasks: int | None = None
     protected_manifest: Mapping[str, str] = field(default_factory=dict)
@@ -133,6 +139,52 @@ class BoundedRunContract:
             not isinstance(self.max_subtasks, int) or self.max_subtasks < 1
         ):
             raise BoundedRunError("max_subtasks must be a positive integer when given")
+        if self.expected_cursor is not None:
+            cursor = tuple(self.expected_cursor)
+            # A cursor of length 0 constrains nothing, so a caller passing one gets
+            # every check skipped rather than the narrower authorisation they meant.
+            # Length 4 or more used to be silently truncated by the comparison, so
+            # its extra components were ignored rather than refused.
+            if not 1 <= len(cursor) <= 3:
+                raise BoundedRunError(
+                    "expected_cursor must carry between 1 and 3 components "
+                    f"(stage, subtask, source step); got {len(cursor)}"
+                )
+            stage, subtask, source_step = cursor + (None,) * (3 - len(cursor))
+            # Non-empty is not the same as constraining something.  A cursor with no
+            # constrained component *is* the documented "no cursor expectation"
+            # (``None``) rather than a weaker version of a named one: a ready state -
+            # the state every migrated driver requires on entry - has
+            # ``active_stage``, ``active_subtask`` and ``source_step_id`` all cleared,
+            # so ``cursor_of(state)`` returns exactly ``(None, None, None)``.  The
+            # twenty migrated G4.5c drivers pass
+            # ``expected_cursor=(state.active_stage, state.active_subtask,
+            # state.source_step_id)``, so refusing this shape would break every one of
+            # them on entry (14 equivalence tests here fail if it is refused).
+            #
+            # What it must not do is *look* like a constraint: a cursor recorded as
+            # ``[null, null, null]`` reads as "entry was pinned" when nothing was
+            # compared.  Normalising it to ``None`` keeps the authorisation honest -
+            # the run's record then says "no cursor expectation" - and leaves the
+            # entry comparison exactly as strict as the caller's cursor really is.
+            if stage is None and subtask is None and source_step is None:
+                object.__setattr__(self, "expected_cursor", None)
+            else:
+                if stage is not None and not _is_source_step(stage):
+                    raise BoundedRunError(
+                        f"expected_cursor stage must be a non-negative source step id, "
+                        f"not {stage!r}"
+                    )
+                if subtask is not None and not isinstance(subtask, str):
+                    raise BoundedRunError(
+                        f"expected_cursor subtask must be a string, not {subtask!r}"
+                    )
+                if source_step is not None and not _is_source_step(source_step):
+                    raise BoundedRunError(
+                        f"expected_cursor source step must be a non-negative source step "
+                        f"id, not {source_step!r}"
+                    )
+                object.__setattr__(self, "expected_cursor", cursor)
         if self.run_policy not in {
             RunPolicy.ADVANCE_UNTIL_BLOCKED,
             RunPolicy.BOUNDED_SUBTASKS,
@@ -143,9 +195,20 @@ class BoundedRunContract:
                 "run_policy=bounded_subtasks requires an explicit max_subtasks bound"
             )
         if self.allowed_source_steps is not None:
-            object.__setattr__(
-                self, "allowed_source_steps", frozenset(self.allowed_source_steps)
+            # Validate the *requested* values, before they become a set.  A
+            # frozenset cannot hold both 1 and True - they are equal and hash alike,
+            # so ``[1, True]`` collapses to ``{1}`` and the bool would be gone before
+            # any check could see it.  The caller asked for a bool; the answer is no.
+            requested = tuple(self.allowed_source_steps)
+            invalid = sorted(
+                repr(step) for step in requested if not _is_source_step(step)
             )
+            if invalid:
+                raise BoundedRunError(
+                    "allowed_source_steps must be non-negative integer source step "
+                    "ids; rejected: " + ", ".join(invalid)
+                )
+            object.__setattr__(self, "allowed_source_steps", frozenset(requested))
             if not self.allowed_source_steps:
                 raise BoundedRunError("allowed_source_steps cannot be empty")
         object.__setattr__(
@@ -308,6 +371,20 @@ class BoundedRunContract:
         }
 
 
+def _is_source_step(value: object) -> bool:
+    """Whether a value is usable as a source step id.
+
+    ``bool`` is excluded deliberately.  It *is* an ``int`` in Python, so
+    ``allowed_source_steps=[True]`` would silently restrict the run to step 1 and
+    ``expected_cursor=(True,)`` would pin the stage to 1: a caller passing a flag
+    where a step id belongs would get a plausible-looking authorisation instead of
+    a refusal.  The Step ceilings already refused bool keys; this makes the three
+    places agree instead of two of them being stricter than the third.
+    """
+
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _validate_step_ceilings(
     name: str, ceilings: Mapping[int, int] | None, *, minimum: int
 ) -> dict[int, int] | None:
@@ -322,7 +399,7 @@ def _validate_step_ceilings(
         return None
     validated: dict[int, int] = {}
     for step, value in dict(ceilings).items():
-        if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+        if not _is_source_step(step):
             raise BoundedRunError(
                 f"{name} keys must be non-negative source step ids, not {step!r}"
             )
@@ -741,12 +818,37 @@ def check_cursor(
     partial expectation was rejected.  The drivers pass all three components, and
     for them nothing changes - a component that is not ``None`` is still compared
     exactly.
+
+    A cursor that constrains nothing is refused here rather than silently skipped.
+    A contract normalises that shape to ``None`` at construction - the drivers spell
+    it ``cursor_of(state)``, which is all-``None`` in the ready state they require -
+    so this refusal guards the direct-caller path rather than a production one.
+    Reading a cursor that compared nothing as agreement is the same fail-open the
+    empty tuple used to be.
     """
 
     if expected_cursor is None:
         return
     actual = cursor_of(state)
     expected = tuple(expected_cursor)
+    if not expected or all(component is None for component in expected):
+        # Defence in depth: a contract refuses these at construction, but a direct
+        # caller passing () or (None, None, None) would otherwise have every
+        # component check skipped and read the silence as agreement.
+        raise BoundedRunError(
+            "expected_cursor must constrain at least one component; a cursor that "
+            "constrains nothing (empty, or all components None) is refused"
+        )
+    if not 1 <= len(expected) <= 3:
+        # ``zip`` stops at the shortest input, so a fourth component was dropped
+        # rather than refused.  ``(None, None, None, 99)`` is the sharp case: its only
+        # real expectation sits past the three compared components, so the guard above
+        # does not fire and the comparison looks at nothing while appearing to pin the
+        # position - the same silent no-op by a third route.
+        raise BoundedRunError(
+            "expected_cursor must carry between 1 and 3 components (stage, subtask, "
+            f"source step); got {len(expected)}"
+        )
     mismatch = [
         (name, want, got)
         for name, want, got in zip(("stage", "subtask", "source_step"), expected, actual)

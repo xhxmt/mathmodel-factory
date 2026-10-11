@@ -1,11 +1,13 @@
 from pathlib import Path
 import json
+import sqlite3
 
 from web.backend.diagnostics_service import build_project_diagnostics, summarize_project_diagnostics
 from factory_core.domain import WorkflowStatus
 from factory_core.domain import PendingAction
 from factory_core.human_decisions import build_decision_request
 from factory_core.storage import SQLiteStateStore
+from factory_core.workflow_events import ENVELOPE_KEY
 from tests.test_selection_service import seed_authoritative_step3_decision
 
 
@@ -284,3 +286,45 @@ def test_native_diagnostics_fails_closed_on_replay_hash_mismatch(tmp_path):
 
     assert diag["source"] == "workflow_events"
     assert diag["status"]["reason_code"] == "WORKFLOW_REPLAY_MISMATCH"
+
+
+def test_diagnostics_reports_a_corrupt_event_version_instead_of_raising(tmp_path):
+    """The error path must survive the error it exists to describe.
+
+    ``build_project_diagnostics`` calls ``project_audit_timeline`` from inside its
+    own ``except ReplayIntegrityError`` branch, so while the timeline propagated an
+    unreadable ``event_version`` the diagnostics response for a corrupt stream
+    raised out of the very handler meant to explain it.  The integrity answer is
+    the reported ``WORKFLOW_REPLAY_MISMATCH``, not an exception.
+    """
+
+    store = SQLiteStateStore(tmp_path, clock=lambda: 100)
+    store.initialize(project_id="demo", project_type="modeling")
+    connection = sqlite3.connect(tmp_path / ".factory" / "state.db")
+    try:
+        revision, event_type, payload = connection.execute(
+            "SELECT revision, type, payload_json FROM events ORDER BY revision DESC LIMIT 1"
+        ).fetchone()
+        tampered = json.loads(payload)
+        tampered[ENVELOPE_KEY]["event_version"] = "not-a-version"
+        connection.execute(
+            "INSERT INTO events(revision, type, created_at, step, attempt, payload_json)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (revision + 1, event_type, 100, None, 0, json.dumps(tampered)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    diag = build_project_diagnostics(
+        tmp_path,
+        "demo",
+        is_running=False,
+        consultation_pending=False,
+        consultation_gate=None,
+    )
+
+    assert diag["source"] == "workflow_events"
+    assert diag["status"]["reason_code"] == "WORKFLOW_REPLAY_MISMATCH"
+    assert diag["events"], "the audit timeline must still be attached to the report"
+    assert diag["events"][-1]["event_version_readable"] is False
