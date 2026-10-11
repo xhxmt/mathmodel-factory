@@ -462,3 +462,71 @@ def test_the_fixture_tree_catches_a_driver_if_one_grows_back(tmp_path):
     report = scan(copied, exemptions=FIXTURE_EXEMPTIONS)
     assert report["ok"] is False
     assert "regrown_driver.py" in {entry["file"] for entry in report["violations"]}
+
+
+def test_no_fixture_acts_when_it_is_imported():
+    """A scanner fixture is data; it must not be able to mutate real state.
+
+    The exempted specimen names the production project on purpose, which is exactly
+    why it may not run at import time: a test that merely imported the fixture would
+    have advanced that project.  Module-level assignments are fine (a ``Path`` is not
+    an action); a bare call is not.
+    """
+
+    import ast
+
+    for path in sorted(FIXTURE_TREE.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(
+                node,
+                (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+            ):
+                continue
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                continue  # the module docstring
+            if isinstance(node, ast.If) and "__name__" in ast.dump(node.test):
+                continue
+            raise AssertionError(
+                f"{path.name}: module-level {type(node).__name__} would run on import"
+            )
+
+
+def test_one_clone_site_is_one_finding(tmp_path):
+    """The clone window can name several paths; the site is still one site."""
+
+    report = scan(
+        _tree(
+            tmp_path,
+            "clone.py",
+            """
+            source = (W / "run_controller.py").read_text()
+            (W / "run_controller.py").write_text(source.replace("old", "new"))
+            """,
+        )
+    )
+    assert len(report["violations"]) == 1, report["violations"]
+    assert report["violations"][0]["driver"] == "run_controller.py"
+
+
+def test_overlapping_channels_report_one_advance(tmp_path):
+    """The bound and inline channels match the same call with different spans.
+
+    ``service = FactoryService(ROOT)`` then ``service.engine(P).run(...)``: the bound
+    match starts at ``service`` and the inline match at ``engine``, so de-duplicating
+    on identical spans left two findings for one advance.
+    """
+
+    report = scan(
+        _tree(
+            tmp_path,
+            "overlap.py",
+            """
+            service = FactoryService(ROOT)
+            state = service.engine(P).run(max_steps=1)
+            """,
+        )
+    )
+    assert len(report["violations"]) == 1, report["violations"]

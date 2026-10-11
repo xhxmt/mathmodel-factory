@@ -106,15 +106,17 @@ def workflow_advance_sites(text: str) -> list[re.Match]:
             + rf")\s*\.\s*(?:engine\({_ARG}\)\s*\.\s*)?run\("
         )
         matches.extend(bound.finditer(text))
-    seen: set[tuple[int, int]] = set()
-    unique: list[re.Match] = []
-    for match in sorted(matches, key=lambda match: (match.start(), match.end())):
-        span = (match.start(), match.end())
-        if span in seen:
+    # The two channels describe the same call with *different* spans: for
+    # ``service = FactoryService(ROOT)`` then ``service.engine(P).run(...)`` the
+    # bound match starts at ``service`` and the inline one at ``engine``.  Merging
+    # on identical spans alone therefore still reported one advance twice, so the
+    # rule is overlap - keep the earliest (widest) span and drop the ones inside it.
+    kept: list[re.Match] = []
+    for match in sorted(matches, key=lambda match: (match.start(), -match.end())):
+        if kept and match.start() < kept[-1].end():
             continue
-        seen.add(span)
-        unique.append(match)
-    return unique
+        kept.append(match)
+    return kept
 
 #: A private registry whose Step ceilings are rewritten - the driver idiom.
 REGISTRY_SHIM = re.compile(
@@ -160,8 +162,12 @@ def driver_source_rewrite_sites(text: str) -> list[tuple[int, int, str]]:
         # ``.write_text(`` of the *output*, so the write target appears inside it
         # and naming that would answer a different question.
         window = text[max(0, match.start() - 160) : match.start() + 3]
-        for name in re.findall(r"([\w./-]+\.py)", window):
-            sites.append((match.start(), match.end(), name))
+        names = re.findall(r"([\w./-]+\.py)", window)
+        if names:
+            # One clone site is one finding.  The window can mention more than one
+            # path, and emitting an entry per name turned a single site into several
+            # violations whose ``driver`` named something the site did not rewrite.
+            sites.append((match.start(), match.end(), names[0]))
     return sites
 
 
