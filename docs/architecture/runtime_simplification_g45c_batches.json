@@ -383,6 +383,119 @@
         "argv[1] is passed straight into expected_revision, which makes the CAS real rather than vacuous; only the first loop iteration uses it, matching the original's single pre-loop assertion"
       ],
       "original_digests_source": "work_manifest.json (the verified backup manifest); every digest here is read from it, none is written by hand"
+    },
+    {
+      "batch": 5,
+      "date_utc": "2026-10-07",
+      "family": "chained (4 single-patcher chains)",
+      "scope_reason": "the four drivers named by another script, handled together because each is independent of the others",
+      "drivers": [
+        {
+          "file": "run_step12_m6.py",
+          "original_sha256": "2926c1dde58633bb1d325fcc6932a9653f96ed2812cda8f45e9f453abafa24a6",
+          "migrated_sha256": "e99ec6c369d08c5c28e18024a54949558a3338344b4c16776f6259c63850ed90",
+          "note": "single invocation; rotted revision==306 dropped in favour of the CAS, active_step==12 kept as an explicit guard"
+        },
+        {
+          "file": "run_step11_revisit.py",
+          "original_sha256": "a9ead9102cd81629827c99daa8a59ee6eb46bb825804f889069e872a3da2cc71",
+          "migrated_sha256": "2871fa08cb664b954b56810e7aac5094a2f76ff394a358af1d71588af5604d9a",
+          "note": "single invocation; rotted revision==301 dropped, active_step==11 kept as a guard"
+        },
+        {
+          "file": "step12_root_completion_20260911/run_step12_revisit.py",
+          "original_sha256": "f277da1083245171f4b51792ac89453da9f346b5fa1a4566f0308d4ba5d4a77f",
+          "migrated_sha256": "6d6515b0b7807928605d626a83847c30da15aefcb3938baeab632eaba4022c1e",
+          "note": "loop over steps 4-10; its private seen counter (threshold >2) becomes previous_boundary_fingerprint"
+        },
+        {
+          "file": "run_m6_native_revisit.py",
+          "original_sha256": "a895d2fbaa43972f37a5d181f348b22a6b46088354951bc0000f9aae3776b39e",
+          "migrated_sha256": "6a7f118c4780ba9fd8c7e575d0fcd5147cc922a8cf392484d345c23d9768f254",
+          "note": "manifest + large identity, loop over steps 5-12; its counter ASSERTED on the third visit, so a stuck workflow produced a traceback - the contract reports NEEDS_INSPECTION on the first unchanged boundary instead"
+        }
+      ],
+      "metric_delta_cumulative": {
+        "naive_dot_run_files": {
+          "before": 52,
+          "after": 35,
+          "delta": -17
+        },
+        "precise_workflow_files": {
+          "before": 25,
+          "after": 8,
+          "delta": -17
+        },
+        "max_steps_1_files": {
+          "before": 23,
+          "after": 6,
+          "delta": -17
+        },
+        "registry_shim_files": {
+          "before": 4,
+          "after": 3,
+          "delta": -1
+        },
+        "hand_rolled_seen_journal": {
+          "before": 4,
+          "after": 0,
+          "delta": -4,
+          "note": "every private repeat counter is now gone"
+        },
+        "checkpoint_precondition_lookup": {
+          "before": 7,
+          "after": 7,
+          "delta": 0
+        },
+        "checkpoint_invariance_check": {
+          "before": 5,
+          "after": 3,
+          "delta": -2
+        },
+        "hardcoded_absolute_revision": {
+          "before": 36,
+          "after": 31,
+          "delta": -5,
+          "new_metric": "files matching revision == <three digits>"
+        },
+        "progress_json_filename": {
+          "before": 35,
+          "after": 13,
+          "delta": -22
+        },
+        "protected_files_filename": {
+          "before": 65,
+          "after": 63,
+          "delta": -2
+        },
+        "advance_bounded_refs": {
+          "before": 0,
+          "after": 17,
+          "delta": 17,
+          "expected": "one per migrated driver"
+        }
+      },
+      "metric_verdict": "every hand-rolled metric fell or was deliberately held flat; the only increase is advance_bounded",
+      "compile_check": {
+        "files": 212,
+        "syntax_errors": 0
+      },
+      "equivalence_tests": [
+        "tests/test_gate_g4_driver_migration.py::test_the_batch5_asserting_counter_becomes_a_reported_boundary",
+        "tests/test_gate_g4_driver_migration.py::test_the_batch5_single_step_shape_is_equivalent",
+        "tests/test_gate_g4_driver_migration.py::test_the_batch5_naming_scripts_need_no_change"
+      ],
+      "scope_correction": {
+        "earlier_claim": "eight non-driver scripts rewrite a driver's source, so the retirement unit is the chain",
+        "measured": "six non-driver scripts name a driver; only TWO of them rewrite source - activate_scope_alignment.py and prepare_readonly_output_recovery.py",
+        "cause": "the classifier computed whether the source-rewrite pattern matched but never used it in the branch; it classified on 'names a driver' alone",
+        "consequence": "four of the seven chained drivers (run_step12_m6.py, run_step11_revisit.py, run_m6_native_revisit.py, step12_root_completion/run_step12_revisit.py) needed no patcher change at all; the naming scripts only mention the filename inside a ps process check, which simply stops matching",
+        "remaining_real_chains": [
+          "run_bounded_evidence_repair.py",
+          "run_readonly_output_recovery.py",
+          "run_scope_alignment.py"
+        ]
+      }
     }
   ],
   "corrections": [

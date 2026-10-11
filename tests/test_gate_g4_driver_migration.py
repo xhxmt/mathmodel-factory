@@ -1385,3 +1385,92 @@ def test_the_batch4_checkpoint_precondition_is_not_the_checkpoint_protection():
         engine.run_bounded(
             BoundedRunContract(expected_revision=state.revision, protected_checkpoints={13})
         )
+
+
+# ============== batch 5: the last private counters, one of which could crash
+def test_the_batch5_asserting_counter_becomes_a_reported_boundary():
+    """run_m6_native_revisit.py did not merely stop on a repeat - it asserted.
+
+    Its counter keyed on active_step and ``assert seen[step] <= 2``, so the third
+    visit to the same step raised instead of stopping, turning a stuck workflow
+    into a traceback.  The contract reports the first unchanged boundary as
+    NEEDS_INSPECTION, so the caller gets an answer rather than an exception - and
+    one iteration earlier.
+    """
+
+    evidence = canary.build_seed(canary.paused_seed)
+    revision = evidence["project_state"]["revision"]
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+
+    seen: dict = {}
+    calls = 0
+    fingerprint = None
+    outcome = None
+    raised = None
+    while calls < 5:
+        state = canary.store_at(root).load()
+        seen[state.active_step] = seen.get(state.active_step, 0) + 1
+        # the original would have raised here on the third visit
+        if seen[state.active_step] > 2:
+            raised = "AssertionError"
+            break
+        calls += 1
+        with canary.frozen_time():
+            outcome = engine.run_bounded(
+                BoundedRunContract(
+                    expected_revision=state.revision,
+                    previous_boundary_fingerprint=fingerprint,
+                )
+            )
+        fingerprint = outcome.boundary_fingerprint
+        if outcome.unchanged_boundary:
+            break
+
+    assert raised is None, "the contract stopped before the original would have raised"
+    assert calls == 2
+    assert outcome.unchanged_boundary is True
+    assert outcome.to_dict()["outcome"] == "NEEDS_INSPECTION"
+
+
+def test_the_batch5_single_step_shape_is_equivalent():
+    """The two single-invocation drivers in the batch, guard included."""
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    legacy = _manifest_legacy_track(6)
+    migrated = _manifest_migrated_track(6)
+
+    assert migrated["outcome"].completed_subtasks == 1
+    _assert_migrated_shape(legacy, migrated)
+
+
+def test_the_batch5_naming_scripts_need_no_change():
+    """The correction that made this batch smaller than planned.
+
+    Four of the scripts that name these drivers only mention the filename inside a
+    ``ps`` process check - they do not read or rewrite the driver's source.  So
+    migrating the driver needs no change there, and the earlier claim of eight
+    source-rewriting patchers was wrong: only activate_scope_alignment.py and
+    prepare_readonly_output_recovery.py rewrite source.
+
+    The check below reproduces the distinction on a synthetic pair so the
+    criterion is visible: naming a file is not the same as rewriting it.
+    """
+
+    import re
+
+    naming_only = "assert not any('run_step12_m6.py' in s for s in ps_output)\n"
+    rewriting = (
+        "runner = (P / 'work/run_step12_m6.py').read_text()\n"
+        "runner = runner.replace('a', 'b')\n"
+        "(P / 'work/run_step12_m6.py').write_text(runner)\n"
+    )
+    reads_and_replaces = re.compile(r"\.py['\"]\s*\)\s*\.read_text\(\)[\s\S]{0,200}?\.replace\(")
+
+    assert not reads_and_replaces.search(naming_only)
+    assert reads_and_replaces.search(rewriting)

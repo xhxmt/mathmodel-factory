@@ -911,6 +911,42 @@ expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id)
 
 **独立驱动至此全部清空**（13 条）。剩余：**7 条链式驱动 + 8 个 patcher**。
 
+### 6.12 G4.5c 第 2 步：批次 5（4 条链式驱动）已完成 + 一处分类更正
+
+`run_step12_m6.py`、`run_step11_revisit.py`、`step12_root_completion_20260911/run_step12_revisit.py`、`run_m6_native_revisit.py` 原地改写。
+
+**累计指标（批次 1–5）**
+
+| 指标 | before | after | Δ |
+|---|---|---|---|
+| `.run(` | 52 | **35** | −17 |
+| 精确工作流推进 | 25 | **8** | −17 |
+| `max_steps=1` | 23 | **6** | −17 |
+| registry shim | 4 | **3** | −1 |
+| **手写 `seen` 计数器** | 4 | **0** | **−4（全部消失）** |
+| checkpoint 前置查找 | 7 | 7 | 0（刻意） |
+| checkpoint 不变性校验 | 5 | 3 | −2 |
+| **硬编码绝对 revision** | 36 | **31** | −5（新增指标） |
+| `progress.json`（文件名） | 35 | **13** | −22 |
+| `protected_files.json`（文件名） | 65 | **63** | −2 |
+| `advance_bounded` | 0 | **17** | **+17（每驱动一个）** |
+
+**一处行为改进值得记**：`run_m6_native_revisit.py` 的私有计数器不是"停"，而是 `assert seen[step] <= 2`——**第三次访问同一步会抛异常**，把"卡住的工作流"变成 traceback。合同在**第一次**未变化 boundary 就报 `NEEDS_INSPECTION`，调用方得到答案而不是异常，且早一轮。
+
+#### 分类更正：真正改写驱动源码的 patcher 只有 2 个，不是 8 个
+
+先前 inventory 报出"8 个非驱动脚本改写驱动源码，因此退役单元是链"。**实测更正**：
+
+- **6 个**非驱动脚本**提到**驱动（不是 8 个）；
+- 其中**只有 2 个**真正改写源码：`activate_scope_alignment.py`、`prepare_readonly_output_recovery.py`；
+- 另外 4 个（`prepare_direct_final.py`、`prepare_m6_native_revisit.py`、`prepare_step11_revisit.py`、`prepare_step12_m6.py`）只是把驱动**文件名写进 `ps` 进程检查**里（防止与运行中的驱动并发），**不读也不改源码**。
+
+**成因**：分类器算出了"是否匹配源码改写模式"的 `hits` 变量，却**从未在分支判断里使用**——它只凭"提到了驱动"就归为 `rewrites_driver_source`。
+
+**后果**：7 条链里有 **4 条根本不需要动 patcher**（本批），它们的"链"只是命名；驱动迁移等同于独立驱动。**真正的链只剩 3 条驱动 + 2 个 patcher**（下一批）。
+
+**尚未改动**：`run_bounded_evidence_repair.py`、`run_readonly_output_recovery.py`、`run_scope_alignment.py` 三条真链，以及 `activate_scope_alignment.py`、`prepare_readonly_output_recovery.py` 两个源码改写 patcher。
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。
