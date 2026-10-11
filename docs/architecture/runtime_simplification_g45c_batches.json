@@ -645,13 +645,31 @@
     "batches": 6,
     "patcher_clone_steps_retired": 2,
     "scripts_still_reading_driver_source": 0,
-    "contract_extensions_required": 4,
+    "contract_extensions_required": 3,
     "note": "the retirement set was 20 real drivers, not the 52 files that first matched a naive .run( regex.  Every one of the twenty now advances through service.advance_bounded; the four capabilities the migration needed (attempt/reopen ceilings, large-file identity, committed-checkpoint protection, and the ability to express all of it at once) were each driven by a real driver rather than by speculation.",
     "verification": {
       "backup": "the pre-rewrite archive still verifies against its manifest; its digest is unchanged at fb4acf0c174d8641...",
       "every_original_digest": "each driver's original digest in this record is read from work_manifest.json, and each migrated digest is re-read from the file on disk",
       "compile": "all 212 python files under work/ compile before and after every batch",
       "ci": "every batch was pushed and the four CI checks were green before the next one started"
-    }
+    },
+    "contract_extensions": [
+      {
+        "fields": "max_attempts_per_step, max_reopens_per_step",
+        "driven_by": "run_bounded_evidence_repair.py's registry shim",
+        "direction": "tighten only"
+      },
+      {
+        "fields": "protected_identity",
+        "driven_by": "run_final_workflow_resume.py's (size, mtime_ns) check on a large file",
+        "direction": "second kind of check"
+      },
+      {
+        "fields": "protected_checkpoints",
+        "driven_by": "the three run_native_*.py drivers holding Step13's checkpoint constant",
+        "direction": "second kind of protection"
+      }
+    ],
+    "count_correction": "an earlier version of this record said four contract extensions.  There were three field additions; the fourth thing the migration needed was not a new field but the ability to bind all of them into one authorisation at once, which the existing contract already supported."
   }
 }
