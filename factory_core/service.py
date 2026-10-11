@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .liveness import pid_is_live
 from .domain import (
     FactoryCoreError,
     InvalidTransition,
@@ -1415,11 +1416,9 @@ class FactoryService:
 
     @staticmethod
     def _pid_is_live(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (PermissionError, ProcessLookupError):
-            return False
+        """Whether the recorded runner still exists; see ``liveness.pid_is_live``."""
+
+        return pid_is_live(pid)
 
     @staticmethod
     def _recorded_runner_identity(snapshot: dict[str, Any]) -> str | None:

@@ -33,6 +33,7 @@ from .bounded_run import (
     verify_protected_manifest,
 )
 from .dirty_classification import classification_sources, source_for
+from .liveness import pid_is_live
 from .domain import (
     ExecutionResult,
     InvalidTransition,
@@ -2440,8 +2441,12 @@ class FactoryEngine:
 
     @staticmethod
     def _pid_is_live(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+        """Whether the recorded runner still exists.
+
+        Delegates to :func:`factory_core.liveness.pid_is_live`, which is the one
+        implementation: ``engine`` and ``service`` had drifted apart, and both read
+        EPERM as death, which would let a second runner start on a project another
+        user's runner is still advancing.
+        """
+
+        return pid_is_live(pid)
