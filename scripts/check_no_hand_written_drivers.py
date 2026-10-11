@@ -27,6 +27,14 @@ Usage:
     check_no_hand_written_drivers.py <work-dir> [--json <path>]
 
 Exit status is 0 when the criterion holds, 1 when it does not.
+
+Two limits are deliberate and worth stating.  A scan that finds no Python file
+**fails**: an empty scan is not a clean one, and reporting OK for a directory
+nothing was read from is the same "agreement reported because nothing was looked
+at" that this checker exists to catch.  And the advance pattern tolerates one level
+of nested parentheses, so ``.engine(Path(P)).run(`` is detected while a second level
+of nesting is not - the pattern is a detector, not a parser, and that direction of
+error is a miss rather than a false pass.
 """
 from __future__ import annotations
 
@@ -38,10 +46,17 @@ import sys
 import tokenize
 from pathlib import Path
 
+#: One level of nested parentheses, so an argument that is itself a call still
+#: matches: ``.engine(Path(P)).run(`` is an advance, and ``[^)]*`` stopped at the
+#: first ``)`` and saw nothing.  A second level of nesting (``f(g(h()))``) is not
+#: covered - the pattern is a detector, not a parser, and a miss there is a miss
+#: rather than a false pass, which is the direction that matters here.
+_ARG = r"(?:[^()]|\([^()]*\))*"
+
 #: A workflow advance through the engine, in any of the inline spellings.
 WORKFLOW_ADVANCE = re.compile(
-    r"(?:FactoryService|FactoryEngine)\s*\([^)]*\)\s*\.engine\([^)]*\)\s*\.run\("
-    r"|\.engine\([^)]*\)\s*\.run\("
+    rf"(?:FactoryService|FactoryEngine)\s*\({_ARG}\)\s*\.engine\({_ARG}\)\s*\.run\("
+    rf"|\.engine\({_ARG}\)\s*\.run\("
     r"|\bengine\.run\("
 )
 
@@ -69,7 +84,7 @@ def workflow_advance_sites(text: str) -> list[re.Match]:
         bound = re.compile(
             r"\b(?:"
             + "|".join(re.escape(name) for name in names)
-            + r")\s*\.\s*(?:engine\([^)]*\)\s*\.\s*)?run\("
+            + rf")\s*\.\s*(?:engine\({_ARG}\)\s*\.\s*)?run\("
         )
         matches.extend(bound.finditer(text))
     return sorted(matches, key=lambda match: match.start())
@@ -202,13 +217,19 @@ def scan(root: Path, *, exemptions: frozenset[str] = frozenset()) -> dict:
         if workflow_advance_sites(text) and PROGRESS_JOURNAL.search(text):
             record(PROGRESS_JOURNAL, "progress_journal_with_advance", True, at_end=True)
 
+    # A scan that found nothing to scan has not cleared anything.  Reporting OK on
+    # an empty tree - or on a mistyped path that happens to exist - is the same
+    # failure this checker exists to find: agreement reported because nothing was
+    # looked at.
+    vacuous = not files
     return {
         "root": str(root),
         "files_scanned": len(files),
         "exemptions": sorted(exemptions),
         "violations": violations,
         "residual": residual,
-        "ok": not violations,
+        "vacuous": vacuous,
+        "ok": not violations and not vacuous,
     }
 
 
@@ -231,6 +252,14 @@ def main(argv: list[str] | None = None) -> int:
     report = scan(args.work_dir, exemptions=frozenset(args.exempt))
     if args.json:
         args.json.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    if report["vacuous"]:
+        print(
+            f"FAIL: no Python file under {report['root']}, so nothing was checked. "
+            "An empty scan is not a clean one - point the checker at the project's "
+            "work/ directory."
+        )
+        return 1
 
     if report["ok"]:
         print(

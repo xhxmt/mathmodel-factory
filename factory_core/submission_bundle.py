@@ -165,8 +165,19 @@ def submission_bundle_paths(
     declared = declared_delivery_files(project)
     for solver_input in solver_coverage.included_paths:
         relative = solver_input.relative_to(project).as_posix()
+        # A registered policy is not by itself ownership or a route.  An
+        # EXPLICIT_ONLY entry that is neither a final input nor a submission member
+        # carries no ``ownership_rule`` and no ``route_stage``: it *describes* the
+        # path without conferring anything.  Treating its mere presence as
+        # sufficient admitted a solver-declared input that nothing owned and
+        # nothing routed, which is the case this check exists to refuse.
+        policy = artifact_policy(relative)
+        has_ownership = policy is not None and policy.ownership_rule is not None
+        has_route = policy is not None and (
+            policy.route_stage is not None or policy.route_flag is not None
+        )
         if (
-            artifact_policy(relative) is None
+            not (has_ownership or has_route)
             and relative not in active_latex
             and relative not in declared
             and relative not in routes.roles

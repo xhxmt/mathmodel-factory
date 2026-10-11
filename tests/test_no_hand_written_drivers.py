@@ -258,3 +258,81 @@ def test_the_project_tree_has_no_hand_written_driver():
     # and the exemptions are exactly the three enumerated backups, no more
     if report["exemptions"]:
         assert set(report["exemptions"]) == set(EXEMPTED_BACKUPS)
+
+
+# ============ an argument that is itself a call, and a scan that examined nothing
+@pytest.mark.parametrize(
+    "source",
+    [
+        "state = service.engine(Path(P)).run(max_steps=1)\n",
+        "state = FactoryService(Path(ROOT)).engine(Path(P)).run(max_steps=1)\n",
+        "state = service.engine(cfg.project_dir(P)).run(max_steps=1)\n",
+        "state = service.engine(load(P).root).run(max_steps=1)\n",
+        "state = build().engine(P).run(max_steps=1)\n",
+    ],
+)
+def test_an_advance_whose_argument_is_a_call_is_caught(tmp_path, source):
+    """``[^)]*`` stopped at the first ``)``, so ``.engine(Path(P)).run(`` was invisible.
+
+    Real scripts compose the project path, so the argument of ``.engine(...)`` is
+    frequently a call itself.  A checker that only knew the flat spelling reported
+    those files as clean.
+    """
+
+    report = scan(_tree(tmp_path, "composed.py", source))
+    assert report["ok"] is False
+    assert "workflow_advance" in {entry["kind"] for entry in report["violations"]}
+
+
+def test_an_empty_scan_is_a_failure_not_a_pass(tmp_path):
+    """Nothing examined is not the same as nothing found.
+
+    ``scan`` returned ``ok`` for a tree with no Python file at all, so a mistyped
+    path - or a directory the drivers had not been written to yet - produced a
+    reassuring all-clear.  This is the failure mode the checker exists to find,
+    committed by the checker.
+    """
+
+    root = tmp_path / "work"
+    root.mkdir()
+
+    report = scan(root)
+    assert report["files_scanned"] == 0
+    assert report["vacuous"] is True
+    assert report["ok"] is False
+
+
+def test_the_script_exits_non_zero_on_an_empty_tree(tmp_path):
+    """The CLI contract, not just the function's: a shell caller sees the failure."""
+
+    import subprocess
+    import sys
+
+    root = tmp_path / "work"
+    root.mkdir()
+
+    completed = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "check_no_hand_written_drivers.py"), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 1
+    assert "nothing was checked" in completed.stdout
+
+
+def test_a_composed_argument_to_the_supported_entry_point_is_allowed(tmp_path):
+    """The control: the wider pattern must not flag the entry point it recommends."""
+
+    report = scan(
+        _tree(
+            tmp_path,
+            "composed_but_bounded.py",
+            """
+            from factory_core.service import FactoryService
+            service = FactoryService(ROOT)
+            outcome = service.advance_bounded(Path(P), contract)
+            """,
+        )
+    )
+    assert report["ok"] is True, report["violations"]

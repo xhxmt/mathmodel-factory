@@ -1021,3 +1021,70 @@ def test_solver_input_exclusion_receipt_path_binds_input_hash(tmp_path):
 
     assert first_path != second_path
     assert first_path.is_file() and second_path.is_file()
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "step5_results_gap_report.md",
+        "step5_bounded_repair_report.md",
+        "m1_solver_evidence_failed.json",
+        "paper/appendix_sources/pro01/anything.npz",
+    ],
+)
+def test_a_registered_but_unowned_unrouted_input_is_refused(tmp_path, relative):
+    """A policy entry that neither owns nor routes is not accountability.
+
+    The check refused a solver-declared input only when ``artifact_policy()``
+    returned ``None``, so *any* registered path passed - including the
+    EXPLICIT_ONLY entries that carry no ``ownership_rule`` and no ``route_stage``.
+    Such an entry describes the path without conferring anything, and its mere
+    presence admitted an input with nothing accountable for where it came from.
+    """
+
+    from factory_core.artifact_policy import artifact_policy
+    from factory_core.submission_bundle import submission_bundle_paths
+
+    policy = artifact_policy(relative)
+    assert policy is not None, "precondition: the path must be registered"
+    assert policy.ownership_rule is None, "precondition: it must have no owner"
+    assert policy.route_stage is None and policy.route_flag is None, (
+        "precondition: it must have no explicit route"
+    )
+
+    _write_minimal_active_paper(tmp_path)
+    input_path = tmp_path / relative
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    input_path.write_bytes(b"solver-input-fixture")
+    _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
+
+    with pytest.raises(ValueError, match="lacks ownership or an explicit route"):
+        submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+
+
+def test_a_registered_and_routed_input_is_still_admitted(tmp_path):
+    """The control: the fix must not refuse an input that really is accountable.
+
+    Without this, "refuse more" would look like a pass on its own.
+    """
+
+    from factory_core.artifact_policy import artifact_policy
+    from factory_core.submission_bundle import submission_bundle_paths
+
+    relative = "tables.tex"
+    policy = artifact_policy(relative)
+    assert policy is not None, "precondition: registered"
+    assert policy.ownership_rule is not None or policy.route_stage is not None, (
+        "precondition: it must confer ownership or a route"
+    )
+
+    _write_minimal_active_paper(tmp_path)
+    input_path = tmp_path / relative
+    input_path.parent.mkdir(parents=True, exist_ok=True)
+    input_path.write_bytes(b"solver-input-fixture")
+    _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
+
+    selected = submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+    assert any(str(path).endswith(relative) for path in selected), (
+        "an accountable solver-declared input must still reach the bundle"
+    )

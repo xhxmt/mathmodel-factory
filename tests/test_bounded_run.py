@@ -530,3 +530,109 @@ def test_the_stage_and_step_paths_share_one_check(tmp_path):
         "_contract_protection_violation()"
         in inspect.getsource(FactoryEngine._advance_loop)
     )
+
+
+# ===================== the authorisation parameters are validated as well
+@pytest.mark.parametrize(
+    "value",
+    [
+        [True],           # bool is an int in Python; a flag is not a step id
+        [False],
+        [-1],             # no such source step
+        [1, True],        # one good id does not excuse one bad one
+        [1, -1],
+        ["16"],           # a string is not a step id
+        [None],
+    ],
+)
+def test_allowed_source_steps_refuses_anything_that_is_not_a_step_id(value):
+    """The scope of an authorisation has to be ids, not values that resemble them.
+
+    ``allowed_source_steps=[True]`` used to be accepted and behave as ``{1}``,
+    because ``bool`` is an ``int``: a caller passing a flag where a step id belongs
+    would get a plausible-looking authorisation to step 1 instead of a refusal.
+    The Step ceilings already refused bool keys - the same concept was simply
+    stricter in one place than in the other.
+    """
+
+    with pytest.raises(BoundedRunError, match="allowed_source_steps"):
+        BoundedRunContract(expected_revision=1, allowed_source_steps=value)
+
+
+@pytest.mark.parametrize("value", [[1], [1, 2], [0], {16}, frozenset({5, 6})])
+def test_allowed_source_steps_still_accepts_real_step_ids(value):
+    """The control: refusing more must not become refusing everything."""
+
+    contract = BoundedRunContract(expected_revision=1, allowed_source_steps=value)
+    assert contract.allowed_source_steps == frozenset(int(step) for step in value)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        (),                       # constrains nothing, so every check is skipped
+        (8, "revision", 12, 99),  # used to be truncated, its 4th component ignored
+        (True,),                  # a bool stage would pin the stage to 1
+        (8, 12),                  # subtask must be a string
+        (8, "revision", True),
+        (-1,),
+        (8, "revision", -5),
+    ],
+)
+def test_expected_cursor_refuses_a_shape_it_cannot_honour(cursor):
+    """A cursor the comparison cannot honour must be refused, not truncated.
+
+    An empty tuple made the component comparison iterate zero times, so a caller
+    who passed one had every cursor check skipped; a four-component tuple was
+    silently cut to three.  Both are the same failure as elsewhere in this module:
+    the check reports agreement because it never looked.
+    """
+
+    with pytest.raises(BoundedRunError, match="expected_cursor"):
+        BoundedRunContract(expected_revision=1, expected_cursor=cursor)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [(8,), (8, "revision"), (8, "revision", 12), (None, None, 12), (8, None, None)],
+)
+def test_expected_cursor_still_accepts_a_usable_authorisation(cursor):
+    """Partial expectations stay legal: a component left out or None is unconstrained."""
+
+    contract = BoundedRunContract(expected_revision=1, expected_cursor=cursor)
+    assert contract.expected_cursor == tuple(cursor)
+
+
+def test_check_cursor_refuses_an_empty_expectation_directly(tmp_path):
+    """Defence in depth: the contract refuses it, and so does the comparison.
+
+    ``check_cursor`` is reachable without a contract, and an empty expectation
+    there would iterate zero components and report agreement with everything.
+    """
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+
+    check_cursor(_State(), (8, "revision", 12))
+
+    with pytest.raises(BoundedRunError, match="constrains nothing"):
+        check_cursor(_State(), ())
+
+
+def test_the_ceilings_and_the_allowlist_now_agree_on_bool():
+    """One rule, three call sites - the inconsistency that produced the gap."""
+
+    from factory_core.bounded_run import _is_source_step
+
+    with pytest.raises(BoundedRunError):
+        BoundedRunContract(expected_revision=1, max_attempts_per_step={True: 1})
+    with pytest.raises(BoundedRunError):
+        BoundedRunContract(expected_revision=1, allowed_source_steps=[True])
+    with pytest.raises(BoundedRunError):
+        BoundedRunContract(expected_revision=1, expected_cursor=(True,))
+
+    assert _is_source_step(0) and _is_source_step(16)
+    assert not _is_source_step(True) and not _is_source_step(-1)
+    assert not _is_source_step("16") and not _is_source_step(None)

@@ -256,6 +256,34 @@ def build_event_payload(
     return safe_payload
 
 
+def event_version_of(
+    envelope: Mapping[str, Any], *, default: int, revision: int | None = None
+) -> int:
+    """The envelope's event version, or an explicit refusal if it is not one.
+
+    ``int()`` raises ``ValueError`` or ``TypeError`` on a corrupt value, and those
+    escaped the caller: ``status_snapshot`` catches ``ReplayIntegrityError`` in
+    order to set ``event_replay_valid = False``, so an unparseable version turned a
+    **reported** integrity failure into a **hard** failure of every read of the
+    project.  A stream that cannot say which generation its events belong to is an
+    integrity failure, and that is a type this module already has.
+
+    The value is required to be an integer: every real envelope carries one
+    (561 / 1411 / 2484 events across the three production streams), so a string or
+    a float is a defect rather than a compatibility case.  ``bool`` is refused for
+    the same reason it is refused as a source step id - it is an ``int``, and
+    ``True`` would read as version 1.
+    """
+
+    raw = envelope.get("event_version", default)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        where = f" at revision {revision}" if revision is not None else ""
+        raise ReplayIntegrityError(
+            f"workflow event version is not an integer{where}: {raw!r}"
+        )
+    return int(raw)
+
+
 def replay_events(
     events: Iterable[WorkflowEvent], *, verify_hashes: bool = True
 ) -> dict[str, Any]:
@@ -267,7 +295,9 @@ def replay_events(
         envelope = event.payload.get(ENVELOPE_KEY)
         if not isinstance(envelope, dict):
             continue
-        if int(envelope.get("event_version", 0)) not in SUPPORTED_EVENT_VERSIONS:
+        if event_version_of(envelope, default=0, revision=event.revision) not in (
+            SUPPORTED_EVENT_VERSIONS
+        ):
             raise ReplayIntegrityError(
                 f"unsupported workflow event version at revision {event.revision}"
             )
@@ -463,14 +493,15 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
         if isinstance(envelope, dict):
             canonical = str(envelope.get("canonical_type") or canonical)
             event_id = envelope.get("event_id")
+            version = event_version_of(envelope, default=1, revision=event.revision)
             stage_id = (
                 envelope.get("subject_stage_id")
-                if int(envelope.get("event_version", 1)) >= 2
+                if version >= 2
                 else envelope.get("stage_id")
             ) or stage_id
             subtask = (
                 envelope.get("subject_subtask")
-                if int(envelope.get("event_version", 1)) >= 2
+                if version >= 2
                 else envelope.get("subtask")
             ) or subtask
             side_effect_refs = list(envelope.get("side_effect_refs") or ())
