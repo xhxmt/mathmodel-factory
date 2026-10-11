@@ -947,6 +947,47 @@ expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id)
 
 **尚未改动**：`run_bounded_evidence_repair.py`、`run_readonly_output_recovery.py`、`run_scope_alignment.py` 三条真链，以及 `activate_scope_alignment.py`、`prepare_readonly_output_recovery.py` 两个源码改写 patcher。
 
+### 6.13 G4.5c 第 2 步：批次 6（最后 3 条驱动 + 2 个克隆 patcher）—— G4.5c 完成
+
+`run_bounded_evidence_repair.py`、`run_readonly_output_recovery.py`、`run_scope_alignment.py` 原地改写；`prepare_readonly_output_recovery.py` 与 `activate_scope_alignment.py` 的**克隆步骤已退役**。
+
+**克隆链的真相**：三个驱动**逐字节同构**，只差 W 路径、一句 journal 文案，以及 `run_scope_alignment.py` 多出的 3 行 manifest 扩展。两个 patcher 通过 `read_text()` → `replace()` → `write_text()` **派生**出后两个——这正是"没有受支持的方式表达『在这个作用域、带这套保护地推进一次』"的产物。
+
+**最有价值的发现（由一次测试失败逼出来）**：批次 6 的测试初版断言三个合同 SHA 互不相同，结果只得到 **2 个**。原因是 `run_bounded_evidence_repair.py` 与 `run_readonly_output_recovery.py` **编码的是同一个授权**——差别只有 manifest 所在目录与一句**根本不属于合同的**文案（`canonical_payload` 里没有 scope 字段）。**从来不是三套协议，而是同一套协议写了三遍。** 这是"退役克隆而非迁移成三个程序"最强的论据。
+
+**累计指标（批次 1–6，全部 20 条驱动）**
+
+| 指标 | before | after | Δ |
+|---|---|---|---|
+| `.run(` | 52 | **32** | −20 |
+| 精确工作流推进 | 25 | **5** | −20 |
+| `max_steps=1` | 23 | **3** | −20 |
+| registry shim | 4 | **0** | −4 |
+| 手写 `seen` 计数器 | 4 | **0** | −4 |
+| checkpoint 前置查找 | 7 | 7 | 0（刻意） |
+| checkpoint 不变性校验 | 5 | 3 | −2 |
+| 硬编码绝对 revision | 36 | **31** | −5 |
+| **驱动源码改写 patcher** | 2 | **0** | −2 |
+| `progress.json`（文件名） | 35 | **10** | −25 |
+| `protected_files.json`（文件名） | 65 | **58** | −7 |
+| `advance_bounded` | 0 | **20** | **+20（每驱动一个）** |
+
+**除预期替代物外无任何指标上升**；212 个文件每批改写前后均 0 语法错误。
+
+#### G4.5c 最终状态
+
+| 项 | 值 |
+|---|---|
+| 已迁移驱动 | **20 / 20**（逐条验证：代码含 `advance_bounded` 且无 `.run(`） |
+| 批次 | 6 |
+| 退役的克隆步骤 | 2 |
+| 仍读取驱动源码的脚本 | **0** |
+| 迁移所需的合同扩展 | 4 项（attempt/reopen 上限、大文件身份、checkpoint 保护、以及"一次表达全部授权"） |
+| 全部摘要核对 | 20 条驱动的**原件摘要**全部等于 `work_manifest.json`，**新件摘要**全部等于磁盘现状 |
+| 备份 | 归档摘要仍为 `fb4acf0c174d8641…`，未被任何批次影响 |
+
+**每一次合同扩展都由真实驱动的真实需求驱动，没有一项是猜测出来的。**
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。

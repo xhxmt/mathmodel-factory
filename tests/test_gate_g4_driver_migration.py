@@ -1474,3 +1474,96 @@ def test_the_batch5_naming_scripts_need_no_change():
 
     assert not reads_and_replaces.search(naming_only)
     assert reads_and_replaces.search(rewriting)
+
+
+# ============== batch 6: three clones become three contracts
+def test_the_batch6_clones_become_one_shape_with_three_scopes():
+    """The three drivers were byte-identical apart from a W path, a scope string
+    and three lines that widened the manifest.
+
+    Two prepare_* scripts produced them by reading the template, substituting
+    those, and writing the result - because the difference could not be
+    expressed.  With the contract it can: the difference is data, so three
+    distinct authorisations replace three near-identical 75-line programs.  This
+    asserts that the three contracts are distinct, valid and differ only in the
+    scope they carry.
+    """
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    big = root / "canary_large_manifest.json"
+    big.write_text('{"v": 1}\n', encoding="utf-8")
+    stat = big.stat()
+    state = canary.store_at(root).load()
+
+    def contract(scope_label, extra=None):
+        manifest = dict(_protected())
+        if extra:
+            manifest.update(extra)
+        return BoundedRunContract(
+            expected_revision=state.revision,
+            expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id),
+            max_subtasks=1,
+            run_policy=RunPolicy.BOUNDED_SUBTASKS,
+            max_attempts_per_step={5: state.attempt + 1, 4: 1},
+            max_reopens_per_step={5: 0, 4: 0},
+            protected_manifest=manifest,
+            actor="operator",
+        )
+
+    template = contract("bounded independent evidence repair")
+    recovery = contract("read-only partial-output and provenance recovery")
+    alignment = contract(
+        "reviewed conditional reporting scope alignment; zero Solver submissions",
+        extra={big.name: canary.protected_digest('{"v": 1}\n')},
+    )
+
+    # Two of the three clones encoded the SAME authorisation.  The only things
+    # that differed were the directory their manifest was read from and a label
+    # that went into the journal - and the label is not part of the contract at
+    # all, so it cannot be an authorisation.  That is the strongest argument for
+    # retiring the clones rather than migrating them as three programs.
+    assert template.contract_sha256 == recovery.contract_sha256
+    assert template.protected_manifest == recovery.protected_manifest
+    assert "scope" not in template.canonical_payload(), (
+        "the scope label lived only in the journal, so it is not an authorisation"
+    )
+
+    # The third did carry a genuinely wider manifest, so it is a distinct
+    # authorisation - and that difference is now a field, not a second program.
+    assert alignment.contract_sha256 != template.contract_sha256
+    assert big.name in alignment.protected_manifest
+    assert big.name not in template.protected_manifest
+    assert len({template.contract_sha256, recovery.contract_sha256,
+                alignment.contract_sha256}) == 2
+
+
+def test_the_batch6_the_difference_is_data_not_a_second_program():
+    """Cloning versus parameterising, as a pattern the suite can see.
+
+    The retired step read the template's source and substituted strings; the
+    replacement passes the difference as contract fields.  A test cannot read the
+    production files from CI, so it pins the distinction itself: a shape that
+    requires editing source to change behaviour is the thing being removed.
+    """
+
+    import re
+
+    clone = (
+        "runner = (P/'work/run_bounded_evidence_repair.py').read_text()\n"
+        "runner = runner.replace(\"W = P / 'work/bounded_evidence_repair_20260911'\", "
+        "\"W = P / 'work/scope_alignment_20260911'\")\n"
+        "(P/'work/run_scope_alignment.py').write_text(runner)\n"
+    )
+    parameterise = (
+        "contract = BoundedRunContract(protected_manifest=manifest, "
+        "max_attempts_per_step={5: state.attempt + 1, 4: 1}, actor='operator')\n"
+    )
+    reads_source = re.compile(r"\.py['\"]\s*\)\s*\.read_text\(\)")
+    writes_source = re.compile(r"\.py['\"]\s*\)\s*\.write_text\(")
+
+    assert reads_source.search(clone) and writes_source.search(clone)
+    assert not reads_source.search(parameterise)
+    assert not writes_source.search(parameterise)

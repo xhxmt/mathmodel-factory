@@ -496,6 +496,131 @@
           "run_scope_alignment.py"
         ]
       }
+    },
+    {
+      "batch": 6,
+      "date_utc": "2026-10-07",
+      "family": "chained (the three real chains)",
+      "scope_reason": "the last three drivers, which are the only ones a script actually rewrote, together with the two rewriting scripts",
+      "drivers": [
+        {
+          "file": "run_bounded_evidence_repair.py",
+          "original_sha256": "24add5ba38833aa7e10d25e2a441844b5a0f47477cfeb62e1777f3b359637095",
+          "migrated_sha256": "7a9d4b7b0d21d11ae31c0ccc31497afbc08d682ff1098022f26c64313493cc4c",
+          "note": "the template the other two were cloned from; its registry shim becomes the contract's ceilings and its two-run loop becomes two bounded invocations"
+        },
+        {
+          "file": "run_readonly_output_recovery.py",
+          "original_sha256": "053699b3e6a66726261242c07830186270219bba5cbb0ba0b00d6a93b53632d8",
+          "migrated_sha256": "5058d3d0e0ee855ec73d0852901c361434b5b6f4d401a6a99ac6216f783f5ec1",
+          "note": "byte-identical to the template apart from a W path and a journal label"
+        },
+        {
+          "file": "run_scope_alignment.py",
+          "original_sha256": "6827c1d0c3ee1cd216f4bc01e35cc490d60cd4d6a576fe993488bf20997c9f48",
+          "migrated_sha256": "e97160ea7ff372d4ee841422558eaacc34ea35ddeb7c3f89df0465bafbe69159",
+          "note": "the template plus three lines widening the manifest to models/reporting_scope; now that difference is a contract field"
+        }
+      ],
+      "patchers_retired": [
+        {
+          "file": "prepare_readonly_output_recovery.py",
+          "original_sha256": "7ff18e43d84c2e8d6492ae21b1124f5557480247efc07575a0c3690c64fa1163",
+          "migrated_sha256": "17f6c44189cfa27f77befe442066242ef3388931c1ffd2482e18dba54a8a4125",
+          "change": "the clone step that read run_bounded_evidence_repair.py, substituted a W path and a scope string, and wrote run_readonly_output_recovery.py is replaced by a comment recording why it existed and why it is gone; the scope file, the prompt note and the effective prompt are untouched"
+        },
+        {
+          "file": "activate_scope_alignment.py",
+          "original_sha256": "6533cae37a927763acdfb80c026269e62e6d07d346b007df4bffc909dd62cdfc",
+          "migrated_sha256": "17e860ef2b715f78ecedf43c5d7fa3e05764137c9b3415a510afbde0e3933d25",
+          "change": "same retirement for the step that produced run_scope_alignment.py, including the three-line manifest widening it used to inject"
+        }
+      ],
+      "metric_delta_cumulative": {
+        "naive_dot_run_files": {
+          "before": 52,
+          "after": 32,
+          "delta": -20
+        },
+        "precise_workflow_files": {
+          "before": 25,
+          "after": 5,
+          "delta": -20
+        },
+        "max_steps_1_files": {
+          "before": 23,
+          "after": 3,
+          "delta": -20
+        },
+        "registry_shim_files": {
+          "before": 4,
+          "after": 0,
+          "delta": -4
+        },
+        "hand_rolled_seen_journal": {
+          "before": 4,
+          "after": 0,
+          "delta": -4
+        },
+        "checkpoint_precondition_lookup": {
+          "before": 7,
+          "after": 7,
+          "delta": 0
+        },
+        "checkpoint_invariance_check": {
+          "before": 5,
+          "after": 3,
+          "delta": -2
+        },
+        "hardcoded_absolute_revision": {
+          "before": 36,
+          "after": 31,
+          "delta": -5
+        },
+        "driver_source_rewriting_patcher": {
+          "before": 2,
+          "after": 0,
+          "delta": -2,
+          "definition": "non-driver scripts that read a driver's .py and write modified source; measured with comments blanked and strings kept, because the pattern needs the filename",
+          "looser_metric": {
+            "definition": "any script reading any .py and replacing",
+            "before": 6,
+            "after": 4,
+            "note": "the four that remain read other files, not drivers"
+          }
+        },
+        "progress_json_filename": {
+          "before": 35,
+          "after": 10,
+          "delta": -25
+        },
+        "protected_files_filename": {
+          "before": 65,
+          "after": 58,
+          "delta": -7
+        },
+        "advance_bounded_refs": {
+          "before": 0,
+          "after": 20,
+          "delta": 20,
+          "expected": "one per migrated driver"
+        }
+      },
+      "metric_verdict": "every hand-rolled metric fell or was deliberately held flat; the only increase is advance_bounded, exactly one per migrated driver",
+      "compile_check": {
+        "files": 212,
+        "syntax_errors": 0
+      },
+      "equivalence_tests": [
+        "tests/test_gate_g4_driver_migration.py::test_the_batch6_clones_become_one_shape_with_three_scopes",
+        "tests/test_gate_g4_driver_migration.py::test_the_batch6_the_difference_is_data_not_a_second_program"
+      ],
+      "finding": {
+        "what": "two of the three clones encoded the SAME authorisation",
+        "evidence": "run_bounded_evidence_repair.py and run_readonly_output_recovery.py differ only in the directory their manifest is read from and a label written into the journal, and the label is not part of the contract at all - canonical_payload has no scope field",
+        "why_it_matters": "it is the strongest argument for retiring the clones rather than migrating them as three programs: there were never three protocols, there was one protocol written three times",
+        "how_it_surfaced": "the first version of the batch-6 test asserted three distinct contract hashes and got two; the test was wrong, and the reason it was wrong is the finding"
+      }
     }
   ],
   "corrections": [
@@ -513,5 +638,20 @@
       "fix": "code-shape metrics scrub comments and strings; filename metrics scrub comments and docstrings, keeping ordinary strings",
       "regression_test": "the metric script is stated in this record; each batch re-measures both sides with the same scrub"
     }
-  ]
+  ],
+  "final_state": {
+    "drivers_migrated": 20,
+    "drivers_remaining": 0,
+    "batches": 6,
+    "patcher_clone_steps_retired": 2,
+    "scripts_still_reading_driver_source": 0,
+    "contract_extensions_required": 4,
+    "note": "the retirement set was 20 real drivers, not the 52 files that first matched a naive .run( regex.  Every one of the twenty now advances through service.advance_bounded; the four capabilities the migration needed (attempt/reopen ceilings, large-file identity, committed-checkpoint protection, and the ability to express all of it at once) were each driven by a real driver rather than by speculation.",
+    "verification": {
+      "backup": "the pre-rewrite archive still verifies against its manifest; its digest is unchanged at fb4acf0c174d8641...",
+      "every_original_digest": "each driver's original digest in this record is read from work_manifest.json, and each migrated digest is re-read from the file on disk",
+      "compile": "all 212 python files under work/ compile before and after every batch",
+      "ci": "every batch was pushed and the four CI checks were green before the next one started"
+    }
+  }
 }
