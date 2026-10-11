@@ -839,6 +839,16 @@ def check_cursor(
             "expected_cursor must constrain at least one component; a cursor that "
             "constrains nothing (empty, or all components None) is refused"
         )
+    if not 1 <= len(expected) <= 3:
+        # ``zip`` stops at the shortest input, so a fourth component was dropped
+        # rather than refused.  ``(None, None, None, 99)`` is the sharp case: its only
+        # real expectation sits past the three compared components, so the guard above
+        # does not fire and the comparison looks at nothing while appearing to pin the
+        # position - the same silent no-op by a third route.
+        raise BoundedRunError(
+            "expected_cursor must carry between 1 and 3 components (stage, subtask, "
+            f"source step); got {len(expected)}"
+        )
     mismatch = [
         (name, want, got)
         for name, want, got in zip(("stage", "subtask", "source_step"), expected, actual)

@@ -1378,6 +1378,8 @@ cubic 在 `fix/post-merge-runtime-hardening` 上留下两条未解决线程。�
 
 **回归（4 项）**：三种全 `None` 形状归一化且 `canonical_payload()` 为 `null`；归一化不动 `expected_revision`/`max_subtasks`/`actor`；`check_cursor` 直接路径拒绝四种"什么都不约束"的形状；部分期望（`(None,None,12)`、`(8,None,None)`）仍可用。
 
+**第三种绕过（cubic 在修好前两条之后又发现，同轮修掉）**：`check_cursor` 直调路径上，四分量游标 `(None, None, None, 99)` 会让"全为 `None`"判断为假，随后 `zip(("stage","subtask","source_step"), expected, actual)` **在第四个分量前停下**——于是"只有一个真期望、却一个分量都没比"的静默通过又多了一条路。修法：全 `None` 判断之后再加长度 1–3 的拒绝（与 `__post_init__` 同规则）。回归：`(None,None,None,99)`、`(8,"revision",12,99)` 在直调路径被拒；`(None,)*5` 由"全 `None`"规则拒绝。
+
 **若坚持构造期一律拒绝**：前置条件是先迁移那 20 个驱动，而改动它们会变更 sha256，使已封存的 G4.5c 批次记录（逐驱动摘要）与 POST 锚点过期。这是独立决策，不在本 PR 内做。
 
 #### 测试口径

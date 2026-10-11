@@ -635,7 +635,7 @@ def test_normalising_a_vacuous_cursor_keeps_the_rest_of_the_authorisation():
     assert contract.expected_cursor is None
 
 
-@pytest.mark.parametrize("cursor", [(), (None,), (None, None), (None, None, None)])
+@pytest.mark.parametrize("cursor", [(), (None,), (None, None), (None, None, None), (None,) * 5])
 def test_check_cursor_refuses_a_cursor_that_constrains_nothing(cursor):
     """The direct-caller path refuses the shape a contract normalises away."""
 
@@ -645,6 +645,27 @@ def test_check_cursor_refuses_a_cursor_that_constrains_nothing(cursor):
         source_step_id = 12
 
     with pytest.raises(BoundedRunError, match="constrain at least one component"):
+        check_cursor(_State(), cursor)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [(None, None, None, 99), (8, "revision", 12, 99)],
+)
+def test_check_cursor_refuses_a_cursor_longer_than_the_position_it_compares(cursor):
+    """``zip`` truncates to the shortest input, so extra components were dropped.
+
+    ``(None, None, None, 99)`` is the sharp case: its only non-``None`` value sits
+    past the three compared components, so the all-``None`` guard does not fire and
+    the comparison looked at nothing while appearing to pin stage/subtask/step.
+    """
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+
+    with pytest.raises(BoundedRunError, match="between 1 and 3 components"):
         check_cursor(_State(), cursor)
 
 
