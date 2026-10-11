@@ -880,6 +880,37 @@ expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id)
 
 **尚未改动**：7 条链式驱动与 8 个 patcher。
 
+### 6.11 G4.5c 第 2 步：批次 4（3 条独立 `special_business`）已完成 —— 独立驱动已清空
+
+`run_native_after_runtime_recovery.py`、`run_native_final16_recovered.py`、`run_native_polish_and_final.py` 原地改写。它们是**唯一持有已提交 checkpoint 不变性**的驱动，因此也是 `protected_checkpoints` 这一第 4 项合同扩展**在真实生产驱动上**的首次验证（此前只在测试里验过）。
+
+**累计指标（批次 1–4）**
+
+| 指标 | before | after | Δ |
+|---|---|---|---|
+| `.run(` | 52 | **39** | −13 |
+| 精确工作流推进 | 25 | **12** | −13 |
+| `max_steps=1` | 23 | **10** | −13 |
+| registry shim | 4 | **3** | −1 |
+| 手写 `seen` 重复计数器 | 4 | **2** | −2 |
+| **checkpoint 前置查找** | 7 | **7** | **0（刻意不变）** |
+| **checkpoint 不变性校验** | 5 | **3** | −2（移进合同的部分） |
+| `progress.json`（文件名） | 35 | **19** | −16 |
+| `protected_files.json`（文件名） | 65 | **63** | −2 |
+| `advance_bounded` | 0 | **13** | **+13（每驱动一个）** |
+
+**两个 checkpoint 指标一平一降，正是本批的要点**：驱动里的 **前置查找**（"这个历史 checkpoint 是不是它该有的样子"）**逐字保留**，而**不变性校验**（"本次运行有没有动它"）移进了合同。两个不同的问题，两套机制。若两个指标都降，反而说明前置条件被误删了。
+
+**忠实性检查（三处）**
+
+1. `run_native_final16_recovered.py` 初版被共享模板加上了 `protected_checkpoints={13}`，但**原件从未校验 step 13 的 checkpoint**（它依赖 Step13 judgment 的 ZIP 备份）——加保护是**行为改变**而非保持，已改回 `None` 并同步修正 docstring。
+2. polish 模式的 `last_completed_step >= 15` 上限、以及解释器/模块前置检查，留在调用方：前者是这个脚本的策略，后者是环境检查，都不是 runner 语义。
+3. **`argv[1]` 直接作为 `expected_revision`**——这才是真正的 CAS（argv 不可能按构造满足），与批次 2 修正掉的"读回再钉"形成对照。只有循环第一轮使用它，与原件进入循环前只断言一次一致。
+
+**度量口径收紧（第四层）**：`protected_files` 指标从裸子串收紧为文件名 `protected_files.json`，因为迁移后驱动的**结构化输出键名 `protected_files_checked`** 把计数抬高了 2。**指标必须数它命名的那个东西。** 本记录中所有 before/after 都在收紧后的口径下测得，before 侧从归档取回。
+
+**独立驱动至此全部清空**（13 条）。剩余：**7 条链式驱动 + 8 个 patcher**。
+
 **canary 保真边界（已记录）**
 
 `build_native_registry` 下，hermetic canary 干净覆盖 step 0–8；**step 8.5 的 reviewer entry gate 需要真实门证据**（`entry_gate.md` 的 VERDICT 及两份配套 map），permissive validator 不产生它，故 ≥8 的种子会停在门处（实测 seed 8→8 failed，而 seed 3→4、4→5、6→7、7→8 均干净推进）。已写成断言测试，避免被误认成驱动差异；未来若需覆盖 8.5 及以后，fixture 需在该处生长。

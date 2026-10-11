@@ -7,7 +7,8 @@
     "filename_metrics": "comments blanked, string literals kept - progress.json and protected_files live in strings, so blanking strings would erase the thing being counted",
     "why_this_matters": "the first attempt at this measurement reported registry_shim unchanged and protected_files/refs up, purely because the migrated file's comment named the removed constructs",
     "baseline": "the pre-rewrite tree, with the original file read back out of the verified archive",
-    "docstring_note": "a third scrub was needed for the filename metrics: a module docstring is a STRING token, so 'blank comments, keep strings' retained the migrated file's own prose mentioning protected_files.json, and the metric rose by one.  Docstrings are located with ast and blanked, otherwise ordinary string literals are kept.  The metric must be immune to comments AND docstrings; the documentation stays informative."
+    "docstring_note": "a third scrub was needed for the filename metrics: a module docstring is a STRING token, so 'blank comments, keep strings' retained the migrated file's own prose mentioning protected_files.json, and the metric rose by one.  Docstrings are located with ast and blanked, otherwise ordinary string literals are kept.  The metric must be immune to comments AND docstrings; the documentation stays informative.",
+    "metric_tightening": "the protected_files metric was tightened from the bare substring to the filename protected_files.json, because the migrated drivers' own structured output uses the key protected_files_checked and inflated the count by two.  A metric must count the thing it names.  All before/after pairs in this record are measured under the tightened definition, with the before side read back out of the archive."
   },
   "batches": [
     {
@@ -22,9 +23,9 @@
         "lines": 53
       },
       "migrated": {
-        "sha256": "a22f310878e581f3bd77bd7bdad5d7ca31660ce131f325a389c5ec88ffd50620",
-        "bytes": 3142,
-        "lines": 71
+        "sha256": "1ac8aafec506d451a58c6067a98a8d52bdd18ca4652d938c40f8665c5c5d1cf2",
+        "bytes": 3726,
+        "lines": 83
       },
       "what_was_replaced": {
         "assert status=='ready' and active_step==5 and last_completed_step==4": "expected_cursor (and a revision CAS the driver never had)",
@@ -93,7 +94,8 @@
         "not_referenced_by_other_scripts": true,
         "equivalence_test_in_ci": true,
         "rotted_state_recorded": "the driver asserted active_step==5/last_completed_step==4 of a project now completed at revision 561"
-      }
+      },
+      "post_record_correction": "the migrated digest recorded when batch 1 was closed became stale when the batch-2 correction added the explicit positional guard to this driver.  The digest, size and line count here are re-read from the file on disk; the correction itself is recorded in corrections[]."
     },
     {
       "batch": 2,
@@ -279,6 +281,108 @@
         "how_caught": "by re-reading the original against the generated file rather than trusting the template",
         "fix": "the backup block is preserved verbatim with a comment saying why it is caller-side and not runner semantics; the loop is wrapped so partial results print before an exception propagates, which the two drivers with try/finally already did and the other two now do as well"
       }
+    },
+    {
+      "batch": 4,
+      "date_utc": "2026-10-07",
+      "family": "special_business",
+      "scope_reason": "the last three standalone drivers; they are the only ones that hold a committed checkpoint constant, so they are where protected_checkpoints is exercised on real production code rather than only in tests",
+      "drivers": [
+        {
+          "file": "run_native_after_runtime_recovery.py",
+          "original_sha256": "ee119fe1e6cecaf49cf4ebb53ce244474671ab0e43c54ad599df74c382d5e871",
+          "migrated_sha256": "184dfe8ad32691454e24690f57c4ec7fb31f8626fecd45c9f94fd1a4fd35233f",
+          "note": "argv revision, polish/final scope, checkpoint13 receipt preconditions, protected_checkpoints={13}; interpreter and module preconditions kept verbatim as caller-side"
+        },
+        {
+          "file": "run_native_final16_recovered.py",
+          "original_sha256": "20c37c5d75af7dc1d1520a7f49ae1b7f23a465081ce4bd5cba9e1d93636573e9",
+          "migrated_sha256": "9bd26b4f7893ad26025bb862fec483d1c9d54fca4bec18d38a83140b6d660311",
+          "note": "protected_checkpoints stays None: this driver never verified Step13's checkpoint, it relies on the Step13 judgment ZIP backup, so adding the protection would change behaviour"
+        },
+        {
+          "file": "run_native_polish_and_final.py",
+          "original_sha256": "14bfbff1ead352ec5d91b29110ca787036d7aa0f5e238d04339f28a818d7d50c",
+          "migrated_sha256": "6678f95ed5d16fb0a3a0c966e6fd86fe9dee2afa54154a6a166c75d4b1d22b72",
+          "note": "argv revision, polish/final scope, checkpoint13 receipt preconditions, protected_checkpoints={13}"
+        }
+      ],
+      "metric_delta_cumulative": {
+        "naive_dot_run_files": {
+          "before": 52,
+          "after": 39,
+          "delta": -13
+        },
+        "precise_workflow_files": {
+          "before": 25,
+          "after": 12,
+          "delta": -13
+        },
+        "max_steps_1_files": {
+          "before": 23,
+          "after": 10,
+          "delta": -13
+        },
+        "registry_shim_files": {
+          "before": 4,
+          "after": 3,
+          "delta": -1
+        },
+        "hand_rolled_seen_journal": {
+          "before": 4,
+          "after": 2,
+          "delta": -2
+        },
+        "checkpoint_precondition_lookup": {
+          "before": 7,
+          "after": 7,
+          "delta": 0,
+          "why_flat": "the preconditions are kept verbatim on purpose: they ask 'is the historical checkpoint what it should be?', which is a different question from the protection"
+        },
+        "checkpoint_invariance_check": {
+          "before": 5,
+          "after": 3,
+          "delta": -2,
+          "what_moved": "the 'unchanged after the run' comparison is now protected_checkpoints, checked by the engine before the commit"
+        },
+        "progress_json_filename": {
+          "before": 35,
+          "after": 19,
+          "delta": -16
+        },
+        "protected_files_filename": {
+          "before": 65,
+          "after": 63,
+          "delta": -2
+        },
+        "run_bounded_refs": {
+          "before": 0,
+          "after": 0,
+          "delta": 0
+        },
+        "advance_bounded_refs": {
+          "before": 0,
+          "after": 13,
+          "delta": 13,
+          "expected": "one per migrated driver"
+        }
+      },
+      "metric_verdict": "every hand-rolled metric fell or was deliberately held flat; the only increase is advance_bounded",
+      "compile_check": {
+        "files": 212,
+        "syntax_errors": 0
+      },
+      "equivalence_tests": [
+        "tests/test_gate_g4_driver_migration.py::test_the_batch4_shape_binds_every_authorisation_at_once",
+        "tests/test_gate_g4_driver_migration.py::test_the_batch4_argv_revision_is_a_real_compare_and_swap",
+        "tests/test_gate_g4_driver_migration.py::test_the_batch4_checkpoint_precondition_is_not_the_checkpoint_protection"
+      ],
+      "fidelity_checks": [
+        "run_native_final16_recovered.py was first generated with protected_checkpoints={13} by the shared template; the original never verified Step13's checkpoint, so it was set to None - adding a protection is a behaviour change, not a preservation",
+        "the polish-mode ceiling (last_completed_step >= 15) and the interpreter/module preconditions stay in the caller, since they are this script's policy and environment checks rather than runner semantics",
+        "argv[1] is passed straight into expected_revision, which makes the CAS real rather than vacuous; only the first loop iteration uses it, matching the original's single pre-loop assertion"
+      ],
+      "original_digests_source": "work_manifest.json (the verified backup manifest); every digest here is read from it, none is written by hand"
     }
   ],
   "corrections": [

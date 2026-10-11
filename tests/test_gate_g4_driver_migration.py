@@ -1258,3 +1258,130 @@ def test_the_batch3_identity_and_loop_shape_is_already_covered():
     assert migrated["outcome"].entry_verification.checked == 2
     assert migrated["outcome"].final_verification.ok is True
     assert not any(p.endswith("large_manifest_identity.json") for p in migrated["files"])
+
+
+# ============== batch 4: every authorisation bound at once, argv CAS included
+def test_the_batch4_shape_binds_every_authorisation_at_once():
+    """The three special_business drivers carry the most contract fields at once.
+
+    An argv-supplied revision (a real compare-and-swap, not a read-back), the
+    stage cursor, an allowed source-step scope, a subtask bound, a hash manifest,
+    a large-file identity and a protected checkpoint.  All of them must appear in
+    the RUN_STARTED authorisation, because the question afterwards is which
+    authorisation a run executed under.
+    """
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    big = root / "canary_large_manifest.json"
+    big.write_text('{"v": 1}\n', encoding="utf-8")
+    stat = big.stat()
+
+    contract = BoundedRunContract(
+        expected_revision=state.revision,          # as if passed on argv
+        expected_cursor=(state.active_stage, state.active_subtask, state.source_step_id),
+        allowed_source_steps=frozenset({7}),
+        max_subtasks=1,
+        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+        protected_manifest=_protected(),
+        protected_identity={big.name: (stat.st_size, stat.st_mtime_ns)},
+        protected_checkpoints={4},
+        actor="operator",
+    )
+
+    with canary.frozen_time():
+        outcome = engine.run_bounded(contract)
+    collected = canary.collect(root)
+
+    bindings = canary.bounded_authorisation(collected["events"])
+    assert bindings, "the authorisation must be recoverable from the stream"
+    block = bindings[0]["block"]
+    assert block["expected_revision"] == state.revision
+    assert block["max_subtasks"] == 1
+    assert block["allowed_source_steps"] == [7]
+    assert block["protected_identity"] == {
+        big.name: {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    }
+    assert block["protected_checkpoints"] == [4]
+    assert block["protected_manifest_sha256"]
+
+    # both kinds of protection were really checked
+    assert outcome.entry_verification.checked == 2, "one hash plus one identity"
+    assert outcome.entry_checkpoints.checked == (4,)
+    assert outcome.entry_verification.ok and outcome.final_verification.ok
+    assert outcome.entry_checkpoints.ok and outcome.final_checkpoints.ok
+
+
+def test_the_batch4_argv_revision_is_a_real_compare_and_swap():
+    """Unlike a revision just read back, an argv expectation cannot self-satisfy.
+
+    This is the difference that batch 2 had to correct: the drivers there read the
+    revision to build the contract, so the CAS was vacuous.  These three take the
+    revision from argv, so a stale authorisation is genuinely refused.
+    """
+
+    from factory_core.bounded_run import BoundedRunError
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    before = canary.collect(root)
+
+    with canary.frozen_time(), pytest.raises(BoundedRunError, match="expected revision 411"):
+        engine.run_bounded(
+            BoundedRunContract(
+                expected_revision=411,  # the driver's argv value, long since stale
+                allowed_source_steps=frozenset({16}),
+                max_subtasks=1,
+            )
+        )
+
+    assert canary.collect(root)["events"] == before["events"]
+
+
+def test_the_batch4_checkpoint_precondition_is_not_the_checkpoint_protection():
+    """Two mechanisms, two questions - the distinction the batch preserves.
+
+    The drivers look up Step13's checkpoint and assert its receipt fields: "is the
+    historical checkpoint what it should be?"  The contract's
+    ``protected_checkpoints`` answers a different question: "does this run leave it
+    alone?"  Keeping the lookup while moving the invariance is why the precondition
+    metric stays flat while the invariance metric falls.
+    """
+
+    from factory_core.bounded_run import ProtectedCheckpointViolation
+
+    canary.build_seed(
+        lambda root: canary.stage_seed_ready_for_step_with_protected_file(root, 6)
+    )
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+
+    # the caller can still assert whatever it likes about an existing checkpoint
+    checkpoint4 = next(
+        c for c in canary.store_at(root).stage_checkpoints() if c["source_step_id"] == 4
+    )
+    assert checkpoint4["source_step_id"] == 4
+
+    # and the contract refuses to protect a checkpoint that is not there, which is
+    # the precondition the lookup would have failed on anyway - but with a reason
+    with canary.frozen_time(), pytest.raises(ProtectedCheckpointViolation):
+        engine.run_bounded(
+            BoundedRunContract(expected_revision=state.revision, protected_checkpoints={13})
+        )
