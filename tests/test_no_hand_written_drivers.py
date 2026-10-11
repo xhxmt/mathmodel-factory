@@ -20,6 +20,7 @@ outside ``service.advance_bounded``.
 """
 from __future__ import annotations
 
+import shutil
 import textwrap
 from pathlib import Path
 
@@ -130,7 +131,43 @@ FORBIDDEN = [
         "progress_journal_with_advance",
         id="progress-journal-beside-advance",
     ),
+    pytest.param(
+        "bound_renamed_service.py",
+        """
+        from factory_core.service import FactoryService
+        svc = FactoryService(ROOT)
+        runner = svc.engine(P)
+        state = runner.run(max_steps=1)
+        """,
+        "workflow_advance",
+        id="bound-name-that-is-not-engine",
+    ),
+    pytest.param(
+        "bound_renamed_factory_call.py",
+        """
+        from factory_core.service import FactoryService
+        runner = FactoryService(ROOT).engine(P)
+        state = runner.run(max_steps=1)
+        """,
+        "workflow_advance",
+        id="bound-name-from-a-one-line-factory-call",
+    ),
+    pytest.param(
+        "clone_patcher.py",
+        """
+        source = (W / "run_controller.py").read_text()
+        (W / "run_controller.py").write_text(source.replace("old", "new"))
+        """,
+        "driver_source_rewrite",
+        id="clone-idiom-rewriting-a-driver",
+    ),
 ]
+
+#: The two "bound" cases above used to name their variable ``engine``, so the
+#: inline ``\\bengine\\.run\\(`` pattern caught them with the binding channel
+#: removed entirely - they proved nothing about the bound-name detection.  The
+#: parameters added here use a name no inline pattern contains, so deleting
+#: ``SERVICE_BINDING`` from ``workflow_advance_sites`` turns them red.
 
 ALLOWED = [
     pytest.param(
@@ -179,6 +216,37 @@ ALLOWED = [
         outcome = FactoryService(ROOT).advance_bounded(P, contract)
         """,
         id="the-supported-entry-point",
+    ),
+    pytest.param(
+        "class_named_engine.py",
+        """
+        game = GameEngine(config)
+        game.run(turns=3)
+        """,
+        id="a-class-whose-name-ends-in-engine",
+    ),
+    pytest.param(
+        "docstring_binding.py",
+        '''
+        """The old shape was:
+
+            service = FactoryService(ROOT)
+        """
+        result = service.run(context)
+        ''',
+        id="a-binding-that-exists-only-in-a-docstring",
+    ),
+    pytest.param(
+        "documented_clone.py",
+        '''
+        """The retired patcher did:
+
+            source = (W / "run_controller.py").read_text()
+            (W / "run_controller.py").write_text(source)
+        """
+        outcome = service.advance_bounded(P, contract)
+        ''',
+        id="a-clone-idiom-that-exists-only-in-a-docstring",
     ),
 ]
 
@@ -336,3 +404,61 @@ def test_a_composed_argument_to_the_supported_entry_point_is_allowed(tmp_path):
         )
     )
     assert report["ok"] is True, report["violations"]
+
+
+# ============ one advance is one finding, and a tree-level assertion CI can run
+def test_one_advance_is_reported_once(tmp_path):
+    """The two channels describe the same call, so it must not be counted twice.
+
+    ``engine = service.engine(P)`` binds the name, and the next line is also the
+    spelling the inline pattern knows.  Reported twice, one hand-written advance
+    reads as two, and a count is what a reviewer takes from the report.
+    """
+
+    report = scan(
+        _tree(
+            tmp_path,
+            "one.py",
+            """
+            engine = service.engine(P)
+            state = engine.run(max_steps=1)
+            """,
+        )
+    )
+    assert len(report["violations"]) == 1, report["violations"]
+
+
+FIXTURE_TREE = REPO_ROOT / "tests/fixtures/driver_guard_tree"
+FIXTURE_EXEMPTIONS = frozenset({"legacy_controller.before.py"})
+
+
+def test_the_committed_fixture_tree_is_clean():
+    """The tree-level assertion, available in CI.
+
+    ``test_the_project_tree_has_no_hand_written_driver`` skips wherever ``work/``
+    is absent - including CI - so the shape the checker has to clear was never
+    asserted in the environment that runs on every change.  The fixture reproduces
+    the real tree's shapes: the migrated form with its documentation of what it
+    replaced, an ordinary helper, a class whose name merely ends in ``Engine``, and
+    one exempted ``.before.py`` copy.
+    """
+
+    report = scan(FIXTURE_TREE, exemptions=FIXTURE_EXEMPTIONS)
+    assert report["ok"] is True, report["violations"]
+    assert report["files_scanned"] >= 4
+    assert report["residual"], "documentation mentions are recorded, just not as violations"
+
+
+def test_the_fixture_tree_catches_a_driver_if_one_grows_back(tmp_path):
+    """The control: the fixture is clean because it has no advance, not because
+    the checker stopped reading it."""
+
+    copied = tmp_path / "tree"
+    shutil.copytree(FIXTURE_TREE, copied)
+    (copied / "regrown_driver.py").write_text(
+        "state = FactoryService(ROOT).engine(P).run(max_steps=1)\n", encoding="utf-8"
+    )
+
+    report = scan(copied, exemptions=FIXTURE_EXEMPTIONS)
+    assert report["ok"] is False
+    assert "regrown_driver.py" in {entry["file"] for entry in report["violations"]}
