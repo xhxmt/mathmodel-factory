@@ -1062,6 +1062,39 @@ None / 0 / <0 / 非整数 -> 不存活（持久化的 0 或负值是损坏而非
 
 **证明测试刻意不做任何 monkeypatch**：在只注入恒定 store 时钟的前提下，包含 `PROMPT_INPUT_BOUND` 在内的**每一个**事件都带上该恒定时间戳。另有测试断言机制本身（`store.clock` 即注入的时钟，而**不带时钟构造的 store 仍是默认时钟**——这正是 context 必须承载它的原因）。
 
+### 6.16 测试层安全修正：真实历史测试改为只读副本
+
+**PR 审查阶段发现的一处潜在风险**（由评审提出，值得单独记录）：
+
+`SQLiteStateStore` 的**任何读路径**（`load` / `status_snapshot` / `events` / `dirty_flags`）都会调用 `_upgrade_schema`，把 v9 库**就地升级**到 v10 并提交。而真实历史测试此前是直接把**原始项目路径**送进 Factory 代码的：
+
+- `test_gate_g3_replay.py`：`SQLiteStateStore(_requires(name))`
+- `test_gate_g2_solver.py` / `test_solver_reconcile.py`：`evaluate_solver_jobs(_requires(name))`（内部开 store）
+
+**当时没有出事**——因为 `_gate_projects` 指向的 A / B / R 恰好都是 phys=10，`_upgrade_schema` 提前返回。但这个安全是**偶然的**：它取决于 A/B/R 恰好是哪些项目，而不是被强制的。`PF_GATE_PROJECTS_ROOT` 让这一点更危险——它允许把该层指向**任何 checkout**，而那些项目的 schema 世代没人检查过。
+
+**CI 也抓不到**：CI 里这些树不存在，所有会出事的测试都被 skip。**全绿不是证据。**
+
+**修正（按评审建议）**：
+
+1. `_gate_projects.snapshot(name, destination)` 只复制 `.factory/`（store 与 solver 评估器所读的全部内容；复制整个项目意味着每次测试搬 979 MiB 的 `work/`），真实历史测试一律走副本；原始库**只由 raw SQLite 打开**。
+2. `tests/test_gate_reads_only_copies.py`（5 项）把这一点变成**结构性约束**：
+   - 扫描全部测试文件，禁止把真实路径访问器（`_gate_projects.require` / `_requires` / `_db` …）送进 store-backed 调用；
+   - **非空泛性**：断言真实历史层确实用了副本（否则"没有真实路径进 store"可以靠"根本不碰真实项目"来满足）；
+   - **行为断言**：用 `bde49712` 自己的代码构造**真实 v9 库**，走副本路径（副本**确实被迁移**），再断言原始库 sha256 与 **mtime_ns** 均不变；
+   - 断言 `snapshot` 对源树**只读**（含"不复制 `work/`"）。
+
+**服务器验收（实证）**：
+
+| 库 | phys | 跑真实历史测试后 | 跑全量套件后 |
+|---|---|---|---|
+| `cumcm_2020_a_codex_luna` | 9 | 摘要/mtime 不变 | **9，不变** |
+| `stability_run2` | 9 | 不变 | **9，不变** |
+| `stability_run3` | 9 | 不变 | **9，不变** |
+| `stability_run4` / `formal_2025b` / `cumcm_2026_a` | 10 | 不变 | 不变 |
+
+**结论：没有任何原始库被改动**（修复前后都是）。但修复把"没出事"从**偶然**变成了**结构上不可能**——三个 v9 库的世代现在是测试层保证的，而不是碰巧的。
+
 > 顺带说明：我一度也给 `audit/service.py` 的 `StepContext` 传了时钟，但那条路径没有引擎 store 可继承，`SQLiteStateStore(project).clock` 恰好**等于默认时钟**——那行不带来任何东西却暗示了它做不到的事，已撤回，该文件回到原状。
 
 

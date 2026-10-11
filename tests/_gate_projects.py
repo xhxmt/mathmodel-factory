@@ -26,6 +26,7 @@ Two things are therefore separated here:
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,33 @@ def available() -> list[str]:
     """Gate projects present in this environment, in stable order."""
 
     return [name for name in sorted(PROJECTS) if real_path(name).is_dir()]
+
+
+def snapshot(name: str, destination: Path) -> Path:
+    """A disposable copy of a real gate project.
+
+    ``SQLiteStateStore`` migrates a database **in place** on any read path -
+    ``load``, ``status_snapshot``, ``events`` and ``dirty_flags`` all call
+    ``_upgrade_schema``, which promotes a generation-9 database to 10 and commits.
+    A test that hands a real project to Factory code is therefore a test that can
+    rewrite it, and CI cannot catch that: the trees are absent there, so the tests
+    that would do it are skipped.
+
+    The real-history layer consequently runs against a copy and the original is
+    only ever read with raw SQLite.  ``PF_GATE_PROJECTS_ROOT`` makes this matter
+    more than it looks: it lets the layer be pointed at any checkout, whose
+    projects' generations nobody has checked.
+
+    Only ``.factory/`` is copied, which is everything the store and the solver
+    evaluator read.
+    """
+
+    source = require(name)
+    target = destination / "gate-projects" / name
+    if not target.exists():
+        target.mkdir(parents=True)
+        shutil.copytree(source / ".factory", target / ".factory", symlinks=True)
+    return target
 
 
 def require(name: str) -> Path:

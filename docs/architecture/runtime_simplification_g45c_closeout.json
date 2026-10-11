@@ -92,5 +92,51 @@
       ]
     }
   },
-  "how_to_run": "uv run python scripts/check_no_hand_written_drivers.py <factory>/ongoing/<project>/work --exempt <each listed backup>"
+  "how_to_run": "uv run python scripts/check_no_hand_written_drivers.py <factory>/ongoing/<project>/work --exempt <each listed backup>",
+  "test_layer_safety": {
+    "risk": "SQLiteStateStore migrates a v9 database in place on ANY read path (load, status_snapshot, events, dirty_flags all call _upgrade_schema), so a test that hands a real project to Factory code is a test that can rewrite it.  The real-history layer did exactly that: test_gate_g3_replay built SQLiteStateStore(_requires(name)), and test_gate_g2_solver and test_solver_reconcile fed _requires(name) to evaluate_solver_jobs.",
+    "why_it_did_not_bite": "the three projects the layer points at are all physical generation 10, so _upgrade_schema returns early.  The safety was incidental - it depended on which projects A, B and R happen to be - not enforced.  PF_GATE_PROJECTS_ROOT makes that worse, since it lets the layer be aimed at any checkout.",
+    "why_ci_could_not_catch_it": "the trees are absent in CI, so every test that would do the damage is skipped; a green run is not evidence",
+    "fix": [
+      "_gate_projects.snapshot(name, destination) copies .factory/ only - everything the store and the solver evaluator read - and the real-history tests use it; the original is opened only by raw SQLite",
+      "tests/test_gate_reads_only_copies.py forbids passing a real-path accessor into a store-backed call, asserts non-vacuity (the layer really does use copies), and asserts the behaviour on a genuine v9 fixture built by bde49712's own code: the copy is migrated, the original's sha256 and mtime_ns are not"
+    ],
+    "server_acceptance": {
+      "method": "captured sha256 + schema_info.schema_version + mtime_ns for the six production databases, ran the real-history tests, then the full suite, and re-captured",
+      "result": "no database changed; the three generation-9 databases are still generation 9",
+      "databases": {
+        "cumcm_2020_a_codex_luna": {
+          "phys_before": 9,
+          "phys_after": 9,
+          "changed": false
+        },
+        "stability_run2": {
+          "phys_before": 9,
+          "phys_after": 9,
+          "changed": false
+        },
+        "stability_run3": {
+          "phys_before": 9,
+          "phys_after": 9,
+          "changed": false
+        },
+        "stability_run4": {
+          "phys_before": 10,
+          "phys_after": 10,
+          "changed": false
+        },
+        "formal_2025b": {
+          "phys_before": 10,
+          "phys_after": 10,
+          "changed": false
+        },
+        "cumcm_2026_a": {
+          "phys_before": 10,
+          "phys_after": 10,
+          "changed": false
+        }
+      }
+    },
+    "conclusion": "nothing was damaged before the fix either, but the fix turns 'it happened not to bite' into 'it structurally cannot': the generation of the three v9 databases is now guaranteed by the test layer rather than by luck."
+  }
 }

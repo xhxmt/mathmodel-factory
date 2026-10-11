@@ -264,7 +264,7 @@ def test_effective_state_serialises_without_dataclass_junk(tmp_path):
 #: the answers recorded on the machine that produced the projects, and skips where
 #: the trees are absent.  Point it elsewhere with ``PF_GATE_PROJECTS_ROOT``.
 @pytest.mark.parametrize("name", sorted(_gate_projects.PROJECTS))
-def test_real_history_regression(name):
+def test_real_history_regression(tmp_path, name):
     """The real projects must land on the answers established when S5 was built.
 
     A: two ownerless jobs whose relevance cannot be proven -> UNRESOLVED.
@@ -272,7 +272,9 @@ def test_real_history_regression(name):
     R: every job is behind the committed cursor -> no blocker.
     """
 
-    states = evaluate_solver_jobs(_gate_projects.require(name))
+    # a copy: evaluate_solver_jobs opens a store, and any read path migrates a
+    # generation-9 database in place
+    states = evaluate_solver_jobs(_gate_projects.snapshot(name, tmp_path))
     blockers = [s for s in states if s.blocks_completion]
     assert states, name
 

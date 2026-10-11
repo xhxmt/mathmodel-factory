@@ -229,7 +229,7 @@ def test_reading_the_stream_mutates_nothing(hermetic_project):
 
 
 # ------------------------------------------------------------- non-vacuity
-def test_the_gate_has_non_vacuous_coverage(hermetic_project):
+def test_the_gate_has_non_vacuous_coverage(hermetic_project, tmp_path):
     """The guard the real-history layer used to carry, made satisfiable.
 
     The previous guard asserted that at least one production tree was present,
@@ -256,5 +256,8 @@ def test_the_gate_has_non_vacuous_coverage(hermetic_project):
     assert BLOCKING_RELEVANCE & PROVEN_RELEVANCE == frozenset()
 
     for name in _gate_projects.available():
-        real_events = SQLiteStateStore(_gate_projects.require(name)).events()
+        # a copy: events() calls _upgrade_schema, which migrates a v9 database
+        real_events = SQLiteStateStore(
+            _gate_projects.snapshot(name, tmp_path)
+        ).events()
         assert len(real_events) > _MIN_EVENTS, name
