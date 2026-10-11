@@ -498,3 +498,63 @@ def test_every_event_is_stamped_with_the_pinned_clock():
 
     # and the two tracks agree on the stamps, which is what the comparison uses
     assert legacy["event_created_at"] == bounded["event_created_at"]
+
+
+# ==================== the clock is inherited, not monkeypatched around
+def test_prompt_step_inherits_the_store_clock_without_monkeypatching():
+    """Gate 1 section 3.5, fixed at the source rather than in the harness.
+
+    ``prompt_step.py`` opens its own store to bind the prompt-input receipt, and
+    that store used to be built with the default clock, so ``PROMPT_INPUT_BOUND``
+    was stamped from the real wall clock: its timestamp, and the event id hashed
+    from it, were not reproducible, and two runs of the same work stopped being
+    comparable.  ``frozen_time()`` worked around it by also replacing the storage
+    class, which is a harness compensating for a product gap.
+
+    The engine now puts its store's clock on the StepContext and the internal
+    store inherits it, so this test deliberately calls **no** monkeypatch: the
+    constant has to arrive on its own.
+    """
+
+    evidence = canary.build_seed(canary.stage_seed)
+    root = canary.restore_seed()
+    engine = FactoryEngine(
+        root, store=canary.store_at(root), registry=canary.stage_registry(),
+        sleeper=lambda _: None,
+    )
+    state = canary.store_at(root).load()
+    contract = BoundedRunContract(
+        expected_revision=state.revision,
+        max_subtasks=1,
+        run_policy=RunPolicy.BOUNDED_SUBTASKS,
+    )
+
+    # no frozen_time() on purpose
+    outcome = engine.run_bounded(contract)
+    collected = canary.collect(root)
+
+    types = [event["type"] for event in collected["events"]]
+    assert "PROMPT_INPUT_BOUND" in types, "the prompt path must be exercised"
+    assert outcome.completed_subtasks == 1
+
+    off_clock = [
+        (kind, stamp)
+        for kind, stamp in zip(types, collected["event_created_at"])
+        if stamp != canary.CONSTANT_EPOCH
+    ]
+    assert off_clock == [], f"events stamped off the injected clock: {off_clock}"
+
+
+def test_the_context_carries_the_clock_the_engine_was_built_with():
+    """The mechanism, asserted directly: no store is opened with a stray clock."""
+
+    from factory_core.storage import SQLiteStateStore
+
+    canary.build_seed(canary.stage_seed)
+    root = canary.restore_seed()
+    store = canary.store_at(root)
+    assert store.clock is canary.constant_clock
+    assert SQLiteStateStore(root).clock is not canary.constant_clock, (
+        "a store built without a clock still uses the default, which is why the "
+        "context has to carry it"
+    )

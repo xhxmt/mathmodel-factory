@@ -1032,6 +1032,40 @@ artifact：`runtime_simplification_g45c_closeout.json`。
 
 #### G4.5c 状态：**CLOSED**
 
+### 6.15 两个开放项已处置
+
+#### `_pid_is_live` 的 EPERM 语义（潜在正确性问题，先修）
+
+`os.kill(pid, 0)` 不用一个返回码回答"runner 还在吗"：`ESRCH` 是没了，而 **`EPERM` 说明进程存在、只是不属于调用者**。**把 EPERM 读成死亡正是危险方向**：在跨用户共享的项目目录上，别的用户的存活 runner 会被判为已死，引擎发出 `RUNNER_INTERRUPTED`，第二个 runner 就可能接管一个仍在被推进的项目。
+
+**修前存在两份实现且已经分叉**：`engine.py` 吞掉所有 `OSError`，`service.py` 只吞 `PermissionError`/`ProcessLookupError`——同一个 pid 会因路径不同得到不同判定，且**两者都把 EPERM 当死亡**。
+
+现在 `factory_core/liveness.py` 是**唯一实现**，两处都委托给它（这也是第三份拷贝不会悄悄出现的原因：有测试断言两个模块里都不再有自己的探测）：
+
+```
+ESRCH            -> 不存活
+EPERM            -> 存活
+成功             -> 存活
+其他异常         -> 存活（fail-closed：不可读的答案不得被读成"runner 没了"，
+                    因为假"存活"的代价是拒绝启动，假"死亡"的代价是两个写者）
+None / 0 / <0 / 非整数 -> 不存活（持久化的 0 或负值是损坏而非 runner；
+                    且 os.kill(-1, 0) 会作用于调用者可发送信号的每一个进程）
+```
+
+测试逐条覆盖（含 monkeypatch 的 EPERM 与 ESRCH），并有一条**引擎级**断言：记录着"存活但非本进程"的 runner 的项目现在抛 `RunnerBusy` 而不是被判为已中断，且记录保持不动。
+
+#### `prompt_step` 的时钟注入（可测试性，后修）
+
+`factory_core/steps/prompt_step.py` 有 4 处自行构造 store 来绑定 prompt-input receipt，用的是**默认时钟**，因此 `PROMPT_INPUT_BOUND` 的时间戳——以及由它哈希出的 `event_id`——**不可复现**，两次相同工作无法比较。Gate 1 §3.5 记录了这个缺口，并让 `frozen_time()` 连 storage 类一起替换来中和它（**harness 在为产品缺口兜底**）。
+
+现在：`SQLiteStateStore.clock` 暴露自己的时钟；`StepContext.clock` 承载它；引擎在 3 处构造 `StepContext` 时填入 `self.store.clock`；`prompt_step.py` 的 4 处内部 store 统一经 `_project_store(context)` 继承。
+
+**证明测试刻意不做任何 monkeypatch**：在只注入恒定 store 时钟的前提下，包含 `PROMPT_INPUT_BOUND` 在内的**每一个**事件都带上该恒定时间戳。另有测试断言机制本身（`store.clock` 即注入的时钟，而**不带时钟构造的 store 仍是默认时钟**——这正是 context 必须承载它的原因）。
+
+> 顺带说明：我一度也给 `audit/service.py` 的 `StepContext` 传了时钟，但那条路径没有引擎 store 可继承，`SQLiteStateStore(project).clock` 恰好**等于默认时钟**——那行不带来任何东西却暗示了它做不到的事，已撤回，该文件回到原状。
+
+
+
 20/20 驱动迁移完成、双向锚点已封存、残留已分类、语义判据对可执行脚本成立、永久 guard 已生效。
 
 **canary 保真边界（已记录）**

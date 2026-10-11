@@ -24,6 +24,25 @@ from .prompting import PromptRenderer
 from .validators import NativeArtifactValidator
 
 
+def _project_store(context):
+    """An internal store for this project that inherits the engine's clock.
+
+    These steps open their own store to read or bind the prompt-input receipt.
+    With the default clock the ``PROMPT_INPUT_BOUND`` event is stamped from the
+    real wall clock, so its timestamp - and the ``event_id`` hashed from it - is
+    not reproducible, and two runs of the same work stop being comparable.  The
+    engine puts its store's clock on the context for exactly this reason; the
+    fallback keeps the previous behaviour for callers that supply none.
+    """
+
+    from ..storage import SQLiteStateStore
+
+    clock = getattr(context, "clock", None)
+    if clock is None:
+        return SQLiteStateStore(context.project_dir)
+    return SQLiteStateStore(context.project_dir, clock=clock)
+
+
 @dataclass
 class PromptStep:
     contract: StepContract
@@ -127,7 +146,7 @@ class PromptStep:
         from ..storage import SQLiteStateStore
 
         assert self.contract.prompt is not None
-        store = SQLiteStateStore(context.project_dir)
+        store = _project_store(context)
         state = store.load()
         attempt_revision = (
             self._attempt_selected_revision(store, context)
@@ -172,7 +191,7 @@ class PromptStep:
         from ..storage import SQLiteStateStore
 
         assert self.contract.prompt is not None
-        store = SQLiteStateStore(context.project_dir)
+        store = _project_store(context)
         if store.exists or int(context.revision) != 0:
             raise RuntimeError(
                 "standalone PromptStep compatibility requires revision 0 and no workflow state"
@@ -285,7 +304,7 @@ class PromptStep:
     def execute(self, context) -> ExecutionResult:
         from ..storage import SQLiteStateStore
 
-        store = SQLiteStateStore(context.project_dir)
+        store = _project_store(context)
         if not store.exists:
             return self._execute_standalone_compatibility(context)
         if store.load().control_mode != "engine":
@@ -381,7 +400,7 @@ class PromptStep:
     def recover(self, context, error: StepError) -> RecoveryDecision:
         from ..storage import SQLiteStateStore
 
-        store = SQLiteStateStore(context.project_dir)
+        store = _project_store(context)
         if not store.exists:
             return RecoveryDecision.from_validation(
                 self.validator.validate(context), active_step=context.step_id

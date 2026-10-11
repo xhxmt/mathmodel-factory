@@ -163,6 +163,19 @@ class SQLiteStateStore:
         self._clock = clock
 
     @property
+    def clock(self) -> Callable[[], float]:
+        """The clock this store was built with.
+
+        Exposed so code that opens its *own* store for the same project can
+        inherit the same clock instead of silently falling back to the wall
+        clock.  ``factory_core.steps.prompt_step`` did exactly that, which made
+        the PROMPT_INPUT_BOUND timestamp - and the event id hashed from it -
+        irreproducible.
+        """
+
+        return self._clock
+
+    @property
     def exists(self) -> bool:
         return self.path.is_file()
 

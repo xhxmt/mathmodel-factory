@@ -511,6 +511,7 @@ class FactoryEngine:
                 timeout_seconds=timeout_seconds,
                 revision=state.revision,
                 deadline_epoch=self._contest_deadline(definition),
+                clock=self.store.clock,
             )
             try:
                 with deadline_scope(preview_context.deadline_epoch):
@@ -1081,6 +1082,7 @@ class FactoryEngine:
                 timeout_seconds=definition.timeout_seconds,
                 revision=state.revision,
                 deadline_epoch=None,
+                clock=self.store.clock,
             )
             validation = definition.lifecycle.validate(context)
             if classifier_stale or not validation.is_valid:
@@ -2317,6 +2319,7 @@ class FactoryEngine:
             ),
             revision=state.revision,
             deadline_epoch=self._contest_deadline(definition),
+            clock=self.store.clock,
         )
 
     def _contest_deadline(self, definition: StepDefinition) -> int | None:
