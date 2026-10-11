@@ -490,10 +490,24 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
         stage_id = event.payload.get("stage")
         subtask = event.payload.get("subtask")
         side_effect_refs: list[Any] = []
+        version_readable = True
         if isinstance(envelope, dict):
             canonical = str(envelope.get("canonical_type") or canonical)
             event_id = envelope.get("event_id")
-            version = event_version_of(envelope, default=1, revision=event.revision)
+            # A reporting read must not be the thing that fails hardest.  A stream
+            # whose version cannot be parsed is an integrity failure, but that is
+            # *reported* elsewhere: ``replay_events`` refuses it and
+            # ``status_snapshot`` sets ``event_replay_valid = False``.  Raising here
+            # instead broke the two callers that exist to *explain* a broken stream
+            # - ``authoritative_status`` through ``project_runtime_diagnostics``,
+            # and ``diagnostics_service``, which calls this function from inside its
+            # own ``except ReplayIntegrityError``.  The unreadable event keeps the
+            # legacy v1 field names, and the record says so.
+            try:
+                version = event_version_of(envelope, default=1, revision=event.revision)
+            except ReplayIntegrityError:
+                version = 1
+                version_readable = False
             stage_id = (
                 envelope.get("subject_stage_id")
                 if version >= 2
@@ -512,6 +526,7 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
                 "created_at": event.created_at,
                 "event_type": event.type,
                 "canonical_type": canonical,
+                "event_version_readable": version_readable,
                 "step": event.step,
                 "attempt": event.attempt,
                 "stage": stage_id,

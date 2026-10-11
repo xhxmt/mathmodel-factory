@@ -30,6 +30,7 @@ from factory_core.workflow_events import (
     ENVELOPE_KEY,
     ReplayIntegrityError,
     project_action_center,
+    project_audit_timeline,
     project_recovery_status,
     replay_events,
     replay_state,
@@ -978,3 +979,73 @@ def test_the_state_snapshot_reports_a_corrupt_version_instead_of_raising(tmp_pat
     assert snapshot["event_replay_valid"] is False, (
         "the snapshot must report the corruption rather than propagate it"
     )
+
+
+def _corrupt_the_last_event_version(tmp_path, version="not-a-version"):
+    """Insert one event whose envelope version cannot be read.
+
+    The events table is append-only, so this is an insert rather than an update.
+    """
+
+    import sqlite3
+
+    connection = sqlite3.connect(tmp_path / ".factory" / "state.db")
+    try:
+        revision, event_type, payload = connection.execute(
+            "SELECT revision, type, payload_json FROM events ORDER BY revision DESC LIMIT 1"
+        ).fetchone()
+        tampered = json.loads(payload)
+        tampered[ENVELOPE_KEY]["event_version"] = version
+        connection.execute(
+            "INSERT INTO events(revision, type, created_at, step, attempt, payload_json)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (revision + 1, event_type, 100, None, 0, json.dumps(tampered)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_the_audit_timeline_reports_a_corrupt_version_instead_of_raising(tmp_path):
+    """The other half of the same guarantee: the timeline must stay readable.
+
+    ``status_snapshot`` reports the corruption, but ``project_audit_timeline`` raised
+    on the very same event - and it is the function both readers of a *broken*
+    stream go through: ``authoritative_status`` (via
+    ``project_runtime_diagnostics``) and ``diagnostics_service``, which calls it from
+    inside its own ``except ReplayIntegrityError`` branch.  Reporting a corrupt
+    stream must not be the read that fails hardest.
+    """
+
+    store = SQLiteStateStore(tmp_path, clock=lambda: 100)
+    store.initialize(project_id="demo", project_type="modeling")
+    _corrupt_the_last_event_version(tmp_path)
+
+    events = SQLiteStateStore(tmp_path, clock=lambda: 100).events()
+    timeline = project_audit_timeline(events)
+
+    assert len(timeline) == len(events), "the timeline must still describe every event"
+    assert timeline[-1]["event_version_readable"] is False, (
+        "the unreadable event must say so rather than pass silently as a v1 envelope"
+    )
+    assert all(record["event_version_readable"] for record in timeline[:-1]), (
+        "readable events must not be marked unreadable"
+    )
+
+
+def test_authoritative_status_survives_a_corrupt_event_version(tmp_path):
+    """The consequence end to end: the status read reports, it does not crash."""
+
+    from factory_core.projections import authoritative_status
+
+    store = SQLiteStateStore(tmp_path, clock=lambda: 100)
+    store.initialize(project_id="demo", project_type="modeling")
+    _corrupt_the_last_event_version(tmp_path)
+
+    snapshot = SQLiteStateStore(tmp_path, clock=lambda: 100).status_snapshot()
+    payload = authoritative_status(tmp_path, snapshot)
+
+    assert snapshot["event_replay_valid"] is False, (
+        "the integrity question is still answered - by the flag, not by an exception"
+    )
+    assert payload["execution_state"] == snapshot["state"].status.value

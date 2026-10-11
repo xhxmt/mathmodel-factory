@@ -90,7 +90,10 @@ class BoundedRunContract:
     expected_revision: int
     #: 1 to 3 components: (stage, subtask, source step).  A component left
     #: as ``None`` is not constrained, and a shorter tuple constrains only its
-    #: prefix; an empty tuple is refused because it constrains nothing.
+    #: prefix.  An empty tuple is refused; a cursor with *no* constrained
+    #: component is normalised to ``None``, because that is what it means - and
+    #: it is what ``cursor_of`` yields for the ready state every migrated driver
+    #: starts from (see ``__post_init__``).
     expected_cursor: tuple[int | None, ...] | None = None
     allowed_source_steps: frozenset[int] | None = None
     max_subtasks: int | None = None
@@ -148,21 +151,40 @@ class BoundedRunContract:
                     f"(stage, subtask, source step); got {len(cursor)}"
                 )
             stage, subtask, source_step = cursor + (None,) * (3 - len(cursor))
-            if stage is not None and not _is_source_step(stage):
-                raise BoundedRunError(
-                    f"expected_cursor stage must be a non-negative source step id, "
-                    f"not {stage!r}"
-                )
-            if subtask is not None and not isinstance(subtask, str):
-                raise BoundedRunError(
-                    f"expected_cursor subtask must be a string, not {subtask!r}"
-                )
-            if source_step is not None and not _is_source_step(source_step):
-                raise BoundedRunError(
-                    f"expected_cursor source step must be a non-negative source step "
-                    f"id, not {source_step!r}"
-                )
-            object.__setattr__(self, "expected_cursor", cursor)
+            # Non-empty is not the same as constraining something.  A cursor with no
+            # constrained component *is* the documented "no cursor expectation"
+            # (``None``) rather than a weaker version of a named one: a ready state -
+            # the state every migrated driver requires on entry - has
+            # ``active_stage``, ``active_subtask`` and ``source_step_id`` all cleared,
+            # so ``cursor_of(state)`` returns exactly ``(None, None, None)``.  The
+            # twenty migrated G4.5c drivers pass
+            # ``expected_cursor=(state.active_stage, state.active_subtask,
+            # state.source_step_id)``, so refusing this shape would break every one of
+            # them on entry (14 equivalence tests here fail if it is refused).
+            #
+            # What it must not do is *look* like a constraint: a cursor recorded as
+            # ``[null, null, null]`` reads as "entry was pinned" when nothing was
+            # compared.  Normalising it to ``None`` keeps the authorisation honest -
+            # the run's record then says "no cursor expectation" - and leaves the
+            # entry comparison exactly as strict as the caller's cursor really is.
+            if stage is None and subtask is None and source_step is None:
+                object.__setattr__(self, "expected_cursor", None)
+            else:
+                if stage is not None and not _is_source_step(stage):
+                    raise BoundedRunError(
+                        f"expected_cursor stage must be a non-negative source step id, "
+                        f"not {stage!r}"
+                    )
+                if subtask is not None and not isinstance(subtask, str):
+                    raise BoundedRunError(
+                        f"expected_cursor subtask must be a string, not {subtask!r}"
+                    )
+                if source_step is not None and not _is_source_step(source_step):
+                    raise BoundedRunError(
+                        f"expected_cursor source step must be a non-negative source step "
+                        f"id, not {source_step!r}"
+                    )
+                object.__setattr__(self, "expected_cursor", cursor)
         if self.run_policy not in {
             RunPolicy.ADVANCE_UNTIL_BLOCKED,
             RunPolicy.BOUNDED_SUBTASKS,
@@ -796,19 +818,26 @@ def check_cursor(
     partial expectation was rejected.  The drivers pass all three components, and
     for them nothing changes - a component that is not ``None`` is still compared
     exactly.
+
+    A cursor that constrains nothing is refused here rather than silently skipped.
+    A contract normalises that shape to ``None`` at construction - the drivers spell
+    it ``cursor_of(state)``, which is all-``None`` in the ready state they require -
+    so this refusal guards the direct-caller path rather than a production one.
+    Reading a cursor that compared nothing as agreement is the same fail-open the
+    empty tuple used to be.
     """
 
     if expected_cursor is None:
         return
     actual = cursor_of(state)
     expected = tuple(expected_cursor)
-    if not expected:
-        # Defence in depth: a contract refuses this at construction, but a direct
-        # caller passing () would otherwise have every component check skipped and
-        # read the silence as agreement.
+    if not expected or all(component is None for component in expected):
+        # Defence in depth: a contract refuses these at construction, but a direct
+        # caller passing () or (None, None, None) would otherwise have every
+        # component check skipped and read the silence as agreement.
         raise BoundedRunError(
-            "expected_cursor must constrain at least one component; an empty "
-            "cursor constrains nothing"
+            "expected_cursor must constrain at least one component; a cursor that "
+            "constrains nothing (empty, or all components None) is refused"
         )
     mismatch = [
         (name, want, got)

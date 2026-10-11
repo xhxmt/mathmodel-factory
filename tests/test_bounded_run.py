@@ -593,6 +593,75 @@ def test_expected_cursor_refuses_a_shape_it_cannot_honour(cursor):
 
 
 @pytest.mark.parametrize(
+    "cursor", [(None,), (None, None), (None, None, None)]
+)
+def test_a_cursor_with_no_constrained_component_is_recorded_as_no_cursor(cursor):
+    """All-``None`` is the documented "no cursor expectation", not a constraint.
+
+    A ready state - the state every migrated driver requires on entry - has
+    ``active_stage``, ``active_subtask`` and ``source_step_id`` all cleared, so
+    ``cursor_of(state)`` *is* ``(None, None, None)`` there, and the twenty migrated
+    G4.5c drivers pass exactly that as ``expected_cursor``.  Refusing it would break
+    every one of them, so the contract normalises it instead - and normalising is
+    the honest fix anyway: recorded as ``[null, null, null]`` the run would read as
+    "entry was pinned" when no component was ever compared.
+    """
+
+    contract = BoundedRunContract(expected_revision=1, expected_cursor=cursor)
+
+    assert contract.expected_cursor is None, (
+        "a cursor that constrains nothing must be recorded as no cursor, not as a "
+        "constraint with empty components"
+    )
+    assert contract.canonical_payload()["expected_cursor"] is None, (
+        "the authorising payload is the audit record: it must not claim a cursor "
+        "expectation that compared nothing"
+    )
+
+
+def test_normalising_a_vacuous_cursor_keeps_the_rest_of_the_authorisation():
+    """The control: only the vacuous cursor is dropped, nothing else moves."""
+
+    contract = BoundedRunContract(
+        expected_revision=7,
+        expected_cursor=(None, None, None),
+        actor="operator",
+        max_subtasks=1,
+    )
+
+    assert contract.expected_revision == 7
+    assert contract.max_subtasks == 1
+    assert contract.actor == "operator"
+    assert contract.expected_cursor is None
+
+
+@pytest.mark.parametrize("cursor", [(), (None,), (None, None), (None, None, None)])
+def test_check_cursor_refuses_a_cursor_that_constrains_nothing(cursor):
+    """The direct-caller path refuses the shape a contract normalises away."""
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+
+    with pytest.raises(BoundedRunError, match="constrain at least one component"):
+        check_cursor(_State(), cursor)
+
+
+def test_check_cursor_still_accepts_one_constrained_component():
+    """The control: a partial expectation remains usable."""
+
+    class _State:
+        active_stage = 8
+        active_subtask = "revision"
+        source_step_id = 12
+
+    check_cursor(_State(), (None, None, 12))
+    check_cursor(_State(), (8, None, None))
+    check_cursor(_State(), None)
+
+
+@pytest.mark.parametrize(
     "cursor",
     [(8,), (8, "revision"), (8, "revision", 12), (None, None, 12), (8, None, None)],
 )
