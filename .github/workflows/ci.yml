@@ -43,6 +43,11 @@ jobs:
           --ignore=tests/test_web_control_plane_api.py
           --ignore=tests/test_cumcm2025a_exact_oracle.py
           --ignore=tests/test_cumcm2025a_occlusion_model.py
+      - name: Driver guard against the committed tree fixture
+        run: >-
+          uv run python scripts/check_no_hand_written_drivers.py
+          tests/fixtures/driver_guard_tree
+          --exempt legacy_controller.before.py
       - run: git diff --check
 
   latex:

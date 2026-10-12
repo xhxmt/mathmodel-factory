@@ -17,6 +17,9 @@ must be zero is a *workflow advance* outside the supported entry point:
   * a private ``StepRegistry`` subclass whose ``get``/``next_after`` are overridden
     to change Step ceilings, which is how the drivers used to bound attempts
   * a hand-written ``progress.json`` journal written next to a workflow advance
+  * a script that reads a driver's source and writes modified source back - the
+    clone idiom the two retired patchers used, which is why the retirement unit
+    was the chain rather than the file
 
 Explicitly allowed, because they are not workflow advances: ``subprocess.run``,
 ``os``/``re``/``asyncio``/executor ``run`` calls, ``self.run`` and other ordinary
@@ -64,8 +67,18 @@ WORKFLOW_ADVANCE = re.compile(
 #: FactoryService(ROOT)`` followed by ``service.engine(P).run(...)`` is a workflow
 #: advance that no inline pattern sees, and the first version of this checker
 #: reported such a file as clean.
+#:
+#: ``Engine\s*\(`` alone was too broad in both directions.  Too broad because it
+#: matched any name *ending* in ``Engine``, so ``game = GameEngine(config)`` bound
+#: ``game`` and every later ``game.run()`` - an ordinary method call - was reported;
+#: the lookbehind keeps ``FactoryEngine(`` and a bare ``Engine(`` while refusing
+#: ``GameEngine(``.  Too broad in the other direction too, because it was applied
+#: to raw text: a *docstring* that quotes the old shape
+#: (``service = FactoryService(ROOT)``) bound ``service`` for the whole file, so a
+#: live ``service.run(...)`` that never touched a factory was flagged.  The scan
+#: now runs this against text with comments and string literals blanked out.
 SERVICE_BINDING = re.compile(
-    r"^\s*(\w+)\s*=\s*[^\n]*(?:FactoryService|FactoryEngine|\.engine\s*\(|Engine\s*\()[^\n]*$",
+    r"^\s*(\w+)\s*=\s*[^\n]*(?:FactoryService|FactoryEngine|\.engine\s*\(|(?<![\w.])Engine\s*\()[^\n]*$",
     re.MULTILINE,
 )
 
@@ -74,12 +87,18 @@ def workflow_advance_sites(text: str) -> list[re.Match]:
     """Every workflow-advance expression in one file's source.
 
     The inline spellings plus any advance reached through a name bound to a
-    factory or an engine.  Both are needed: the bound form is how a script
-    written in two statements gets past a checker that only knows one-liners.
+    factory or an engine.  Both are needed: the bound form is how a script written
+    in two statements gets past a checker that only knows one-liners.
+
+    Bindings are read from the source with comments and string literals blanked,
+    so a file's own documentation cannot manufacture a name; and the two channels
+    are de-duplicated by position, because ``engine = service.engine(P)`` followed
+    by ``engine.run(...)`` is one advance, not two.
     """
 
+    code = blanked(text, ignored_spans(text))
     matches = list(WORKFLOW_ADVANCE.finditer(text))
-    names = sorted({match.group(1) for match in SERVICE_BINDING.finditer(text)})
+    names = sorted({match.group(1) for match in SERVICE_BINDING.finditer(code)})
     if names:
         bound = re.compile(
             r"\b(?:"
@@ -87,7 +106,17 @@ def workflow_advance_sites(text: str) -> list[re.Match]:
             + rf")\s*\.\s*(?:engine\({_ARG}\)\s*\.\s*)?run\("
         )
         matches.extend(bound.finditer(text))
-    return sorted(matches, key=lambda match: match.start())
+    # The two channels describe the same call with *different* spans: for
+    # ``service = FactoryService(ROOT)`` then ``service.engine(P).run(...)`` the
+    # bound match starts at ``service`` and the inline one at ``engine``.  Merging
+    # on identical spans alone therefore still reported one advance twice, so the
+    # rule is overlap - keep the earliest (widest) span and drop the ones inside it.
+    kept: list[re.Match] = []
+    for match in sorted(matches, key=lambda match: (match.start(), -match.end())):
+        if kept and match.start() < kept[-1].end():
+            continue
+        kept.append(match)
+    return kept
 
 #: A private registry whose Step ceilings are rewritten - the driver idiom.
 REGISTRY_SHIM = re.compile(
@@ -116,6 +145,32 @@ DRIVER_SOURCE_REWRITE = re.compile(
 )
 
 
+def driver_source_rewrite_sites(text: str) -> list[tuple[int, int, str]]:
+    """The driver files a script reads and writes back, with match offsets.
+
+    Returns ``(match start, match end, driver)``.  Both offsets are needed: the
+    match *begins* inside the filename string and *ends* in code (at the
+    ``.write_text(`` of the output), so the "is this a comment or a string"
+    question has to be asked at the end - the same rule the ``progress.json``
+    journal needs, for the same reason.  Asking it at the start classified every
+    clone site as documentation and let it through.
+    """
+
+    sites: list[tuple[int, int, str]] = []
+    for match in DRIVER_SOURCE_REWRITE.finditer(text):
+        # Only the text before the ``.py`` that is read: the match runs on to the
+        # ``.write_text(`` of the *output*, so the write target appears inside it
+        # and naming that would answer a different question.
+        window = text[max(0, match.start() - 160) : match.start() + 3]
+        names = re.findall(r"([\w./-]+\.py)", window)
+        if names:
+            # One clone site is one finding.  The window can mention more than one
+            # path, and emitting an entry per name turned a single site into several
+            # violations whose ``driver`` named something the site did not rewrite.
+            sites.append((match.start(), match.end(), names[0]))
+    return sites
+
+
 def rewrites_driver_source(text: str) -> list[str]:
     """The driver files a script reads and writes back, if any.
 
@@ -125,20 +180,33 @@ def rewrites_driver_source(text: str) -> list[str]:
     """
 
     files: list[str] = []
-    for match in DRIVER_SOURCE_REWRITE.finditer(text):
-        # Only the text before the ``.py`` that is read: the match runs on to the
-        # ``.write_text(`` of the *output*, so the write target appears inside it
-        # and naming that would answer a different question.
-        window = text[max(0, match.start() - 160) : match.start() + 3]
-        for name in re.findall(r"([\w./-]+\.py)", window):
-            if name not in files:
-                files.append(name)
+    for _start, _end, name in driver_source_rewrite_sites(text):
+        if name not in files:
+            files.append(name)
     return files
 
 
 def is_backup(relative: str) -> bool:
     name = Path(relative).name
     return any(marker in name for marker in BACKUP_MARKERS)
+
+
+def blanked(text: str, spans: list[tuple[int, int]]) -> str:
+    """``text`` with the ignored spans replaced by spaces, offsets preserved.
+
+    Blanking rather than deleting keeps every other offset - and so every line and
+    column - exactly where it was, so a position read from this copy still indexes
+    the original.
+    """
+
+    if not spans:
+        return text
+    characters = list(text)
+    for start, end in spans:
+        for index in range(max(0, start), min(len(characters), end)):
+            if characters[index] != "\n":
+                characters[index] = " "
+    return "".join(characters)
 
 
 def ignored_spans(text: str) -> list[tuple[int, int]]:
@@ -216,6 +284,28 @@ def scan(root: Path, *, exemptions: frozenset[str] = frozenset()) -> dict:
         record(REGISTRY_SHIM, "registry_shim", True)
         if workflow_advance_sites(text) and PROGRESS_JOURNAL.search(text):
             record(PROGRESS_JOURNAL, "progress_journal_with_advance", True, at_end=True)
+        # The clone idiom: a script that reads a driver and writes its source back.
+        # ``rewrites_driver_source`` existed for this but ``scan`` never called it,
+        # so the one pattern that regenerates a retired driver was the only one the
+        # standing check did not look for.
+        for start, end, rewritten in driver_source_rewrite_sites(text):
+            # The string test is taken at the END of the match: it starts inside the
+            # filename literal and finishes in code, at the output's ``.write_text(``.
+            # Taking it at the start would read every clone site as documentation.
+            if ignored(end - 1):
+                residual.append({"file": relative, "kind": "in_comment_or_string"})
+                continue
+            entry = {
+                "file": relative,
+                "line": text[:start].count("\n") + 1,
+                "kind": "driver_source_rewrite",
+                "snippet": text.splitlines()[text[:start].count("\n")].strip()[:100],
+                "driver": rewritten,
+            }
+            if relative not in exemptions:
+                violations.append(entry)
+            else:
+                residual.append(entry)
 
     # A scan that found nothing to scan has not cleared anything.  Reporting OK on
     # an empty tree - or on a mistyped path that happens to exist - is the same
