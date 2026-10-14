@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from factory_core.domain import InvalidTransition
+from factory_core.engine import FactoryEngine
 from factory_core.native_boundary import NativeBoundaryError, require_native_project
 from factory_core.service import FactoryService
 from factory_core.storage import SQLiteStateStore
@@ -66,6 +67,15 @@ def test_retired_rollback_cannot_mutate_native_project(tmp_path, method):
     before, _ = service.create_project('demo', 'fixture', start=False)
     with pytest.raises(InvalidTransition, match='retired'):
         getattr(service, method)('demo', expected_revision=before.revision)
+    assert service.inspect('demo') == before
+
+
+def test_retired_workflow_deactivation_cannot_mutate_native_project(tmp_path):
+    service = FactoryService(tmp_path)
+    before, _ = service.create_project('demo', 'fixture', start=False)
+    engine = FactoryEngine(tmp_path / 'ongoing/demo')
+    with pytest.raises(InvalidTransition, match='retired'):
+        engine.deactivate(expected_revision=before.revision)
     assert service.inspect('demo') == before
 
 

@@ -67,6 +67,7 @@ __pycache__/
 .env.*
 !.env.example
 .claude/settings.local.json
+.claude/*.lock
 
 # Document archives (organized historical docs)
 /docs/sessions/

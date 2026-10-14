@@ -37,7 +37,7 @@
 事实。控制面 `web/auth.db` 保存身份、`project_acl`、展示 ACL 和 delivery override；它不属于
 Stage 层，不能替代项目决定或推进 cursor。项目决定也不能反向授予 Web 访问或交付 override。
 当前 writer 边界及已知旁路见
-[`application_writer_allowlist_v1.json`](application_writer_allowlist_v1.json)。
+`application_writer_allowlist_v1.json`（已迁出本仓库，登记于 `docs/architecture/EXPERIMENTAL_CODE_SPLIT.json`）。
 
 合并后不得退回“整个 Stage 失败就全部重跑”。每个 Stage 必须持久化当前 subtask、所消费的
 输入 fingerprint 和已完成的 Step checkpoint，从最后一个有效 checkpoint 恢复。
