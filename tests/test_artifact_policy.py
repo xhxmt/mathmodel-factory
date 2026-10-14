@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from factory_core.artifact_ownership import artifact_pattern_matches
 from factory_core.current_artifact_ownership import (
     ARTIFACT_OWNERSHIP_REGISTRY,
     iter_owned_artifacts,
@@ -100,6 +101,24 @@ PATH_CORPUS = tuple(
 )
 
 
+
+def _allowlisted_shadow(path: str) -> bool:
+    """True for a path whose policy-only entry is allowed to shadow an ownership rule.
+
+    The agreement invariants (1 and 2) hold for every path *except* the deliberate
+    shadows listed in ``POLICY_ONLY_SHADOW_ALLOWLIST``.  Each of those carries its own
+    overlap test (below), so the exception is named in one place rather than silently
+    weakening the invariants for every path.
+    """
+
+    policy = artifact_policy(path)
+    return (
+        policy is not None
+        and policy.is_policy_only
+        and policy.pattern in POLICY_ONLY_SHADOW_ALLOWLIST
+    )
+
+
 # --------------------------------------------------------------- invariants 1, 2
 @pytest.mark.parametrize("path", PATH_CORPUS)
 def test_all_ownership_backed_policies_agree_with_legacy_resolution(path):
@@ -108,6 +127,8 @@ def test_all_ownership_backed_policies_agree_with_legacy_resolution(path):
     The policy must carry the very object the legacy API returns, so no two
     registries can drift apart for the same path.
     """
+    if _allowlisted_shadow(path):
+        pytest.skip(f"{path}: allowlisted shadow")
 
     policy = artifact_policy(path)
     legacy = artifact_ownership(path)
@@ -151,15 +172,19 @@ def test_s1b_registers_exactly_the_observed_gap_and_nothing_else():
         if artifact_policy(path) is not None
     }
     assert covered == set(OBSERVED_GAP_PATHS)
-    assert len(NATIVE_POLICY) == 18, "18 entries whose globs cover 21 paths"
+    # 18 gap entries + the two allowlisted shadows (scripts/submit_*.sh, result*.xlsx)
+    assert len(NATIVE_POLICY) == 20, "18 gap entries plus 2 allowlisted shadows"
     assert all(p.is_policy_only for p in NATIVE_POLICY)
     # every ownership rule still has its compatibility policy, and no ownership
     # rule was displaced
     backed = [p for p in POLICY_ORDER if p.ownership_rule is not None]
     assert len(backed) == len(ARTIFACT_OWNERSHIP_REGISTRY)
     assert len(ADDITIONAL_OWNERSHIP) == 5
-    # and nothing shadowed the legacy registry
-    assert shadowed_ownership_rules() == []
+    # and the only shadows of the legacy registry are the two allowlisted ones,
+    # each with its own overlap test
+    assert {pattern for pattern, _, _ in shadowed_ownership_rules()} == set(
+        POLICY_ONLY_SHADOW_ALLOWLIST
+    )
 
 
 @pytest.mark.parametrize("path", OBSERVED_GAP_PATHS)
@@ -181,12 +206,66 @@ def test_observed_gap_paths_are_registered_by_s1b_without_gaining_an_owner(path)
 
 
 # ------------------------------------------------------------------ invariant 3
-def test_no_policy_only_entry_shadows_an_ownership_rule():
-    """Invariant 3. Vacuous while NATIVE_POLICY is empty, hence the detector test
-    below proves the check is not silently doing nothing."""
+def test_every_shadowing_policy_only_entry_is_allowlisted_with_a_witness():
+    """Invariant 3, in the form it takes once shadowing is deliberate.
 
-    assert shadowed_ownership_rules() == []
-    assert POLICY_ONLY_SHADOW_ALLOWLIST == frozenset()
+    A policy-only entry that steals a path from an ownership rule turns "has a Stage
+    owner" into "has none", which is how a guard like this goes quiet.  Every such
+    entry must therefore be listed in ``POLICY_ONLY_SHADOW_ALLOWLIST`` and carry an
+    overlap test (below); the allowlist is compared exactly, so it cannot grow
+    silently either.
+    """
+
+    hits = shadowed_ownership_rules()
+    assert {policy_pattern for policy_pattern, _, _ in hits} == set(
+        POLICY_ONLY_SHADOW_ALLOWLIST
+    ), hits
+    assert POLICY_ONLY_SHADOW_ALLOWLIST == frozenset({"scripts/submit_*.sh", "result*.xlsx"})
+
+
+@pytest.mark.parametrize(
+    "policy_pattern, witness, frozen_owner, first_writer_stage, expected_mode, expected_submission",
+    [
+        # The guide launches solver jobs from scripts/ (Solver Execution), so stages 5
+        # and 6 wrote scripts/submit_*.sh - a Stage-3-owned path - and each write
+        # rewound the workflow.
+        ("scripts/submit_*.sh", "scripts/submit_sens.sh", 3, 6,
+         InvalidationMode.EXPLICIT_ONLY.value, False),
+        # The paper step regenerates the declared attachments; they are owned by
+        # Stage 4, so a stage-7 write rewound the solve.
+        ("result*.xlsx", "result2.xlsx", 4, 7,
+         InvalidationMode.PRESENTATION_ONLY.value, True),
+    ],
+)
+def test_the_shadowed_paths_no_longer_route_a_later_stage_backwards(
+    policy_pattern, witness, frozen_owner, first_writer_stage, expected_mode, expected_submission
+):
+    """The overlap test each allowlisted entry owes.
+
+    It names the frozen rule being shadowed, checks that its owner really is upstream
+    of the stage that writes the path (which is what made the write a rewind), and
+    pins the consequence the entry declares.
+    """
+
+    frozen = next(
+        (rule for rule in _OWNERSHIP_ORDER if artifact_pattern_matches(rule.pattern, witness)),
+        None,
+    )
+    assert frozen is not None, f"no frozen rule for {witness}"
+    assert frozen.owner_stage == frozen_owner
+    assert frozen.owner_stage < first_writer_stage, (
+        "the shadow is only justified while the frozen owner is upstream of the writer"
+    )
+
+    policy = artifact_policy(witness)
+    assert policy is not None and policy.is_policy_only
+    assert policy.pattern == policy_pattern
+    assert policy.invalidation_mode == expected_mode
+    assert policy.submission_member is expected_submission
+    # No Stage routing back to the frozen owner: a policy-only entry cannot carry an
+    # ownership rule (invariant 1), so the change cannot become an upstream obligation.
+    assert policy.ownership_rule is None
+    assert policy.route_stage != frozen.owner_stage
 
 
 def test_shadow_detector_actually_detects_shadowing():
@@ -218,6 +297,8 @@ def test_policy_presence_covers_and_may_extend_ownership_presence(path):
     Equality would be wrong once policy-only entries exist - and equality in the
     other direction (policy missing where ownership exists) is still forbidden.
     """
+    if _allowlisted_shadow(path):
+        pytest.skip(f"{path}: allowlisted shadow")
 
     policy = artifact_policy(path)
     legacy = artifact_ownership(path)
@@ -231,6 +312,8 @@ def test_policy_presence_covers_and_may_extend_ownership_presence(path):
 
 @pytest.mark.parametrize("path", PATH_CORPUS)
 def test_stage_routing_is_unchanged(path):
+    if _allowlisted_shadow(path):
+        pytest.skip(f"{path}: allowlisted shadow")
     assert artifact_policy_owner_stage(path) == artifact_owner_stage(path)
     assert artifact_policy_owner_stage(path, default=99) == artifact_owner_stage(
         path, default=99
@@ -425,6 +508,8 @@ def test_policy_iterator_mirrors_the_walk_and_skip_order(tmp_path):
 def test_policy_ownership_rule_matches_the_legacy_lookup(path):
     """``policy_ownership_rule`` must agree with ``artifact_ownership`` for every
     path that has a rule, and be None exactly where the legacy lookup is None."""
+    if _allowlisted_shadow(path):
+        pytest.skip(f"{path}: allowlisted shadow")
 
     assert policy_ownership_rule(path) is artifact_ownership(path) if (
         artifact_ownership(path) is not None
@@ -433,6 +518,8 @@ def test_policy_ownership_rule_matches_the_legacy_lookup(path):
 
 @pytest.mark.parametrize("path", PATH_CORPUS)
 def test_policy_reopen_target_matches_the_legacy_one(path):
+    if _allowlisted_shadow(path):
+        pytest.skip(f"{path}: allowlisted shadow")
     from factory_core.current_artifact_ownership import reopen_after_step_for_artifact
 
     assert reopen_after_step_for_policy_artifact(path) == (

@@ -18,7 +18,11 @@ import sqlite3
 
 import pytest
 
-from factory_core.artifact_policy import NATIVE_POLICY, artifact_policy
+from factory_core.artifact_policy import (
+    NATIVE_POLICY,
+    POLICY_ONLY_SHADOW_ALLOWLIST,
+    artifact_policy,
+)
 from factory_core.current_artifact_ownership import artifact_ownership
 from factory_core.current_dirty import classify_manifest_changes
 from factory_core.domain import SCHEMA_VERSION
@@ -114,6 +118,13 @@ def test_gate_registration_is_complete_and_ownerless():
     for path in TREE:
         policy = artifact_policy(path)
         if policy is not None and policy.is_policy_only:
+            if policy.pattern in POLICY_ONLY_SHADOW_ALLOWLIST:
+                # A deliberate, allowlisted shadow: this entry exists precisely to take
+                # the path away from its frozen owner (see the overlap tests in
+                # tests/test_artifact_policy.py).  It must really shadow, and every
+                # other policy-only entry must still be ownerless.
+                assert artifact_ownership(path) is not None, path
+                continue
             assert artifact_ownership(path) is None, path
 
 
