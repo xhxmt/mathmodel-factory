@@ -264,11 +264,37 @@ NATIVE_POLICY: tuple[ArtifactPolicy, ...] = (
     #    fail closed for them.
     ArtifactPolicy("paper/appendix_sources/pro01/**", ArtifactRole.EXPLORATORY.value,
                    InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    # -- Execution infrastructure and the declared attachments: a change that must
+    #    not rewind an upstream stage.
+    #
+    #    modeling_guide.md tells solver steps to launch their jobs from scripts/
+    #    (Solver Execution), and the paper step regenerates the declared result*.xlsx
+    #    attachments.  Under the frozen owners (``scripts/**`` -> Stage 3,
+    #    ``result*.xlsx`` -> Stage 4) each such write was an *upstream* obligation, so
+    #    the engine rewound the workflow through a semantic reopen.  Observed on a real
+    #    run: scripts/submit_one_step5.sh (stage 5 -> owner 3), scripts/submit_sens.sh
+    #    (stage 6 -> owner 3), result1..4.xlsx (stage 7 -> owner 4).  Both entries
+    #    shadow a frozen rule deliberately - that is what
+    #    POLICY_ONLY_SHADOW_ALLOWLIST plus its overlap tests exist for - and both keep
+    #    the artifact's delivery role while dropping the rewind: the launchers are
+    #    declared non-blocking (they are rebuilt by whichever stage runs the solver),
+    #    and the attachments keep their submission membership but route a change to
+    #    the derived-artifact chain instead of back to Stage 4.
+    ArtifactPolicy("scripts/submit_*.sh", ArtifactRole.DERIVED_GENERATOR.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+    ArtifactPolicy("result*.xlsx", ArtifactRole.DERIVED_PRESENTATION.value,
+                   InvalidationMode.PRESENTATION_ONLY.value, True, True,
+                   blocker="derived_artifacts_verification",
+                   route_stage=9, route_flag="FORMAT_DIRTY"),
 )
 
 #: A policy-only pattern may only shadow an ownership rule if it is listed here
-#: with a witness test.  Empty means "no shadowing is permitted" (CI invariant 3).
-POLICY_ONLY_SHADOW_ALLOWLIST: frozenset[str] = frozenset()
+#: with a witness test.  Two entries are listed: the solver launcher scripts and the
+#: declared result attachments, each with an overlap test that names the frozen rule
+#: it shadows and why the frozen owner is upstream of the stage that writes it.
+POLICY_ONLY_SHADOW_ALLOWLIST: frozenset[str] = frozenset(
+    {"scripts/submit_*.sh", "result*.xlsx"}
+)
 
 #: Native entries win over the ownership order, mirroring
 #: ``_OWNERSHIP_ORDER = ADDITIONAL_OWNERSHIP + FROZEN_REGISTRY``.
