@@ -679,3 +679,74 @@ def test_parallel_prepare_shortage_uses_standard_retry_budget(tmp_path):
     assert store.events()[-1].payload["error_class"] == (
         "TRANSIENT_INSUFFICIENT_STREAMS"
     )
+
+
+# --------------------------------------------------------------------------
+# Non-content failures (a checker produced no verdict) and the attempt budget
+# --------------------------------------------------------------------------
+
+
+def _engine_with(tmp_path, results, *, max_attempts):
+    handler = FakeHandler(list(results))
+    validator = FakeValidator(
+        [ValidationResult.valid() if result.returncode == 0 else ValidationResult.invalid("audit") for result in results]
+    )
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling")
+    engine = FactoryEngine(
+        tmp_path, store=store, registry=registry_for(handler, validator, max_attempts=max_attempts),
+        sleeper=lambda _: None,
+    )
+    return engine, store, handler
+
+
+def test_a_checker_without_a_verdict_never_consumes_a_content_attempt(tmp_path):
+    undecided = ExecutionResult.failed("TRANSIENT_INCREMENTAL_AUDIT", returncode=75)
+    engine, store, handler = _engine_with(
+        tmp_path, [undecided, undecided, ExecutionResult.succeeded()], max_attempts=1
+    )
+
+    state = engine.run()
+
+    assert state.status is WorkflowStatus.COMPLETED
+    assert handler.calls == [1, 2, 3]
+    retries = [event for event in store.events() if event.type == "RETRY_SCHEDULED"]
+    assert [event.payload["infrastructure_retries"] for event in retries] == [1, 2]
+    assert [event.payload["content_attempts_used"] for event in retries] == [0, 0]
+    assert store.verify_aggregate_domain_root()
+
+
+def test_an_exhausted_infrastructure_budget_is_its_own_terminal_class(tmp_path):
+    from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET
+
+    undecided = ExecutionResult.failed("TRANSIENT_INCREMENTAL_AUDIT", returncode=75)
+    engine, store, handler = _engine_with(
+        tmp_path, [undecided] * (INFRASTRUCTURE_RETRY_BUDGET + 1), max_attempts=5
+    )
+
+    state = engine.run()
+
+    assert state.status is WorkflowStatus.FAILED
+    assert len(handler.calls) == INFRASTRUCTURE_RETRY_BUDGET + 1
+    failure = store.events()[-1]
+    assert failure.type == "STEP_FAILED"
+    assert failure.payload["error_class"] == "PERMANENT_AUDIT_INFRASTRUCTURE"
+    assert failure.payload["exhausted_error_class"] == "TRANSIENT_INCREMENTAL_AUDIT"
+    assert failure.payload["content_attempts_used"] == 0
+
+
+def test_content_failures_keep_their_budget_between_infrastructure_retries(tmp_path):
+    undecided = ExecutionResult.failed("TRANSIENT_INCREMENTAL_AUDIT", returncode=75)
+    finding = ExecutionResult.failed("AUDIT_REPAIR_REQUIRED", returncode=1)
+    engine, store, handler = _engine_with(
+        tmp_path, [undecided, finding, undecided, finding], max_attempts=2
+    )
+
+    state = engine.run()
+
+    assert state.status is WorkflowStatus.FAILED
+    assert handler.calls == [1, 2, 3, 4]
+    failure = store.events()[-1]
+    assert failure.payload["error_class"] == "AUDIT_REPAIR_REQUIRED"
+    assert failure.payload["content_attempts_used"] == 2
+    assert store.verify_aggregate_domain_root()

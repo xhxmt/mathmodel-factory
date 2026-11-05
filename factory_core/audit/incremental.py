@@ -19,6 +19,61 @@ from .persistence import atomic_write_json, utc_now
 INCOMPLETE_STATUSES = frozenset(
     {"RUNNING", "PARTIAL", "PENDING", "INCOMPLETE", "FAILED"}
 )
+# A checker that dies without a verdict is not evidence about the project.
+# These markers identify the host running out of a resource the check needed.
+_RESOURCE_EXHAUSTION_MARKERS = (
+    "No space left on device",
+    "[Errno 28]",
+    "database or disk is full",
+    "Disk quota exceeded",
+    "[Errno 122]",
+    "MemoryError",
+    "Cannot allocate memory",
+    "[Errno 12]",
+    "Too many open files",
+    "[Errno 24]",
+)
+_UNCAUGHT_EXCEPTION_LINE = re.compile(
+    r"^[A-Za-z_][\w.]*(?:Error|Exception|Interrupt|Warning|Failure)\b(?::.*)?$"
+)
+_LOG_TAIL_BYTES = 65_536
+
+
+def checker_no_verdict(returncode: int, log: Path) -> str:
+    """Why a non-zero checker exit produced no verdict, or ``""`` if it did.
+
+    The check scripts use different exit codes for FAIL (1, 2 or 3), so the
+    code alone cannot separate a finding from a crash.  Three signals can:
+    the process was killed by a signal, the log names an exhausted host
+    resource, or the log ends in an uncaught Python traceback.  A script that
+    reports a finding and exits normally never ends that way.
+    """
+
+    if returncode == 0:
+        return ""
+    if returncode < 0 or returncode >= 128:
+        return f"terminated by signal (returncode {returncode})"
+    try:
+        with log.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - _LOG_TAIL_BYTES))
+            tail = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    for marker in _RESOURCE_EXHAUSTION_MARKERS:
+        if marker in tail:
+            return f"host resource exhausted ({marker})"
+    lines = [line.strip() for line in tail.splitlines() if line.strip()]
+    if (
+        lines
+        and "Traceback (most recent call last):" in tail
+        and _UNCAUGHT_EXCEPTION_LINE.match(lines[-1])
+    ):
+        return f"uncaught exception: {lines[-1][:200]}"
+    return ""
+
+
 PROFILE_DECISIONS = {
     AuditProfile.MODEL: "MODEL_READY",
     AuditProfile.RESULTS: "RESULTS_VERIFIED",
@@ -35,6 +90,9 @@ class StageCheck:
     report: str = ""
     returncode: int = 0
     timed_out: bool = False
+    # The check ran but produced no verdict (crash, signal, exhausted host
+    # resource).  Like a timeout, it says nothing about the project.
+    indeterminate: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -130,13 +188,22 @@ class IncrementalAuditService:
             for check in checks
             if not check.passed and check.severity == "hard"
         ]
-        indeterminate = [check for check in hard_failures if check.timed_out]
+        indeterminate = [
+            check for check in hard_failures if check.timed_out or check.indeterminate
+        ]
+        # A determinate finding is a real defect and wins: only when every hard
+        # failure lacks a verdict is the audit as a whole undecided.
+        undecided = bool(indeterminate) and len(indeterminate) == len(hard_failures)
+        # What the repair route and the reported failed check are judged on.
+        decisive = indeterminate if undecided else [
+            check for check in hard_failures if check not in indeterminate
+        ]
         warnings = [
             check
             for check in checks
             if not check.passed and check.severity == "warning"
         ]
-        if indeterminate:
+        if undecided:
             status = AuditStatus.INDETERMINATE
             decision = f"{profile.value.upper()}_AUDIT_INDETERMINATE"
             error_class = "TRANSIENT_INCREMENTAL_AUDIT"
@@ -156,9 +223,10 @@ class IncrementalAuditService:
             "checkpoint_step": checkpoint_step,
             "checks": [check.to_dict() for check in checks],
             "hard_failures": [check.name for check in hard_failures],
+            "indeterminate_checks": [check.name for check in indeterminate],
             "warnings": [check.name for check in warnings],
             "repair_step": self._repair_step(
-                profile, checkpoint_step, hard_failures
+                profile, checkpoint_step, decisive
             ),
         }
         if profile is AuditProfile.PAPER:
@@ -197,7 +265,7 @@ class IncrementalAuditService:
                 self._latest_path(project, profile).relative_to(project)
             ),
             "audit_reused": False,
-            "failed_check": hard_failures[0].name if hard_failures else "",
+            "failed_check": decisive[0].name if decisive else "",
             "repair_step": evidence["repair_step"],
         }
         execution = (
@@ -488,17 +556,27 @@ class IncrementalAuditService:
                     accepted=(0,),
                     log_path=report,
                 )
+                no_verdict = (
+                    ""
+                    if result.accepted or result.timed_out
+                    else checker_no_verdict(result.returncode, result.log_path)
+                )
+                if result.accepted:
+                    detail = "PASS"
+                elif no_verdict:
+                    detail = f"no verdict, exit={result.returncode}: {no_verdict}"
+                else:
+                    detail = f"exit={result.returncode}"
                 checks.append(
                     StageCheck(
                         name,
                         result.accepted,
                         severity,
-                        "PASS"
-                        if result.accepted
-                        else f"exit={result.returncode}",
+                        detail,
                         str(report.relative_to(project)),
                         result.returncode,
                         result.timed_out,
+                        bool(no_verdict),
                     )
                 )
             except OSError as exc:

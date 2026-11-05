@@ -336,3 +336,97 @@ def test_ledger_parser_supports_existing_column_order(tmp_path: Path) -> None:
         ledger.read_text(encoding="utf-8").replace("| OPEN |", "| RESOLVED |"),
     )
     assert has_unresolved_blocking(ledger) is False
+
+
+class ScriptedRunner:
+    """Each label maps to (returncode, log text); unlisted labels pass."""
+
+    def __init__(self, outcomes: dict[str, tuple[int, str]]) -> None:
+        self.outcomes = outcomes
+
+    def python(self, _root, _project, _script, _args, *, label, log_path, **_kwargs):
+        returncode, text = self.outcomes.get(label, (0, "VERDICT: PASS\n"))
+        write(Path(log_path), text)
+        return CommandResult(returncode, returncode == 0, Path(log_path))
+
+
+DISK_FULL_TRACEBACK = (
+    "checking provenance\n"
+    "Traceback (most recent call last):\n"
+    '  File "scripts/verify_provenance.py", line 88, in main\n'
+    "    connection.execute(query)\n"
+    "sqlite3.OperationalError: database or disk is full\n"
+)
+UNCAUGHT_TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "scripts/verify_invariants.py", line 12, in <module>\n'
+    "KeyError: 'p1'\n"
+)
+
+
+def test_a_checker_that_crashes_on_a_full_disk_is_indeterminate_not_a_finding(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_results(project)
+    service = IncrementalAuditService(
+        root, runner=ScriptedRunner({"audit_results_provenance": (1, DISK_FULL_TRACEBACK)})
+    )
+
+    outcome = service.run_project(project, AuditProfile.RESULTS, checkpoint_step=5)
+
+    assert outcome.record.status is AuditStatus.INDETERMINATE
+    assert outcome.execution.error_class == "TRANSIENT_INCREMENTAL_AUDIT"
+    check = next(item for item in outcome.record.evidence["checks"] if item["name"] == "provenance")
+    assert check["indeterminate"] is True
+    assert "no verdict" in check["detail"] and "disk is full" in check["detail"]
+    assert outcome.record.evidence["indeterminate_checks"] == ["provenance"]
+
+
+def test_an_uncaught_exception_or_signal_is_indeterminate(tmp_path: Path) -> None:
+    for returncode, text in ((1, UNCAUGHT_TRACEBACK), (-9, ""), (137, "Killed\n")):
+        root = tmp_path / f"factory{returncode}"
+        project = root / "ongoing" / "demo"
+        valid_results(project)
+        service = IncrementalAuditService(
+            root, runner=ScriptedRunner({"audit_results_invariants": (returncode, text)})
+        )
+        outcome = service.run_project(project, AuditProfile.RESULTS, checkpoint_step=5)
+        assert outcome.record.status is AuditStatus.INDETERMINATE, returncode
+
+
+def test_a_reported_finding_stays_a_failure(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_results(project)
+    # A script that reports a finding exits normally, even if its report
+    # quotes an exception name.
+    report = "VERDICT: FAIL\nmissing value for p1 (KeyError in source data)\n"
+    service = IncrementalAuditService(
+        root, runner=ScriptedRunner({"audit_results_invariants": (1, report)})
+    )
+
+    outcome = service.run_project(project, AuditProfile.RESULTS, checkpoint_step=5)
+
+    assert outcome.record.status is AuditStatus.FAIL
+    assert outcome.execution.error_class == "AUDIT_REPAIR_REQUIRED"
+
+
+def test_a_determinate_finding_wins_over_a_crashed_sibling_check(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_results(project)
+    service = IncrementalAuditService(
+        root,
+        runner=ScriptedRunner(
+            {
+                "audit_results_provenance": (1, DISK_FULL_TRACEBACK),
+                "audit_results_invariants": (1, "VERDICT: FAIL\n"),
+            }
+        ),
+    )
+
+    outcome = service.run_project(project, AuditProfile.RESULTS, checkpoint_step=5)
+
+    assert outcome.record.status is AuditStatus.FAIL
+    assert outcome.execution.metadata["failed_check"] == "invariants"
+    assert outcome.record.evidence["indeterminate_checks"] == ["provenance"]

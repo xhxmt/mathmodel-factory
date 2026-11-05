@@ -429,9 +429,14 @@ def replay_decisions(fixtures: list[dict[str, Any]], rule: Callable[[ChangeSet],
 def failure_records(fixture: dict[str, Any], labels: dict[int, dict[str, str]]) -> list[dict[str, Any]]:
     """Every failure that ended a Step attempt, with its hand-checked cause.
 
-    Under the current engine every failed attempt of a Step counts against that
-    Step's attempt budget, whatever its error class.
+    A failed attempt counts against the Step's content budget unless its
+    recorded error class is one the engine exempts
+    (:data:`factory_core.engine.NON_CONTENT_ERROR_CLASSES`).  The replay
+    re-applies that budget rule to recorded classes; it cannot re-run a check
+    to reclassify a failure recorded under an older checker.
     """
+
+    from factory_core.engine import NON_CONTENT_ERROR_CLASSES
 
     attempts = {attempt.end_rev: attempt for attempt in attempt_ledger(fixture["events"]) if attempt.end_rev is not None}
     records = []
@@ -449,7 +454,8 @@ def failure_records(fixture: dict[str, Any], labels: dict[int, dict[str, str]]) 
                 "error_class": event.get("error_class"),
                 "reason": event.get("reason"),
                 "attempt_hours": attempt.hours if attempt is not None else 0.0,
-                "consumed_attempt": attempt is not None,
+                "consumed_attempt": attempt is not None
+                and str(event.get("error_class") or "") not in NON_CONTENT_ERROR_CLASSES,
                 "cause": label.get("cause", "unlabeled"),
                 "evidence": label.get("evidence"),
             }
