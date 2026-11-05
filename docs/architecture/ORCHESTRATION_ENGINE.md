@@ -45,7 +45,7 @@ operational exception. Conversely, those grants do not choose a method,
 resolve a Human Gate, advance a scheduler cursor, or replace the immutable
 decision request/instance in the project database. See
 `decisions/ADR-0001-phase0-source-truth.md` (relocated out of this repository; recorded in
-`docs/architecture/EXPERIMENTAL_CODE_SPLIT.json`).
+[`docs/architecture/EXPERIMENTAL_CODE_SPLIT.json`](EXPERIMENTAL_CODE_SPLIT.json)).
 
 Step outputs remain validation evidence. `checkpoint.md`, `.heartbeat`,
 `.paused`, `.killed`, `.runner.pid`, and `diagnostics/status.json` are generated
@@ -83,7 +83,7 @@ supersede, prompt-attempt input binding, and projection-failure bookkeeping;
 bootstrap/migration initialization and archive relocation are separate write
 surfaces. The characterized inventory and future static-gate specification are
 `application_writer_allowlist_v1.json` (relocated out of this repository; recorded in
-`docs/architecture/EXPERIMENTAL_CODE_SPLIT.json`).
+[`docs/architecture/EXPERIMENTAL_CODE_SPLIT.json`](EXPERIMENTAL_CODE_SPLIT.json)).
 No caller may infer from this target that the current code has a unique writer.
 The Stage catalog maps every Step 0-16 contract
 exactly once and adds non-integer reviewer-entry and content-freeze subtasks;
