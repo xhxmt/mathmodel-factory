@@ -174,7 +174,7 @@ never a finding, and leaves its ledger row as the last verdict recorded it; a
 determinate finding in a sibling check still wins. Error classes in
 `engine.NON_CONTENT_ERROR_CLASSES` never consume a Step's content attempts:
 the engine derives their count from the event stream (no new replayed state
-field) and stops after `INFRASTRUCTURE_RETRY_BUDGET` retries with a distinct
+field) and stops after `INFRASTRUCTURE_RETRY_BUDGET` retries of the same class with a distinct
 terminal class (`PERMANENT_AUDIT_INFRASTRUCTURE`; `PERMANENT_MODEL_BACKEND_INFRASTRUCTURE`
 for `TRANSIENT_MODEL_BACKEND`, a model process that exited non-zero; a timeout
 still consumes a content attempt).

@@ -761,6 +761,21 @@ def test_a_model_backend_failure_never_consumes_a_content_attempt(tmp_path):
 
     assert engine.run().status is WorkflowStatus.COMPLETED
     assert handler.calls == [1, 2, 3]
+    retries = [event for event in store.events() if event.type == "RETRY_SCHEDULED"]
+    assert [event.payload["content_attempts_used"] for event in retries] == [0, 0]
+
+
+def test_each_infrastructure_class_has_its_own_budget(tmp_path):
+    from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET
+
+    audit = ExecutionResult.failed("TRANSIENT_INCREMENTAL_AUDIT", returncode=75)
+    backend = ExecutionResult.failed("TRANSIENT_MODEL_BACKEND", returncode=1, backend="codex")
+    results = [audit] * INFRASTRUCTURE_RETRY_BUDGET + [backend] * INFRASTRUCTURE_RETRY_BUDGET
+    engine, store, handler = _engine_with(tmp_path, [*results, ExecutionResult.succeeded()], max_attempts=1)
+
+    assert engine.run().status is WorkflowStatus.COMPLETED
+    retries = [event for event in store.events() if event.type == "RETRY_SCHEDULED"]
+    assert [event.payload["infrastructure_retries"] for event in retries] == [1, 2, 3, 1, 2, 3]
 
 
 def test_an_exhausted_backend_budget_has_its_own_terminal_class(tmp_path):
@@ -773,6 +788,11 @@ def test_an_exhausted_backend_budget_has_its_own_terminal_class(tmp_path):
     failure = store.events()[-1]
     assert failure.payload["error_class"] == "PERMANENT_MODEL_BACKEND_INFRASTRUCTURE"
     assert failure.payload["exhausted_error_class"] == "TRANSIENT_MODEL_BACKEND"
+    assert failure.payload["content_attempts_used"] == 0
+    assert all(
+        event.payload["content_attempts_used"] == 0
+        for event in store.events() if event.type == "RETRY_SCHEDULED"
+    )
 
 
 def test_a_model_timeout_still_consumes_a_content_attempt(tmp_path):

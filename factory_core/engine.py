@@ -68,10 +68,11 @@ from .transitions import TransitionCoordinator
 
 # Failures that say a check or harness produced no verdict at all.  They are
 # not evidence about the content, so they never consume one of the Step's
-# content attempts (``max_attempts``).  Each class maps to the terminal class
-# recorded once its own budget, INFRASTRUCTURE_RETRY_BUDGET consecutive
-# retries of one Step attempt sequence, is spent - so an exhausted harness
-# never reads as a content failure.
+# content attempts (``max_attempts``).  Each class has its own budget of
+# INFRASTRUCTURE_RETRY_BUDGET retries per Step attempt sequence (an audit
+# crash does not spend the backend's retries) and maps to the terminal class
+# recorded once that budget is spent - so an exhausted harness never reads
+# as a content failure.
 NON_CONTENT_ERROR_CLASSES: dict[str, str] = {
     "TRANSIENT_INCREMENTAL_AUDIT": "PERMANENT_AUDIT_INFRASTRUCTURE",
     # The model process exited non-zero (an upstream error, a dropped
@@ -884,9 +885,10 @@ class FactoryEngine:
             non_content = error_class in NON_CONTENT_ERROR_CLASSES
             earlier_non_content = self._non_content_retries(definition.id)
             if non_content:
-                # Spends the infrastructure budget, never a content attempt.
-                exhausted = earlier_non_content + 1 > INFRASTRUCTURE_RETRY_BUDGET
-                failure_metadata["infrastructure_retries"] = earlier_non_content + 1
+                # Spends this class's infrastructure budget, never a content attempt.
+                same_class = self._non_content_retries(definition.id, error_class)
+                exhausted = same_class + 1 > INFRASTRUCTURE_RETRY_BUDGET
+                failure_metadata["infrastructure_retries"] = same_class + 1
                 failure_metadata["infrastructure_retry_budget"] = INFRASTRUCTURE_RETRY_BUDGET
             else:
                 exhausted = attempt - earlier_non_content >= definition.max_attempts
@@ -2504,7 +2506,7 @@ class FactoryEngine:
             return NON_CONTENT_ERROR_CLASSES[error_class]
         return error_class
 
-    def _non_content_retries(self, step_id: int) -> int:
+    def _non_content_retries(self, step_id: int, error_class: str | None = None) -> int:
         """Non-content retries in the current attempt sequence of ``step_id``.
 
         Derived from the event stream rather than a state field, so replay
@@ -2512,7 +2514,7 @@ class FactoryEngine:
         starts at the latest Stage-subtask selection or the Step's latest
         ``STEP_STARTED`` with attempt 1, whichever is later, and every
         ``RETRY_SCHEDULED`` of a class in :data:`NON_CONTENT_ERROR_CLASSES`
-        since then is counted.
+        since then is counted (only those of ``error_class`` when given).
         """
 
         count = 0
@@ -2521,9 +2523,10 @@ class FactoryEngine:
                 break
             if event.step != step_id:
                 continue
-            if event.type == "RETRY_SCHEDULED" and str(
-                event.payload.get("error_class") or ""
-            ) in NON_CONTENT_ERROR_CLASSES:
+            recorded = str(event.payload.get("error_class") or "")
+            if event.type == "RETRY_SCHEDULED" and recorded in NON_CONTENT_ERROR_CLASSES and (
+                error_class is None or recorded == error_class
+            ):
                 count += 1
             elif event.type == "STEP_STARTED" and event.attempt <= 1:
                 break
