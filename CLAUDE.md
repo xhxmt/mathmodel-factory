@@ -167,6 +167,12 @@ model routes are quarantined in the worker and a healthy configured fallback is
 tried; a missing API credential or unsupported model must not be invoked again
 on every workflow retry.
 
+Pause and kill decide how to stop the runner before committing anything. The
+launch identity recorded for the current pid and lease is verified against the
+live process, independently of `aggregate_valid`; a gone or reused pid needs no
+signal, and a live pid without a verifiable identity refuses the operation with
+`STOP_IDENTITY_UNAVAILABLE` and commits nothing.
+
 `run_paper.sh --infer-step` reads Native SQLite state only. Projects without
 Native state remain historical artifacts and cannot execute here.
 
