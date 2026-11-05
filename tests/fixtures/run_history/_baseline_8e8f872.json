@@ -1,0 +1,209 @@
+{
+ "schema": "factory-run-history-replay-v1",
+ "rule": "current",
+ "current_classifier": "9f8ba8f601d1",
+ "totals": {
+  "runs": 16,
+  "completed": 2,
+  "deadline_h": 0.44,
+  "fail_h": 9.42,
+  "idle_h": 184.57,
+  "interrupted_h": 1.45,
+  "kept_h": 23.49,
+  "killed_h": 0.18,
+  "paused_h": 5.85,
+  "redone_h": 37.4,
+  "reopened_mid_h": 16.76,
+  "retry_h": 7.7,
+  "span_h": 316.87,
+  "superseded_h": 8.1,
+  "kept_share": 0.0741
+ },
+ "runs": [
+  {
+   "run": "cumcm_2020_a_codex_luna",
+   "final_status": "failed",
+   "span_h": 60.74,
+   "idle_h": 37.63,
+   "kept_h": 7.6,
+   "redone_h": 6.5
+  },
+  {
+   "run": "cumcm_2025_b_codex_luna_stability_20260817",
+   "final_status": "killed",
+   "span_h": 2.19,
+   "idle_h": 0.0,
+   "kept_h": 1.2,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2025_b_codex_luna_stability_20260817_run3",
+   "final_status": "failed",
+   "span_h": 0.07,
+   "idle_h": 0.0,
+   "kept_h": 0.0,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2025_b_codex_luna_stability_20260817_run4",
+   "final_status": "failed",
+   "span_h": 50.4,
+   "idle_h": 21.58,
+   "kept_h": 3.69,
+   "redone_h": 7.67
+  },
+  {
+   "run": "cumcm_2025_b_luna_usability_20260906t063231z",
+   "final_status": "paused",
+   "span_h": 8.01,
+   "idle_h": 2.1,
+   "kept_h": 1.04,
+   "redone_h": 2.62
+  },
+  {
+   "run": "cumcm_2025_b_gpt_formal_20260908t153023z",
+   "final_status": "completed",
+   "span_h": 35.76,
+   "idle_h": 11.81,
+   "kept_h": 3.19,
+   "redone_h": 4.9
+  },
+  {
+   "run": "cumcm_2026_a_fable_pro_20260910",
+   "final_status": "completed",
+   "span_h": 40.46,
+   "idle_h": 18.09,
+   "kept_h": 2.33,
+   "redone_h": 5.2
+  },
+  {
+   "run": "cumcm_2025_b_luna_flow_20260915",
+   "final_status": "failed",
+   "span_h": 0.23,
+   "idle_h": 0.0,
+   "kept_h": 0.0,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2025_b_luna_flow_20260915_retry",
+   "final_status": "killed",
+   "span_h": 0.03,
+   "idle_h": 0.0,
+   "kept_h": 0.0,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2025_b_luna_flow_20260915_verified",
+   "final_status": "killed",
+   "span_h": 0.06,
+   "idle_h": 0.0,
+   "kept_h": 0.0,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2025_b_luna_flow_20260915_verified2",
+   "final_status": "paused",
+   "span_h": 0.44,
+   "idle_h": 0.0,
+   "kept_h": 0.15,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2026_a_postmerge_canary",
+   "final_status": "failed",
+   "span_h": 0.08,
+   "idle_h": 0.0,
+   "kept_h": 0.0,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2026_a_postmerge_canary2",
+   "final_status": "failed",
+   "span_h": 0.0,
+   "idle_h": 0.0,
+   "kept_h": 0.0,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2026_a_postmerge_canary3",
+   "final_status": "failed",
+   "span_h": 0.0,
+   "idle_h": 0.0,
+   "kept_h": 0.0,
+   "redone_h": 0.0
+  },
+  {
+   "run": "cumcm_2026_a_postmerge_canary4",
+   "final_status": "failed",
+   "span_h": 68.0,
+   "idle_h": 55.34,
+   "kept_h": 2.06,
+   "redone_h": 5.42
+  },
+  {
+   "run": "cumcm_2026_a_postmerge_run2",
+   "final_status": "paused",
+   "span_h": 50.39,
+   "idle_h": 38.03,
+   "kept_h": 2.25,
+   "redone_h": 5.09
+  }
+ ],
+ "decisions": {
+  "change_sets": 346,
+  "evaluated_change_sets": 299,
+  "recorded_reopens": 49,
+  "decided_reopens": 46,
+  "decided_reopen_pairs": {
+   "stage10->owner8": 5,
+   "stage10->owner9": 2,
+   "stage2->owner1": 1,
+   "stage3->owner1": 1,
+   "stage4->owner1": 1,
+   "stage4->owner3": 11,
+   "stage5->owner3": 2,
+   "stage5->owner4": 2,
+   "stage7->owner3": 1,
+   "stage7->owner4": 1,
+   "stage8->owner3": 12,
+   "stage8->owner6": 1,
+   "stage9->owner8": 6
+  },
+  "fidelity": {
+   "change_sets_under_current_classifier": 47,
+   "mismatches": [
+    {
+     "run": "cumcm_2026_a_postmerge_run2",
+     "rev": 774,
+     "stage": 8,
+     "subtask": "revision",
+     "recorded": {
+      "reopen": false,
+      "owner_stage": null,
+      "resume_after_step": null
+     },
+     "decided": {
+      "reopen": true,
+      "owner_stage": 3,
+      "resume_after_step": 3,
+      "owners": [
+       3,
+       6
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "failures": {
+  "total": 122,
+  "by_cause": {
+   "unlabeled": 55,
+   "infrastructure": 35,
+   "workflow": 26,
+   "provider": 6
+  },
+  "non_content_consuming_attempts": 54,
+  "non_content_attempt_hours": 5.44
+ }
+}

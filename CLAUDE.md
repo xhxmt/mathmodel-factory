@@ -48,6 +48,8 @@ Direct runner invocations:
 ./run_paper.sh --infer-step <project_dir>
 ./run_paper.sh --status <project_dir>
 python3 -m factory_core.cli audit <project_dir>
+python3 -m factory_core.cli preflight [<project_dir>] [--steps 0-16] [--offline]
+python3 scripts/replay_run_history.py            # liveness replay of tests/fixtures/run_history
 ```
 
 Inside a project directory:

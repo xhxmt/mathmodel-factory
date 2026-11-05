@@ -13,6 +13,7 @@ from pathlib import Path
 from .domain import FactoryCoreError, MigrationConflict, WorkflowStatus
 from .engine import FactoryEngine
 from .projections import runtime_payload, write_compatibility_projections
+from .runtime_env import disk_backed_tmpdir
 from .storage import SQLiteStateStore
 from .service import FactoryService, wait_for_worker_ready
 from .stages import STAGE_SCHEDULER_GENERATION, STEP_SCHEDULER_GENERATION
@@ -153,7 +154,8 @@ def compat(arguments: list[str]) -> int:
     if state.status is WorkflowStatus.ARCHIVING:
         state = service.archive(project)
     else:
-        state = service.run(project, archive=True)
+        with disk_backed_tmpdir(service.root):
+            state = service.run(project, archive=True)
     print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
     return 0 if state.status not in {WorkflowStatus.FAILED, WorkflowStatus.KILLED} else 1
 
@@ -223,6 +225,15 @@ def build_parser() -> argparse.ArgumentParser:
     rebase.add_argument("project_dir")
     rebase.add_argument("--expected-revision", type=int)
 
+    preflight = sub.add_parser(
+        "preflight",
+        help="read-only check that model routes and scratch space can carry a run",
+    )
+    preflight.add_argument("project_dir", nargs="?")
+    preflight.add_argument("--steps", default="0-16", help="Steps to check, e.g. 0-16 or 4,5,9")
+    preflight.add_argument("--min-free-gb", type=float, default=2.0)
+    preflight.add_argument("--offline", action="store_true", help="skip network probes (reported as UNKNOWN)")
+    preflight.add_argument("--timeout", type=float, default=15.0)
     worker = sub.add_parser("worker")
     worker.add_argument("project_dir")
     worker.add_argument("--ready-file", required=True)
@@ -313,6 +324,28 @@ def build_parser() -> argparse.ArgumentParser:
     scheduler_activate.add_argument("project_dir")
     scheduler_activate.add_argument("--expected-revision", type=int)
     return parser
+
+
+def _parse_step_list(value: str) -> list[int]:
+    steps: list[int] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            low, high = (int(item) for item in part.split("-", 1))
+            steps.extend(range(low, high + 1))
+        else:
+            steps.append(int(part))
+    if not steps or any(step < 0 or step > 16 for step in steps):
+        raise ValueError(f"--steps must name Steps 0-16, got {value!r}")
+    return sorted(set(steps))
+
+
+def _default_http_get():
+    from .preflight import _urllib_get
+
+    return _urllib_get
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -419,15 +452,30 @@ def main(argv: list[str] | None = None) -> int:
             handle = service.start(project)
             print(json.dumps({"pid": handle.pid, "log": str(handle.log_path)}, sort_keys=True))
             return 0
+        if args.command == "preflight":
+            from .preflight import FAIL, run_preflight
+
+            report = run_preflight(
+                service.root,
+                project,
+                steps=_parse_step_list(args.steps),
+                min_free_bytes=int(args.min_free_gb * 2**30),
+                http_get=None if args.offline else _default_http_get(),
+                timeout=args.timeout,
+            )
+            print(json.dumps(report, ensure_ascii=False, indent=1, sort_keys=True))
+            return 3 if report["status"] == FAIL else 0
         if args.command == "worker":
             assert project is not None
             wait_for_worker_ready(Path(args.ready_file))
-            state = service.run(project, archive=True, ready_file=Path(args.ready_file))
+            with disk_backed_tmpdir(service.root):
+                state = service.run(project, archive=True, ready_file=Path(args.ready_file))
             print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
             return 0 if state.status not in {WorkflowStatus.FAILED, WorkflowStatus.KILLED} else 1
         if args.command == "run":
             assert project is not None
-            state = service.run(project, max_steps=args.max_steps, archive=True)
+            with disk_backed_tmpdir(service.root):
+                state = service.run(project, max_steps=args.max_steps, archive=True)
             print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
             return 0
         if args.command == "advance":
@@ -475,7 +523,8 @@ def main(argv: list[str] | None = None) -> int:
                 actor=args.actor,
                 previous_boundary_fingerprint=args.previous_boundary_fingerprint,
             )
-            result = service.advance_bounded(project, contract)
+            with disk_backed_tmpdir(service.root):
+                result = service.advance_bounded(project, contract)
             print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
             return 0
         if args.command == "rebase-classifier":
