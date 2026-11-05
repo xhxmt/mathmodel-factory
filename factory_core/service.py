@@ -26,6 +26,7 @@ from .contest import ContestPolicy
 from .engine import FactoryEngine
 from .human_decisions import validate_resolution
 from .projections import runtime_payload, write_compatibility_projections
+from .runtime_env import disk_tmpdir_overrides
 from .steps import build_native_registry
 from .adapters.solvers import SolverRequest, build_solver_backends
 from .registry import SolverBackendRegistry
@@ -111,6 +112,9 @@ class WorkerLauncher:
                 cwd=self.code_root,
                 env={
                     **os.environ,
+                    # Scratch files of checkers, solvers and agents stay on disk
+                    # when the inherited temp dir is a memory filesystem.
+                    **disk_tmpdir_overrides(self.factory_root),
                     "FACTORY": str(self.factory_root),
                     "PYTHONPATH": os.pathsep.join(
                         filter(

@@ -13,6 +13,7 @@
 | 查看当前 10-Stage 编排合同与实施状态 | [docs/architecture/STAGE_SIMPLIFICATION_PLAN.md](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md) |
 | 查看横向运行时基础设施收敛实现与验收计划 | [docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md](docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md) |
 | 查看源码、运行数据和兼容边界 | [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md) |
+| 查看下一步优化执行方案（活性优先）与回放基线 | [docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md](docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md) |
 | 编写模型、代码和论文 | [modeling_guide.md](modeling_guide.md) |
 | 检查建模口径 | [docs/guides/MODELING_CHECKLIST.md](docs/guides/MODELING_CHECKLIST.md) |
 | 使用 Web Dashboard | [web/README.md](web/README.md) |
@@ -38,6 +39,7 @@
 - [docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md](docs/architecture/RUNTIME_INFRASTRUCTURE_CONVERGENCE_PLAN.md)：已实现的类型化 WorkflowEvent、纯 Projector、Human Decision、StageExecutionPipeline 和 Job 幂等合同，以及尚未实现的 application-writer 唯一性与仍待完成的 clean-room 运营验收。
 - [docs/architecture/repository-boundaries.md](docs/architecture/repository-boundaries.md)：核心、应用、部署、评测、历史资产和运行数据的所有权。
 - [docs/architecture/compatibility-removal.md](docs/architecture/compatibility-removal.md)：兼容入口的可观察移除条件；本轮不删除这些入口。
+- [docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md](docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md)：基于 16 次运行事件流的优化执行方案（阶段 0–6），以及阶段 0 的执行记录；回放基线见 `tests/fixtures/run_history/_baseline_8e8f872.json`。
 - [docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md](docs/archive/WORKTREE_CONSOLIDATION_2026-07-30.md)：本轮旧 worktree 的恢复、取舍与合并依据（历史快照）。
 - [docs/archive/FIRST_PRINCIPLES_AUDIT_2026-08-09.md](docs/archive/FIRST_PRINCIPLES_AUDIT_2026-08-09.md)：2026-08-09 第一性原理审计（历史快照；不得替代当前代码、工作流或部署文档）。
 

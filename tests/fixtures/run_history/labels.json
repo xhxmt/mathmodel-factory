@@ -1,0 +1,305 @@
+{
+ "schema": "factory-run-history-labels-v1",
+ "causes": {
+  "infrastructure": "a checker, judge or harness failed to produce a verdict",
+  "provider": "the model provider refused or was unavailable",
+  "workflow": "a budget or gate state of the engine itself",
+  "unlabeled": "no hand-checked evidence; may be a genuine content defect"
+ },
+ "failures": {
+  "cumcm_2020_a_codex_luna": {
+   "126": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_ROLE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "128": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_ROLE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "135": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_PROVENANCE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "222": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_REOPEN_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "260": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_ROLE: the judge produced no usable verdict ('')"
+   },
+   "262": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_ROLE: the judge produced no usable verdict ('')"
+   }
+  },
+  "cumcm_2025_b_codex_luna_stability_20260817_run3": {
+   "12": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   }
+  },
+  "cumcm_2025_b_codex_luna_stability_20260817_run4": {
+   "634": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "987": {
+    "cause": "workflow",
+    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+   },
+   "989": {
+    "cause": "workflow",
+    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+   },
+   "996": {
+    "cause": "workflow",
+    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+   },
+   "998": {
+    "cause": "workflow",
+    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+   },
+   "1005": {
+    "cause": "workflow",
+    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+   },
+   "1037": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_PACKET: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1044": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1477": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "1868": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_PACKET: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1870": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1874": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "1878": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_PACKET: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1880": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1894": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1898": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1946": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_PACKET: the judge produced no usable verdict ('')"
+   },
+   "1948": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('')"
+   },
+   "2184": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "2376": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_PACKET: the judge produced no usable verdict ('')"
+   },
+   "2378": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('')"
+   },
+   "2380": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_REVIEW_LOOP_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "2394": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "2449": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   }
+  },
+  "cumcm_2025_b_gpt_formal_20260908t153023z": {
+   "589": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "781": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "1045": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_PACKET: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1047": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "1059": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_INDETERMINATE: the judge produced no usable verdict ('Gate 2 evidence is indeterminate')"
+   },
+   "1061": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Gate 2 evidence is indeterminate')"
+   },
+   "1082": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_REVIEW_LOOP_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "1294": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Gate 2 evidence is indeterminate')"
+   },
+   "1296": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Gate 2 evidence is indeterminate')"
+   },
+   "1351": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Gate 2 evidence is indeterminate')"
+   }
+  },
+  "cumcm_2025_b_luna_flow_20260915": {
+   "31": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   }
+  },
+  "cumcm_2025_b_luna_flow_20260915_verified2": {
+   "13": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   }
+  },
+  "cumcm_2025_b_luna_usability_20260906t063231z": {
+   "282": {
+    "cause": "infrastructure",
+    "evidence": "engine error class TRANSIENT_JUDGE_PACKET: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "284": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "289": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   }
+  },
+  "cumcm_2026_a_fable_pro_20260910": {
+   "344": {
+    "cause": "workflow",
+    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_STEP8_5_GATE"
+   },
+   "346": {
+    "cause": "workflow",
+    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_STEP8_5_GATE"
+   },
+   "372": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Step 13 judge verdict missing or invalid')"
+   },
+   "377": {
+    "cause": "infrastructure",
+    "evidence": "engine error class PERMANENT_JUDGE_INFRASTRUCTURE: the judge produced no usable verdict ('Gate 2 evidence is indeterminate')"
+   },
+   "481": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "551": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED: a budget counter, not a new defect"
+   },
+   "555": {
+    "cause": "workflow",
+    "evidence": "engine error class PERMANENT_ATTEMPT_BUDGET_EXHAUSTED: a budget counter, not a new defect"
+   }
+  },
+  "cumcm_2026_a_postmerge_canary": {
+   "6": {
+    "cause": "provider",
+    "evidence": "records/CANARY_1.json F3: codex upstream exhausted 5 reconnects ('high demand')"
+   },
+   "10": {
+    "cause": "workflow",
+    "evidence": "records/CANARY_1.json F1: step 0 has max_attempts=1 and resume preserves the spent attempt; no model call was made"
+   }
+  },
+  "cumcm_2026_a_postmerge_canary2": {
+   "6": {
+    "cause": "provider",
+    "evidence": "records/DSH_ROUTE.json: the deepseek HTTP route is not agentic and cannot produce step artifacts"
+   }
+  },
+  "cumcm_2026_a_postmerge_canary3": {
+   "6": {
+    "cause": "provider",
+    "evidence": "records/DSH_ROUTE.json: route probe before the DSH headless route existed"
+   }
+  },
+  "cumcm_2026_a_postmerge_canary4": {
+   "402": {
+    "cause": "provider",
+    "evidence": "records/p4/RUN_STOP_20261013.json: dsh QUOTA 'Insufficient Balance' during step 9, confirmed by a 402 probe"
+   },
+   "408": {
+    "cause": "infrastructure",
+    "evidence": "records/p4/HARNESS_BUG_20261014_env.json: the retry ran without the DSH environment, so the backend refused to start and the dispatcher fell through"
+   },
+   "411": {
+    "cause": "infrastructure",
+    "evidence": "records/p4/HARNESS_BUG_20261014_env.json: the retry ran without the DSH environment, so the backend refused to start and the dispatcher fell through"
+   }
+  },
+  "cumcm_2026_a_postmerge_run2": {
+   "99": {
+    "cause": "provider",
+    "evidence": "records/p4/RUN2_STOP_20261014.json: dsh QUOTA 'Insufficient Balance', confirmed by a 402 probe; the event names codex because only the last fallback is reported"
+   },
+   "424": {
+    "cause": "infrastructure",
+    "evidence": "records/p4/ATTEMPT_RESTORE_20261015_tmpfs.json: the numbers checker crashed with 'database or disk is full' on a full /tmp tmpfs; the paper passed every gate when re-run"
+   },
+   "427": {
+    "cause": "infrastructure",
+    "evidence": "records/p4/ATTEMPT_RESTORE_20261015_tmpfs.json: the numbers checker crashed with 'database or disk is full' on a full /tmp tmpfs; the paper passed every gate when re-run"
+   },
+   "430": {
+    "cause": "infrastructure",
+    "evidence": "records/p4/ATTEMPT_RESTORE_20261015_tmpfs.json: the numbers checker crashed with 'database or disk is full' on a full /tmp tmpfs; the paper passed every gate when re-run"
+   },
+   "433": {
+    "cause": "infrastructure",
+    "evidence": "records/p4/ATTEMPT_RESTORE_20261015_tmpfs.json: the numbers checker crashed with 'database or disk is full' on a full /tmp tmpfs; the paper passed every gate when re-run"
+   },
+   "436": {
+    "cause": "infrastructure",
+    "evidence": "records/p4/ATTEMPT_RESTORE_20261015_tmpfs.json: the numbers checker crashed with 'database or disk is full' on a full /tmp tmpfs; the paper passed every gate when re-run"
+   },
+   "744": {
+    "cause": "provider",
+    "evidence": "records/p4/FINDINGS_20261016_livelocks_and_masking.json F-B: dsh primary aborted, claude proxy 400, codex sentinel 127"
+   }
+  }
+ }
+}

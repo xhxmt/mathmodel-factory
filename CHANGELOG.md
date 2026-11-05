@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-05 — 活性优化阶段 0：运行历史回放、磁盘临时目录与路线预检
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 0。
+
+- **运行历史回放（新）**：`scripts/extract_run_history.py` 在项目提交租约下读取 `state.db` 主文件与 WAL 的私有快照（与 `isolated_state_snapshot_ro` 相同，看得到已提交的 WAL 帧，不在源目录创建或修改任何文件），抽取不含论文内容的夹具（事件、每次提交的分类变更集合、solver 作业归属；去掉哈希链、prompt 收据，任何账户的家目录与疑似密钥被替换）。`scripts/replay_run_history.py` 对夹具做三件事：时间账（保留 / 重做 / 中途回退 / 空转；PAUSED 只挂起尝试，RESUMED 后直接成功的仍记为保留，暂停时段不计入工作；`STEP_REOPENED` 与 `STAGE_SEMANTIC_REOPENED` 一样结束当前尝试）、按可替换规则重新判定每个变更集合是否回退、按人工标注统计非内容原因消耗的尝试次数。只有提交路径（`STEP_SUCCEEDED`、`STAGE_SEMANTIC_REOPENED`）上的变更集合参与回退判定，与引擎的 `_complete_stage_task` / `_fail_stage_task` 分工一致。
+- **夹具与基线**：`tests/fixtures/run_history/` 收录 2026-08-03 至 2026-10-16 的 16 次运行（1.8 MB），`labels.json` 为 67 条有出处的失败原因标注，`_baseline_8e8f872.json` 为当前 main 的基线：316.9 h 挂钟时间中保留的模型工作 23.2 h（7.3%）、空转 185.0 h；346 个变更集合中 299 个参与判定，记录回退 49 次，当前规则判定 46 次；非内容原因消耗尝试 56 次（5.8 h）。
+- **回放忠实性**：在当前分类器（`9f8ba8f601d1`）下记录的 47 个提交变更集合中，46 个逐条复现引擎当时的判定；唯一差异（run2 rev 774）来自验收主机上操作员手工打的本地豁免补丁，测试中以带出处的已知例外登记。run2 在 rev 437 起因人工改库导致事件链断开，但其后的判定事件仍真实发生，故保留全部事件用于决策回放（与方案初稿"只用到 rev 436"不同）。
+- **活性回归门禁**：`tests/test_run_history_replay.py` 断言回退判定次数与非内容尝试损失不得高于基线；以"总是回退"规则验证门禁确实会失败（299 > 46）。
+- **磁盘临时目录**：`factory_core/runtime_env.py`。当继承的临时目录位于 tmpfs/ramfs 时，worker 启动环境以及 `run`、`worker`、`advance`、兼容入口执行期间把 `TMPDIR` 指向 `run_state/tmp`；`FACTORY_TMPDIR` 可显式指定。进程内调用结束后恢复原环境与 `tempfile` 缓存。判断的是 `tempfile` 实际会用的目录（与 `tempfile` 一样按候选顺序逐个做一次真实写入探测，不存在、不可写或磁盘已满的 `TMPDIR` 会被跳过）；无法判断文件系统类型时不做改动。
+- **路线预检（新命令）**：`factory preflight [<project_dir>] [--steps] [--min-free-gb] [--offline]`，只读。按调度器同样的候选链（项目/默认分配 + 目录默认；启用联合建模的项目，Step 2 改为检查固定的 Claude 联合建模执行器）逐个检查可执行文件、凭据是否存在（从不输出取值）、DeepSeek 余额（`/user/balance`）或 OpenAI 兼容端点 `/models`，以及临时目录与项目所在磁盘空间。402、`is_available=false`、凭据缺失、Node < 24 或启动器不是文件的 DSH、临时目录位置被普通文件占用均为 FAIL；无法探测，或 2xx 响应不是文档规定的形状（DeepSeek 须有 `is_available=true` 与 `balance_infos` 列表，OpenAI 兼容端点须返回带 `data` 列表的模型清单），为 UNKNOWN，不记为 PASS。`--steps` 与 `--min-free-gb`（须为有限的非负数，0 表示不检查）的非法取值按用法错误退出。任一 Step 的全部候选失败时退出码为 3。
+- 测试：新增 58 例（回放与抽取 16 例，运行环境与预检 42 例）。
+
 ## 2026-09-22 — TUI 客户端 M4：打磨与文档（M0–M3 收尾）
 
 - 用 `uvx ruff check`（ruff 0.16.8）对 `apps/tui/` 与 TUI 测试做了一次真实 lint，而不是目测。修掉 13 项：1 处未使用导入（F401）、4 处导入顺序（I001）、7 处多余引号注解（UP037，各文件都有 `from __future__ import annotations`，引号本就冗余）、1 处函数末尾多余的 `return None`（RET501/PLR1711），并把 3 处自返回 dunder（`__aenter__`/`__aiter__`）的注解改为 `typing.Self`（PYI034）。
