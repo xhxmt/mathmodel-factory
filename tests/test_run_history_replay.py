@@ -281,3 +281,16 @@ def test_other_accounts_home_paths_are_redacted():
     text = extract_module.sanitize_text("/home/alice/x /Users/bob/y /root/.config/z")
     assert text == "~/x ~/y ~/.config/z"
     assert extract_module.sanitize_text("/home/josé/run /Users/张三/log") == "~/run ~/log"
+
+
+def test_non_content_failures_and_their_terminal_class_consume_no_content_attempt():
+    events = _events(
+        ("STEP_STARTED", 0, 10), ("RETRY_SCHEDULED", 60, 10),
+        ("STEP_STARTED", 120, 10), ("STEP_FAILED", 180, 10),
+        ("STEP_STARTED", 240, 11), ("STEP_FAILED", 300, 11),
+    )
+    events[1]["error_class"] = "TRANSIENT_INCREMENTAL_AUDIT"
+    events[3]["error_class"] = "PERMANENT_AUDIT_INFRASTRUCTURE"
+    events[5]["error_class"] = "AUDIT_REPAIR_REQUIRED"
+    records = replay.failure_records({"run": "demo", "events": events}, {})
+    assert [record["consumed_attempt"] for record in records] == [False, False, True]

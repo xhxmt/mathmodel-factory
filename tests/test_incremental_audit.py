@@ -430,3 +430,53 @@ def test_a_determinate_finding_wins_over_a_crashed_sibling_check(tmp_path: Path)
     assert outcome.record.status is AuditStatus.FAIL
     assert outcome.execution.metadata["failed_check"] == "invariants"
     assert outcome.record.evidence["indeterminate_checks"] == ["provenance"]
+
+
+def test_any_uncaught_exception_name_is_recognised(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_results(project)
+    crash = (
+        "Traceback (most recent call last):\n"
+        '  File "scripts/verify_invariants.py", line 3, in <module>\n'
+        "    raise CheckerCrash('boom')\n"
+        "CheckerCrash: boom\n"
+    )
+    service = IncrementalAuditService(root, runner=ScriptedRunner({"audit_results_invariants": (1, crash)}))
+    assert service.run_project(project, AuditProfile.RESULTS, checkpoint_step=5).record.status is AuditStatus.INDETERMINATE
+
+
+def test_a_finding_that_quotes_resource_errors_is_still_a_finding(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_results(project)
+    report = (
+        "solver log excerpt: MemoryError at iteration 40; database or disk is full\n"
+        "the reported optimum is therefore not supported by the log\n"
+        "VERDICT: FAIL\n"
+    )
+    service = IncrementalAuditService(root, runner=ScriptedRunner({"audit_results_invariants": (1, report)}))
+    assert service.run_project(project, AuditProfile.RESULTS, checkpoint_step=5).record.status is AuditStatus.FAIL
+
+
+def test_a_check_without_a_verdict_leaves_its_ledger_row_alone(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_results(project)
+    ledger = project / "audit_issue_ledger.md"
+
+    IncrementalAuditService(root, runner=ScriptedRunner({})).run_project(
+        project, AuditProfile.RESULTS, checkpoint_step=5
+    )
+    before = ledger.read_text(encoding="utf-8")
+    assert "AUDIT-RESULTS-PROVENANCE" in before
+    write(project / "solve_log.md", lines(21))  # new snapshot, no cache hit
+    outcome = IncrementalAuditService(
+        root, runner=ScriptedRunner({"audit_results_provenance": (1, DISK_FULL_TRACEBACK)})
+    ).run_project(project, AuditProfile.RESULTS, checkpoint_step=5)
+
+    assert outcome.record.status is AuditStatus.INDETERMINATE
+    row = next(line for line in ledger.read_text(encoding="utf-8").splitlines() if "AUDIT-RESULTS-PROVENANCE" in line)
+    assert row == next(line for line in before.splitlines() if "AUDIT-RESULTS-PROVENANCE" in line)
+    assert "OPEN" not in row
+    assert not has_unresolved_blocking(ledger)

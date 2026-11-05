@@ -2504,13 +2504,16 @@ class FactoryEngine:
 
         Derived from the event stream rather than a state field, so replay
         stays exact and no member is added to the replayed state: a sequence
-        starts at the Step's latest ``STEP_STARTED`` with attempt 1, and every
+        starts at the latest Stage-subtask selection or the Step's latest
+        ``STEP_STARTED`` with attempt 1, whichever is later, and every
         ``RETRY_SCHEDULED`` of a class in :data:`NON_CONTENT_ERROR_CLASSES`
         since then is counted.
         """
 
         count = 0
         for event in reversed(self.store.events()):
+            if event.type == "STAGE_SUBTASK_SELECTED":
+                break
             if event.step != step_id:
                 continue
             if event.type == "RETRY_SCHEDULED" and str(

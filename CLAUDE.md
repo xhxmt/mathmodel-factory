@@ -167,10 +167,11 @@ model routes are quarantined in the worker and a healthy configured fallback is
 tried; a missing API credential or unsupported model must not be invoked again
 on every workflow retry.
 
-An incremental-audit check that ends without a verdict (timeout, signal, an
-uncaught traceback, or an exhausted host resource such as a full disk) is
-`INDETERMINATE` / `TRANSIENT_INCREMENTAL_AUDIT`, never a finding; a determinate
-finding in a sibling check still wins. Error classes in
+An incremental-audit check that ends without a verdict (timeout, signal, a log
+ending in an uncaught traceback, or a last line naming an exhausted host
+resource such as a full disk) is `INDETERMINATE` / `TRANSIENT_INCREMENTAL_AUDIT`,
+never a finding, and leaves its ledger row as the last verdict recorded it; a
+determinate finding in a sibling check still wins. Error classes in
 `engine.NON_CONTENT_ERROR_CLASSES` never consume a Step's content attempts:
 the engine derives their count from the event stream (no new replayed state
 field) and stops after `INFRASTRUCTURE_RETRY_BUDGET` retries with a distinct

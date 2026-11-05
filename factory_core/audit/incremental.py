@@ -33,10 +33,31 @@ _RESOURCE_EXHAUSTION_MARKERS = (
     "Too many open files",
     "[Errno 24]",
 )
-_UNCAUGHT_EXCEPTION_LINE = re.compile(
-    r"^[A-Za-z_][\w.]*(?:Error|Exception|Interrupt|Warning|Failure)\b(?::.*)?$"
-)
+# The last line of an uncaught traceback: an exception's qualified name,
+# optionally followed by ": message".  Any name, not only *Error.
+_EXCEPTION_LINE = re.compile(r"^[A-Za-z_][\w.]*(?::(?:\s.*)?)?$")
+_TRACEBACK_HEADER = "Traceback (most recent call last):"
 _LOG_TAIL_BYTES = 65_536
+# Resource markers count only in the last line a process wrote before dying,
+# so a finding report that quotes "MemoryError" earlier still reads as a FAIL.
+_RESOURCE_TAIL_LINES = 1
+
+
+def _ends_in_traceback(lines: list[str]) -> bool:
+    """Whether the log ends with an uncaught Python exception.
+
+    After the last traceback header, every line is an indented frame (or a
+    chained-exception separator) until a final non-indented exception line.
+    """
+
+    try:
+        start = max(index for index, line in enumerate(lines) if line.strip() == _TRACEBACK_HEADER)
+    except ValueError:
+        return False
+    body = lines[start + 1 :]
+    if not body or body[-1][:1].isspace() or not _EXCEPTION_LINE.match(body[-1].strip()):
+        return False
+    return all(line[:1].isspace() or not line.strip() for line in body[:-1])
 
 
 def checker_no_verdict(returncode: int, log: Path) -> str:
@@ -44,9 +65,9 @@ def checker_no_verdict(returncode: int, log: Path) -> str:
 
     The check scripts use different exit codes for FAIL (1, 2 or 3), so the
     code alone cannot separate a finding from a crash.  Three signals can:
-    the process was killed by a signal, the log names an exhausted host
+    the process was killed by a signal, its last lines name an exhausted host
     resource, or the log ends in an uncaught Python traceback.  A script that
-    reports a finding and exits normally never ends that way.
+    reports a finding and exits normally ends with its report, not that way.
     """
 
     if returncode == 0:
@@ -61,16 +82,13 @@ def checker_no_verdict(returncode: int, log: Path) -> str:
             tail = handle.read().decode("utf-8", errors="replace")
     except OSError:
         return ""
+    lines = tail.rstrip().splitlines()
+    last_lines = "\n".join(line for line in lines[-_RESOURCE_TAIL_LINES:])
     for marker in _RESOURCE_EXHAUSTION_MARKERS:
-        if marker in tail:
+        if marker in last_lines:
             return f"host resource exhausted ({marker})"
-    lines = [line.strip() for line in tail.splitlines() if line.strip()]
-    if (
-        lines
-        and "Traceback (most recent call last):" in tail
-        and _UNCAUGHT_EXCEPTION_LINE.match(lines[-1])
-    ):
-        return f"uncaught exception: {lines[-1][:200]}"
+    if _ends_in_traceback(lines):
+        return f"uncaught exception: {lines[-1].strip()[:200]}"
     return ""
 
 
@@ -954,6 +972,9 @@ class IncrementalAuditService:
                 ),
             )
             for check in checks
+            # A check without a verdict says nothing about the project: its
+            # row keeps whatever the last verdict recorded.
+            if not (check.timed_out or check.indeterminate)
         ]
         sync_incremental_findings(
             project / "audit_issue_ledger.md", findings

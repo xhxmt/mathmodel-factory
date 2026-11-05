@@ -454,8 +454,11 @@ def failure_records(fixture: dict[str, Any], labels: dict[int, dict[str, str]]) 
                 "error_class": event.get("error_class"),
                 "reason": event.get("reason"),
                 "attempt_hours": attempt.hours if attempt is not None else 0.0,
+                # Neither a non-content retry nor the terminal class its
+                # exhausted budget ends with is a content attempt.
                 "consumed_attempt": attempt is not None
-                and str(event.get("error_class") or "") not in NON_CONTENT_ERROR_CLASSES,
+                and str(event.get("error_class") or "") not in NON_CONTENT_ERROR_CLASSES
+                and str(event.get("error_class") or "") not in NON_CONTENT_ERROR_CLASSES.values(),
                 "cause": label.get("cause", "unlabeled"),
                 "evidence": label.get("evidence"),
             }
