@@ -66,7 +66,9 @@ _PROVIDER_SIGNALS: tuple[tuple[str, re.Pattern[str], bool], ...] = (
     ),
 )
 _FAILURE_CONTEXT = re.compile(
-    r"\b(?:error|failed|failure|exceeded|retry(?:ing)?|reconnect(?:ing)?|http\s*\d{3}|status\W{0,3}\d{3})\b",
+    # "too many requests" is the HTTP 429 reason phrase: a failure report by itself.
+    r"\b(?:error|failed|failure|exceeded|retry(?:ing)?|reconnect(?:ing)?|too many requests"
+    r"|http\s*\d{3}|status\W{0,3}\d{3})\b",
     re.IGNORECASE,
 )
 _LOG_TAIL_BYTES = 65_536

@@ -162,6 +162,7 @@ def test_candidates_skipped_by_codex_only_are_reported(monkeypatch, tmp_path):
     ("stream error: rate limit exceeded, retrying in 10s\n", "rate limited"),
     ("reconnecting... We're currently experiencing high demand\n", "provider overloaded"),
     ("request failed with status 429\n", "rate limited"),
+    ("Too Many Requests\n", "rate limited"),
 ])
 def test_ambiguous_provider_phrases_need_a_failure_on_the_same_line(monkeypatch, tmp_path, text, signal):
     log = _log(tmp_path, "m.log", text)
