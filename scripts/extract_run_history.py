@@ -16,12 +16,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 FIXTURE_SCHEMA = "factory-run-history-fixture-v1"
 
@@ -55,6 +60,8 @@ _DROPPED_EVENT_TYPES = frozenset(
 )
 _MAX_TEXT = 300
 _HOME = str(Path.home())
+# Home directories of any other account (another operator, root on a server).
+_OTHER_HOMES = re.compile(r"(?:/home|/Users)/[A-Za-z0-9_.\-]+|/root(?=/|\b)")
 # Credential-shaped tokens.  The fixture is committed, so anything that looks
 # like a key is replaced even if it is probably harmless.
 _SECRET_PATTERNS = (
@@ -67,6 +74,7 @@ _SECRET_PATTERNS = (
 def sanitize_text(value: Any) -> str:
     text = str(value)
     text = text.replace(_HOME, "~")
+    text = _OTHER_HOMES.sub("~", text)
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub("<redacted>", text)
     if len(text) > _MAX_TEXT:
@@ -105,10 +113,25 @@ def _stage_of(payload: dict[str, Any], workflow: dict[str, Any]) -> int | None:
     return None
 
 
-def _open_readonly(database: Path) -> sqlite3.Connection:
+@contextlib.contextmanager
+def _open_readonly(database: Path) -> Iterator[sqlite3.Connection]:
+    """Read a private main/WAL copy of a project database.
+
+    ``immutable=1`` would make SQLite ignore a live ``-wal`` sidecar and read
+    stale or incomplete state.  The engine's own snapshot reader copies the
+    main file and WAL into a private directory under the project's commit
+    lease, so committed WAL frames are seen and nothing beside the source
+    database is created or modified.
+    """
+
+    from factory_core.state_lease import isolated_state_snapshot_ro, state_commit_lease
+
     if not database.is_file():
         raise FileNotFoundError(f"no state database at {database}")
-    return sqlite3.connect(f"file:{database}?mode=ro&immutable=1", uri=True)
+    with state_commit_lease(database.parent.parent):
+        with isolated_state_snapshot_ro(database) as connection:
+            connection.row_factory = None
+            yield connection
 
 
 def _tables(connection: sqlite3.Connection) -> set[str]:
@@ -119,8 +142,7 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
 
 
 def extract(project_dir: Path) -> dict[str, Any]:
-    connection = _open_readonly(project_dir / ".factory" / "state.db")
-    try:
+    with _open_readonly(project_dir / ".factory" / "state.db") as connection:
         tables = _tables(connection)
         columns = [row[1] for row in connection.execute("pragma table_info(project_state)")]
         state = dict(zip(columns, connection.execute("select * from project_state").fetchone()))
@@ -182,8 +204,6 @@ def extract(project_dir: Path) -> dict[str, Any]:
                 "select job_id, owner_stage from solver_jobs where owner_stage is not null"
             ):
                 solver_owners[str(job_id)] = int(owner_stage)
-    finally:
-        connection.close()
 
     return {
         "schema": FIXTURE_SCHEMA,

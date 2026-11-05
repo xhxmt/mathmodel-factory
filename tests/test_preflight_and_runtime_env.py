@@ -47,8 +47,28 @@ def test_memory_tmpdir_is_moved_under_run_state(tmp_path):
 
 
 def test_disk_tmpdir_is_left_alone(tmp_path):
-    assert runtime_env.disk_tmpdir_overrides(tmp_path, {"TMPDIR": "/home/u/tmp"}, mounts_text=MOUNTS) == {}
+    disk = tmp_path / "disk"
+    disk.mkdir()
+    mounts = MOUNTS + f"\n/dev/vdc1 {tmp_path} ext4 rw 0 0"
+    assert runtime_env.disk_tmpdir_overrides(tmp_path, {"TMPDIR": str(disk)}, mounts_text=mounts) == {}
     assert not (tmp_path / "run_state").exists()
+
+
+def test_a_stale_tmpdir_is_judged_by_where_tempfile_falls_back(tmp_path):
+    # TMPDIR names a disk path that does not exist: tempfile would skip it and
+    # use /tmp, which is tmpfs here, so the run must still be redirected.
+    environ = {"TMPDIR": str(tmp_path / "absent-disk-dir")}
+    assert runtime_env.effective_tempdir(environ) == "/tmp"
+    overrides = runtime_env.disk_tmpdir_overrides(tmp_path, environ, mounts_text=MOUNTS)
+    assert overrides == {"TMPDIR": str(tmp_path.resolve() / "run_state" / "tmp")}
+
+
+def test_context_restores_tempfile_cache_even_when_tmpdir_is_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    with runtime_env.disk_backed_tmpdir(tmp_path, mounts_text=MOUNTS):
+        pass
+    assert tempfile.tempdir is None
 
 
 def test_unknown_filesystem_is_left_alone(tmp_path):
@@ -231,3 +251,97 @@ def test_scratch_space_reports_a_shortfall(tmp_path):
     checks = pf.check_scratch_space(tmp_path, None, min_free_bytes=2**62, environ={"TMPDIR": str(tmp_path)},
                                     mounts_text=MOUNTS)
     assert [check.status for check in checks] == [pf.FAIL]
+
+
+def test_a_balance_body_of_the_wrong_shape_is_unknown_not_a_crash(tmp_path):
+    for body in (b"[]", b'"ok"', json.dumps({"balance_infos": "n/a"}).encode()):
+        check = pf.check_model("deepseek-chat", _deepseek_entry(), tmp_path,
+                               environ={"DEEPSEEK_API_KEY": "k"}, http_get=_http(200, body))
+        assert check.status in {pf.UNKNOWN, pf.PASS}, body
+    check = pf.check_model("deepseek-chat", _deepseek_entry(), tmp_path,
+                           environ={"DEEPSEEK_API_KEY": "k"}, http_get=_http(200, b"[]"))
+    assert check.status == pf.UNKNOWN
+
+
+def test_dsh_launcher_must_be_a_file(tmp_path):
+    node = tmp_path / "node"
+    node.write_text("#!/bin/sh\necho v24.1.0\n")
+    node.chmod(0o755)
+    launcher_dir = tmp_path / "dsh"
+    launcher_dir.mkdir()
+    entry = {"backend": "dsh", "model": "deepseek-flash", "effort": "", "base_url": "", "key_env": "DEEPSEEK_API_KEY"}
+    check = pf.check_model("dsh-deepseek", entry, tmp_path,
+                           environ={"DSH_NODE": str(node), "DSH_CLI": str(launcher_dir), "DEEPSEEK_API_KEY": "k"},
+                           http_get=None)
+    assert check.status == pf.FAIL
+    assert "launcher not found" in check.detail
+
+
+def test_a_file_where_the_scratch_directory_belongs_fails(tmp_path):
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    for tmpdir in (blocker, blocker / "nested"):
+        [check] = pf.check_scratch_space(tmp_path, None, min_free_bytes=0, environ={"FACTORY_TMPDIR": str(tmpdir)},
+                                         mounts_text=MOUNTS)
+        assert check.status == pf.FAIL, tmpdir
+        assert "is not a directory" in check.detail
+
+
+def _project_with_joint_modeling(root: Path, enabled: bool) -> Path:
+    import sqlite3
+
+    project = root / "ongoing" / "joint_demo"
+    database = project / ".factory" / "state.db"
+    database.parent.mkdir(parents=True)
+    connection = sqlite3.connect(database)
+    connection.execute("create table events (revision integer, type text, created_at real, step integer, "
+                       "attempt integer, payload_json text)")
+    payload = {"joint_modeling": {"enabled": enabled, "model": "claude"}}
+    connection.execute("insert into events values (7, 'JOINT_MODELING_CONFIGURED', 1.0, null, null, ?)",
+                       (json.dumps(payload),))
+    connection.commit()
+    connection.close()
+    return project
+
+
+def test_joint_modeling_configuration_is_read_without_touching_the_database(tmp_path):
+    project = _project_with_joint_modeling(tmp_path, True)
+    database = project / ".factory" / "state.db"
+    before = database.read_bytes()
+    assert pf.joint_modeling_enabled(project) is True
+    assert database.read_bytes() == before
+    assert sorted(path.name for path in database.parent.iterdir()) == ["state.db"]
+    assert pf.joint_modeling_enabled(_project_with_joint_modeling(tmp_path / "off", False)) is False
+    assert pf.joint_modeling_enabled(tmp_path / "no-project") is False
+
+
+def test_step_2_with_joint_modeling_checks_the_pinned_executor(tmp_path, monkeypatch):
+    from factory_core import joint_modeling_executor
+
+    project = _project_with_joint_modeling(tmp_path, True)
+    monkeypatch.setattr(joint_modeling_executor, "executor_blocker", lambda: "claude CLI not found")
+    monkeypatch.setattr(pf, "step_candidates", lambda *a, **k: pytest.fail("Step 2 must not use the candidate chain"))
+    steps, models = pf.check_routes(tmp_path, project.name, [2], project_dir=project, environ={}, http_get=None)
+    assert [check.status for check in steps] == [pf.FAIL]
+    assert "claude CLI not found" in steps[0].detail
+    assert [check.name for check in models] == ["model:joint-claude"]
+
+    monkeypatch.setattr(joint_modeling_executor, "executor_blocker", lambda: "")
+    steps, _ = pf.check_routes(tmp_path, project.name, [2], project_dir=project, environ={}, http_get=None)
+    assert [check.status for check in steps] == [pf.PASS]
+
+
+@pytest.mark.parametrize("argv", [
+    ["preflight", "--min-free-gb", "-1"],
+    ["preflight", "--min-free-gb", "nan"],
+    ["preflight", "--steps", "4-x"],
+    ["preflight", "--steps", "17"],
+    ["preflight", "--steps", "9-3"],
+])
+def test_cli_rejects_bad_preflight_arguments_as_usage_errors(argv, capsys):
+    from factory_core import cli
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(argv)
+    assert excinfo.value.code == 2
+    assert "Traceback" not in capsys.readouterr().err

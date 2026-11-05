@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -230,8 +231,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="read-only check that model routes and scratch space can carry a run",
     )
     preflight.add_argument("project_dir", nargs="?")
-    preflight.add_argument("--steps", default="0-16", help="Steps to check, e.g. 0-16 or 4,5,9")
-    preflight.add_argument("--min-free-gb", type=float, default=2.0)
+    preflight.add_argument(
+        "--steps", type=_step_list_argument, default="0-16", help="Steps to check, e.g. 0-16 or 4,5,9"
+    )
+    preflight.add_argument(
+        "--min-free-gb", type=_free_gb_argument, default=2.0, help="minimum free scratch space; 0 disables"
+    )
     preflight.add_argument("--offline", action="store_true", help="skip network probes (reported as UNKNOWN)")
     preflight.add_argument("--timeout", type=float, default=15.0)
     worker = sub.add_parser("worker")
@@ -334,12 +339,31 @@ def _parse_step_list(value: str) -> list[int]:
             continue
         if "-" in part:
             low, high = (int(item) for item in part.split("-", 1))
+            if low > high:
+                raise ValueError(f"empty Step range {part!r}")
             steps.extend(range(low, high + 1))
         else:
             steps.append(int(part))
     if not steps or any(step < 0 or step > 16 for step in steps):
         raise ValueError(f"--steps must name Steps 0-16, got {value!r}")
     return sorted(set(steps))
+
+
+def _step_list_argument(value: str) -> list[int]:
+    try:
+        return _parse_step_list(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--steps must name Steps 0-16 (e.g. 0-16 or 4,5,9), got {value!r}") from exc
+
+
+def _free_gb_argument(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a number: {value!r}") from exc
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number >= 0 (0 disables the check), got {value!r}")
+    return number
 
 
 def _default_http_get():
@@ -458,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
             report = run_preflight(
                 service.root,
                 project,
-                steps=_parse_step_list(args.steps),
+                steps=args.steps,
                 min_free_bytes=int(args.min_free_gb * 2**30),
                 http_get=None if args.offline else _default_http_get(),
                 timeout=args.timeout,

@@ -57,6 +57,27 @@ def filesystem_type(path: str | Path, mounts_text: str | None = None) -> str | N
     return best_type
 
 
+def _usable_directory(path: str) -> bool:
+    return os.path.isdir(path) and os.access(path, os.W_OK | os.X_OK)
+
+
+def effective_tempdir(environ: Mapping[str, str]) -> str:
+    """The directory ``tempfile`` would choose under ``environ``.
+
+    Mirrors ``tempfile``'s candidate order (``TMPDIR``, ``TEMP``, ``TMP``,
+    then the platform defaults) and skips candidates that are not writable
+    directories, so a stale ``TMPDIR`` is judged by where scratch files will
+    really go.  It never reads ``tempfile``'s process-wide cache.
+    """
+
+    candidates = [(environ.get(name) or "").strip() for name in ("TMPDIR", "TEMP", "TMP")]
+    candidates += ["/tmp", "/var/tmp", "/usr/tmp"]
+    for candidate in candidates:
+        if candidate and _usable_directory(candidate):
+            return candidate
+    return os.getcwd()
+
+
 def disk_tmpdir_overrides(
     factory_root: str | Path,
     environ: Mapping[str, str] | None = None,
@@ -76,7 +97,7 @@ def disk_tmpdir_overrides(
     if explicit:
         target = Path(explicit)
     else:
-        inherited = (environ.get("TMPDIR") or "").strip() or tempfile.gettempdir()
+        inherited = effective_tempdir(environ)
         if filesystem_type(inherited, mounts_text) not in MEMORY_FILESYSTEMS:
             return {}
         target = Path(factory_root).resolve() / "run_state" / "tmp"
@@ -94,9 +115,10 @@ def disk_backed_tmpdir(factory_root: str | Path, *, mounts_text: str | None = No
     so an in-process caller (a test, the Web control plane) is left as it was.
     """
 
+    # Snapshot tempfile's cache before anything below could populate it.
+    previous_tempdir = tempfile.tempdir
     overrides = disk_tmpdir_overrides(factory_root, mounts_text=mounts_text)
     previous = {key: os.environ.get(key) for key in overrides}
-    previous_tempdir = tempfile.tempdir
     os.environ.update(overrides)
     if overrides:
         tempfile.tempdir = None

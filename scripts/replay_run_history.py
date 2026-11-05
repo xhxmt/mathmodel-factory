@@ -27,7 +27,7 @@ import argparse
 import json
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -50,14 +50,19 @@ _ATTEMPT_END = {
     "RETRY_SCHEDULED": "retry",
     "RUNNER_INTERRUPTED": "interrupted",
     "STAGE_SEMANTIC_REOPENED": "reopened_mid",
+    "STEP_REOPENED": "reopened_mid",
     "KILLED": "killed",
-    "PAUSED": "paused",
     "RUN_STOPPED": "stopped",
     "CONTEST_DEADLINE_EXHAUSTED": "deadline",
     "RUNNER_EXIT_UNVERIFIED": "unverified",
 }
 # These end an attempt whatever Step they name: they stop the runner itself.
-_RUNNER_WIDE = {"KILLED", "PAUSED", "RUN_STOPPED"}
+_RUNNER_WIDE = {"KILLED", "RUN_STOPPED"}
+# A pause suspends the open attempt rather than ending it: after ``RESUMED``
+# recovery may promote the interrupted Step straight to ``STEP_SUCCEEDED``
+# without a new ``STEP_STARTED``.  The PAUSED..RESUMED stretch is not work.
+# An attempt that never continues (the next event is a new ``STEP_STARTED``,
+# or the history ends) ends at its pause with outcome ``paused``.
 
 _FAILURE_EVENTS = {"STEP_FAILED", "RETRY_SCHEDULED"}
 
@@ -118,10 +123,37 @@ class Attempt:
     error_class: str | None = None
     fate: str = ""
     end_rev: int | None = None
+    pauses: list[tuple[float, float]] = field(default_factory=list)
+    # First pause not yet followed by an end event of this attempt.
+    paused_at: float | None = None
+    # Start of the pause still waiting for its RESUMED.
+    open_pause: float | None = None
 
     @property
     def hours(self) -> float:
-        return max(0.0, self.end - self.start) / 3600
+        paused = sum(max(0.0, end - start) for start, end in self.pauses)
+        return max(0.0, self.end - self.start - paused) / 3600
+
+    def segments(self) -> list[tuple[float, float]]:
+        """The stretches this attempt was running, with its pauses cut out."""
+
+        result, cursor = [], self.start
+        for start, end in sorted(self.pauses):
+            if start > cursor:
+                result.append((cursor, start))
+            cursor = max(cursor, end)
+        if self.end > cursor:
+            result.append((cursor, self.end))
+        return result
+
+    def close_at_pause(self) -> None:
+        """End a suspended attempt that never continued, at its pause."""
+
+        assert self.paused_at is not None
+        self.end = self.paused_at
+        self.pauses = [(start, end) for start, end in self.pauses if end <= self.paused_at]
+        self.outcome = "paused"
+        self.paused_at = self.open_pause = None
 
 
 def attempt_ledger(events: list[dict[str, Any]]) -> list[Attempt]:
@@ -137,22 +169,44 @@ def attempt_ledger(events: list[dict[str, Any]]) -> list[Attempt]:
         kind = event["type"]
         if kind == "STEP_STARTED":
             if current is not None:
-                current.end = event["ts"]
-                current.outcome = "superseded"
+                if current.paused_at is not None:
+                    current.close_at_pause()
+                else:
+                    current.end = event["ts"]
+                    current.outcome = "superseded"
                 attempts.append(current)
             current = Attempt(step=event.get("step"), start=event["ts"], end=event["ts"], outcome="open")
             continue
-        if current is None or kind not in _ATTEMPT_END:
+        if current is None:
+            continue
+        if kind == "PAUSED":
+            if current.paused_at is None:
+                current.paused_at = event["ts"]
+            if current.open_pause is None:
+                current.open_pause = event["ts"]
+            continue
+        if kind == "RESUMED":
+            if current.open_pause is not None:
+                current.pauses.append((current.open_pause, event["ts"]))
+                current.open_pause = None
+            continue
+        if kind not in _ATTEMPT_END:
             continue
         if kind in _RUNNER_WIDE or event.get("step") in (None, current.step):
             current.end = event["ts"]
             current.end_rev = event["rev"]
             current.outcome = _ATTEMPT_END[kind]
             current.error_class = event.get("error_class")
+            # The attempt continued through its pause(s).  A pause with no
+            # RESUMED was not idle: the worker kept running until this event.
+            current.paused_at = current.open_pause = None
             attempts.append(current)
             current = None
     if current is not None:
-        current.end = events[-1]["ts"]
+        if current.paused_at is not None:
+            current.close_at_pause()
+        else:
+            current.end = events[-1]["ts"]
         attempts.append(current)
 
     last_success = {attempt.step: index for index, attempt in enumerate(attempts) if attempt.outcome == "ok"}
@@ -169,7 +223,7 @@ def time_accounting(fixture: dict[str, Any]) -> dict[str, Any]:
     if not events:
         return {"span_h": 0.0, "idle_h": 0.0, "fate_h": {}, "fate_n": {}, "attempts": 0}
     attempts = attempt_ledger(events)
-    covered = [(attempt.start, attempt.end) for attempt in attempts]
+    covered = [segment for attempt in attempts for segment in attempt.segments()]
     idle = 0.0
     for before, after in zip(events, events[1:]):
         gap = after["ts"] - before["ts"]

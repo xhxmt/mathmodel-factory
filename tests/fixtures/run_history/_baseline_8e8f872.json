@@ -6,18 +6,19 @@
   "runs": 16,
   "completed": 2,
   "deadline_h": 0.44,
-  "fail_h": 9.42,
-  "idle_h": 184.57,
-  "interrupted_h": 1.45,
-  "kept_h": 23.49,
+  "fail_h": 9.89,
+  "idle_h": 184.98,
+  "interrupted_h": 1.66,
+  "kept_h": 23.23,
   "killed_h": 0.18,
-  "paused_h": 5.85,
-  "redone_h": 37.4,
-  "reopened_mid_h": 16.76,
+  "paused_h": 2.36,
+  "redone_h": 39.31,
+  "reopened_mid_h": 21.89,
   "retry_h": 7.7,
   "span_h": 316.87,
-  "superseded_h": 8.1,
-  "kept_share": 0.0741
+  "superseded_h": 4.45,
+  "unverified_h": 0.49,
+  "kept_share": 0.0733
  },
  "runs": [
   {
@@ -49,8 +50,8 @@
    "final_status": "failed",
    "span_h": 50.4,
    "idle_h": 21.58,
-   "kept_h": 3.69,
-   "redone_h": 7.67
+   "kept_h": 3.65,
+   "redone_h": 8.75
   },
   {
    "run": "cumcm_2025_b_luna_usability_20260906t063231z",
@@ -64,17 +65,17 @@
    "run": "cumcm_2025_b_gpt_formal_20260908t153023z",
    "final_status": "completed",
    "span_h": 35.76,
-   "idle_h": 11.81,
-   "kept_h": 3.19,
-   "redone_h": 4.9
+   "idle_h": 12.62,
+   "kept_h": 2.8,
+   "redone_h": 5.4
   },
   {
    "run": "cumcm_2026_a_fable_pro_20260910",
    "final_status": "completed",
    "span_h": 40.46,
-   "idle_h": 18.09,
-   "kept_h": 2.33,
-   "redone_h": 5.2
+   "idle_h": 17.69,
+   "kept_h": 2.49,
+   "redone_h": 5.53
   },
   {
    "run": "cumcm_2025_b_luna_flow_20260915",
@@ -203,7 +204,7 @@
    "workflow": 26,
    "provider": 6
   },
-  "non_content_consuming_attempts": 54,
-  "non_content_attempt_hours": 5.44
+  "non_content_consuming_attempts": 56,
+  "non_content_attempt_hours": 5.83
  }
 }

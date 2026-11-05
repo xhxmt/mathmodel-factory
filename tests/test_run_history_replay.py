@@ -59,6 +59,7 @@ def test_fixtures_carry_no_credentials_home_paths_or_addresses():
         r"|[Bb]earer\s+[A-Za-z0-9._\-]{8,}"
         r"|/home/[A-Za-z0-9_\-]+"
         r"|/Users/[A-Za-z0-9_\-]+"
+        r"|/root(?:/|\b)"
         r"|[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
     )
     for path in sorted(FIXTURES.glob("*.json")):
@@ -84,7 +85,7 @@ def test_time_accounting_reproduces_the_baseline(report):
     for key in ("span_h", "kept_h", "redone_h", "reopened_mid_h", "idle_h"):
         assert totals[key] == pytest.approx(BASELINE["totals"][key], abs=0.01), key
     assert totals["completed"] == 2
-    assert totals["kept_share"] == pytest.approx(0.0741, abs=0.0005)
+    assert totals["kept_share"] == pytest.approx(0.0733, abs=0.0005)
 
 
 def test_recorded_decisions_match_the_baseline(report):
@@ -221,3 +222,61 @@ def test_extractor_never_writes_to_the_source_database(tmp_path):
     extract_module.extract(project)
     assert database.read_bytes() == before
     assert sorted(path.name for path in database.parent.iterdir()) == ["state.db"]
+
+
+def _events(*rows):
+    return [{"rev": index + 1, "type": kind, "ts": ts, **({"step": step} if step is not None else {})}
+            for index, (kind, ts, step) in enumerate(rows)]
+
+
+def test_a_paused_attempt_that_resumes_and_succeeds_is_kept_work():
+    # Recovery promotes the interrupted Step after RESUMED without a new STEP_STARTED.
+    events = _events(("STEP_STARTED", 0, 5), ("PAUSED", 600, None), ("RESUMED", 4200, None),
+                     ("STEP_SUCCEEDED", 4800, 5))
+    [attempt] = replay.attempt_ledger(events)
+    assert (attempt.outcome, attempt.fate) == ("ok", "kept")
+    assert attempt.hours == pytest.approx(1200 / 3600)
+    assert attempt.segments() == [(0, 600), (4200, 4800)]
+
+
+def test_a_paused_attempt_that_is_restarted_ends_at_its_pause():
+    events = _events(("STEP_STARTED", 0, 4), ("PAUSED", 600, None), ("RESUMED", 4200, None),
+                     ("STEP_STARTED", 4300, 4), ("STEP_SUCCEEDED", 5000, 4))
+    first, second = replay.attempt_ledger(events)
+    assert (first.outcome, first.end, first.pauses) == ("paused", 600, [])
+    assert (second.outcome, second.fate) == ("ok", "kept")
+
+
+def test_step_reopened_ends_the_active_attempt():
+    events = _events(("STEP_STARTED", 0, 13), ("STEP_REOPENED", 900, None), ("STEP_STARTED", 1000, 11),
+                     ("STEP_SUCCEEDED", 1500, 11))
+    first, second = replay.attempt_ledger(events)
+    assert (first.outcome, first.end) == ("reopened_mid", 900)
+    assert second.outcome == "ok"
+
+
+def test_extractor_reads_committed_wal_frames_without_touching_the_source(tmp_path):
+    project = _synthetic_project(tmp_path)
+    database = project / ".factory" / "state.db"
+    writer = sqlite3.connect(database)
+    try:
+        writer.execute("pragma journal_mode=wal")
+        writer.execute("pragma wal_autocheckpoint=0")
+        writer.execute(
+            "insert into events values (4, 'STEP_STARTED', 170.0, 5, 2, ?)", (json.dumps({"stage": 4}),)
+        )
+        writer.commit()
+        wal = Path(f"{database}-wal")
+        assert wal.stat().st_size > 0
+        before = {path.name: path.read_bytes() for path in database.parent.iterdir()}
+        fixture = extract_module.extract(project)
+        after = {path.name: path.read_bytes() for path in database.parent.iterdir()}
+    finally:
+        writer.close()
+    assert [event["rev"] for event in fixture["events"]] == [1, 3, 4]
+    assert after == before
+
+
+def test_other_accounts_home_paths_are_redacted():
+    text = extract_module.sanitize_text("/home/alice/x /Users/bob/y /root/.config/z")
+    assert text == "~/x ~/y ~/.config/z"

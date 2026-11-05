@@ -20,14 +20,13 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
-from .runtime_env import disk_tmpdir_overrides, filesystem_type
+from .runtime_env import disk_tmpdir_overrides, effective_tempdir, filesystem_type
 
 PASS, WARN, FAIL, UNKNOWN = "PASS", "WARN", "FAIL", "UNKNOWN"
 _SEVERITY = {PASS: 0, UNKNOWN: 1, WARN: 1, FAIL: 2}
@@ -82,7 +81,7 @@ def check_scratch_space(
 ) -> list[Check]:
     environ = os.environ if environ is None else environ
     overrides = disk_tmpdir_overrides(factory_root, environ, mounts_text=mounts_text, create=False)
-    tmpdir = Path(overrides.get("TMPDIR") or environ.get("TMPDIR") or tempfile.gettempdir())
+    tmpdir = Path(overrides.get("TMPDIR") or effective_tempdir(environ))
     targets = [("scratch:TMPDIR", tmpdir)]
     if project_dir is not None:
         targets.append(("scratch:project", project_dir))
@@ -92,6 +91,12 @@ def check_scratch_space(
         probe = path
         while not probe.exists() and probe != probe.parent:
             probe = probe.parent
+        if not probe.is_dir():
+            # Either the target itself or a parent the run would create it
+            # under is a file: creating the scratch directory would fail.
+            checks.append(Check(name, FAIL, f"{path}: {probe} exists and is not a directory",
+                                {"path": str(path), "blocking_path": str(probe)}))
+            continue
         try:
             free = shutil.disk_usage(probe).free
         except OSError as exc:
@@ -140,11 +145,13 @@ def _probe_deepseek_balance(key: str, http_get: HttpGet, timeout: float) -> Chec
             payload = json.loads(body.decode("utf-8", errors="replace"))
         except ValueError:
             return Check("provider", UNKNOWN, "deepseek balance endpoint returned no JSON")
+        if not isinstance(payload, dict):
+            return Check("provider", UNKNOWN, "deepseek balance endpoint returned an unexpected JSON shape")
         if payload.get("is_available") is False:
             return Check("provider", FAIL, "deepseek reports is_available=false (balance exhausted)")
         balances = [
             f"{item.get('total_balance')} {item.get('currency')}"
-            for item in payload.get("balance_infos") or []
+            for item in (payload.get("balance_infos") if isinstance(payload.get("balance_infos"), list) else [])
             if isinstance(item, dict)
         ]
         return Check("provider", PASS, "deepseek balance available: " + (", ".join(balances) or "n/a"))
@@ -195,7 +202,7 @@ def check_model(
             findings.append(Check("executable", FAIL, "no usable node for the DeepSeek Harness (set DSH_NODE)"))
         elif major < DSH_MIN_NODE_MAJOR:
             findings.append(Check("executable", FAIL, f"node v{major} < {DSH_MIN_NODE_MAJOR}: the launcher would exit 0 having done nothing"))
-        elif not cli or not os.path.exists(cli):
+        elif not cli or not os.path.isfile(cli):
             findings.append(Check("executable", FAIL, "DeepSeek Harness launcher not found (set DSH_CLI)"))
         else:
             findings.append(Check("executable", PASS, f"node v{major}, launcher present"))
@@ -253,11 +260,54 @@ def _entry(factory_root: Path, model_id: str) -> dict[str, str] | None:
     return ModelDispatcher(factory_root, ModelBackendRegistry())._entry(model_id)
 
 
+def joint_modeling_enabled(project_dir: Path) -> bool | None:
+    """Whether Step 2 runs on the pinned joint-modeling executor.
+
+    Reads the latest ``JOINT_MODELING_CONFIGURED`` event from a private
+    main/WAL snapshot (the engine's own reader), so a live database is seen
+    as committed and nothing beside it is created.  ``None`` = undecidable.
+    """
+
+    from .state_lease import isolated_state_snapshot_ro, state_commit_lease
+
+    database = project_dir / ".factory" / "state.db"
+    if not database.is_file():
+        return False
+    try:
+        with state_commit_lease(project_dir):
+            with isolated_state_snapshot_ro(database) as connection:
+                row = connection.execute(
+                    "SELECT payload_json FROM events WHERE type='JOINT_MODELING_CONFIGURED' "
+                    "ORDER BY revision DESC LIMIT 1"
+                ).fetchone()
+    except Exception:  # noqa: BLE001 - a lease, snapshot or SQLite failure is reported as undecidable
+        return None
+    if row is None:
+        return False
+    try:
+        value = json.loads(row[0] or "{}").get("joint_modeling")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(value, dict) or type(value.get("enabled")) is not bool:
+        return None
+    return value["enabled"]
+
+
+def _joint_executor_check() -> Check:
+    from .joint_modeling_executor import executor_blocker
+
+    blocker = executor_blocker()
+    if blocker:
+        return Check("model:joint-claude", FAIL, f"joint-modeling executor unavailable: {blocker}")
+    return Check("model:joint-claude", PASS, "joint-modeling executor (Claude CLI) available")
+
+
 def check_routes(
     factory_root: Path,
     project_id: str,
     steps: Iterable[int],
     *,
+    project_dir: Path | None = None,
     environ: Mapping[str, str] | None = None,
     http_get: HttpGet | None = _urllib_get,
     timeout: float = 15.0,
@@ -273,8 +323,22 @@ def check_routes(
 
     model_checks: dict[str, Check] = {}
     step_checks: list[Check] = []
+    joint = joint_modeling_enabled(project_dir) if project_dir is not None else False
     for step in steps:
         contract = contract_for(step)
+        if step == 2 and joint is not False:
+            # The dispatcher bypasses the candidate chain for Step 2 when joint
+            # modeling is enabled: the pinned executor is the only route.
+            if joint is None:
+                step_checks.append(Check(f"step:{step}:{contract.name}", WARN,
+                                         "joint-modeling configuration unreadable; Step 2 route undecided"))
+                continue
+            executor = _joint_executor_check()
+            model_checks.setdefault(executor.name, executor)
+            step_checks.append(Check(f"step:{step}:{contract.name}", executor.status,
+                                     f"joint modeling enabled: {executor.detail}",
+                                     {"candidates": [executor.name]}))
+            continue
         candidates = step_candidates(factory_root, project_id, step, contract.default_models)
         verdicts = []
         for model_id in candidates:
@@ -314,7 +378,7 @@ def run_preflight(
     project_id = project_dir.name if project_dir is not None else "_default"
     scratch = check_scratch_space(factory_root, project_dir, min_free_bytes=min_free_bytes,
                                   environ=environ, mounts_text=mounts_text)
-    step_checks, model_checks = check_routes(factory_root, project_id, steps,
+    step_checks, model_checks = check_routes(factory_root, project_id, steps, project_dir=project_dir,
                                              environ=environ, http_get=http_get, timeout=timeout)
     checks = scratch + step_checks
     overall = max((check.status for check in checks), key=lambda status: _SEVERITY[status], default=PASS)
