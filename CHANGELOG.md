@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-05 — 活性优化阶段 1b：失败记录列出每个候选模型
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1b。调度器依次尝试主线路、备用线路和目录默认候选，全部失败时只返回最后一个候选的结果：canary4 与 run2 中 DeepSeek 线路余额不足（402），回退到的 codex 又启动失败，事件里只剩 "codex 127"。
+
+- **逐个记录**：`factory_core/adapters/models/dispatcher.py`。每个未成功的候选写入 `candidate_attempts`（模型、后端、错误类别、退出码、日志、耗时、后端原因，以及因隔离或缺凭据而跳过的说明）。
+- **提供方信号**：非零退出的候选，从日志末尾 64 KiB 识别余额或配额耗尽、凭据被拒、限流、过载。HTTP 状态码只在 `HTTP` / `status` / `code` / `error` 之后才算，行号或 token 数里的 "402" 不算。以 0 退出的进程不判提供方故障。
+- **主错误**：全部候选失败时，返回最能解释失败的一项：提供方信号最优先（余额 > 凭据 > 限流 > 过载），其次是模型跑过但没有产物、模型不支持、一般后端故障或超时，再次是缺凭据、可执行文件不存在、因隔离跳过；同级取最靠前的候选。返回的错误类别、退出码和元数据取自这一项，另带 `primary_candidate`；有提供方信号时带 `provider_signal`，后端没有给原因时 `reason` 为 `provider: <信号>`。以前取最后一个候选：最后的 codex 启动失败（PERMANENT）会让一个本可重试的主线路故障直接变成终止。
+- 测试：新增 5 例（`tests/test_dispatcher_attempts.py`）。
+
 ## 2026-11-05 — 活性优化阶段 0：运行历史回放、磁盘临时目录与路线预检
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 0。

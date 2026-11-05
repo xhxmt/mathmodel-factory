@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -25,6 +26,133 @@ _BUILTINS = {
     "dsh-deepseek": {"backend": "dsh", "model": "deepseek-flash", "effort": "", "base_url": "", "key_env": "DEEPSEEK_API_KEY"},
     "deepseek-chat": {"backend": "openai", "model": "deepseek-chat", "effort": "", "base_url": "https://api.deepseek.com", "key_env": "DEEPSEEK_API_KEY"},
 }
+
+
+# Provider failures recognised in a candidate's log tail, most explanatory
+# first.  Only an HTTP status in a status context counts, so a stray "402"
+# (a line number, a token count) does not.
+_PROVIDER_SIGNALS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "balance or quota exhausted",
+        re.compile(
+            r"insufficient[ _]balance|insufficient_quota|exceeded your current quota"
+            r"|credit balance is too low|payment required"
+            r"|(?:http|status|code|error)\W{0,3}402\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "credential rejected",
+        re.compile(
+            r"invalid[ _]api[ _]key|incorrect api key|authentication[ _](?:failed|error)"
+            r"|(?:http|status|code|error)\W{0,3}40[13]\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "rate limited",
+        re.compile(r"rate[ _]limit|too many requests|(?:http|status|code|error)\W{0,3}429\b", re.IGNORECASE),
+    ),
+    (
+        "provider overloaded",
+        re.compile(
+            r"high demand|overloaded|service unavailable|(?:http|status|code|error)\W{0,3}50[23]\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+_LOG_TAIL_BYTES = 65_536
+
+
+def _provider_signal(project_dir: Path, log: object) -> str:
+    if not log:
+        return ""
+    path = Path(str(log))
+    if not path.is_absolute():
+        path = project_dir / path
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            handle.seek(max(0, handle.tell() - _LOG_TAIL_BYTES))
+            tail = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    for label, pattern in _PROVIDER_SIGNALS:
+        if pattern.search(tail):
+            return label
+    return ""
+
+
+@dataclass(frozen=True)
+class CandidateAttempt:
+    model_id: str
+    result: ExecutionResult
+    note: str = ""
+    provider_signal: str = ""
+
+    @property
+    def rank(self) -> int:
+        """Lower explains the step's failure better.
+
+        A provider refusing the account is the actionable cause; a fallback
+        whose executable is missing, or a candidate skipped by quarantine,
+        explains nothing about why the run could not proceed.
+        """
+
+        if self.provider_signal:
+            return {label: index for index, (label, _) in enumerate(_PROVIDER_SIGNALS)}[self.provider_signal]
+        error_class = self.result.error_class
+        if error_class == "TRANSIENT_ARTIFACT_MISSING":
+            return 10  # the model ran and produced nothing usable
+        if error_class == "PERMANENT_MODEL_UNSUPPORTED":
+            return 11
+        if error_class in {"TRANSIENT_MODEL_BACKEND", "TRANSIENT_TIMEOUT"} or not error_class.startswith("PERMANENT"):
+            return 12
+        if self.result.metadata.get("missing_key_env"):
+            return 20
+        if error_class == "PERMANENT_BACKEND_UNAVAILABLE":
+            return 21  # launch error: executable missing
+        if self.note.startswith("skipped"):
+            return 30
+        return 25
+
+    def public(self) -> dict[str, object]:
+        metadata = self.result.metadata
+        record: dict[str, object] = {
+            "model_id": self.model_id,
+            "backend": metadata.get("backend", ""),
+            "error_class": self.result.error_class,
+            "returncode": self.result.returncode,
+        }
+        for key in ("log", "duration_seconds", "reason"):
+            if metadata.get(key) not in (None, ""):
+                record[key] = metadata[key]
+        if self.provider_signal:
+            record["provider_signal"] = self.provider_signal
+        if self.note:
+            record["note"] = self.note
+        return record
+
+
+def _aggregate_failure(attempts: list[CandidateAttempt], last: ExecutionResult) -> ExecutionResult:
+    """The step's failure: the most explanatory candidate, with every attempt."""
+
+    if not attempts:
+        return last
+    primary = min(enumerate(attempts), key=lambda item: (item[1].rank, item[0]))[1]
+    metadata = {
+        **primary.result.metadata,
+        "candidate_attempts": [attempt.public() for attempt in attempts],
+        "primary_candidate": primary.model_id,
+    }
+    if primary.provider_signal:
+        metadata["provider_signal"] = primary.provider_signal
+        metadata.setdefault("reason", f"provider: {primary.provider_signal}")
+    return ExecutionResult(
+        returncode=primary.result.returncode,
+        error_class=primary.result.error_class,
+        metadata=metadata,
+    )
 
 
 class ModelDispatcher:
@@ -80,6 +208,9 @@ class ModelDispatcher:
             if model_id and model_id not in candidates:
                 candidates.append(model_id)
         last = ExecutionResult.failed("PERMANENT_MODEL_CONFIG", returncode=2)
+        # Every candidate that did not succeed, in order.  The step's failure is
+        # reported from the most explanatory one, not just the last fallback.
+        attempts: list[CandidateAttempt] = []
         for model_id in candidates:
             if model_id in self._quarantined_models:
                 last = ExecutionResult.failed(
@@ -88,12 +219,14 @@ class ModelDispatcher:
                     model_id=model_id,
                     quarantine=self._quarantined_models[model_id],
                 )
+                attempts.append(CandidateAttempt(model_id, last, "skipped: quarantined earlier in this worker"))
                 continue
             entry = self._entry(model_id)
             if entry is None:
                 last = ExecutionResult.failed(
                     "PERMANENT_MODEL_CONFIG", returncode=2, model_id=model_id
                 )
+                attempts.append(CandidateAttempt(model_id, last, "not in the model registry"))
                 continue
             backend_name = entry["backend"]
             if os.getenv("CODEX_ONLY", "0").lower() in {"1", "true", "yes", "on"} and backend_name != "codex":
@@ -104,6 +237,7 @@ class ModelDispatcher:
                 last = ExecutionResult.failed(
                     "PERMANENT_MODEL_CONFIG", returncode=2, model_id=model_id
                 )
+                attempts.append(CandidateAttempt(model_id, last, f"backend {backend_name!r} is not registered"))
                 continue
             key_env = entry.get("key_env", "")
             if (
@@ -122,6 +256,7 @@ class ModelDispatcher:
                     backend=backend_name,
                     missing_key_env=key_env,
                 )
+                attempts.append(CandidateAttempt(model_id, last, f"{key_env} is not set"))
                 continue
             configured = replace(
                 request,
@@ -168,7 +303,20 @@ class ModelDispatcher:
                     returncode=1,
                     **metadata,
                 )
-        return last
+            attempts.append(
+                CandidateAttempt(
+                    model_id,
+                    last,
+                    # A process that exited 0 was not refused by its provider,
+                    # whatever warnings its log carries.
+                    provider_signal=(
+                        _provider_signal(request.project_dir, last.metadata.get("log"))
+                        if last.returncode != 0
+                        else ""
+                    ),
+                )
+            )
+        return _aggregate_failure(attempts, last)
 
     def execute_model_id(self, model_id: str, request: ModelRequest) -> ExecutionResult:
         entry = self._entry(model_id)

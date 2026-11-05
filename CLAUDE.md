@@ -165,7 +165,10 @@ that exits zero without producing the required artifact is
 `TRANSIENT_ARTIFACT_MISSING`, not an unclassified success. Permanently rejected
 model routes are quarantined in the worker and a healthy configured fallback is
 tried; a missing API credential or unsupported model must not be invoked again
-on every workflow retry.
+on every workflow retry. When every candidate fails, the dispatcher reports the
+most explanatory one (a provider signal such as an exhausted balance in its log
+first, a fallback that could not launch last) and lists all of them in
+`candidate_attempts`.
 
 `run_paper.sh --infer-step` reads Native SQLite state only. Projects without
 Native state remain historical artifacts and cannot execute here.
