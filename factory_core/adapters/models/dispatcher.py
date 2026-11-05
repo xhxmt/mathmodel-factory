@@ -29,37 +29,45 @@ _BUILTINS = {
 
 
 # Provider failures recognised in a candidate's log tail, most explanatory
-# first.  Only an HTTP status in a status context counts, so a stray "402"
-# (a line number, a token count) does not.
-_PROVIDER_SIGNALS: tuple[tuple[str, re.Pattern[str]], ...] = (
+# first.  A status code counts only right after HTTP/status/code/error, so a
+# stray "402" (a line number, a token count) does not.  The phrases that also
+# occur in ordinary prose or echoed code ("rate limit", "overloaded", "high
+# demand") count only on a line that reports a failure (_FAILURE_CONTEXT);
+# the balance and credential phrases are unambiguous on their own.
+_STATUS = r"(?:http|status|code|error)\W{0,3}"
+_PROVIDER_SIGNALS: tuple[tuple[str, re.Pattern[str], bool], ...] = (
     (
         "balance or quota exhausted",
         re.compile(
             r"insufficient[ _]balance|insufficient_quota|exceeded your current quota"
-            r"|credit balance is too low|payment required"
-            r"|(?:http|status|code|error)\W{0,3}402\b",
+            r"|credit balance is too low|payment required|" + _STATUS + r"402\b",
             re.IGNORECASE,
         ),
+        False,
     ),
     (
         "credential rejected",
         re.compile(
-            r"invalid[ _]api[ _]key|incorrect api key|authentication[ _](?:failed|error)"
-            r"|(?:http|status|code|error)\W{0,3}40[13]\b",
+            r"invalid[ _]api[ _]key|incorrect api key|authentication[ _](?:failed|error)|"
+            + _STATUS + r"40[13]\b",
             re.IGNORECASE,
         ),
+        False,
     ),
     (
         "rate limited",
-        re.compile(r"rate[ _]limit|too many requests|(?:http|status|code|error)\W{0,3}429\b", re.IGNORECASE),
+        re.compile(r"rate[ _]limit|too many requests|" + _STATUS + r"429\b", re.IGNORECASE),
+        True,
     ),
     (
         "provider overloaded",
-        re.compile(
-            r"high demand|overloaded|service unavailable|(?:http|status|code|error)\W{0,3}50[23]\b",
-            re.IGNORECASE,
-        ),
+        re.compile(r"high demand|overloaded|service unavailable|" + _STATUS + r"50[23]\b", re.IGNORECASE),
+        True,
     ),
+)
+_FAILURE_CONTEXT = re.compile(
+    r"\b(?:error|failed|failure|exceeded|retry(?:ing)?|reconnect(?:ing)?|http\s*\d{3}|status\W{0,3}\d{3})\b",
+    re.IGNORECASE,
 )
 _LOG_TAIL_BYTES = 65_536
 
@@ -77,9 +85,11 @@ def _provider_signal(project_dir: Path, log: object) -> str:
             tail = handle.read().decode("utf-8", errors="replace")
     except OSError:
         return ""
-    for label, pattern in _PROVIDER_SIGNALS:
-        if pattern.search(tail):
-            return label
+    lines = tail.splitlines()
+    for label, pattern, needs_context in _PROVIDER_SIGNALS:
+        for line in lines:
+            if pattern.search(line) and (not needs_context or _FAILURE_CONTEXT.search(line)):
+                return label
     return ""
 
 
@@ -100,7 +110,7 @@ class CandidateAttempt:
         """
 
         if self.provider_signal:
-            return {label: index for index, (label, _) in enumerate(_PROVIDER_SIGNALS)}[self.provider_signal]
+            return [label for label, _, _ in _PROVIDER_SIGNALS].index(self.provider_signal)
         error_class = self.result.error_class
         if error_class == "TRANSIENT_ARTIFACT_MISSING":
             return 10  # the model ran and produced nothing usable
@@ -124,7 +134,7 @@ class CandidateAttempt:
             "error_class": self.result.error_class,
             "returncode": self.result.returncode,
         }
-        for key in ("log", "duration_seconds", "reason"):
+        for key in ("log", "duration_seconds", "reason", "launch_error", "message"):
             if metadata.get(key) not in (None, ""):
                 record[key] = metadata[key]
         if self.provider_signal:
@@ -147,7 +157,8 @@ def _aggregate_failure(attempts: list[CandidateAttempt], last: ExecutionResult) 
     }
     if primary.provider_signal:
         metadata["provider_signal"] = primary.provider_signal
-        metadata.setdefault("reason", f"provider: {primary.provider_signal}")
+        if not str(metadata.get("reason") or "").strip():
+            metadata["reason"] = f"provider: {primary.provider_signal}"
     return ExecutionResult(
         returncode=primary.result.returncode,
         error_class=primary.result.error_class,
@@ -230,6 +241,14 @@ class ModelDispatcher:
                 continue
             backend_name = entry["backend"]
             if os.getenv("CODEX_ONLY", "0").lower() in {"1", "true", "yes", "on"} and backend_name != "codex":
+                attempts.append(
+                    CandidateAttempt(
+                        model_id,
+                        ExecutionResult.failed("PERMANENT_MODEL_CONFIG", returncode=2,
+                                               model_id=model_id, backend=backend_name),
+                        "skipped: CODEX_ONLY allows only the codex backend",
+                    )
+                )
                 continue
             try:
                 backend = self.backends.get(backend_name)
@@ -311,7 +330,7 @@ class ModelDispatcher:
                     # whatever warnings its log carries.
                     provider_signal=(
                         _provider_signal(request.project_dir, last.metadata.get("log"))
-                        if last.returncode != 0
+                        if backend_result.returncode != 0
                         else ""
                     ),
                 )
