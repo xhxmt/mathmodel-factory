@@ -55,11 +55,6 @@ def _decode_object(raw: bytes, *, label: str) -> dict[str, Any]:
     return value
 
 
-def _read_object(path: Path) -> tuple[dict[str, Any], bytes]:
-    raw = _read_bytes(path, "MANIFEST_UNREADABLE", "packet manifest")
-    return _decode_object(raw, label=str(path)), raw
-
-
 def _decode_role_payload(raw: bytes, role: str) -> dict[str, Any]:
     try:
         lines = raw.decode("utf-8").splitlines()
@@ -96,11 +91,6 @@ def _decode_role_payload(raw: bytes, role: str) -> dict[str, Any]:
     if payload.get("verdict") not in allowed_verdicts:
         raise GroundingError("ROLE_VERDICT_INVALID", f"invalid {role} verdict")
     return payload
-
-
-def _role_payload(path: Path, role: str) -> dict[str, Any]:
-    raw = _read_bytes(path, "ROLE_OUTPUT_UNREADABLE", "role output")
-    return _decode_role_payload(raw, role)
 
 
 def _references(payload: dict[str, Any], role: str) -> Iterable[tuple[str, dict[str, Any]]]:

@@ -2,7 +2,7 @@
 
 **Goal:** Stop `xhxmt.github.io` from showing any public showcase content while keeping the site technically reachable.
 
-**Current Context:** The published site is a single static page driven by [xhxmt.github.io/index.html](/home/tfisher/paper_factory/xhxmt.github.io/index.html:1). The user wants "不显示内容", and explicitly selected the minimal option: keep the site up, but make the homepage blank.
+**Current Context:** The published site is a single static page driven by `xhxmt.github.io/index.html` (a separate repository outside this one). The user wants "不显示内容", and explicitly selected the minimal option: keep the site up, but make the homepage blank.
 
 **Chosen Approach:** Replace the current homepage with a minimal blank HTML document. The page will keep only the basic HTML structure, set a white background, render no visible content, and add `noindex, nofollow, noarchive` to reduce search engine visibility.
 
