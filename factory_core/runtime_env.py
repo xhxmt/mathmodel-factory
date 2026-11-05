@@ -58,7 +58,33 @@ def filesystem_type(path: str | Path, mounts_text: str | None = None) -> str | N
 
 
 def _usable_directory(path: str) -> bool:
-    return os.path.isdir(path) and os.access(path, os.W_OK | os.X_OK)
+    """Whether ``tempfile`` would accept ``path``: it must take a real write.
+
+    ``tempfile`` probes each candidate by creating, writing and removing a
+    file, and skips one where that fails - a full or quota-exhausted disk
+    included.  Permission bits alone would call such a directory usable.
+    """
+
+    if not os.path.isdir(path):
+        return False
+    probe = os.path.join(path, f".factory-tmp-probe-{os.getpid()}-{os.urandom(6).hex()}")
+    try:
+        descriptor = os.open(probe, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError:
+        return False
+    try:
+        try:
+            os.write(descriptor, b"blat")
+        finally:
+            os.close(descriptor)
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            os.unlink(probe)
+        except OSError:
+            pass
 
 
 def effective_tempdir(environ: Mapping[str, str]) -> str:
@@ -66,8 +92,9 @@ def effective_tempdir(environ: Mapping[str, str]) -> str:
 
     Mirrors ``tempfile``'s candidate order (``TMPDIR``, ``TEMP``, ``TMP``,
     then the platform defaults) and skips candidates that are not writable
-    directories, so a stale ``TMPDIR`` is judged by where scratch files will
-    really go.  It never reads ``tempfile``'s process-wide cache.
+    directories (by a real write, as ``tempfile`` does), so a stale or full
+    ``TMPDIR`` is judged by where scratch files will really go.  It never
+    reads ``tempfile``'s process-wide cache.
     """
 
     candidates = [(environ.get(name) or "").strip() for name in ("TMPDIR", "TEMP", "TMP")]

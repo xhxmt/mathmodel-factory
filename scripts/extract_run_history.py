@@ -61,7 +61,9 @@ _DROPPED_EVENT_TYPES = frozenset(
 _MAX_TEXT = 300
 _HOME = str(Path.home())
 # Home directories of any other account (another operator, root on a server).
-_OTHER_HOMES = re.compile(r"(?:/home|/Users)/[A-Za-z0-9_.\-]+|/root(?=/|\b)")
+# The whole first component is replaced, whatever its characters (accents,
+# non-ASCII names); it ends at a path separator, whitespace or a quote.
+_OTHER_HOMES = re.compile(r"(?:/home|/Users)/[^/\s\"'`<>]+|/root(?=/|\b)")
 # Credential-shaped tokens.  The fixture is committed, so anything that looks
 # like a key is replaced even if it is probably harmless.
 _SECRET_PATTERNS = (

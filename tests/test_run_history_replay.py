@@ -280,3 +280,4 @@ def test_extractor_reads_committed_wal_frames_without_touching_the_source(tmp_pa
 def test_other_accounts_home_paths_are_redacted():
     text = extract_module.sanitize_text("/home/alice/x /Users/bob/y /root/.config/z")
     assert text == "~/x ~/y ~/.config/z"
+    assert extract_module.sanitize_text("/home/josé/run /Users/张三/log") == "~/run ~/log"

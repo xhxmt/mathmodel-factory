@@ -253,14 +253,51 @@ def test_scratch_space_reports_a_shortfall(tmp_path):
     assert [check.status for check in checks] == [pf.FAIL]
 
 
-def test_a_balance_body_of_the_wrong_shape_is_unknown_not_a_crash(tmp_path):
-    for body in (b"[]", b'"ok"', json.dumps({"balance_infos": "n/a"}).encode()):
-        check = pf.check_model("deepseek-chat", _deepseek_entry(), tmp_path,
-                               environ={"DEEPSEEK_API_KEY": "k"}, http_get=_http(200, body))
-        assert check.status in {pf.UNKNOWN, pf.PASS}, body
+@pytest.mark.parametrize("body", [
+    b"[]",
+    b'"ok"',
+    b"{}",
+    json.dumps({"balance_infos": "n/a"}).encode(),
+    json.dumps({"is_available": True, "balance_infos": "n/a"}).encode(),
+    json.dumps({"balance_infos": [{"currency": "CNY", "total_balance": "9"}]}).encode(),
+])
+def test_a_balance_body_of_the_wrong_shape_is_unknown_never_pass(tmp_path, body):
     check = pf.check_model("deepseek-chat", _deepseek_entry(), tmp_path,
-                           environ={"DEEPSEEK_API_KEY": "k"}, http_get=_http(200, b"[]"))
-    assert check.status == pf.UNKNOWN
+                           environ={"DEEPSEEK_API_KEY": "k"}, http_get=_http(200, body))
+    assert check.status == pf.UNKNOWN, body
+
+
+def _proxy_entry():
+    return {"backend": "openai", "model": "m", "effort": "", "base_url": "https://proxy.example/v1",
+            "key_env": "PROXY_KEY"}
+
+
+@pytest.mark.parametrize("body, status", [
+    (json.dumps({"object": "list", "data": [{"id": "m"}]}).encode(), pf.PASS),
+    (b"<html>sign in</html>", pf.UNKNOWN),
+    (b"{}", pf.UNKNOWN),
+    (b"[]", pf.UNKNOWN),
+])
+def test_an_openai_compatible_route_passes_only_on_a_model_list(tmp_path, body, status):
+    check = pf.check_model("proxy-model", _proxy_entry(), tmp_path,
+                           environ={"PROXY_KEY": "k"}, http_get=_http(200, body))
+    assert check.status == status, body
+
+
+def test_a_directory_that_refuses_a_write_is_not_usable(tmp_path, monkeypatch):
+    import errno
+
+    real_write = os.write
+
+    def full_disk(descriptor, data):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(runtime_env.os, "write", full_disk)
+    assert runtime_env._usable_directory(str(tmp_path)) is False
+    assert list(tmp_path.iterdir()) == []  # the probe file was removed
+    monkeypatch.setattr(runtime_env.os, "write", real_write)
+    assert runtime_env._usable_directory(str(tmp_path)) is True
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_dsh_launcher_must_be_a_file(tmp_path):

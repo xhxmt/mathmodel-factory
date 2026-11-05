@@ -149,10 +149,12 @@ def _probe_deepseek_balance(key: str, http_get: HttpGet, timeout: float) -> Chec
             return Check("provider", UNKNOWN, "deepseek balance endpoint returned an unexpected JSON shape")
         if payload.get("is_available") is False:
             return Check("provider", FAIL, "deepseek reports is_available=false (balance exhausted)")
+        infos = payload.get("balance_infos")
+        # Only the documented shape proves a balance: is_available true and a list of balances.
+        if payload.get("is_available") is not True or not isinstance(infos, list):
+            return Check("provider", UNKNOWN, "deepseek balance response lacks is_available=true and balance_infos")
         balances = [
-            f"{item.get('total_balance')} {item.get('currency')}"
-            for item in (payload.get("balance_infos") if isinstance(payload.get("balance_infos"), list) else [])
-            if isinstance(item, dict)
+            f"{item.get('total_balance')} {item.get('currency')}" for item in infos if isinstance(item, dict)
         ]
         return Check("provider", PASS, "deepseek balance available: " + (", ".join(balances) or "n/a"))
     return Check("provider", verdict, f"deepseek balance: {detail}")
@@ -161,10 +163,19 @@ def _probe_deepseek_balance(key: str, http_get: HttpGet, timeout: float) -> Chec
 def _probe_openai_compatible(base_url: str, key: str, http_get: HttpGet, timeout: float) -> Check:
     url = base_url.rstrip("/") + "/models"
     try:
-        status, _body = http_get(url, {"Authorization": f"Bearer {key}"}, timeout)
+        status, body = http_get(url, {"Authorization": f"Bearer {key}"}, timeout)
     except OSError as exc:
         return Check("provider", UNKNOWN, f"{base_url} unreachable: {type(exc).__name__}")
     verdict, detail = _http_verdict(status)
+    if verdict == PASS:
+        # An OpenAI-compatible model list is an object with a "data" list; a
+        # proxy's login page or an empty body is not proof the route works.
+        try:
+            payload = json.loads(body.decode("utf-8", errors="replace"))
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            return Check("provider", UNKNOWN, f"{url}: HTTP {status} but not an OpenAI-compatible model list")
     return Check("provider", verdict, f"{url}: {detail}")
 
 
