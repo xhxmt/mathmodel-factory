@@ -5,9 +5,9 @@
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1c 与 REV3 W1b。验收运行 run2 从 rev 437 起事件链无法重放（`aggregate_valid=False`），此后三次 pause（rev 713、771、789）都先提交了 PAUSED，随后因"没有可用的启动身份"而改记 `RUNNER_EXIT_UNVERIFIED`，runner 进程仍在运行。REV3 已查明身份其实可以解析（rev 709 的 `RUN_STARTED` 带有 pid、lease 和与进程相符的 identity），是 `_recorded_runner_identity` 在库无效时直接返回了空。
 
 - **能否停进程与库是否有效脱钩**：`factory_core/service.py`。身份令牌会与活进程的 `_process_identity` 比对，这个比对本身就是证据，不依赖状态库；不再以 `aggregate_valid` 为前提。来源仍限于与当前 pid 和 lease 相符的 `WORKER_LAUNCHED` / `RUN_STARTED`，从不只凭 pid。
-- **提交前先判断**：新增 `_runner_stop_identity`，在提交 PAUSED / KILLED 之前决定如何停进程。没有记录的 pid、pid 已不存在、或 pid 已被另一个进程复用（令牌不符，说明原 runner 已退出）时，直接提交、不发信号。pid 上有活进程却没有可核对的启动身份时，抛出 `STOP_IDENTITY_UNAVAILABLE`，什么都不提交，提示操作员先自行结束该进程。以前这种情况会提交 PAUSED，再改记 INTERRUPTED，与进程树矛盾。
+- **提交前先判断**：新增 `_runner_stop_identity`，在提交 PAUSED / KILLED 之前决定如何停进程。没有记录的 pid、pid 已不存在（身份读不到且 `_pid_is_live` 也确认不存在）、或 pid 已被另一个进程复用（令牌不符，说明原 runner 已退出）时，直接提交、不发信号。pid 上有活进程却没有可核对的启动身份，或身份读不到而 pid 仍存在时，抛出 `InvalidTransition`（消息以 `STOP_IDENTITY_UNAVAILABLE` 开头），什么都不提交，提示操作员先自行结束该进程。记录的 runner 就是调用方自己时，以 `STOP_SELF` 拒绝，因为无法从自身确认退出。过期的 `expected_revision` 先于进程检查报告为 `RevisionConflict`。以前这种情况会提交 PAUSED，再改记 INTERRUPTED，与进程树矛盾。
 - 其余顺序不变：先提交以收回 lease，再按身份结束整个进程树；结束无法确认时仍记 `RUNNER_EXIT_UNVERIFIED`。
-- 测试：新增"事件链被篡改后 pause / kill 仍能停下 runner"2 例，更新了 3 个固定旧行为的测试。
+- 测试：新增 8 例（事件链被篡改后仍能停下 runner、身份不可读但 pid 存在、调用方自身、过期 revision，各含 pause 与 kill），更新了 3 个固定旧行为的测试。
 
 ## 2026-11-05 — 活性优化阶段 0：运行历史回放、磁盘临时目录与路线预检
 

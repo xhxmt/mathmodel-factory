@@ -450,6 +450,8 @@ class FactoryService:
         snapshot = engine.store.status_snapshot()
         state = snapshot["state"]
         revision = state.revision if expected_revision is None else expected_revision
+        # A stale revision is reported as such, not masked by process checks.
+        self._assert_expected_revision(state, expected_revision)
         # Decide whether the runner can be stopped before anything is
         # committed: a pause the process tree contradicts is never recorded.
         stop_identity = self._runner_stop_identity(snapshot)
@@ -497,6 +499,7 @@ class FactoryService:
         snapshot = engine.store.status_snapshot()
         state = snapshot["state"]
         revision = state.revision if expected_revision is None else expected_revision
+        self._assert_expected_revision(state, expected_revision)
         stop_identity = self._runner_stop_identity(snapshot)
         updated = engine.kill(expected_revision=revision)
         self._verify_runner_stop(engine.project_dir, snapshot, stop_identity)
@@ -1471,8 +1474,21 @@ class FactoryService:
         pid = snapshot["state"].runner_pid
         if not pid:
             return None
+        if pid == os.getpid():
+            raise InvalidTransition(
+                f"STOP_SELF: runner pid {pid} is this controller process; its exit cannot be "
+                "verified from here, so nothing was changed. Stop it from another process."
+            )
         live = _process_identity(pid)
         if live is None:
+            if self._pid_is_live(pid):
+                # The pid exists but its identity cannot be read (for
+                # example /proc/<pid>/stat is unreadable): not proof it is gone.
+                raise InvalidTransition(
+                    f"STOP_IDENTITY_UNAVAILABLE: runner pid {pid} still exists but its process "
+                    "identity cannot be read, so it can neither be verified nor assumed gone; "
+                    "nothing was changed. Stop that process yourself, then retry."
+                )
             return None
         expected = self._recorded_runner_identity(snapshot)
         if not expected:

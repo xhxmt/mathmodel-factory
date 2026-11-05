@@ -109,8 +109,9 @@ def test_a_broken_event_chain_does_not_prevent_stopping_the_runner(tmp_path, ope
         connection.close()
         assert store.status_snapshot()['aggregate_valid'] is False
 
-        getattr(service, operation)('demo', expected_revision=state.revision)
+        result = getattr(service, operation)('demo', expected_revision=state.revision)
 
+        assert result.status is (WorkflowStatus.PAUSED if operation == 'pause' else WorkflowStatus.KILLED)
         assert processes._process_identity(child.pid) is None
         child.wait(timeout=3)
         assert not any(e.type == 'RUNNER_EXIT_UNVERIFIED' for e in store.events())
@@ -118,3 +119,45 @@ def test_a_broken_event_chain_does_not_prevent_stopping_the_runner(tmp_path, ope
         if child.poll() is None:
             child.terminate()
             child.wait(timeout=3)
+
+
+def _running_with(tmp_path, pid, identity='recorded-start'):
+    service = FactoryService(tmp_path)
+    state, _ = service.create_project('demo', 'A controlled ownership fixture.', start=False)
+    store = SQLiteStateStore(tmp_path / 'ongoing/demo')
+    state = store.transition(expected_revision=state.revision, event_type='RUN_STARTED',
+        changes=dict(status=WorkflowStatus.RUNNING, runner_pid=pid, runner_lease_id='lease-a'),
+        payload=dict(worker_pid=pid, lease_id='lease-a', worker_identity=identity))
+    return service, store, state
+
+
+@pytest.mark.parametrize('operation', ['pause', 'kill'])
+def test_an_unreadable_identity_of_a_live_pid_is_not_taken_as_gone(tmp_path, monkeypatch, operation):
+    service, store, state = _running_with(tmp_path, 123456789)
+    monkeypatch.setattr(processes, '_process_identity', lambda pid: None)
+    monkeypatch.setattr(FactoryService, '_pid_is_live', staticmethod(lambda pid: True))
+    events_before = len(store.events())
+    with pytest.raises(InvalidTransition, match='STOP_IDENTITY_UNAVAILABLE'):
+        getattr(service, operation)('demo', expected_revision=state.revision)
+    assert store.load().status is WorkflowStatus.RUNNING
+    assert len(store.events()) == events_before
+
+
+@pytest.mark.parametrize('operation', ['pause', 'kill'])
+def test_the_controller_never_commits_a_stop_of_itself(tmp_path, operation):
+    import os
+    service, store, state = _running_with(tmp_path, os.getpid(), processes._process_identity(os.getpid()))
+    with pytest.raises(InvalidTransition, match='STOP_SELF'):
+        getattr(service, operation)('demo', expected_revision=state.revision)
+    assert store.load().status is WorkflowStatus.RUNNING
+    assert not any(e.type == 'RUNNER_EXIT_UNVERIFIED' for e in store.events())
+
+
+@pytest.mark.parametrize('operation', ['pause', 'kill'])
+def test_a_stale_revision_is_reported_before_process_checks(tmp_path, monkeypatch, operation):
+    from factory_core.domain import RevisionConflict
+
+    service, store, state = _running_with(tmp_path, 123456789, identity='')
+    monkeypatch.setattr(processes, '_process_identity', lambda pid: 'some-process')
+    with pytest.raises(RevisionConflict):
+        getattr(service, operation)('demo', expected_revision=state.revision - 1)
