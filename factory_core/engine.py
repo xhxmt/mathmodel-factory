@@ -2498,13 +2498,21 @@ class FactoryEngine:
         metadata = result.metadata
         own = str(metadata.get("reason") or "").strip()
         backend = str(metadata.get("model_id") or metadata.get("backend") or "model backend")
+        duration = metadata.get("duration_seconds")
+        # Dispatcher-level config failures (unknown or quarantined model,
+        # missing credential, launch error) never ran a process; their
+        # returncode is synthetic and must not be reported as an exit.
+        ran = metadata.get("process_pid") is not None or isinstance(duration, (int, float))
         if own:
             head = f"{result.error_class} from {backend}: {own}"
-        else:
+        elif metadata.get("missing_key_env"):
+            head = f"{result.error_class}: {backend} not started, {metadata['missing_key_env']} is not set"
+        elif ran and not metadata.get("launch_error"):
             head = f"{result.error_class}: {backend} exited with returncode {result.returncode}"
-            duration = metadata.get("duration_seconds")
             if isinstance(duration, (int, float)):
                 head += f" after {float(duration):.1f} s"
+        else:
+            head = f"{result.error_class}: {backend} failed before running"
         return f"{head}; then {validation_reason}" if validation_reason else head
 
     @staticmethod

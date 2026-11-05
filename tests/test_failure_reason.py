@@ -64,7 +64,42 @@ def test_a_backend_failure_keeps_its_own_reason(tmp_path):
     )
 
 
-def test_audit_and_judge_failures_keep_the_validator_message(tmp_path):
+def test_a_config_failure_is_not_reported_as_a_process_exit(tmp_path):
+    # The dispatcher returns returncode 2 for a missing credential without
+    # starting anything; "exited with returncode 2" would be invented.
+    payload = _fail_once(
+        tmp_path,
+        ExecutionResult.failed("PERMANENT_MODEL_CONFIG", returncode=2, model_id="deepseek-chat",
+                               backend="openai", missing_key_env="DEEPSEEK_API_KEY"),
+        "Step 13 judge verdict missing or invalid",
+    )
+    assert payload["reason"].startswith(
+        "PERMANENT_MODEL_CONFIG: deepseek-chat not started, DEEPSEEK_API_KEY is not set"
+    )
+    assert "exited" not in payload["reason"]
+
+
+def test_an_unknown_model_failed_before_running(tmp_path):
+    payload = _fail_once(
+        tmp_path,
+        ExecutionResult.failed("PERMANENT_MODEL_CONFIG", returncode=2, model_id="ghost"),
+        "Step 9 paper draft invalid",
+    )
+    assert payload["reason"] == "PERMANENT_MODEL_CONFIG: ghost failed before running; then Step 9 paper draft invalid"
+
+
+def test_a_judge_failure_keeps_the_validator_message(tmp_path):
+    payload = _fail_once(
+        tmp_path,
+        ExecutionResult.failed("TRANSIENT_JUDGE_ROLE", returncode=2, role="math", backend="codex",
+                               duration_seconds=40.0),
+        "Step 13 judge verdict missing or invalid",
+    )
+    assert payload["reason"] == "Step 13 judge verdict missing or invalid"
+    assert "validation_reason" not in payload
+
+
+def test_audit_failures_keep_the_validator_message(tmp_path):
     payload = _fail_once(
         tmp_path,
         ExecutionResult.failed("AUDIT_REPAIR_REQUIRED", returncode=1, backend="codex"),
@@ -92,3 +127,20 @@ def test_the_reviewer_entry_gate_says_why_it_is_not_ready(tmp_path):
     assert "no VERDICT" in not_ready_reason(collect_step8_5_state(project))
     _write(project / "entry_gate.md", "VERDICT: PASS\n")
     assert not_ready_reason(collect_step8_5_state(project)) == ""
+
+
+def test_the_reviewer_entry_gate_names_inputs_newer_than_its_pass(tmp_path):
+    import os
+
+    project = tmp_path
+    for name in ("reviewer_entry_map.md", "anchor_figure_plan.md", "entry_gate.md"):
+        _write(project / name, "VERDICT: PASS\n" if name == "entry_gate.md" else "x\n")
+    _write(project / "model.md", "model\n")
+    gate_time = (project / "entry_gate.md").stat().st_mtime
+    for name in ("reviewer_entry_map.md", "anchor_figure_plan.md", "entry_gate.md"):
+        os.utime(project / name, (gate_time, gate_time))
+    os.utime(project / "model.md", (gate_time + 60, gate_time + 60))
+
+    state = collect_step8_5_state(project)
+    assert state["status"] == "stale"
+    assert not_ready_reason(state) == "entry gate PASS is older than its inputs: model.md"
