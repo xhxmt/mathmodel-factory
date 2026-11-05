@@ -750,3 +750,40 @@ def test_content_failures_keep_their_budget_between_infrastructure_retries(tmp_p
     assert failure.payload["error_class"] == "AUDIT_REPAIR_REQUIRED"
     assert failure.payload["content_attempts_used"] == 2
     assert store.verify_aggregate_domain_root()
+
+
+def test_a_model_backend_failure_never_consumes_a_content_attempt(tmp_path):
+    # canary 1: Step 0 had one attempt, and one codex upstream failure ended the run.
+    backend = ExecutionResult.failed("TRANSIENT_MODEL_BACKEND", returncode=1, backend="codex")
+    engine, store, handler = _engine_with(
+        tmp_path, [backend, backend, ExecutionResult.succeeded()], max_attempts=1
+    )
+
+    assert engine.run().status is WorkflowStatus.COMPLETED
+    assert handler.calls == [1, 2, 3]
+
+
+def test_an_exhausted_backend_budget_has_its_own_terminal_class(tmp_path):
+    from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET
+
+    backend = ExecutionResult.failed("TRANSIENT_MODEL_BACKEND", returncode=1, backend="codex")
+    engine, store, _ = _engine_with(tmp_path, [backend] * (INFRASTRUCTURE_RETRY_BUDGET + 1), max_attempts=5)
+
+    assert engine.run().status is WorkflowStatus.FAILED
+    failure = store.events()[-1]
+    assert failure.payload["error_class"] == "PERMANENT_MODEL_BACKEND_INFRASTRUCTURE"
+    assert failure.payload["exhausted_error_class"] == "TRANSIENT_MODEL_BACKEND"
+
+
+def test_a_model_timeout_still_consumes_a_content_attempt(tmp_path):
+    timeout = ExecutionResult.failed("TRANSIENT_TIMEOUT", returncode=124)
+    engine, store, handler = _engine_with(tmp_path, [timeout, ExecutionResult.succeeded()], max_attempts=1)
+
+    assert engine.run().status is WorkflowStatus.FAILED
+    assert handler.calls == [1]
+
+
+def test_step_0_has_three_attempts():
+    from factory_core.steps.catalog import contract_for
+
+    assert contract_for(0).max_attempts == 3

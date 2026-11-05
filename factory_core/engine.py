@@ -74,6 +74,11 @@ from .transitions import TransitionCoordinator
 # never reads as a content failure.
 NON_CONTENT_ERROR_CLASSES: dict[str, str] = {
     "TRANSIENT_INCREMENTAL_AUDIT": "PERMANENT_AUDIT_INFRASTRUCTURE",
+    # The model process exited non-zero (an upstream error, a dropped
+    # stream, "high demand"): the Step's content was never attempted.
+    # TRANSIENT_TIMEOUT is deliberately absent - a model that runs out of
+    # time on a hard Step has attempted the content.
+    "TRANSIENT_MODEL_BACKEND": "PERMANENT_MODEL_BACKEND_INFRASTRUCTURE",
 }
 INFRASTRUCTURE_RETRY_BUDGET = 3
 
