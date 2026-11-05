@@ -11,7 +11,7 @@ from typing import Callable
 
 from ..domain import PendingAction, ValidationResult
 from ..audit.ledger import has_unresolved_blocking
-from scripts.step8_5_gate import collect_step8_5_state
+from scripts.step8_5_gate import collect_step8_5_state, not_ready_reason
 from scripts.workflow_state import (
     gate2_continuation_override,
     gate2_verdict,
@@ -363,7 +363,7 @@ class NativeArtifactValidator:
     def _step_9(self, project: Path):
         gate = collect_step8_5_state(project)
         if not gate.get("ready"):
-            action = PendingAction(type="human_consultation", gate="step8_5", metadata={"reason": gate.get("reason")})
+            action = PendingAction(type="human_consultation", gate="step8_5", metadata={"reason": not_ready_reason(gate)})
             return False, "Step 8.5 is not ready", ("entry_gate.md", "reviewer_entry_map.md", "anchor_figure_plan.md"), {"pending_action": action}
         paper = _paper(project)
         text = _text(paper)

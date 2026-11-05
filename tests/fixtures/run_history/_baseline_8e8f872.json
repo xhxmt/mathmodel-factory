@@ -201,8 +201,8 @@
   "by_cause": {
    "unlabeled": 55,
    "infrastructure": 35,
-   "workflow": 26,
-   "provider": 6
+   "workflow": 21,
+   "provider": 11
   },
   "non_content_consuming_attempts": 56,
   "non_content_attempt_hours": 5.83

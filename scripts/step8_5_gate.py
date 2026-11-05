@@ -93,6 +93,27 @@ def collect_step8_5_state(project_dir: str | Path) -> dict:
     }
 
 
+def not_ready_reason(state: dict) -> str:
+    """One line saying why a gate state is not ready ("" when it is ready).
+
+    The state itself carries no reason field; callers used to print
+    ``state.get("reason")`` and so always reported "None".
+    """
+
+    if state.get("ready"):
+        return ""
+    status = state.get("status")
+    if status == "missing":
+        missing = sorted(name for name, present in (state.get("present") or {}).items() if not present)
+        return "missing or empty: " + (", ".join(missing) or "required artifacts")
+    if status == "stale":
+        stale = state.get("stale_inputs") or []
+        return "entry gate PASS is older than its inputs: " + (", ".join(stale) or "inputs changed")
+    if status == "revise":
+        return "entry_gate.md verdict is REVISE"
+    return "entry_gate.md has no VERDICT: PASS or VERDICT: REVISE line"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("project_dir")

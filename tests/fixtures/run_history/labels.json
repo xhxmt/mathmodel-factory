@@ -45,24 +45,24 @@
     "evidence": "engine error class PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED: a budget counter, not a new defect"
    },
    "987": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "the codex model process exited with returncode 1 after about 1 s (duration_seconds in the event); 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact the model never wrote, recorded as the event reason"
    },
    "989": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "the codex model process exited with returncode 1 after about 1 s (duration_seconds in the event); 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact the model never wrote, recorded as the event reason"
    },
    "996": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "the codex model process exited with returncode 1 after about 1 s (duration_seconds in the event); 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact the model never wrote, recorded as the event reason"
    },
    "998": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "the codex model process exited with returncode 1 after about 1 s (duration_seconds in the event); 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact the model never wrote, recorded as the event reason"
    },
    "1005": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "the codex model process exited with returncode 1 after about 1 s (duration_seconds in the event); 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact the model never wrote, recorded as the event reason"
    },
    "1037": {
     "cause": "infrastructure",
