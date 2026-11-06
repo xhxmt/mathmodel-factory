@@ -27,6 +27,7 @@ from .engine import FactoryEngine
 from .human_decisions import validate_resolution
 from .projections import runtime_payload, write_compatibility_projections
 from .runtime_env import disk_tmpdir_overrides
+from .state_lease import StateLeaseError, state_commit_lease
 from .steps import build_native_registry
 from .adapters.solvers import SolverRequest, build_solver_backends
 from .registry import SolverBackendRegistry
@@ -153,7 +154,10 @@ class WorkerLauncher:
                          "lease_id": f"launch:{process.pid}",
                          "log": str(log_path.relative_to(project))},
             )
-            ready.write_text(str(process.pid) + "\n", encoding="ascii")
+            # Every handshake file lives beside state.db, so it is created and
+            # removed only under the commit lease (see wait_for_worker_ready).
+            with state_commit_lease(project):
+                ready.write_text(str(process.pid) + "\n", encoding="ascii")
             acknowledged = ready.with_suffix(".ack")
             deadline = time.monotonic() + self.ready_timeout
             while not acknowledged.is_file():
@@ -162,9 +166,10 @@ class WorkerLauncher:
                 if time.monotonic() >= deadline:
                     raise TimeoutError("worker initialization timed out")
                 time.sleep(0.02)
-            if acknowledged.read_text().strip() != str(process.pid):
-                raise RuntimeError("worker readiness identity mismatch")
-            acknowledged.unlink()
+            with state_commit_lease(project):
+                if acknowledged.read_text().strip() != str(process.pid):
+                    raise RuntimeError("worker readiness identity mismatch")
+                acknowledged.unlink()
         except BaseException as exc:
             from .adapters.infrastructure.process import ProcessSupervisor, _process_identity
             descendants = {}
@@ -181,7 +186,11 @@ class WorkerLauncher:
                              "exception_type": type(exc).__name__, "exit_code": process.poll(),
                              "process_tree_exited": exited},
                 )
-            ready.unlink(missing_ok=True)
+            try:
+                _remove_handshake_file(project, ready)
+            except StateLeaseError:
+                # Cleanup must not replace the launch failure being reported.
+                ready.unlink(missing_ok=True)
             raise
         return WorkerHandle(process.pid, log_path, store.load())
 
@@ -420,7 +429,8 @@ class FactoryService:
         self._require_stage_runtime(engine.store.load())
         if ready_file is not None:
             from .projections import _atomic_text
-            _atomic_text(ready_file.with_suffix(".ack"), str(os.getpid()) + "\n")
+            with state_commit_lease(engine.project_dir):
+                _atomic_text(ready_file.with_suffix(".ack"), str(os.getpid()) + "\n")
         state = engine.run(max_steps=max_steps)
         if state.status is WorkflowStatus.COMPLETED:
             self._write_delivery_manifest(engine.project_dir)
@@ -1566,11 +1576,29 @@ class FactoryService:
         raise RuntimeError("runner exit not verified for all observed processes")
 
 
-def wait_for_worker_ready(path: Path, *, timeout_seconds: float = 30.0) -> None:
+def _remove_handshake_file(project: Path, path: Path) -> None:
+    with state_commit_lease(project):
+        path.unlink(missing_ok=True)
+
+
+def wait_for_worker_ready(
+    path: Path, project: Path, *, timeout_seconds: float = 30.0
+) -> None:
+    """Consume the parent's launch permit for ``project``.
+
+    The launch handshake files sit in ``.factory/`` next to ``state.db``.  A
+    read snapshot of the database refuses to trust a directory that changed
+    while it was copied, so creating or removing one of these files outside
+    the commit lease made a concurrent reader -- this worker's own first store
+    access, the parent, or the Web status poller -- fail with
+    ``NATIVE_WORKFLOW_REQUIRED``.  Parent and child therefore change them only
+    while holding ``state_commit_lease(project)``.
+    """
+
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if path.is_file():
-            path.unlink(missing_ok=True)
+            _remove_handshake_file(project, path)
             return
         time.sleep(0.05)
     raise TimeoutError(f"worker launch handshake timed out: {path}")

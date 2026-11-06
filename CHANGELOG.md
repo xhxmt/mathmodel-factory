@@ -23,6 +23,14 @@
 - 测试：新增 `tests/test_stage_catalog_v2.py`（20 例），`tests/test_audit_service.py` 新增 5 例，`tests/test_run_history_replay.py` 新增 1 例。
 - 未做（第二部分）：`STEPS.md`、Step 13/14/15 与 Judge 的 prompt、比赛看板阶段映射、前端步骤展示；完成后再把新项目默认切到 v2。
 
+## 2026-11-06 — worker 启动握手不再打断并发的状态快照
+
+PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_entry_completes_initialization_when_pause_arrives[web_resume]`，worker 报 `NATIVE_WORKFLOW_REQUIRED: workflow database cannot be inspected safely`。本地在满负载下大约 1/16–1/40 能复现，底层异常是 `StateLeaseError: workflow state database directory changed during snapshot`。main 上同样存在，与 #45 的改动无关。
+
+- **原因**：`worker_ready_*` 和 `.ack` 放在 `.factory/` 中，与 `state.db` 同一目录。`isolated_state_snapshot_ro` 复制数据库时，如果该目录发生变化（mtime/ctime 变了），会按设计拒绝快照。父进程删除 `.ack`、写入 ready 文件，子进程删除 ready、写入 `.ack`，这些操作都没有持有 commit lease。因此并发读者会偶发失败，包括 worker 自己的第一次读库、父进程，以及 Web 的状态轮询。
+- **修复**：`factory_core/service.py`、`factory_core/cli.py`。握手文件的创建和删除一律在 `state_commit_lease(project)` 内进行。`wait_for_worker_ready` 新增必填参数 `project`。启动失败时清理 ready 文件，如果拿不到 lease，就退回到直接删除，不掩盖原本的启动错误。快照的校验规则不变，仍然 fail closed。
+- 测试：新增 3 例（`tests/test_worker_handshake_lease.py`）。在修复前的代码上 3 例全部失败。其中一例让快照进行时另一线程消费启动许可，这一例可以确定地复现原来的报错。满负载下原测试连续 80 次通过。
+
 ## 2026-11-05 — 活性优化阶段 1c：pause / kill 真正停下进程，否则什么都不提交
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1c 与 REV3 W1b。验收运行 run2 从 rev 437 起事件链无法重放（`aggregate_valid=False`），此后三次 pause（rev 713、771、789）都先提交了 PAUSED，随后因"没有可用的启动身份"而改记 `RUNNER_EXIT_UNVERIFIED`，runner 进程仍在运行。REV3 已查明身份其实可以解析（rev 709 的 `RUN_STARTED` 带有 pid、lease 和与进程相符的 identity），是 `_recorded_runner_identity` 在库无效时直接返回了空。
@@ -97,7 +105,6 @@
 - 文档：`README.md` 新增「TUI 客户端（终端）」一节及「包含内容」条目；`web/README.md` 新增「终端客户端（TUI）」一节，含启动命令、完整键位表与刷新节奏说明。
 - 测试 74 例通过（67 TUI + 7 部署 preflight）；端到端冒烟（登录 → 项目表 → 详情 → 日志 → 过滤）复跑通过。
 
-
 ## 2026-09-22 — TUI 客户端 M3：日志尾随（/logs 轮询）
 
 - `apps/tui/client.py`：新增 `project_logs(base_name, lines=200)`，行数下限夹到 1（后端为 `max(1, lines)`），使用 `HEAVY_TIMEOUT`，`base_name` 经 URL 转义。
@@ -112,7 +119,6 @@
 ### 顺带发现的后端隐患（本里程碑未修改，避免越界）
 `/logs` 是普通 `async def`，**没有**像 `/steps`、`/diagnostics`、`/contest-dashboard` 那样走 `run_in_threadpool`（2026-09-18 那次修复只覆盖了后三个），并且它先 `read_text()` **整个文件**再切最后 N 行。本机真实日志最大 **8.2 MB**（4–6.5 MB 的有多个），因此 `?lines=200` 的每次请求都会让后端在**事件循环上同步读取整个文件**、再把其中 99% 丢掉——与 2026-09-18 记录的问题同类。TUI 因此刻意取 5s（而非计划中的 3s），并只在面板可见且项目运行时轮询，以把影响压到最小。彻底的修法是把 `/logs` 移入线程池、并只读文件尾部若干字节；那属后端改动，需另行确认。
 
-
 ## 2026-09-22 — TUI 客户端 M2：项目详情（阶段产物 + 阻塞面板）
 
 - `apps/tui/client.py`：新增只读投影 `project_steps` / `project_diagnostics`，两者使用独立的 `HEAVY_TIMEOUT`（90s）而非 15s 交互上限——后端把它们放在线程池里执行，在大项目上会合法地超过交互时限。该接缝在 M0 就已留出，此处首次真正使用。`base_name` 经 URL 转义。
@@ -125,7 +131,6 @@
 - 非阻塞项目显示「无阻塞记录」而非留空；加载失败则接管面板（「诊断加载失败：…」）。两者视觉上可区分，「取不到」不会被误读为「没问题」。
 - 测试累计 59 例（含部署 preflight）：新增 `tests/test_tui_reads.py` 与 `tests/test_tui_detail.py`。其中超时预算是**行为验证**而非常量比对——用一个真实本地 HTTP 服务器延迟 250ms，证明 50ms 的交互上限会杀掉 login、却不会杀掉投影。（自定义 `httpx` transport 无法用于此测试：超时由具体 transport 实施，假 transport 根本不会抛 `ReadTimeout`。）
 
-
 ## 2026-09-22 — TUI 客户端 M1：实时项目表（WS 接入）
 
 - `apps/tui/realtime.py`：`/ws` 实时 feed。三条后端事实决定了它的形状：票据**一次性且 60s 过期**（因此每次连接尝试都重新签发，包括首次）；WS **只推项目状态、不推日志**（日志留待 M3 轮询）；断开是常态而非异常（后端重启、账号被禁用、空闲超时都会关闭连接），因此 feed 通过 `on_state` 上报 `connecting`/`live`/`disconnected` 而不抛异常，并以指数退避（1s → 30s 封顶）重连直到 `stop()`。
@@ -135,7 +140,6 @@
 - 删除 M0 的 `screens/home.py` 占位屏；`ProjectsScreen` 不再接收从未被读取的 `session` 参数。
 - `tui` extra 补入 `websockets==16.0`（此前只在 `web` extra 中，`--extra tui` 单独安装不出来）。
 - 测试累计 42 例（含部署 preflight）：投递路径由**本地真实 WebSocket 服务器**端到端覆盖（票据握手、URL 构造、帧解码、归一化）；重连与退避由脚本化 connector + 注入 sleep 确定性断言（含 30s 封顶与 live 后重置）；另覆盖坏帧忽略、不可键快照不清表、`stop()` 幂等。已对真实后端确认 `/ws` 端点形状：无票据或错误票据在握手期即被拒绝。
-
 
 ## 2026-09-22 — TUI 客户端 M0：骨架与登录（Web 控制平面的终端客户端）
 
@@ -155,7 +159,6 @@
 - 实测（本机 `complete/cumcm2024b_no_judge_rep1/logs/step_5_codex_step5_full_solve_20260605_023516.log`，8.20 MB）：结果与旧的「全量读取再切片」**完全一致**，耗时 80.2 ms → **0.541 ms（148×）**，且不再占用事件循环。
 - 测试：新增 `tests/test_log_tail.py`（16 例，含用字节计数桩**证明读取确实有界**、以 7 字节块强制跨多字节字符边界、`max_bytes` 上限行为、缺失/空文件、传入目录等）；`tests/test_web_control_plane_api.py` 新增 4 例，其中一例以**线程身份**证明该 handler 已不在事件循环线程上执行——去掉线程池跳转该测试即失败（已做 falsification 验证，确认测试非空转）。相关集合 64 例通过。
 
-
 ## 2026-09-22 — 隔离测试对生产认证库的写入（修复 admin 密码被测试覆盖的事故）
 
 - 事故：2026-09-20T12:13:33Z，`web/auth.db` 中 `admin` 的 `password_hash` 被改写为**仓库里已提交的测试字面量**（`tests/test_showcase_acl.py`、`tests/test_secret_ops_api.py`、`tests/test_control_plane_auth.py` 三处同值），而登录入口在 `0.0.0.0:443` 公网可达——等同于把 admin 凭据公开。审计依据：`audit_log` 第 45 行 `user.bootstrap_admin_sync {"password_updated": true}`，且 `web/auth.db` mtime `12:13:33.453` 与之毫秒级吻合；服务进程自 09-18 13:22 起未重启，故写入者不是服务本身。
@@ -167,7 +170,6 @@
 - 新增 `tests/test_auth_db_isolation.py` 固定该契约：断言 `AUTH_DB_FILE` 指向仓库之外，且 import 后端 app 前后仓库库字节不变。
 - 验证：修复后相关集合 94 例通过（auth/web/hygiene/joint-modeling/secret/deploy），且仓库库始终未被创建；护栏经临时探针验证会以会话错误形式失败。
 - 运维记录：生产 admin 密码已通过重启 `paper-factory-api.service` 从 GCP Secret Manager 重新同步（审计 `user.bootstrap_admin_sync` id=46，`password_updated: true`），并确认此前泄露的测试字面量已无法登录。注意 `bootstrap_admin` 使 Secret Manager 成为权威来源，因此直接改 `web/auth.db` 或本地 `.env` 都会在下次启动时被覆盖。
-
 
 ## 2026-09-22 — Tier 0 仓库瘦身：清除退役资产与死引用
 
@@ -201,7 +203,6 @@
 - Main entry points now use FactoryEngine + SQLite + Native Stage only. Older Native projects require explicit Stage activation; Legacy rollback/import and experimental DB dispatch are rejected.
 - Kept native audit, solver evidence, final approval and atomic delivery checks, with independent native DB/commit boundaries. Removed experimental frontend flags, API routers and CI bootstrap dependencies.
 - Runtime data, credentials, other worktrees and production processes are unchanged. See `docs/architecture/NATIVE_MAINLINE.md`.
-
 
 ## 2026-09-15: Authority solver-policy application route
 
@@ -1206,7 +1207,6 @@
 - **废弃**: 即将移除的功能
 
 更多技术细节请参考各版本的 commit 记录。
-
 
 ## 2026-09-10 — Linked-project artifact browsing
 
