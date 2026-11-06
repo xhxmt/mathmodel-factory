@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-06 — worker 启动握手不再打断并发的状态快照
+
+PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_entry_completes_initialization_when_pause_arrives[web_resume]`，worker 报 `NATIVE_WORKFLOW_REQUIRED: workflow database cannot be inspected safely`。本地在满负载下大约 1/16–1/40 能复现，底层异常是 `StateLeaseError: workflow state database directory changed during snapshot`。main 上同样存在，与 #45 的改动无关。
+
+- **原因**：`worker_ready_*` 和 `.ack` 放在 `.factory/` 中，与 `state.db` 同一目录。`isolated_state_snapshot_ro` 复制数据库时，如果该目录发生变化（mtime/ctime 变了），会按设计拒绝快照。父进程删除 `.ack`、写入 ready 文件，子进程删除 ready、写入 `.ack`，这些操作都没有持有 commit lease。因此并发读者会偶发失败，包括 worker 自己的第一次读库、父进程，以及 Web 的状态轮询。
+- **修复**：`factory_core/service.py`、`factory_core/cli.py`。握手文件的创建和删除一律在 `state_commit_lease(project)` 内进行。`wait_for_worker_ready` 新增必填参数 `project`。启动失败时清理 ready 文件，如果拿不到 lease，就退回到直接删除，不掩盖原本的启动错误。快照的校验规则不变，仍然 fail closed。
+- 测试：新增 3 例（`tests/test_worker_handshake_lease.py`）。在修复前的代码上 3 例全部失败。其中一例让快照进行时另一线程消费启动许可，这一例可以确定地复现原来的报错。满负载下原测试连续 80 次通过。
+
 ## 2026-11-05 — 活性优化阶段 1c：pause / kill 真正停下进程，否则什么都不提交
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1c 与 REV3 W1b。验收运行 run2 从 rev 437 起事件链无法重放（`aggregate_valid=False`），此后三次 pause（rev 713、771、789）都先提交了 PAUSED，随后因"没有可用的启动身份"而改记 `RUNNER_EXIT_UNVERIFIED`，runner 进程仍在运行。REV3 已查明身份其实可以解析（rev 709 的 `RUN_STARTED` 带有 pid、lease 和与进程相符的 identity），是 `_recorded_runner_identity` 在库无效时直接返回了空。
