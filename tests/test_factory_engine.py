@@ -80,6 +80,12 @@ def test_engine_retries_through_registry_without_step_number_branches(tmp_path):
 
 
 def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_path):
+    from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET
+
+    # A Judge role without a usable verdict is non-content (phase 3c): it
+    # retries the Judge's infrastructure, never a content attempt, and ends as
+    # PERMANENT_JUDGE_INFRASTRUCTURE once that budget is spent.
+    failures = INFRASTRUCTURE_RETRY_BUDGET + 1
     handler = FakeHandler(
         [
             ExecutionResult.failed(
@@ -87,13 +93,8 @@ def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_pa
                 returncode=2,
                 role="math",
                 backend="codex",
-            ),
-            ExecutionResult.failed(
-                "TRANSIENT_JUDGE_ROLE",
-                returncode=2,
-                role="math",
-                backend="codex",
-            ),
+            )
+            for _ in range(failures)
         ]
     )
     validator = FakeValidator(
@@ -101,11 +102,8 @@ def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_pa
             ValidationResult.invalid(
                 "judge output missing",
                 metadata={"failed_check": "grounding", "missing_artifacts": ["judge_outputs/math.md"]},
-            ),
-            ValidationResult.invalid(
-                "judge output missing",
-                metadata={"failed_check": "grounding", "missing_artifacts": ["judge_outputs/math.md"]},
-            ),
+            )
+            for _ in range(failures)
         ]
     )
     store = SQLiteStateStore(tmp_path)
@@ -120,15 +118,40 @@ def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_pa
     state = engine.run()
 
     assert state.status is WorkflowStatus.FAILED
-    retry = next(event for event in store.events() if event.type == "RETRY_SCHEDULED")
+    assert handler.calls == list(range(1, failures + 1))  # more than max_attempts=2
+    retries = [event for event in store.events() if event.type == "RETRY_SCHEDULED"]
+    assert len(retries) == INFRASTRUCTURE_RETRY_BUDGET
     failure = store.events()[-1]
-    for event in (retry, failure):
+    for event in (retries[0], failure):
         assert event.payload["failed_check"] == "grounding"
         assert event.payload["role"] == "math"
         assert event.payload["backend"] == "codex"
         assert event.payload["missing_artifacts"] == ["judge_outputs/math.md"]
     assert failure.payload["error_class"] == "PERMANENT_JUDGE_INFRASTRUCTURE"
     assert failure.payload["exhausted_error_class"] == "TRANSIENT_JUDGE_ROLE"
+    assert failure.payload["content_attempts_used"] == 0
+
+
+def test_judge_infrastructure_classes_share_one_retry_budget(tmp_path):
+    from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET
+
+    classes = ["TRANSIENT_JUDGE_ROLE", "TRANSIENT_JUDGE_PACKET", "TRANSIENT_JUDGE_INDETERMINATE",
+               "TRANSIENT_JUDGE_PROVENANCE", "TRANSIENT_JUDGE_ROLE"]
+    handler = FakeHandler([ExecutionResult.failed(name, returncode=2) for name in classes])
+    validator = FakeValidator([ValidationResult.invalid("no usable verdict") for _ in classes])
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling")
+    engine = FactoryEngine(
+        tmp_path, store=store, registry=registry_for(handler, validator, max_attempts=2),
+        sleeper=lambda _: None,
+    )
+
+    state = engine.run()
+
+    # Mixing classes does not multiply the budget: one terminal class, one budget.
+    assert state.status is WorkflowStatus.FAILED
+    assert len(handler.calls) == INFRASTRUCTURE_RETRY_BUDGET + 1
+    assert store.events()[-1].payload["error_class"] == "PERMANENT_JUDGE_INFRASTRUCTURE"
 
 
 def test_engine_classifies_exit_zero_with_missing_artifact(tmp_path):

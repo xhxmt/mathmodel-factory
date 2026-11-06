@@ -97,6 +97,17 @@ NON_CONTENT_ERROR_CLASSES: dict[str, str] = {
     # TRANSIENT_TIMEOUT is deliberately absent - a model that runs out of
     # time on a hard Step has attempted the content.
     "TRANSIENT_MODEL_BACKEND": "PERMANENT_MODEL_BACKEND_INFRASTRUCTURE",
+    # Phase 3c: a Judge that produced no usable verdict (indeterminate review,
+    # a malformed or missing role output, a packet, provenance or aggregation
+    # failure) has not judged the content, so it retries the Judge's
+    # infrastructure instead of spending one of the Step's content attempts.
+    # The classes share one budget: they all end as PERMANENT_JUDGE_INFRASTRUCTURE.
+    "TRANSIENT_JUDGE_INDETERMINATE": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_ROLE": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_PACKET": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_INFRASTRUCTURE": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_PROVENANCE": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_AGGREGATION": "PERMANENT_JUDGE_INFRASTRUCTURE",
 }
 INFRASTRUCTURE_RETRY_BUDGET = 3
 
@@ -930,8 +941,12 @@ class FactoryEngine:
             non_content = error_class in NON_CONTENT_ERROR_CLASSES
             earlier_non_content = self._non_content_retries(definition.id)
             if non_content:
-                # Spends this class's infrastructure budget, never a content attempt.
-                same_class = self._non_content_retries(definition.id, error_class)
+                # Spends the infrastructure budget of this class's terminal
+                # class (shared by every class that ends the same way), never
+                # a content attempt.
+                same_class = self._non_content_retries(
+                    definition.id, terminal_class=NON_CONTENT_ERROR_CLASSES[error_class]
+                )
                 exhausted = same_class + 1 > INFRASTRUCTURE_RETRY_BUDGET
                 failure_metadata["infrastructure_retries"] = same_class + 1
                 failure_metadata["infrastructure_retry_budget"] = INFRASTRUCTURE_RETRY_BUDGET
@@ -2887,7 +2902,13 @@ class FactoryEngine:
             return NON_CONTENT_ERROR_CLASSES[error_class]
         return error_class
 
-    def _non_content_retries(self, step_id: int, error_class: str | None = None) -> int:
+    def _non_content_retries(
+        self,
+        step_id: int,
+        error_class: str | None = None,
+        *,
+        terminal_class: str | None = None,
+    ) -> int:
         """Non-content retries in the current attempt sequence of ``step_id``.
 
         Derived from the event stream rather than a state field, so replay
@@ -2895,7 +2916,8 @@ class FactoryEngine:
         starts at the latest Stage-subtask selection or the Step's latest
         ``STEP_STARTED`` with attempt 1, whichever is later, and every
         ``RETRY_SCHEDULED`` of a class in :data:`NON_CONTENT_ERROR_CLASSES`
-        since then is counted (only those of ``error_class`` when given).
+        since then is counted (only those of ``error_class``, or of a class
+        ending as ``terminal_class``, when given).
         """
 
         count = 0
@@ -2907,6 +2929,8 @@ class FactoryEngine:
             recorded = str(event.payload.get("error_class") or "")
             if event.type == "RETRY_SCHEDULED" and recorded in NON_CONTENT_ERROR_CLASSES and (
                 error_class is None or recorded == error_class
+            ) and (
+                terminal_class is None or NON_CONTENT_ERROR_CLASSES[recorded] == terminal_class
             ):
                 count += 1
             elif event.type == "STEP_STARTED" and event.attempt <= 1:
