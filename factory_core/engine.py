@@ -66,6 +66,18 @@ from .stages import (
 from .transitions import TransitionCoordinator
 
 
+# Failures that say a check or harness produced no verdict at all.  They are
+# not evidence about the content, so they never consume one of the Step's
+# content attempts (``max_attempts``).  Each class maps to the terminal class
+# recorded once its own budget, INFRASTRUCTURE_RETRY_BUDGET consecutive
+# retries of one Step attempt sequence, is spent - so an exhausted harness
+# never reads as a content failure.
+NON_CONTENT_ERROR_CLASSES: dict[str, str] = {
+    "TRANSIENT_INCREMENTAL_AUDIT": "PERMANENT_AUDIT_INFRASTRUCTURE",
+}
+INFRASTRUCTURE_RETRY_BUDGET = 3
+
+
 @dataclass(frozen=True)
 class ScheduledStageTask:
     stage_id: int
@@ -466,7 +478,12 @@ class FactoryEngine:
                              "allowed_source_steps": sorted(allowed_source_steps)},
                 )
             attempt = state.attempt + 1 if state.active_step == definition.id else 1
-            if stage_mode and state.attempt >= definition.max_attempts:
+            content_attempts_used = (
+                state.attempt - self._non_content_retries(definition.id)
+                if state.active_step == definition.id
+                else 0
+            )
+            if stage_mode and content_attempts_used >= definition.max_attempts:
                 assert stage_task is not None
                 return self._fail_stage_task(
                     state,
@@ -859,7 +876,17 @@ class FactoryEngine:
                 )
             )
             permanent = error_class.startswith("PERMANENT")
-            if permanent or attempt >= definition.max_attempts:
+            non_content = error_class in NON_CONTENT_ERROR_CLASSES
+            earlier_non_content = self._non_content_retries(definition.id)
+            if non_content:
+                # Spends the infrastructure budget, never a content attempt.
+                exhausted = earlier_non_content + 1 > INFRASTRUCTURE_RETRY_BUDGET
+                failure_metadata["infrastructure_retries"] = earlier_non_content + 1
+                failure_metadata["infrastructure_retry_budget"] = INFRASTRUCTURE_RETRY_BUDGET
+            else:
+                exhausted = attempt - earlier_non_content >= definition.max_attempts
+            failure_metadata["content_attempts_used"] = attempt - earlier_non_content - int(non_content)
+            if permanent or exhausted:
                 terminal_error_class = self._terminal_error_class(
                     error_class, exhausted=not permanent
                 )
@@ -2468,7 +2495,34 @@ class FactoryEngine:
     def _terminal_error_class(error_class: str, *, exhausted: bool) -> str:
         if exhausted and error_class.startswith("TRANSIENT_JUDGE"):
             return "PERMANENT_JUDGE_INFRASTRUCTURE"
+        if exhausted and error_class in NON_CONTENT_ERROR_CLASSES:
+            return NON_CONTENT_ERROR_CLASSES[error_class]
         return error_class
+
+    def _non_content_retries(self, step_id: int) -> int:
+        """Non-content retries in the current attempt sequence of ``step_id``.
+
+        Derived from the event stream rather than a state field, so replay
+        stays exact and no member is added to the replayed state: a sequence
+        starts at the latest Stage-subtask selection or the Step's latest
+        ``STEP_STARTED`` with attempt 1, whichever is later, and every
+        ``RETRY_SCHEDULED`` of a class in :data:`NON_CONTENT_ERROR_CLASSES`
+        since then is counted.
+        """
+
+        count = 0
+        for event in reversed(self.store.events()):
+            if event.type == "STAGE_SUBTASK_SELECTED":
+                break
+            if event.step != step_id:
+                continue
+            if event.type == "RETRY_SCHEDULED" and str(
+                event.payload.get("error_class") or ""
+            ) in NON_CONTENT_ERROR_CLASSES:
+                count += 1
+            elif event.type == "STEP_STARTED" and event.attempt <= 1:
+                break
+        return count
 
     @staticmethod
     def _pid_is_live(pid: int) -> bool:
