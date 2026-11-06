@@ -491,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
             return 3 if report["status"] == FAIL else 0
         if args.command == "worker":
             assert project is not None
-            wait_for_worker_ready(Path(args.ready_file))
+            wait_for_worker_ready(Path(args.ready_file), project)
             with disk_backed_tmpdir(service.root):
                 state = service.run(project, archive=True, ready_file=Path(args.ready_file))
             print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
