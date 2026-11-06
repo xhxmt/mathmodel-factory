@@ -147,8 +147,12 @@ class FactoryEngine:
         registry: StepRegistry | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         projector: Callable[[Path, WorkflowState], None] | None = None,
+        dispatch_preflight: Callable[[StepDefinition], dict | None] | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
+        #: Phase 3d: called with the Step definition before ``STEP_STARTED``; a report
+        #: (not ``None``) pauses the run without consuming an attempt.
+        self._dispatch_preflight = dispatch_preflight
         self.store = store or SQLiteStateStore(self.project_dir)
         self.registry = registry or StepRegistry()
         self._sleep = sleeper
@@ -635,6 +639,39 @@ class FactoryEngine:
                     payload={
                         "error_class": "PERMANENT_INVALID_PREPARE_RESULT",
                         "reason": prepared.reason,
+                    },
+                )
+            blocked = (
+                self._dispatch_preflight(definition)
+                if self._dispatch_preflight is not None
+                else None
+            )
+            if blocked is not None:
+                # No STEP_STARTED, so no attempt is spent; the Stage cursor
+                # stays, and a resume after the provider or disk is fixed
+                # dispatches the same Step.
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="PAUSED",
+                    changes={
+                        "status": WorkflowStatus.PAUSED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "reason": {
+                            "code": "PAUSED",
+                            "subcode": "PROVIDER_UNAVAILABLE",
+                            "actor": "engine",
+                            "message": str(blocked.get("message") or "dispatch preflight failed"),
+                            "evidence": [],
+                        },
+                        "stage": stage_task.stage_id if stage_task is not None else None,
+                        "subtask": stage_task.subtask if stage_task is not None else None,
+                        "source_step": definition.id,
+                        "preflight": blocked,
                     },
                 )
             state = self._owned_transition(

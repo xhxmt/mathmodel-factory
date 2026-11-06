@@ -553,13 +553,17 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
     return timeline
 
 
-def _semantic_reopen_budget_pause(events: list[WorkflowEvent]) -> WorkflowEvent | None:
-    """The latest PAUSED event, when the engine recorded it for a spent budget."""
+_ENGINE_PAUSE_SUBCODES = frozenset({"SEMANTIC_REOPEN_BUDGET", "PROVIDER_UNAVAILABLE"})
+
+
+def _engine_pause(events: list[WorkflowEvent]) -> WorkflowEvent | None:
+    """The latest PAUSED event, when the engine recorded it with an explanation
+    (phase 3a: spent reopen budget; phase 3d: dispatch preflight failure)."""
 
     for event in reversed(events):
         if event.type == "PAUSED":
             reason = event.payload.get("reason") or {}
-            if isinstance(reason, dict) and reason.get("subcode") == "SEMANTIC_REOPEN_BUDGET":
+            if isinstance(reason, dict) and reason.get("subcode") in _ENGINE_PAUSE_SUBCODES:
                 return event
             return None
     return None
@@ -600,6 +604,7 @@ def project_runtime_diagnostics(
     suggested = ["refresh_status"]
     evidence: list[dict[str, Any]] = []
     reopen_budget: dict[str, Any] | None = None
+    preflight: dict[str, Any] | None = None
     if pending is not None:
         gate = pending.get("gate")
         if gate in {"reviewer_entry_gate", "step8_5"}:
@@ -619,19 +624,25 @@ def project_runtime_diagnostics(
             for path in (pending.get("reason") or {}).get("evidence", [])
         ]
     elif state.status is WorkflowStatus.PAUSED and (
-        budget_pause := _semantic_reopen_budget_pause(event_list)
+        engine_pause := _engine_pause(event_list)
     ) is not None:
-        # Phase 3a: the run paused because its semantic-reopen budget is spent.
-        reason = budget_pause.payload.get("reason") or {}
-        reason_code = "SEMANTIC_REOPEN_BUDGET"
+        reason = engine_pause.payload.get("reason") or {}
+        reason_code = str(reason.get("subcode"))
         reason_summary = str(reason.get("message") or "")
-        suggested = [
-            "revert_upstream_edits_and_resume",
-            "grant_semantic_reopen",
-            "refresh_status",
-        ]
         evidence = [{"kind": "file", "path": path} for path in reason.get("evidence", [])]
-        reopen_budget = budget_pause.payload.get("reopen_budget")
+        if reason_code == "SEMANTIC_REOPEN_BUDGET":
+            # Phase 3a: the run paused because its semantic-reopen budget is spent.
+            suggested = [
+                "revert_upstream_edits_and_resume",
+                "grant_semantic_reopen",
+                "refresh_status",
+            ]
+            reopen_budget = engine_pause.payload.get("reopen_budget")
+        else:
+            # Phase 3d: a model route or scratch space failed before dispatch;
+            # nothing was attempted, so resuming after the fix is enough.
+            suggested = ["resume_project", "refresh_status"]
+            preflight = engine_pause.payload.get("preflight")
     elif latest_recovery and state.status in {
         WorkflowStatus.FAILED,
         WorkflowStatus.RETRYING,
@@ -664,6 +675,7 @@ def project_runtime_diagnostics(
             "evidence": evidence,
             "workflow_revision": state.revision,
             **({"reopen_budget": reopen_budget} if reopen_budget is not None else {}),
+            **({"preflight": preflight} if preflight is not None else {}),
         },
         "events": project_audit_timeline(event_list)[-5:],
         "actions": [{"id": action_id} for action_id in suggested],

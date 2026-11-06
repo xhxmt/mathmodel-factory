@@ -107,7 +107,7 @@ export default {
       const code = this.diagnostics?.status?.reason_code
       return {
         'is-warn': code === 'NO_LOG_PROGRESS' || code === 'LOCK_STALE_RECLAIMED',
-        'is-block': code === 'AWAITING_STEP8_5' || code === 'VERIFY_OUTPUT_FAILED' || code === 'CONSULTATION_PENDING' || code === 'HUMAN_DECISION_REQUIRED' || code === 'ORPHANED_DECISION_ARTIFACT' || code === 'DECISION_RECEIPT_MISMATCH' || code === 'WORKFLOW_REPLAY_MISMATCH' || code === 'SEMANTIC_REOPEN_BUDGET' || String(code || '').startsWith('PERMANENT_'),
+        'is-block': code === 'AWAITING_STEP8_5' || code === 'VERIFY_OUTPUT_FAILED' || code === 'CONSULTATION_PENDING' || code === 'HUMAN_DECISION_REQUIRED' || code === 'ORPHANED_DECISION_ARTIFACT' || code === 'DECISION_RECEIPT_MISMATCH' || code === 'WORKFLOW_REPLAY_MISMATCH' || code === 'SEMANTIC_REOPEN_BUDGET' || code === 'PROVIDER_UNAVAILABLE' || String(code || '').startsWith('PERMANENT_'),
       }
     },
   },

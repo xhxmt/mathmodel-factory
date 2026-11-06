@@ -254,10 +254,13 @@ class FactoryService:
                 "historical runtimes are preserved in paper_new"
             )
         registry = self._native_registry_factory(self.code_root)
+        from .dispatch_preflight import for_project
+
         return FactoryEngine(
             resolved,
             registry=registry,
             projector=write_compatibility_projections,
+            dispatch_preflight=for_project(self.code_root, resolved),
         )
 
     def create_project(
@@ -1669,7 +1672,14 @@ def wait_for_worker_ready(
 # ---------------------------------------------------------------------------
 
 PAUSED_SUBCODES = frozenset(
-    {"OPERATOR", "DEADLINE", "EXECUTION_SCOPE", "FREEZE_BOUNDARY", "SEMANTIC_REOPEN_BUDGET"}
+    {
+        "OPERATOR",
+        "DEADLINE",
+        "EXECUTION_SCOPE",
+        "FREEZE_BOUNDARY",
+        "SEMANTIC_REOPEN_BUDGET",
+        "PROVIDER_UNAVAILABLE",
+    }
 )
 RESUMED_SUBCODES = frozenset({"OPERATOR", "RETRY", "AUTO_RECOVERY"})
 REASON_ACTORS = frozenset({"operator", "engine", "scheduler"})

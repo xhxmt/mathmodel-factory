@@ -224,6 +224,18 @@ deadline and other budgets still apply. A plain resume of such a project
 recovers the failed attempt and stops at `PERMANENT_ATTEMPT_BUDGET_EXHAUSTED`.
 Do not edit the state database or write one-off authorization events instead.
 
+Before `STEP_STARTED` (after prepare) the engine runs the dispatch preflight
+(`factory_core/dispatch_preflight.py`, wired by `FactoryService.engine`; set
+`FACTORY_DISPATCH_PREFLIGHT=0` to disable, as `tests/conftest.py` does). It
+reuses `factory preflight`'s route and scratch checks for that Step. Only a
+decided `FAIL` blocks — every candidate model fails (no executable or
+credential, a rejected credential, an exhausted balance such as HTTP 402), or
+scratch space is below 2 GiB; `UNKNOWN`/`WARN` and a crashing check never
+block. A block commits `PAUSED` (subcode `PROVIDER_UNAVAILABLE`, actor
+`engine`) with the credential-free report, spends no attempt, keeps the cursor,
+and a resume after the fix dispatches the same Step. The v2 `final_judge` is
+skipped: its Judge roles route as Step 16, not by Step 13's assignments.
+
 Pause and kill decide how to stop the runner before committing anything. The
 launch identity recorded for the current pid and lease is verified against the
 live process, independently of `aggregate_valid`; a gone or reused pid needs no
