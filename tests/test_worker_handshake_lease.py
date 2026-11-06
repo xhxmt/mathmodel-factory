@@ -6,6 +6,7 @@ it copies the database, so a handshake file created or removed outside the
 commit lease made the worker's own first store access fail with
 ``NATIVE_WORKFLOW_REQUIRED`` (PR #45 CI, run 42163370537).
 """
+import fcntl
 import os
 from pathlib import Path
 import subprocess
@@ -35,17 +36,34 @@ def test_consuming_the_launch_permit_waits_for_a_running_snapshot(tmp_path, monk
     ready = project / '.factory/worker_ready_concurrent'
     ready.write_text('1\n')
     original = state_lease._read_snapshot_component
+    original_flock, original_unlink = fcntl.flock, Path.unlink
     consumer = []
+    # Set by the consumer thread when it either asks for an exclusive lock
+    # (leased: it now blocks behind the snapshot) or has removed the permit
+    # (unleased: .factory already changed).  No timing assumption either way.
+    reached = threading.Event()
+
+    def flock(descriptor, operation):
+        if consumer and threading.current_thread() is consumer[0] and operation & fcntl.LOCK_EX:
+            reached.set()
+        return original_flock(descriptor, operation)
+
+    def unlink(path, *args, **kwargs):
+        result = original_unlink(path, *args, **kwargs)
+        if consumer and threading.current_thread() is consumer[0] and path == ready:
+            reached.set()
+        return result
 
     def snapshot_with_concurrent_consumer(*args, **kwargs):
         if not consumer:
             thread = threading.Thread(target=wait_for_worker_ready, args=(ready, project))
             consumer.append(thread)
             thread.start()
-            # Unleased, the permit is gone (and .factory changed) well before this.
-            thread.join(timeout=0.5)
+            assert reached.wait(timeout=10), 'consumer never reached the permit'
         return original(*args, **kwargs)
 
+    monkeypatch.setattr(fcntl, 'flock', flock)
+    monkeypatch.setattr(Path, 'unlink', unlink)
     monkeypatch.setattr(state_lease, '_read_snapshot_component', snapshot_with_concurrent_consumer)
     require_native_project(project)  # raised "directory changed during snapshot"
     consumer[0].join(timeout=5)
