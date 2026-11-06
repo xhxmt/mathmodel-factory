@@ -9,6 +9,15 @@
 - 其余顺序不变：先提交以收回 lease，再按身份结束整个进程树；结束无法确认时仍记 `RUNNER_EXIT_UNVERIFIED`。
 - 测试：新增 8 例（事件链被篡改后仍能停下 runner、身份不可读但 pid 存在、调用方自身、过期 revision，各含 pause 与 kill），更新了 3 个固定旧行为的测试。
 
+## 2026-11-05 — 活性优化阶段 1b：失败记录列出每个候选模型
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1b。调度器依次尝试主线路、备用线路和目录默认候选，全部失败时只返回最后一个候选的结果：canary4 与 run2 中 DeepSeek 线路余额不足（402），回退到的 codex 又启动失败，事件里只剩 "codex 127"。
+
+- **逐个记录**：`factory_core/adapters/models/dispatcher.py`。每个未成功的候选写入 `candidate_attempts`（模型、后端、错误类别、退出码、日志、耗时、后端原因、启动失败的 `launch_error` / `message`，以及因隔离、缺凭据或 `CODEX_ONLY` 而跳过的说明）。
+- **提供方信号**：非零退出的候选，从日志末尾 64 KiB 识别余额或配额耗尽、凭据被拒、限流、过载。HTTP 状态码只在 `HTTP` / `status` / `code` / `error` 之后才算，行号或 token 数里的 "402" 不算；"rate limit"、"overloaded"、"high demand" 这类也会出现在普通文字或回显代码里的说法，只有同一行同时报告失败（error、failed、exceeded、retry、reconnect 或状态码）时才算。后端以 0 退出的进程（包括随后判为无产物的）不判提供方故障。
+- **主错误**：全部候选失败时，返回最能解释失败的一项：提供方信号最优先（余额 > 凭据 > 限流 > 过载），其次是模型跑过但没有产物、模型不支持、一般后端故障或超时，再次是缺凭据、可执行文件不存在、其他 `PERMANENT_*` 配置失败、因隔离或 `CODEX_ONLY` 跳过；同级取最靠前的候选。返回的错误类别、退出码和元数据取自这一项，另带 `primary_candidate`；有提供方信号时带 `provider_signal`，后端没有给出（或给了空的）原因时 `reason` 为 `provider: <信号>`。以前取最后一个候选：最后的 codex 启动失败（PERMANENT）会让一个本可重试的主线路故障直接变成终止。
+- 测试：新增 14 例（`tests/test_dispatcher_attempts.py`）。
+
 ## 2026-11-05 — 活性优化阶段 1e：失败事件写明真正发生的失败
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1e。run4（2026-08-19）rev 987–1005 的 5 次失败记为 `TRANSIENT_MODEL_BACKEND`，`reason` 却是 "Step 8.5 reviewer-entry gate is not ready: None"，读起来像门禁状态拒绝，人工标注也因此标成了 workflow。事件本身的证据是 codex 每次约 1 秒就以 returncode 1 退出：错误类别是对的，原因字段写错了。

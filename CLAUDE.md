@@ -165,7 +165,10 @@ that exits zero without producing the required artifact is
 `TRANSIENT_ARTIFACT_MISSING`, not an unclassified success. Permanently rejected
 model routes are quarantined in the worker and a healthy configured fallback is
 tried; a missing API credential or unsupported model must not be invoked again
-on every workflow retry.
+on every workflow retry. When every candidate fails, the dispatcher reports the
+most explanatory one (a provider signal such as an exhausted balance in its log
+first, a fallback that could not launch last) and lists all of them in
+`candidate_attempts`.
 
 An incremental-audit check that ends without a verdict (timeout, signal, a log
 ending in an uncaught traceback, or a last line naming an exhausted host
