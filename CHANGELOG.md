@@ -9,6 +9,17 @@
 - **回放标注**：`labels.json` 中这 5 次失败改标为 provider，逐条写明各自事件里的证据（rev 987/989/996/998 为约 1 s、未记录退出码的重试；rev 1005 为 returncode 1、约 15 s）。基线中 workflow 26→21、provider 6→11；非内容原因消耗尝试仍为 56 次。
 - 测试：新增 8 例（`tests/test_failure_reason.py`）。
 
+## 2026-11-05 — 活性优化阶段 1a：检查器无结论不再算内容失败
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1a。2026-10-15 的验收运行 run2 中，Step 10 的检查脚本因 `/tmp` 写满而崩溃，被记为 `PAPER_AUDIT_FAILED`（`AUDIT_REPAIR_REQUIRED`），5 次内容尝试全部耗尽。
+
+- **检查器三值化**：`factory_core/audit/incremental.py`。检查脚本非零退出时，若被信号终止、日志最后一行是主机资源耗尽（磁盘满、配额、内存、文件句柄），或日志以未捕获的 Python traceback 结尾（任意异常名，traceback 之后只有缩进的栈帧和最后的异常行），记为"无结论"（`StageCheck.indeterminate`），与超时同样归入 `INDETERMINATE` / `TRANSIENT_INCREMENTAL_AUDIT`。各检查脚本用于 FAIL 的退出码不同（1、2、3），因此不靠退出码判断。正常退出并报告缺陷的脚本仍是 FAIL，即使报告前文引用了异常名或资源错误字样。
+- **确定的缺陷优先**：以前只要有一个硬检查超时，整次审计就是 INDETERMINATE，同一次里真实的缺陷会被掩盖。现在只有当所有硬失败都无结论时才判 INDETERMINATE；有确定的失败时，`failed_check` 与 `repair_step` 按确定的失败计算；所有硬失败都无结论时，仍按这些无结论的检查给出路由信息。`evidence.indeterminate_checks` 列出无结论的检查。
+- **台账**：超时或无结论的检查不再写入 `audit_issue_ledger.md`，对应行保留上一次有结论时的状态，主机故障不会留下 OPEN 的 BLOCKING 条目去触发修复或评审循环门禁。
+- **引擎预算**：`factory_core/engine.py`。`NON_CONTENT_ERROR_CLASSES` 中的错误类别（目前为 `TRANSIENT_INCREMENTAL_AUDIT`）不消耗 Step 的内容尝试次数，另有 `INFRASTRUCTURE_RETRY_BUDGET = 3` 次重试预算，用尽后以独立的 `PERMANENT_AUDIT_INFRASTRUCTURE` 终止，不会被当成内容失败。次数从事件流推导（本次尝试序列起点为最近一次阶段子任务选择或该 Step 最近一次 attempt 1 的 `STEP_STARTED`，取较晚者），不新增回放状态字段，也不回退 `attempt`（它参与 prompt 回执的唯一键）。失败事件新增 `content_attempts_used`，无结论失败另带 `infrastructure_retries` / `infrastructure_retry_budget`。
+- **回放**：失败统计按同一规则计次，非内容类别及其预算用尽后的终止类别都不算内容尝试。历史上 run2 Step 10 的 5 次失败记录的是旧检查器给出的 `AUDIT_REPAIR_REQUIRED`，夹具里没有检查日志，回放无法重新判定它们，所以基线中的非内容尝试损失仍为 56 次；新行为由复现"磁盘写满导致 traceback"的检查器测试证明。
+- 测试：新增 11 例（检查器 7 例，引擎 3 例，回放 1 例）。
+
 ## 2026-11-05 — 活性优化阶段 0：运行历史回放、磁盘临时目录与路线预检
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 0。
