@@ -1,16 +1,16 @@
 <template>
   <div class="rail" :class="{ compact }" role="img" :aria-label="`流水线进度：第 ${Math.max(0, currentStep)} / 16 步`">
-    <template v-for="s in STEPS" :key="s.index">
+    <template v-for="(s, position) in steps" :key="s.index">
       <span class="node" :class="['st-' + state(s), 'kind-' + s.kind]" :title="tip(s)">
         <span v-if="!compact" class="num">{{ s.index }}</span>
       </span>
-      <span v-if="s.index < 16" class="seg" :class="{ on: state(s) === 'done' }"></span>
+      <span v-if="position < steps.length - 1" class="seg" :class="{ on: state(s) === 'done' }"></span>
     </template>
   </div>
 </template>
 
 <script>
-import { STEPS, stepStatus } from '../lib/steps.js'
+import { stepStatus, stepsInOrder } from '../lib/steps.js'
 import { workflowStepState } from '../lib/projectState.js'
 
 export default {
@@ -21,7 +21,10 @@ export default {
     awaiting: { type: Boolean, default: false },
     compact: { type: Boolean, default: false },
   },
-  data() { return { STEPS } },
+  computed: {
+    // The project's own run order: Stage catalog v2 runs 14 and 15 before 13.
+    steps() { return stepsInOrder(this.project) },
+  },
   methods: {
     state(s) {
       if (this.project) return workflowStepState(s.index, this.project)

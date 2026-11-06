@@ -1,3 +1,5 @@
+import { isStepDone, nextStepAfter, stepLabelOverride, stepOrder, stepPosition } from './stageCatalog.js'
+
 // The canonical 16-step modeling workflow (Setup = step 0).
 // kind: 'setup' | 'normal' | 'human' (human intervention) | 'gate' (QA gate)
 export const STEPS = [
@@ -39,8 +41,16 @@ export function stepStatus(index, currentStep) {
   return 'pending'
 }
 
-export function stepByIndex(index) {
-  return STEPS[index] || null
+export function stepByIndex(index, project = null) {
+  const step = STEPS[index] || null
+  const override = step && stepLabelOverride(index, project)
+  return override ? { ...step, ...override } : step
+}
+
+// STEPS in the order this project runs them (Stage catalog v2 runs 14, 15
+// before 13), with the catalog's Step names.
+export function stepsInOrder(project = null) {
+  return stepOrder(project).map((index) => stepByIndex(index, project))
 }
 
 export function stepConfigKey(step) {
@@ -96,7 +106,7 @@ export function projectStepIndex(project = {}) {
   if (project.status === 'completed') return 16
   if (hasNativeStepCursor(project) && project.active_subtask === 'reviewer_entry_gate') return 8.5
   const raw = hasNativeStepCursor(project)
-    ? (project.source_step_id ?? (project.last_completed_step != null ? Number(project.last_completed_step) + 1 : project.current_step) ?? 0)
+    ? (project.source_step_id ?? (project.last_completed_step != null ? nextStepAfter(project.last_completed_step, project) : project.current_step) ?? 0)
     : Number(project.current_step ?? -1) + 1
   const index = Number(raw)
   return Number.isFinite(index) ? Math.min(16, Math.max(0, index)) : 0
@@ -105,13 +115,16 @@ export function projectStepIndex(project = {}) {
 export function projectStepName(project = {}) {
   if (project.status === 'completed') return '已完成'
   const index = projectStepIndex(project)
-  return index === 8.5 ? EDITORIAL_GATE_STEP.name : (stepByIndex(index)?.name || '')
+  return index === 8.5 ? EDITORIAL_GATE_STEP.name : (stepByIndex(index, project)?.name || '')
 }
 
 export function projectStepStatus(index, project, legacyCurrentStep) {
   if (!hasNativeStepCursor(project)) return stepStatus(index, legacyCurrentStep)
   if (project.status === 'completed') return 'done'
-  const completed = Number(project.last_completed_step ?? (projectStepIndex(project) - 1))
-  if (index <= completed || (index === 8.5 && Number(project.source_step_id) > 8)) return 'done'
+  const completed = project.last_completed_step != null
+    ? Number(project.last_completed_step)
+    : stepOrder(project)[Math.floor(stepPosition(projectStepIndex(project), project)) - 1] ?? -1
+  if (isStepDone(index, completed, project)
+    || (index === 8.5 && project.source_step_id != null && stepPosition(project.source_step_id, project) > stepPosition(8, project))) return 'done'
   return index === projectStepIndex(project) ? 'active' : 'pending'
 }

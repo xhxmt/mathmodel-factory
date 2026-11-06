@@ -1,4 +1,5 @@
 import { stepByIndex } from './steps.js'
+import { isCatalogV2, isStepDone, nextStepAfter, stagesFor, stepPosition } from './stageCatalog.js'
 import { statusLabel } from './status.js'
 
 export const STAGES = [
@@ -26,7 +27,7 @@ export function currentStepIndex(project = {}) {
   const source = index(project.source_step_id)
   if (source !== null) return source
   if (project.last_completed_step == null && project.scheduler_generation && index(project.current_step) !== null) return index(project.current_step)
-  if (project.last_completed_step != null) return Math.min(16, Math.max(0, Number(project.last_completed_step) + 1))
+  if (project.last_completed_step != null) return nextStepAfter(project.last_completed_step, project)
   // Legacy API: current_step is a completed checkpoint. Native status has source_step_id.
   return Math.min(16, Math.max(0, Number(project.current_step ?? -1) + 1))
 }
@@ -37,10 +38,11 @@ export function completedStepIndex(project = {}) {
 }
 export function projectProgress(project = {}) {
   if (executionStatus(project) === 'completed') return 100
-  return Math.min(99, Math.max(0, Math.round((completedStepIndex(project) + 1) / 17 * 100)))
+  return Math.min(99, Math.max(0, Math.round((stepPosition(completedStepIndex(project), project) + 1) / 17 * 100)))
 }
 export function currentStage(project = {}) {
-  return STAGES.find(stage => stage.id === Number(project.active_stage)) || STAGES.find(stage => stage.steps.includes(currentStepIndex(project)))
+  const stages = stagesFor(project)
+  return stages.find(stage => stage.id === Number(project.active_stage)) || stages.find(stage => stage.steps.includes(currentStepIndex(project)))
 }
 export function humanLabel(project = {}) {
   if (project.consultation_pending) {
@@ -50,10 +52,12 @@ export function humanLabel(project = {}) {
 }
 export function stepText(project = {}) {
   if (executionStatus(project) === 'completed') return '全部步骤已完成'
-  if (project.active_subtask === 'content_freeze_guard' || project.selection_gate === 'content_freeze') return 'Step 16 前置 · 内容冻结确认'
+  if (project.active_subtask === 'content_freeze_guard' || project.selection_gate === 'content_freeze') {
+    return isCatalogV2(project) ? '最终审计前 · 内容冻结确认' : 'Step 16 前置 · 内容冻结确认'
+  }
   if (project.active_subtask === 'reviewer_entry_gate') return 'Step 8.5 · 阅卷入口设计'
   const step = currentStepIndex(project)
-  return `Step ${step} · ${stepByIndex(step)?.name || '等待调度'}`
+  return `Step ${step} · ${stepByIndex(step, project)?.name || '等待调度'}`
 }
 export function workflowStepState(step, project = {}) {
   const state = executionStatus(project)
@@ -66,7 +70,7 @@ export function workflowStepState(step, project = {}) {
     if (state === 'retrying') return 'retrying'
     return state === 'running' || state === 'archiving' ? 'live' : 'pending'
   }
-  return step <= completedStepIndex(project) ? 'done' : 'pending'
+  return isStepDone(step, completedStepIndex(project), project) ? 'done' : 'pending'
 }
 export function primaryControl(project = {}) {
   const state = executionStatus(project)

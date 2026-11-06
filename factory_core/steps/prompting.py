@@ -42,6 +42,14 @@ class PromptRenderer:
         }
         for key, value in values.items():
             text = text.replace(key, value)
+        from .catalog_prompts import (
+            V2_PROMPT_OVERLAY,
+            apply_v2_overlay,
+            project_uses_catalog_v2,
+        )
+
+        if Path(template).name in V2_PROMPT_OVERLAY and project_uses_catalog_v2(project):
+            text = apply_v2_overlay(template, text)
         text = self._apply_ablations(template, text)
         note = (
             self.user_note(project.name, step_key)

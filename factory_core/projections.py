@@ -97,7 +97,9 @@ def runtime_payload(
         if stage_cursor["source_step_id"] is not None
         else max(0, state.last_completed_step)
     )
-    phase = phase_for_step(min(current_step, 16))
+    phase = phase_for_step(
+        min(current_step, 16), catalog_version=state.stage_catalog_version
+    )
     action = state.pending_action or {}
     display = {
         WorkflowStatus.READY: "就绪",

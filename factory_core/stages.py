@@ -706,7 +706,12 @@ class StageCatalog:
                     "subtasks": [
                         {
                             **asdict(subtask),
-                            "contest_phase": phase_for_step(subtask.source_step_id).id,
+                            "contest_phase": phase_for_step(
+                                subtask.checkpoint_step_id
+                                if subtask.checkpoint_step_id is not None
+                                else subtask.source_step_id,
+                                catalog_version=self.version,
+                            ).id,
                             "step_budget": {
                                 "timeout_seconds": subtask.step_contract.timeout_seconds,
                                 "hang_timeout_seconds": subtask.step_contract.hang_timeout_seconds,

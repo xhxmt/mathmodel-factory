@@ -49,7 +49,8 @@ def test_service_creates_native_project_and_consultation_projection(tmp_path):
     assert worker is None
     assert state.runtime_generation == "native_v2"
     assert state.scheduler_generation == "stage_v1"
-    assert state.stage_catalog_version == "factory-stage-catalog-v1"
+    # New projects use the paper-segment reorder (optimization plan, phase 2).
+    assert state.stage_catalog_version == "factory-stage-catalog-v2"
     assert state.status is WorkflowStatus.READY
     assert (project / "consultation/enabled").is_file()
     assert "Research question**: /tmp/problem.pdf" in (

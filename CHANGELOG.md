@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-06 — 活性优化阶段 2（第二部分）：合同、prompt、看板与前端；新项目默认 v2
+
+接第一部分。完成后新项目默认使用 `factory-stage-catalog-v2`；现有项目保持记录在库里的 v1，不迁移；`factory create --stage-catalog v1` 仍可创建 v1 项目。
+
+- **默认切换**：`FactoryService.create_project` 不指定时使用 `NEW_PROJECT_STAGE_CATALOG`（v2），CLI `--stage-catalog` 默认 `v2`。Web 建项目和 `launch_agents.sh new` 都经过这里。
+- **合同**：`STEPS.md` 写明 v2 的阶段划分、Step 13 最终审计的产出与判退路径、v2 不再有预审 / 跳过凭证 / `PRECHECK_PASS` / 技术续跑、向前修复的文档清单、Gate 2 在 Step 13 之前、Step 16 复用判定的条件；v1 合同原样保留并标注适用范围。README、CLAUDE.md 同步。
+- **prompt**：模板文件不改，v1 项目渲染出的 prompt 与模板哈希逐字节不变。v2 项目在渲染后按 `factory_core/steps/catalog_prompts.py` 的整句替换改写 Step 12、14、15 中关于"Step 13 数学预审"和"Step 16 审计"的说法；任一原句缺失时渲染直接报错，测试也逐条检查。Judge 的 prompt 无需修改：v2 的 Step 13 以 Step 16 的评审身份运行，走 `FINAL_SUBMISSION` 分支。
+- **比赛看板**：`contest.py` 新增 v2 的阶段划分（Step 13 归入"最终审计与交付"），`runtime_payload`、v2 阶段编排载荷、`contest_dashboard` 的阶段与剩余步数估计、"交付尚未就绪"提醒都按项目自己的编排判断。
+- **前端**：新增 `web/frontend/src/lib/stageCatalog.js`。步骤是否完成、下一步、所属阶段与比赛阶段、v2 下 Step 13/16 的名称都按项目编排的位置判断；`StepRail`、`PipelineTimeline`、`StageProgressPanel` 按项目的实际执行顺序展示，不连续的步骤组显示为"13、16"。v1 项目的显示不变。
+- 测试：`tests/test_stage_catalog_v2.py` 增至 25 例（prompt 覆盖、比赛阶段、默认值），新增 `web/frontend/tests/stage-catalog-v2.test.mjs` 并加入 CI；`test_factory_service.py` 中固定默认版本的断言改为 v2。
+
 ## 2026-11-06 — 活性优化阶段 2（第一部分）：论文段重排的 v2 阶段编排（可选启用）
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 2 与决策 1、2（11 月 6 日：允许改合同、采用重排，Gate 2 放在 Step 13 之前）。新项目默认仍是 v1，现有项目不迁移；`factory create --stage-catalog v2` 显式启用。

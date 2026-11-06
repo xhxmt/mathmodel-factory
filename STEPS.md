@@ -53,8 +53,16 @@ the competition-facing workflow is grouped into eight phases:
 4. Validation (Steps 6–7; use problem-type-specific evidence)
 5. Paper Construction (Steps 8–9)
 6. Deterministic Paper Audit (Step 10)
-7. Review & Revision (Steps 11–15; Human Gate 2 and content freeze)
-8. Final Audit & Delivery (Step 16)
+7. Review & Revision (Steps 11, 12, 14, 15; Human Gate 2 and content freeze)
+8. Final Audit & Delivery (Step 13 final Judge, Step 16 acceptance)
+
+New projects use Stage catalog v2 (`factory-stage-catalog-v2`), which runs the
+paper segment as 11 → 12 → 14 → 15 → content freeze → 13 → 16. Step numbers
+keep their meaning; only the order changed, so Step 13 runs after Steps 14 and
+15. Projects created before v2 keep `factory-stage-catalog-v1`
+(11 → 12 → 13 → 14 → 15 → content freeze → 16, with Step 13 in phase 7) and
+the v1 Step 13 contract below; they are not migrated. `factory create
+--stage-catalog v1` still creates a v1 project.
 
 This is the stable user-facing and validation contract. New projects are
 scheduled and recovered through ten persistent Stages, while Step 0–16 remain
@@ -285,7 +293,37 @@ Produce:
 - updated `assumption_ledger.md` — every BLOCKING and MAJOR issue from Step 11 must be either resolved or explicitly justified
 - archive of pre-revision draft at `paper/archive/pre_step12/`
 
-### Step 13: Preliminary Mathematical Audit
+### Step 13: Final Judge (catalog v2) / Preliminary Mathematical Audit (catalog v1)
+
+**Catalog v2 (new projects).** Step 13 is the one full Judge of the paper. It
+runs after Step 15 and after the content-freeze approval (Human Gate 2), as an
+analysis-only final audit executed under the Step-16 evaluator identity:
+compile the final PDF, rerun the complete Step-10 paper checks plus provenance,
+run the visual/page gate, build packets, run the enforce-mode three-role Judge
+(math, execution, paper), reject any snapshot mutation during judging, and
+write a judgment receipt bound to the approved snapshot. It never creates
+`final_submission.sha256`, an override receipt or a final acceptance receipt.
+Its verdicts are the final-audit tokens (`VERDICT: PASS`,
+`VERDICT: REOPEN_REVISION_TEXT`, `VERDICT: REOPEN_REVISION_MODEL`); a reopen
+returns to Step 12 (text) or the owning modeling/solving Step (model), and
+after T−2h requires a `delivery_freeze_override` exactly as a Step-16 reopen
+does. Step 13 is bounded by the contest deadline, inside the terminal reserve.
+There is no math precheck, no conditional skip receipt, no `PRECHECK_PASS`,
+and no Step-13 technical continuation in v2.
+
+In v2, the following edits create no upstream obligation and are checked by
+this Judge and `verify_numbers` instead: the paper's mathematical content
+changed by Steps 9–15, `judge_evaluation.md` and the issue-ledger rows the
+Judge Stage records, and later edits (from Step 9 on) to `model.md`,
+`symbol_table.md`, `evaluation.md`, `sensitivity_report.md`,
+`visualization_log.md`, `reviewer_entry_map.md`, and `anchor_figure_plan.md`.
+Changes to model code, data, canonical results, solver receipts or
+`claim_registry.json` still reopen their owning Stage. The Step 8.5 reviewer
+entry gate is validated once, before Step 9. The Stage-8 exit check for
+unresolved BLOCKING/MAJOR issues runs after Step 12.
+
+**Catalog v1 (existing projects).** The rest of this section is the v1 Step 13
+contract.
 
 For an explicitly requested technical evaluation after an unsuccessful Step13,
 the bounded operator route in `factory_core.repair_operations` records an
@@ -381,6 +419,10 @@ Single-step polish bundle (formerly three separate steps in the social-science v
 - **Internal traces removal**: `m1`/`m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache` → rewrite to paper-readable model/validation language (required submission files like `result*.xlsx` may remain)
 - **Risk phrasing rewrite**: "脆弱"/"翻转"/"风险暴露"/"乐观上界" → "抽样加密验证"/"步长收敛性"/"独立算法复核"/"稳定性检验"
 
+In catalog v2, Steps 14 and 15 run before the Judge, so their edits to the
+paper's mathematics are checked by Step 13 rather than reopening Stage 8; edits
+to model code, data, canonical results or solver evidence still reopen the
+owning Stage. In catalog v1:
 Step 14 / Step 15 changes to model, mathematics, canonical results, source
 mapping, or core numerical claims set semantic dirty state, reopen the owning
 Stage using the earliest dirty cause owner and a resume boundary derived from
@@ -410,6 +452,14 @@ the freeze. Content-freeze rejection clears the pending action, records a
 `WORK_REOPENED` recovery effect, invalidates downstream checkpoints, and
 returns to Stage 9. A new request generation is created only after repaired
 content reruns the owning work and reaches Gate 2 again.
+
+In catalog v2 the content-freeze approval precedes Step 13 (the final Judge),
+not Step 16, and a rejection returns to Step 12's end (Stage 9). Step 16 then
+enters acceptance and, when the current snapshot is exactly the one Step 13
+judged and its judgment receipt verifies, promotes that PASS without rerunning
+the Judge; decision routing, the snapshot recheck, the judgment-receipt
+rebuild, the delivery fence and the final acceptance receipt still run. If the
+snapshot changed, Step 16 runs the full final audit as described below.
 
 Step 16 is the workflow compatibility adapter between the independent audit
 subsystem and delivery. It invokes or reuses the audit for the current content

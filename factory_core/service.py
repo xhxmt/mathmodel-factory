@@ -46,11 +46,16 @@ SOLVER_TERMINAL_STATUSES = {
 from .workflow_events import project_runtime_diagnostics
 from .stages import (
     STAGE_CATALOG_VERSION,
+    STAGE_CATALOG_VERSION_V2,
     STAGE_SCHEDULER_GENERATION,
     STEP_SCHEDULER_GENERATION,
     initial_stage_checkpoints,
     projected_stage_cursor,
 )
+
+# The Stage catalog of newly created projects (optimization plan, phase 2).
+# Existing projects keep the version recorded in their state database.
+NEW_PROJECT_STAGE_CATALOG = STAGE_CATALOG_VERSION_V2
 from scripts.solver_job_receipt import (
     ReceiptError,
     build_completion_receipt,
@@ -255,9 +260,10 @@ class FactoryService:
     ) -> tuple[WorkflowState, WorkerHandle | None]:
         """Create a Native project.
 
-        ``stage_catalog_version`` selects the Stage catalog; the default stays
-        v1.  ``factory-stage-catalog-v2`` (the paper-segment reorder) is opt-in
-        until its Step contracts, prompts and Web views are switched over.
+        ``stage_catalog_version`` selects the Stage catalog.  New projects
+        default to ``factory-stage-catalog-v2`` (the paper-segment reorder:
+        one final Judge after final prose and the content freeze); pass
+        ``factory-stage-catalog-v1`` to create a v1 project.
         """
         if not BASE_NAME_RE.fullmatch(base_name):
             raise ValueError("base_name must contain only letters, numbers, '_' or '-'")
@@ -319,7 +325,7 @@ class FactoryService:
             project_type="modeling",
             runtime_generation="native_v2",
             scheduler_generation=STAGE_SCHEDULER_GENERATION,
-            stage_catalog_version=stage_catalog_version,
+            stage_catalog_version=stage_catalog_version or NEW_PROJECT_STAGE_CATALOG,
             contest_policy=contest_policy.to_dict(),
         )
         write_compatibility_projections(project, state)

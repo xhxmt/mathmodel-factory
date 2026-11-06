@@ -1,18 +1,20 @@
 <template>
   <section class="stage-panel panel" aria-label="十阶段调度进度">
     <header><div><span class="stage-kicker mono">WORKFLOW</span><h2>{{ executionStatus(project) === 'completed' ? '工作流已完成' : stepText(project) }}</h2></div><span class="stage-count mono">{{ Math.min(10, project.last_completed_stage || 0) }} / 10 阶段完成</span></header>
-    <ol><li v-for="stage in STAGES" :key="stage.id" :class="state(stage)" :aria-current="stage.id === active?.id && executionStatus(project) !== 'completed' ? 'step' : undefined">
+    <ol><li v-for="stage in stages" :key="stage.id" :class="state(stage)" :aria-current="stage.id === active?.id && executionStatus(project) !== 'completed' ? 'step' : undefined">
       <span class="stage-number mono"><Icon v-if="state(stage) === 'done'" name="check" :size="13" /><template v-else>{{ String(stage.id).padStart(2, '0') }}</template></span>
       <span class="stage-name">{{ stage.name }}</span>
-      <span class="stage-steps mono">{{ stage.steps.length > 1 ? `Step ${stage.steps[0]}–${stage.steps.at(-1)}` : `Step ${stage.steps[0]}` }}</span>
+      <span class="stage-steps mono">Step {{ stepRangeLabel(stage.steps) }}</span>
     </li></ol>
   </section>
 </template>
 <script setup>
 import { computed } from 'vue'
 import Icon from './Icon.vue'
-import { STAGES, currentStage, executionStatus, stepText, statusTone } from '../lib/projectState.js'
+import { currentStage, executionStatus, stepText, statusTone } from '../lib/projectState.js'
+import { stagesFor, stepRangeLabel } from '../lib/stageCatalog.js'
 const props = defineProps({ project: { type: Object, required: true } })
+const stages = computed(() => stagesFor(props.project))
 const active = computed(() => currentStage(props.project))
 function state(stage) {
   if (stage.id === active.value?.id && executionStatus(props.project) !== 'completed') return 'current ' + statusTone(props.project)

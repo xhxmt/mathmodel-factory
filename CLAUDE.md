@@ -84,14 +84,17 @@ The only active workflow is `engine` / `native_v2` / `stage_v1`, backed by
 validation contracts. Existing `step_v2` Native projects require explicit
 `factory migrate scheduler-activate`; Legacy migration and rollback are retired.
 
-Each Stage project records its catalog in `stage_catalog_version`.
-`factory-stage-catalog-v1` is the default. `factory-stage-catalog-v2` is opt-in
-(`factory create --stage-catalog v2`) and reorders the paper segment to
+Each Stage project records its catalog in `stage_catalog_version`. New
+projects use `factory-stage-catalog-v2`, which reorders the paper segment to
 12 → 14 → 15 → content freeze → 13 (the one final Judge, an analysis-only final
 audit) → 16 (acceptance that promotes that judgment for an unchanged snapshot).
-Step numbers keep their meaning, so v2 ordering questions must go through
-`factory_core.stages.StageCatalog` positions, never step-number comparison; its
-dirty-owner rules live in `factory_core/stage_catalog_v2_policy.py`.
+Existing projects keep `factory-stage-catalog-v1` and are not migrated;
+`factory create --stage-catalog v1` still creates one. Step numbers keep their
+meaning, so v2 ordering questions must go through `factory_core.stages.StageCatalog`
+positions (frontend: `web/frontend/src/lib/stageCatalog.js`), never step-number
+comparison. v2 dirty-owner rules live in `factory_core/stage_catalog_v2_policy.py`;
+v2 prompt wording is a rendering overlay in `factory_core/steps/catalog_prompts.py`
+so v1 prompts stay byte-identical.
 
 `factory_core/` owns revisioned transitions, events, retry budgets, recovery,
 pending actions, native Stage/Step registration, audit, delivery and solver jobs.
@@ -315,10 +318,10 @@ See `STEPS.md` for exact outputs and line/file gates. In short:
 - Step 10: `paper` profile for numerical, code, result, and deliverable consistency; symbol findings are warnings.
 - Step 11: constructive review.
 - Step 12: revision and archive of the pre-revision draft.
-- Step 13: isolated math-only precheck; `PRECHECK_PASS` allows progress but never delivery.
+- Step 13: in catalog v2 (new projects), the one final Judge: an analysis-only full final audit run after Step 15 and the content freeze. In catalog v1, an isolated math-only precheck before Step 14; `PRECHECK_PASS` allows progress but never delivery.
 - Step 14: abstract replacement.
 - Step 15: citation audit, table/prose polish, de-robotification; these edits make the Step-13 precheck non-final and produce the `CONTENT_READY` boundary.
-- Step 16: require Human Gate 2 (`content_freeze`) before execution, then explicitly request acceptance for the independent final-audit result . On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. Only a Native accepted result may then be copied, packaged, cleaned, and moved to `complete/`; default audit alone performs none of those delivery mutations or acceptance writes.
+- Step 16: in catalog v2, accept the Step-13 judgment when the snapshot is unchanged (otherwise rerun the full final audit). In catalog v1, require Human Gate 2 (`content_freeze`) before execution, then explicitly request acceptance for the independent final-audit result . On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. Only a Native accepted result may then be copied, packaged, cleaned, and moved to `complete/`; default audit alone performs none of those delivery mutations or acceptance writes.
 
 Step 13 precheck verdict tokens are `PRECHECK_PASS`,
 `REOPEN_REVISION_MODEL`, and `INDETERMINATE_REVIEW`. Final-audit Gate 2 verdict

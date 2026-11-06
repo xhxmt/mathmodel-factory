@@ -287,4 +287,11 @@
 
 **验证**：核心套件 2797 passed；新增 `tests/test_stage_catalog_v2.py`（20 例）、`test_audit_service.py` 中 5 例提升测试、`test_run_history_replay.py` 中 1 例 v2 回放门禁。
 
-**第二部分（待做）**：`STEPS.md`、Step 13/14/15 与 Judge 的 prompt、比赛看板的阶段映射（v2 的 Step 13 属于"最终审计与交付"阶段）、前端步骤展示与 `tests/step-display.test.mjs`；全部就绪后把新项目默认切到 v2。
+**第二部分：合同、prompt、看板与前端（已完成，新项目默认 v2）**
+
+- `STEPS.md`、README、CLAUDE.md 写明 v2 合同，v1 合同保留并标注适用范围。
+- prompt 模板不改：v1 渲染结果逐字节不变；v2 在渲染后按 `factory_core/steps/catalog_prompts.py` 整句改写 Step 12/14/15，原句缺失即报错。Judge prompt 不需改动。
+- 比赛看板与前端按项目编排的位置判断步骤完成、下一步与所属阶段；v2 的 Step 13 归入"最终审计与交付"。
+- 新项目默认 v2；现有项目不迁移，`--stage-catalog v1` 仍可用。
+
+阶段 2 的退出条件（回放中 F-C、F-D 与纯文档回退归零、前端与核心测试全绿、CHANGELOG 记录合同变更）已满足。验收 A 将是 v2 的第一次真实运行。

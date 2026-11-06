@@ -455,16 +455,16 @@ def test_final_judge_step_runs_the_full_final_audit_as_analysis(tmp_path, monkey
     assert not step.validate(context).is_valid
 
 
-def test_new_projects_default_to_v1_and_v2_is_opt_in(tmp_path):
+def test_new_projects_default_to_v2_and_v1_stays_available(tmp_path):
     from factory_core.service import FactoryService
 
     service = FactoryService(tmp_path)
     default, _ = service.create_project("default_demo", "q", start=False)
-    reordered, _ = service.create_project(
-        "v2_demo", "q", start=False, stage_catalog_version=STAGE_CATALOG_VERSION_V2
+    legacy, _ = service.create_project(
+        "v1_demo", "q", start=False, stage_catalog_version=STAGE_CATALOG_VERSION
     )
-    assert default.stage_catalog_version == STAGE_CATALOG_VERSION
-    assert reordered.stage_catalog_version == STAGE_CATALOG_VERSION_V2
+    assert default.stage_catalog_version == STAGE_CATALOG_VERSION_V2
+    assert legacy.stage_catalog_version == STAGE_CATALOG_VERSION
     with pytest.raises(ValueError, match="unsupported Stage catalog"):
         service.create_project("bad", "q", stage_catalog_version="factory-stage-catalog-v7")
 
@@ -472,6 +472,61 @@ def test_new_projects_default_to_v1_and_v2_is_opt_in(tmp_path):
 def test_cli_create_accepts_the_v2_catalog():
     from factory_core.cli import build_parser
 
-    args = build_parser().parse_args(["create", "demo", "q", "--stage-catalog", "v2"])
-    assert args.stage_catalog == "v2"
-    assert build_parser().parse_args(["create", "demo", "q"]).stage_catalog == "v1"
+    args = build_parser().parse_args(["create", "demo", "q", "--stage-catalog", "v1"])
+    assert args.stage_catalog == "v1"
+    assert build_parser().parse_args(["create", "demo", "q"]).stage_catalog == "v2"
+
+
+# -- prompts and projections -----------------------------------------------
+
+def test_v2_prompt_overlay_matches_every_template_exactly_once():
+    from pathlib import Path as _Path
+
+    from factory_core.steps.catalog_prompts import V2_PROMPT_OVERLAY
+
+    prompts = _Path(__file__).resolve().parents[1] / "prompts"
+    for template, pairs in V2_PROMPT_OVERLAY.items():
+        text = (prompts / template).read_text(encoding="utf-8")
+        for old, new in pairs:
+            assert text.count(old) == 1, (template, old[:40])
+            assert old != new
+
+
+@pytest.mark.parametrize("template", ["step12_revision.txt", "step14_abstract.txt", "step15_polish.txt"])
+def test_v1_prompts_are_untouched_and_v2_prompts_drop_the_precheck(tmp_path, template):
+    from pathlib import Path as _Path
+
+    from factory_core.steps.catalog_prompts import V2_PROMPT_OVERLAY
+    from factory_core.steps.prompting import PromptRenderer
+
+    renderer = PromptRenderer(_Path(__file__).resolve().parents[1])
+    v1_project = tmp_path / "v1"
+    SQLiteStateStore(v1_project).initialize(
+        project_id="v1", project_type="modeling", scheduler_generation=STAGE_SCHEDULER_GENERATION
+    )
+    v2_project = tmp_path / "v2"
+    v2_store(v2_project)
+    step = template.removeprefix("step").split("_")[0]
+    render = lambda project: renderer.render(  # noqa: E731
+        template, project, step_key=step, include_preamble=False, researcher_note=""
+    )
+
+    v1, v2 = render(v1_project), render(v2_project)
+    for old, new in V2_PROMPT_OVERLAY[template]:
+        assert old in v1 and new not in v1  # v1 keeps the template text verbatim
+        assert old not in v2 and new in v2
+    assert "PRECHECK_PASS" not in v2
+    assert "Step 13 数学预审或" not in v2
+
+
+def test_v2_contest_phase_moves_step13_to_final_audit():
+    from factory_core.contest import CONTEST_CATALOG_V2, phase_for_step
+
+    assert CONTEST_CATALOG_V2 == STAGE_CATALOG_VERSION_V2
+    assert phase_for_step(13).name == "review_and_revision"
+    assert phase_for_step(13, catalog_version=STAGE_CATALOG_VERSION_V2).name == "final_audit_and_delivery"
+    assert phase_for_step(14, catalog_version=STAGE_CATALOG_VERSION_V2).name == "review_and_revision"
+    payload = CATALOG_V2.payload()
+    judge = next(s for stage in payload["stages"] for s in stage["subtasks"] if s["key"] == "final_judge")
+    assert judge["contest_phase"] == 8
+    assert payload["schema_version"] == STAGE_CATALOG_VERSION_V2

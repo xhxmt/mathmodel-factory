@@ -1,4 +1,7 @@
 import { needsHuman, humanLabel, executionStatus, stepText } from './projectState.js'
+import { contestPhasesFor } from './stageCatalog.js'
+
+export { contestPhasesFor }
 
 export const LOG_LEVELS = [
   { key: 'all', label: '全部' },
@@ -69,9 +72,10 @@ export const CONTEST_PHASES = [
   { id: 8, key: 'final_audit_and_delivery', label: '最终交付', steps: [16] },
 ]
 
-export function phaseForStep(step) {
+export function phaseForStep(step, project = null) {
   const key = step === '8_5' ? '8_5' : Number(step)
-  return CONTEST_PHASES.find((phase) => phase.steps.includes(key)) || CONTEST_PHASES[0]
+  const phases = contestPhasesFor(project)
+  return phases.find((phase) => phase.steps.includes(key)) || phases[0]
 }
 
 export function formatDuration(seconds) {

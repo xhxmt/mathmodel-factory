@@ -18,6 +18,7 @@ from .runtime_env import disk_backed_tmpdir
 from .storage import SQLiteStateStore
 from .service import FactoryService, wait_for_worker_ready
 from .stages import (
+    STAGE_CATALOG_VERSION,
     STAGE_CATALOG_VERSION_V2,
     STAGE_SCHEDULER_GENERATION,
     STEP_SCHEDULER_GENERATION,
@@ -256,9 +257,10 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--stage-catalog",
         choices=("v1", "v2"),
-        default="v1",
-        help="Stage catalog for the new project; v2 runs the one final Judge "
-        "(Step 13) after abstract, polish and the content freeze",
+        default="v2",
+        help="Stage catalog for the new project (default v2: the one final Judge, "
+        "Step 13, runs after abstract, polish and the content freeze; v1 keeps "
+        "the Step-13 precheck before abstract and polish)",
     )
 
     start = sub.add_parser("start")
@@ -478,7 +480,9 @@ def main(argv: list[str] | None = None) -> int:
                 start=args.start,
                 contest_deadline_at=args.contest_deadline,
                 stage_catalog_version=(
-                    STAGE_CATALOG_VERSION_V2 if args.stage_catalog == "v2" else None
+                    STAGE_CATALOG_VERSION_V2
+                    if args.stage_catalog == "v2"
+                    else STAGE_CATALOG_VERSION
                 ),
             )
             payload = runtime_payload(state)
