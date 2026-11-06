@@ -17,7 +17,11 @@ from .projections import runtime_payload, write_compatibility_projections
 from .runtime_env import disk_backed_tmpdir
 from .storage import SQLiteStateStore
 from .service import FactoryService, wait_for_worker_ready
-from .stages import STAGE_SCHEDULER_GENERATION, STEP_SCHEDULER_GENERATION
+from .stages import (
+    STAGE_CATALOG_VERSION_V2,
+    STAGE_SCHEDULER_GENERATION,
+    STEP_SCHEDULER_GENERATION,
+)
 from .workflow_events import (
     ENVELOPE_KEY,
     ReplayIntegrityError,
@@ -249,6 +253,13 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--consult", action="store_true")
     create.add_argument("--start", action="store_true")
     create.add_argument("--contest-deadline", type=_deadline_epoch)
+    create.add_argument(
+        "--stage-catalog",
+        choices=("v1", "v2"),
+        default="v1",
+        help="Stage catalog for the new project; v2 runs the one final Judge "
+        "(Step 13) after abstract, polish and the content freeze",
+    )
 
     start = sub.add_parser("start")
     start.add_argument("project_dir")
@@ -466,6 +477,9 @@ def main(argv: list[str] | None = None) -> int:
                 consult=args.consult,
                 start=args.start,
                 contest_deadline_at=args.contest_deadline,
+                stage_catalog_version=(
+                    STAGE_CATALOG_VERSION_V2 if args.stage_catalog == "v2" else None
+                ),
             )
             payload = runtime_payload(state)
             payload["worker_pid"] = worker_handle.pid if worker_handle else None

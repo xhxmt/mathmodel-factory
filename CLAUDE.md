@@ -84,6 +84,15 @@ The only active workflow is `engine` / `native_v2` / `stage_v1`, backed by
 validation contracts. Existing `step_v2` Native projects require explicit
 `factory migrate scheduler-activate`; Legacy migration and rollback are retired.
 
+Each Stage project records its catalog in `stage_catalog_version`.
+`factory-stage-catalog-v1` is the default. `factory-stage-catalog-v2` is opt-in
+(`factory create --stage-catalog v2`) and reorders the paper segment to
+12 → 14 → 15 → content freeze → 13 (the one final Judge, an analysis-only final
+audit) → 16 (acceptance that promotes that judgment for an unchanged snapshot).
+Step numbers keep their meaning, so v2 ordering questions must go through
+`factory_core.stages.StageCatalog` positions, never step-number comparison; its
+dirty-owner rules live in `factory_core/stage_catalog_v2_policy.py`.
+
 `factory_core/` owns revisioned transitions, events, retry budgets, recovery,
 pending actions, native Stage/Step registration, audit, delivery and solver jobs.
 The full pre-split source and experimental development contracts live separately

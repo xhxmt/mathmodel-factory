@@ -251,7 +251,14 @@ class FactoryService:
         consult: bool = False,
         start: bool = False,
         contest_deadline_at: int | None = None,
+        stage_catalog_version: str | None = None,
     ) -> tuple[WorkflowState, WorkerHandle | None]:
+        """Create a Native project.
+
+        ``stage_catalog_version`` selects the Stage catalog; the default stays
+        v1.  ``factory-stage-catalog-v2`` (the paper-segment reorder) is opt-in
+        until its Step contracts, prompts and Web views are switched over.
+        """
         if not BASE_NAME_RE.fullmatch(base_name):
             raise ValueError("base_name must contain only letters, numbers, '_' or '-'")
         ongoing = self.root / "ongoing"
@@ -312,6 +319,7 @@ class FactoryService:
             project_type="modeling",
             runtime_generation="native_v2",
             scheduler_generation=STAGE_SCHEDULER_GENERATION,
+            stage_catalog_version=stage_catalog_version,
             contest_policy=contest_policy.to_dict(),
         )
         write_compatibility_projections(project, state)

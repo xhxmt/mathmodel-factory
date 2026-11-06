@@ -15,6 +15,7 @@ from .specialized import (
     ConditionalMathPreflightSkipStep,
     ContentFreezeGuardStep,
     DeliveryStep,
+    FinalJudgeStep,
     JudgeStep,
     PaperDraftStep,
     ParallelProposalStep,
@@ -40,6 +41,7 @@ def build_native_registry(
     runner = runner or CommandRunner()
     registry = StepRegistry()
     judge_step: JudgeStep | None = None
+    delivery_step: DeliveryStep | None = None
     for contract in STEP_CONTRACTS:
         validator = (
             validator_factory(root, contract.id)
@@ -65,7 +67,7 @@ def build_native_registry(
         elif contract.implementation == "delivery":
             if judge_step is None:
                 raise RuntimeError("judge Step must be registered before delivery Step")
-            step = DeliveryStep(
+            step = delivery_step = DeliveryStep(
                 contract,
                 root,
                 judge_step,
@@ -114,6 +116,20 @@ def build_native_registry(
             max_attempts=1,
             max_reopens=0,
             step=ConditionalMathPreflightSkipStep(root),
+        ),
+    )
+    assert delivery_step is not None
+    # Stage catalog v2 runs Step 13 as the one final Judge (analysis-only final
+    # audit); v1 projects keep the registered Step-13 precheck above.
+    registry.register_stage_subtask(
+        "final_judge",
+        StepDefinition(
+            id=13,
+            name="final_judge",
+            timeout_seconds=max(step13.timeout_seconds, 21_600),
+            max_attempts=step13.max_attempts,
+            max_reopens=step13.max_reopens,
+            step=FinalJudgeStep(delivery_step),
         ),
     )
     registry.register_stage_subtask(

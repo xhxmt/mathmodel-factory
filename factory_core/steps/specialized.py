@@ -1410,6 +1410,79 @@ class JudgeStep:
         return _recover(self.validator, context)
 
 
+def _stage_catalog_v2(project: Path) -> bool:
+    from ..stages import STAGE_CATALOG_VERSION_V2
+    from ..storage import SQLiteStateStore
+
+    store = SQLiteStateStore(project)
+    return store.exists and store.load().stage_catalog_version == STAGE_CATALOG_VERSION_V2
+
+
+@dataclass
+class FinalJudgeStep:
+    """Stage catalog v2 Step 13: the one full Judge of the final text.
+
+    It runs after Steps 14 and 15 and after the content-freeze approval, as an
+    analysis-only final audit: compile, paper/provenance checks, visual gate,
+    packets, the three-role Judge and a judgment receipt bound to the approved
+    snapshot.  It never writes acceptance or delivery artifacts; Step 16
+    promotes this judgment when the snapshot is unchanged.
+    """
+
+    delivery: "DeliveryStep"
+
+    def prepare(self, context):
+        # Re-checks the content-freeze approval and dynamic consultation; a
+        # withdrawn approval waits at the gate instead of failing the audit.
+        return prepare_human_gates(context.project_dir, 16)
+
+    @staticmethod
+    def final_audit_context(context):
+        # The final audit binds its Judge batches, evaluator contract and
+        # judgment receipt to execution Step 16 (the full three-role review,
+        # not the v1 Step-13 math precheck).  Running it under that identity
+        # is what lets Step 16 verify and promote this exact judgment.
+        from dataclasses import replace
+
+        return replace(context, step_id=16)
+
+    def execute(self, context) -> ExecutionResult:
+        return self.delivery.final_audit_service().run(
+            self.final_audit_context(context), analysis_only=True, reuse_pass=True
+        ).execution
+
+    def validate(self, context):
+        service = self.delivery.final_audit_service()
+        try:
+            snapshot = service._snapshot(context.project_dir.resolve())
+            judged = service._load_reusable(
+                context.project_dir.resolve(), snapshot, analysis_only=True
+            )
+        except (OSError, ValueError) as exc:
+            return ValidationResult.invalid(
+                f"final Judge snapshot cannot be verified: {exc}",
+                ".factory/audits/analysis_latest.json",
+                metadata={"error_class": "TRANSIENT_FINAL_JUDGE_EVIDENCE"},
+            )
+        if judged is None or judged.status.value != "PASS" or not judged.judge_completed:
+            return ValidationResult.invalid(
+                "no verified final-Judge PASS for the current snapshot",
+                ".factory/audits/analysis_latest.json",
+                metadata={"error_class": "TRANSIENT_FINAL_JUDGE_EVIDENCE"},
+            )
+        return ValidationResult.valid(
+            metadata={
+                "final_judge_snapshot": snapshot.snapshot_id,
+                "final_judge_decision": judged.decision,
+            }
+        )
+
+    def recover(self, context, error):
+        return RecoveryDecision.from_validation(
+            self.validate(context), active_step=context.step_id
+        )
+
+
 @dataclass
 class DeliveryStep:
     contract: StepContract
@@ -1425,13 +1498,23 @@ class DeliveryStep:
     def prepare(self, context):
         return prepare_human_gates(context.project_dir, context.step_id)
 
+    def final_audit_service(self):
+        from ..audit.service import FinalAuditService
+
+        return self.audit_service or FinalAuditService(
+            self.factory_root,
+            self.judge_step,
+            getattr(self.judge_step, "validator", self.validator),
+            self.runner,
+            self.fingerprinter,
+            self.override_provider,
+        )
+
     def execute_analysis(self, context) -> ExecutionResult:
         """Technical continuation: compilation and audit without publication."""
-        from ..audit.service import FinalAuditService
-        service = self.audit_service or FinalAuditService(self.factory_root, self.judge_step,
-            getattr(self.judge_step, "validator", self.validator), self.runner,
-            self.fingerprinter, self.override_provider)
-        return service.run(context, analysis_only=True, reuse_pass=True).execution
+        return self.final_audit_service().run(
+            context, analysis_only=True, reuse_pass=True
+        ).execution
 
     def execute(self, context) -> ExecutionResult:
         project = context.project_dir
@@ -1495,21 +1578,14 @@ class DeliveryStep:
         def finalization_guard() -> None:
             ensure_deadline()
             verify_final_input_snapshot(project, final_input)
-        if self.audit_service is None:
-            from ..audit.service import FinalAuditService
-
-            audit_service = FinalAuditService(
-                self.factory_root,
-                self.judge_step,
-                getattr(self.judge_step, "validator", self.validator),
-                self.runner,
-                self.fingerprinter,
-                self.override_provider,
-            )
-        else:
-            audit_service = self.audit_service
+        audit_service = self.final_audit_service()
+        # Catalog v2: Step 13 already ran the one Judge on this approved
+        # snapshot; acceptance promotes that judgment instead of rerunning it.
+        promote = (
+            {"promote_analysis_pass": True} if _stage_catalog_v2(project) else {}
+        )
         try:
-            outcome = audit_service.run(context, analysis_only=False)
+            outcome = audit_service.run(context, analysis_only=False, **promote)
         except NativeBoundaryError as exc:
             return self._with_workflow_events(
                 ExecutionResult.failed(

@@ -1103,3 +1103,79 @@ def test_technical_flow_plus_no_judge_ablation_is_non_delivery_terminal(
     assert outcome.execution.metadata["technical_flow_validation"] is True
     assert not (project / "judge_outputs/final_submission.sha256").exists()
     assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
+
+
+# -- Stage catalog v2: Step 16 promotes the Step-13 final Judge --------------
+
+def _analysis_then_acceptance(tmp_path, monkeypatch, *, fingerprints, receipt_valid=True,
+                              promote=True):
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    judge = PassingJudge()
+    values = iter(fingerprints)
+    current = {"id": next(values)}
+    service = FinalAuditService(
+        root, judge, FakeValidator(), RecordingRunner(),
+        fingerprinter=lambda _project, _base: current["id"],
+    )
+    analysis = service.run(make_context(project), analysis_only=True)
+    assert analysis.record.status is AuditStatus.PASS
+    assert judge.judge_calls == 1
+    current["id"] = next(values, current["id"])
+    monkeypatch.setattr(
+        "scripts.judgment_receipt.verify_receipt",
+        lambda *_args, **_kwargs: (receipt_valid, [] if receipt_valid else ["tampered"]),
+    )
+    accepted = service.run(
+        make_context(project), compile_pdf=False, analysis_only=False,
+        **({"promote_analysis_pass": True} if promote else {}),
+    )
+    return project, judge, accepted
+
+
+def test_acceptance_promotes_the_analysis_judgment_for_the_same_snapshot(tmp_path, monkeypatch):
+    project, judge, accepted = _analysis_then_acceptance(
+        tmp_path, monkeypatch, fingerprints=["c" * 64]
+    )
+
+    assert judge.judge_calls == 1  # the Judge ran once, in the analysis
+    assert accepted.record.status is AuditStatus.PASS
+    assert accepted.record.delivery_allowed is True
+    assert accepted.record.evidence["judge"]["promoted_analysis_snapshot"] == "c" * 64
+    assert (project / "judge_outputs/final_submission.sha256").read_text().strip() == "c" * 64
+    assert (project / "judge_outputs/final_acceptance_receipt.json").is_file()
+
+
+def test_acceptance_reruns_the_judge_when_the_snapshot_changed(tmp_path, monkeypatch):
+    _project, judge, accepted = _analysis_then_acceptance(
+        tmp_path, monkeypatch, fingerprints=["c" * 64, "d" * 64]
+    )
+
+    assert judge.judge_calls == 2
+    assert accepted.record.delivery_allowed is True
+    assert "promoted_analysis_snapshot" not in accepted.record.evidence["judge"]
+
+
+def test_acceptance_does_not_promote_an_unverified_judgment(tmp_path, monkeypatch):
+    _project, judge, accepted = _analysis_then_acceptance(
+        tmp_path, monkeypatch, fingerprints=["c" * 64], receipt_valid=False
+    )
+
+    assert judge.judge_calls == 2
+    assert "promoted_analysis_snapshot" not in accepted.record.evidence.get("judge", {})
+
+
+def test_acceptance_without_promotion_keeps_rerunning_the_judge(tmp_path, monkeypatch):
+    _project, judge, _accepted = _analysis_then_acceptance(
+        tmp_path, monkeypatch, fingerprints=["c" * 64], promote=False
+    )
+
+    assert judge.judge_calls == 2
+
+
+def test_promotion_is_acceptance_only(tmp_path):
+    service = FinalAuditService(tmp_path, PassingJudge(), FakeValidator(), RecordingRunner(),
+                                fingerprinter=lambda _p, _b: "e" * 64)
+    with pytest.raises(ValueError, match="acceptance mode"):
+        service.run(make_context(tmp_path), analysis_only=True, promote_analysis_pass=True)

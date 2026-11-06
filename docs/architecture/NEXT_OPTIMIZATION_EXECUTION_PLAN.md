@@ -182,8 +182,8 @@
 
 | # | 决策 | 我的建议 | 最晚何时 |
 | --- | --- | --- | --- |
-| 1 | 是否允许修改 `STEPS.md` 与 prompt（项目规定这些是 agent 合同，不能随意改） | 允许，逐条写进 CHANGELOG | 阶段 2 开工前 |
-| 2 | 论文段采用"重排到 14→15→13"还是"直接去掉 Step 13 预审" | 重排 | 阶段 2 开工前 |
+| 1 | 是否允许修改 `STEPS.md` 与 prompt（项目规定这些是 agent 合同，不能随意改） | 已定（11 月 6 日）：允许，逐条写进 CHANGELOG | 阶段 2 开工前 |
+| 2 | 论文段采用"重排到 14→15→13"还是"直接去掉 Step 13 预审" | 已定（11 月 6 日）：重排；Gate 2 放在 Step 13 之前（见阶段 2 执行记录） | 阶段 2 开工前 |
 | 3 | 新的返工规则只用于新项目，还是也迁移现有项目 | 只用于新项目 | 阶段 4 开工前 |
 | 4 | 运行级回退上限的数值，用尽时暂停还是失败 | 3 次，用尽暂停并报告 | 阶段 3 |
 | 5 | 验收运行的模型线路与充值金额 | 需要你定；至少覆盖 6h 模型工作 | 验收 A 前 |
@@ -261,3 +261,30 @@
 
 - 核心测试套件（CI 同款参数）：2698 passed、0 failed；driver guard、`compileall`、`git diff --check` 通过。本机需去掉 SOCKS 代理变量 `ALL_PROXY`，否则 TUI 测试因缺少 `socksio` 失败，与代码无关。
 - 一轮完整测试会在 `TMPDIR` 下留下约 1.5–2 GB 临时目录，其中有一百多个 `paper-factory-*` 目录由被测代码 `mkdtemp` 创建后未清理，还有只读的"不可变产物"。在 3.9G 的 tmpfs `/tmp` 上连续跑三轮会写满 `/tmp`，导致 824 个测试以 `database or disk is full` 失败。这和验收 run2 Step 10 是同一故障模式。临时目录放进仓库内又会触发 3 个"必须在仓库外"的测试，所以本机跑套件时应把 `TMPDIR` 指到仓库外的磁盘目录，并在跑完后清理。测试的临时目录泄漏留待后续处理。
+
+## 阶段 2 执行记录（2026-11-06，分支 `feat/phase2-paper-reorder`，基于 `ebb885e`）
+
+**追加决策：Gate 2 放在 Step 13 之前。** 开工时核对代码发现，审计快照指纹（`scripts/submission_fingerprint.py`）包含人工批准凭证 `approval_receipts`，最终审计在 analysis 模式下也要求 content-freeze 已批准（`audit/service.py`）。因此"Judge 在批准前跑、Step 16 在指纹不变时复用"按现有代码不成立：批准一落，指纹就变。11 月 6 日定为 12 → 14 → 15 → Gate 2 → 13 → 16。批准与完整 Judge 的先后关系与 v1 相同（v1 也是先批准、Step 16 再跑 Judge），指纹与凭证结构不变；代价是批准时还看不到 Judge 结论。
+
+**第一部分：引擎与审计（可选启用，默认仍为 v1）**
+
+- 新阶段编排 `factory-stage-catalog-v2`（`factory_core/stages.py` 的 `StageCatalog`）：Stage 8 = 11、12；Stage 9 = 14、15；Stage 10 = content-freeze → `final_judge`（Step 13）→ 16。Step 编号含义不变。v2 里 Step 13 在 14、15 之后，所以一切"谁在谁之后"都按编排位置判断：检查点失效、`resume_after_step_for_stage`、初始化种子、回退目标校验、content-freeze 拒绝后的回退点。v1 的原函数逐字节保留，测试断言通用实现与之完全一致。
+- 新项目默认仍是 v1；`factory create --stage-catalog v2` 或 `FactoryService.create_project(stage_catalog_version=...)` 显式启用。现有项目不迁移（与决策 3 的建议一致）。
+- v2 的 Step 13 是一次完整的最终审计（analysis 模式：编译、论文检查、视觉门禁、三角色 Judge、判定凭证），以 execution Step 16 的身份运行，绑定已批准的快照，不写任何验收或交付产物。Step 16 只在编译前探测到同一快照、判定凭证校验通过的 analysis PASS 时，把它作为 Judge 结果交给原有验收收尾（判定路由、快照复核、凭证重建、交付边界、最终验收凭证），不重跑 Judge；快照一变就照常完整重跑。v1 的 Step 16 不启用这条路径。
+- v2 的归属规则（`factory_core/stage_catalog_v2_policy.py`，并入 v2 的分类器身份，v1 身份不变）：`judge_evaluation.md` 与 Judge 阶段自己写的问题台账归 Stage 10；论文源文件的 MATH 域归 Stage 10（由 Judge 与 `verify_numbers` 把关）；Stage 7 起修改 `model.md`、`symbol_table.md`、`evaluation.md`、`sensitivity_report.md`、`visualization_log.md`、`reviewer_entry_map.md`、`anchor_figure_plan.md` 视为向前修复。模型代码、数据、规范化结果、求解收据与 `claim_registry.json` 仍按原规则回退。状态库清除脏标记时内嵌的分类器 rebase 也按同一规则处理 v2 项目。
+- 8.5 门禁在 v2 里只在 Step 9 开始前校验；Stage 8 出口的"未解决 BLOCKING/MAJOR"检查移到 Step 12；v2 的 Step 13 和 Step 16 一样受比赛终点而非 content freeze 约束，也同样受 T−2h 交付冻结约束；v1 的 Step 13 技术续跑在 v2 不存在。
+
+**回放（16 次运行，新增规则 `v2`）**
+
+| 指标 | current | v2 |
+| --- | --- | --- |
+| 判定的回退 | 46 | 27 |
+| Stage 9 → 8（摘要、润色改公式） | 6 | 0 |
+| Stage 10 → 8（最终审计改写 Judge 投影） | 5 | 0 |
+| Stage 8 → 3 / 6（修订只改文档） | 13 | 0 |
+| Stage 8 → 3 / 4（修订改了模型代码或重跑求解，留给阶段 4） | — | 4 |
+| Stage 10 → 9（Step 16 期间改了论文正文） | 2 | 2 |
+
+**验证**：核心套件 2797 passed；新增 `tests/test_stage_catalog_v2.py`（20 例）、`test_audit_service.py` 中 5 例提升测试、`test_run_history_replay.py` 中 1 例 v2 回放门禁。
+
+**第二部分（待做）**：`STEPS.md`、Step 13/14/15 与 Judge 的 prompt、比赛看板的阶段映射（v2 的 Step 13 属于"最终审计与交付"阶段）、前端步骤展示与 `tests/step-display.test.mjs`；全部就绪后把新项目默认切到 v2。

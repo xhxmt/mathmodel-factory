@@ -55,13 +55,15 @@ from .registry import StepDefinition, StepRegistry
 from .storage import SQLiteStateStore
 from .stages import (
     STAGE_CATALOG_VERSION,
+    STAGE_CATALOG_VERSION_V2,
+    FINAL_JUDGE_SUBTASK,
     STAGE_SCHEDULER_GENERATION,
     STEP_SCHEDULER_GENERATION,
+    SUPPORTED_STAGE_CATALOG_VERSIONS,
+    StageCatalog,
+    catalog_for_version,
     completed_stage_for_step,
-    next_stage_subtask,
-    resume_after_step_for_stage,
     stage_for_id,
-    subtask_for_key,
 )
 from .transitions import TransitionCoordinator
 
@@ -317,7 +319,7 @@ class FactoryEngine:
                 f"unsupported scheduler generation: {state.scheduler_generation}"
             )
         stage_mode = state.scheduler_generation == STAGE_SCHEDULER_GENERATION
-        if stage_mode and state.stage_catalog_version != STAGE_CATALOG_VERSION:
+        if stage_mode and state.stage_catalog_version not in SUPPORTED_STAGE_CATALOG_VERSIONS:
             raise InvalidTransition(
                 "Stage scheduler project has an unsupported Stage catalog version"
             )
@@ -684,7 +686,13 @@ class FactoryEngine:
             if resume_after is not None:
                 policy_payload = self.store.contest_policy()
                 if (
-                    definition.id == 16
+                    (
+                        definition.id == 16
+                        or (
+                            stage_task is not None
+                            and stage_task.subtask == FINAL_JUDGE_SUBTASK
+                        )
+                    )
                     and policy_payload is not None
                     and self.store.now_epoch()
                     >= int(policy_payload["delivery_freeze_at"])
@@ -748,7 +756,9 @@ class FactoryEngine:
                             "resume_after_step": resume_after,
                         },
                     )
-                resume_after = self._validated_resume_target(resume_after, definition.id)
+                resume_after = self._validated_resume_target(
+                    resume_after, definition.id, self._catalog(state)
+                )
                 reopen_changes = {
                     "status": WorkflowStatus.RUNNING,
                     "last_completed_step": resume_after,
@@ -758,7 +768,7 @@ class FactoryEngine:
                 reopen_kwargs = {}
                 if stage_task is not None:
                     reopen_changes.update(
-                        last_completed_stage=completed_stage_for_step(resume_after),
+                        last_completed_stage=self._catalog(state).completed_stage_for_step(resume_after),
                         active_stage=None,
                         active_subtask=None,
                         source_step_id=None,
@@ -1000,20 +1010,22 @@ class FactoryEngine:
     ) -> tuple[WorkflowState, ScheduledStageTask | None]:
         state = self._invalidate_stale_stage_receipts(state, lease)
         completed = self.store.completed_stage_subtasks()
+        catalog = self._catalog(state)
         selected = None
         if state.active_subtask is not None:
-            stage, subtask = subtask_for_key(state.active_subtask)
+            stage, subtask = catalog.subtask_for_key(state.active_subtask)
             if state.active_stage != stage.id:
                 raise InvalidTransition(
                     "persisted Stage and subtask do not belong to the same catalog entry"
                 )
             selected = (stage, subtask)
         else:
-            selected = next_stage_subtask(completed_subtasks=completed)
+            selected = catalog.next_stage_subtask(completed_subtasks=completed)
         if selected is None:
             return state, None
         stage, subtask = selected
-        if subtask.key in {"reviewer_entry_gate", "content_freeze_guard"}:
+        if subtask.kind != "step":
+            # Gate and final-Judge subtasks have their own registered lifecycle.
             definition = self.registry.stage_subtask(subtask.key)
         elif subtask.conditional:
             if semantic_flags(self.store.dirty_flags()):
@@ -1066,7 +1078,7 @@ class FactoryEngine:
                 "subtask": subtask.key,
                 "source_step": subtask.source_step_id,
                 "checkpoint_step": subtask.checkpoint_step_id,
-                "stage_catalog_version": STAGE_CATALOG_VERSION,
+                "stage_catalog_version": catalog.version,
             },
             subtask_baseline={
                 "stage_id": stage.id,
@@ -1087,6 +1099,14 @@ class FactoryEngine:
             for item in self.store.stage_checkpoints()
         }
         reviewer = checkpoints.get((6, "reviewer_entry_gate"))
+        v2 = state.stage_catalog_version == STAGE_CATALOG_VERSION_V2
+        if v2 and any(
+            item.get("completed_step_id") == 9 for item in checkpoints.values()
+        ):
+            # v2 validates the reviewer-entry gate once, at Step 9 entry.  Later
+            # edits to its reports are forward repairs (stage_catalog_v2_policy)
+            # and must not rewind the paper to Step 8.
+            reviewer = None
         if reviewer is not None:
             from scripts.step8_5_gate import collect_step8_5_state
 
@@ -1128,7 +1148,7 @@ class FactoryEngine:
         stage9_checkpoints = [
             item for (stage_id, _subtask), item in checkpoints.items() if stage_id == 9
         ]
-        current_classifier = classifier_contract_sha256()
+        current_classifier = self._classifier_sha(state)
         classifier_stale = any(
             item.get("receipt", {}).get("classifier_contract_sha256")
             != current_classifier
@@ -1145,10 +1165,34 @@ class FactoryEngine:
             if conditional is not None
             else {}
         )
-        if classifier_stale or (
+        if v2 and classifier_stale:
+            return self._owned_transition(
+                state,
+                lease,
+                event_type="STAGE_CHECKPOINT_INVALIDATED",
+                changes={
+                    "status": WorkflowStatus.RUNNING,
+                    "last_completed_step": min(state.last_completed_step, 12),
+                    "last_completed_stage": min(state.last_completed_stage, 8),
+                    "active_step": None,
+                    "active_stage": None,
+                    "active_subtask": None,
+                    "source_step_id": None,
+                    "attempt": 0,
+                },
+                payload={
+                    "stage": 9,
+                    "subtask": "abstract",
+                    "reason": "dirty-classifier contract changed",
+                },
+                invalidate_checkpoints_after_step=12,
+                subtask_baseline=None,
+                event_step=14,
+            )
+        if not v2 and (classifier_stale or (
             result_metadata.get("conditional_math_preflight") == "skipped"
             and not stage9_checkpoints
-        ):
+        )):
             definition = self.registry.stage_subtask(
                 "conditional_math_preflight_skip"
             )
@@ -1202,6 +1246,8 @@ class FactoryEngine:
         baseline = self.store.stage_cursor_input()
         after = capture_artifact_manifest(self.project_dir)
         output_fingerprint = manifest_fingerprint(after)
+        state = self.store.load()
+        classifier_sha = self._classifier_sha(state)
         if baseline is None or (
             int(baseline["stage_id"]) != task.stage_id
             or str(baseline["subtask"]) != task.subtask
@@ -1214,7 +1260,7 @@ class FactoryEngine:
                     "cause_artifact": "MISSING_STAGE_INPUT_BASELINE",
                     "baseline_fingerprint": "MISSING",
                     "current_fingerprint": output_fingerprint,
-                    "classifier_contract_sha256": classifier_contract_sha256(),
+                    "classifier_contract_sha256": classifier_sha,
                     # Not derived from a rule: constructed deliberately to fail
                     # closed when the stage baseline is absent.
                     "classification_source": "explicit_fail_closed",
@@ -1225,7 +1271,7 @@ class FactoryEngine:
                     "cause_artifact": "MISSING_STAGE_INPUT_BASELINE",
                     "baseline_fingerprint": "MISSING",
                     "current_fingerprint": output_fingerprint,
-                    "classifier_contract_sha256": classifier_contract_sha256(),
+                    "classifier_contract_sha256": classifier_sha,
                     "classification_source": "explicit_fail_closed",
                 },
             ]
@@ -1239,7 +1285,7 @@ class FactoryEngine:
         for change in classify_manifest_changes(before, after):
             record = {
                 **change.to_dict(),
-                "classifier_contract_sha256": classifier_contract_sha256(),
+                "classifier_contract_sha256": classifier_sha,
                 "classification_source": source_for(
                     sources, change.flag.value, change.cause_artifact
                 ),
@@ -1247,6 +1293,15 @@ class FactoryEngine:
             receipt_owner = self._solver_receipt_owner_stage(change.cause_artifact)
             if receipt_owner is not None:
                 record["owner_stage"] = receipt_owner
+            if state.stage_catalog_version == STAGE_CATALOG_VERSION_V2:
+                from .stage_catalog_v2_policy import v2_owner_stage
+
+                owner, rule = v2_owner_stage(record, initiator_stage=task.stage_id)
+                if rule is not None:
+                    record["v1_owner_stage"] = record["owner_stage"]
+                    record["v2_owner_rule"] = rule
+                    record["owner_stage"] = owner
+                    record["classification_source"] = "stage_catalog_v2"
             dirty_changes.append(record)
         return (
             str(baseline["input_fingerprint"]),
@@ -1491,7 +1546,7 @@ class FactoryEngine:
         )
         if upstream_owners:
             semantic_owner_stage = upstream_owners[0]
-            semantic_reopen_target = resume_after_step_for_stage(
+            semantic_reopen_target = self._catalog(state).resume_after_step_for_stage(
                 semantic_owner_stage
             )
             semantic_reason = (
@@ -1500,7 +1555,7 @@ class FactoryEngine:
             )
 
         if semantic_reopen_target is not None:
-            if not self._stage_semantic_reopen_allowed(task.stage_id):
+            if not self._stage_semantic_reopen_allowed(task.stage_id, state):
                 return self._stage_transition(
                     state,
                     lease,
@@ -1518,7 +1573,7 @@ class FactoryEngine:
                         "resume_after_step": semantic_reopen_target,
                         "semantic_owner_stage": semantic_owner_stage,
                         "reason": semantic_reason,
-                        "classifier_contract_sha256": classifier_contract_sha256(),
+                        "classifier_contract_sha256": self._classifier_sha(state),
                     },
                     dirty_changes=dirty_changes,
                     event_step=task.source_step_id,
@@ -1530,7 +1585,7 @@ class FactoryEngine:
                 changes={
                     "status": WorkflowStatus.RUNNING,
                     "last_completed_step": semantic_reopen_target,
-                    "last_completed_stage": completed_stage_for_step(
+                    "last_completed_stage": self._catalog(state).completed_stage_for_step(
                         semantic_reopen_target
                     ),
                     "active_step": None,
@@ -1548,7 +1603,7 @@ class FactoryEngine:
                     "dirty_owner_stages": upstream_owners,
                     "reason": semantic_reason,
                     "dirty_flags": sorted(new_flags),
-                    "classifier_contract_sha256": classifier_contract_sha256(),
+                    "classifier_contract_sha256": self._classifier_sha(state),
                 },
                 dirty_changes=dirty_changes,
                 invalidate_checkpoints_after_step=semantic_reopen_target,
@@ -1556,7 +1611,10 @@ class FactoryEngine:
                 event_step=task.source_step_id,
             )
 
-        if task.stage_id == 8 and task.checkpoint_step_id == 13:
+        stage8_exit_step = (
+            12 if state.stage_catalog_version == STAGE_CATALOG_VERSION_V2 else 13
+        )
+        if task.stage_id == 8 and task.checkpoint_step_id == stage8_exit_step:
             from .audit.ledger import has_unresolved_critical
 
             # Step 13 continuation is explicitly authorized by the control-plane
@@ -1566,7 +1624,7 @@ class FactoryEngine:
                 has_unresolved_critical(self.project_dir / "audit_issue_ledger.md")
                 and validation.metadata.get("gate2_continuation_override") is not True
             ):
-                if not self._reopen_allowed(self.registry.get(13)):
+                if not self._reopen_allowed(self.registry.get(stage8_exit_step)):
                     return self._stage_transition(
                         state,
                         lease,
@@ -1601,7 +1659,7 @@ class FactoryEngine:
                         "attempt": 0,
                     },
                     payload={
-                        "source_step": 13,
+                        "source_step": task.source_step_id,
                         "stage": 8,
                         "subtask": task.subtask,
                         "resume_after_step": 10,
@@ -1615,7 +1673,9 @@ class FactoryEngine:
 
         completed = self.store.completed_stage_subtasks()
         completed.add((task.stage_id, task.subtask))
-        next_selected = next_stage_subtask(completed_subtasks=completed)
+        next_selected = self._catalog(state).next_stage_subtask(
+            completed_subtasks=completed
+        )
         stage_completed = next_selected is None or next_selected[0].id != task.stage_id
         next_baseline = None
         changes = {
@@ -1675,7 +1735,7 @@ class FactoryEngine:
             "completed_step_id": task.checkpoint_step_id,
             "input_fingerprint": input_fingerprint,
             "output_fingerprint": output_fingerprint,
-            "classifier_contract_sha256": classifier_contract_sha256(),
+            "classifier_contract_sha256": self._classifier_sha(state),
             "evidence": list(validation.evidence),
             "validation": validation_metadata,
             "result": result.metadata,
@@ -1685,7 +1745,7 @@ class FactoryEngine:
             clear = {
                 "owner_stage": task.stage_id,
                 "cleared_fingerprint": output_fingerprint,
-                "classifier_contract_sha256": classifier_contract_sha256(),
+                "classifier_contract_sha256": self._classifier_sha(state),
                 "success_receipt": checkpoint_receipt,
             }
         return self._stage_transition(
@@ -1720,8 +1780,26 @@ class FactoryEngine:
             event_step=task.source_step_id,
         )
 
-    def _stage_semantic_reopen_allowed(self, stage_id: int) -> bool:
-        current_classifier = classifier_contract_sha256()
+    def _catalog(self, state: WorkflowState) -> StageCatalog:
+        return catalog_for_version(state.stage_catalog_version)
+
+    @staticmethod
+    def _classifier_sha(state: WorkflowState) -> str:
+        """The classifier identity this project's dirty decisions are bound to."""
+
+        base = classifier_contract_sha256()
+        if state.stage_catalog_version == STAGE_CATALOG_VERSION_V2:
+            from .stage_catalog_v2_policy import v2_classifier_contract_sha256
+
+            return v2_classifier_contract_sha256(base)
+        return base
+
+    def _stage_semantic_reopen_allowed(
+        self, stage_id: int, state: WorkflowState | None = None
+    ) -> bool:
+        current_classifier = (
+            self._classifier_sha(state) if state is not None else classifier_contract_sha256()
+        )
         events = self.store.events()
         legacy_boundary = max(
             (
@@ -1767,10 +1845,10 @@ class FactoryEngine:
                 raise InvalidTransition(
                     "Stage scheduler recovery requires an atomic Stage/subtask cursor"
                 )
-            stage, subtask = subtask_for_key(state.active_subtask)
+            stage, subtask = self._catalog(state).subtask_for_key(state.active_subtask)
             if stage.id != state.active_stage or subtask.source_step_id != state.active_step:
                 raise InvalidTransition("Stage recovery cursor is internally inconsistent")
-            if subtask.key in {"reviewer_entry_gate", "content_freeze_guard"}:
+            if subtask.kind != "step":
                 definition = self.registry.stage_subtask(subtask.key)
             elif subtask.conditional and not semantic_flags(self.store.dirty_flags()):
                 definition = self.registry.stage_subtask(
@@ -1846,7 +1924,7 @@ class FactoryEngine:
                     ),
                 )
             resume_after = self._validated_resume_target(
-                decision.resume_after_step, definition.id
+                decision.resume_after_step, definition.id, self._catalog(state)
             )
             changes = {
                 "status": WorkflowStatus.READY,
@@ -1859,7 +1937,7 @@ class FactoryEngine:
             }
             if stage_task is not None:
                 changes.update(
-                    last_completed_stage=completed_stage_for_step(resume_after),
+                    last_completed_stage=self._catalog(state).completed_stage_for_step(resume_after),
                     active_stage=None,
                     active_subtask=None,
                     source_step_id=None,
@@ -2408,7 +2486,7 @@ class FactoryEngine:
         policy = ContestPolicy.from_dict(payload)
         return (
             policy.contest_deadline_at
-            if definition.id == 16
+            if definition.id == 16 or definition.name == FINAL_JUDGE_SUBTASK
             else policy.content_freeze_at
         )
 
@@ -2473,16 +2551,33 @@ class FactoryEngine:
         configured = definition.timeout_seconds if step_timeout is None else step_timeout
         if payload is None:
             return configured
+        # The v2 final Judge (Step 13) runs after the content-freeze approval,
+        # inside the terminal reserve that v1 gave to Step 16, which ran the
+        # same Judge there; it is bounded by the contest deadline like Step 16.
+        deadline_step = 16 if definition.name == FINAL_JUDGE_SUBTASK else definition.id
         return effective_timeout(
             ContestPolicy.from_dict(payload),
-            step_id=definition.id,
+            step_id=deadline_step,
             step_timeout=configured,
             now=self.store.now_epoch(),
         )
 
     @staticmethod
-    def _validated_resume_target(value: object, active_step: int) -> int:
+    def _validated_resume_target(
+        value: object, active_step: int, catalog: StageCatalog | None = None
+    ) -> int:
         target = int(value)
+        if catalog is not None and catalog.version == STAGE_CATALOG_VERSION_V2:
+            # v2 runs Step 13 after 14 and 15: "earlier" is catalog position.
+            try:
+                earlier = catalog.step_position(target) < catalog.step_position(active_step)
+            except KeyError:
+                earlier = False
+            if target < -1 or not earlier:
+                raise InvalidTransition(
+                    f"step {active_step} cannot reopen after invalid step {target}"
+                )
+            return target
         if target < -1 or target >= active_step:
             raise InvalidTransition(
                 f"step {active_step} cannot reopen after invalid step {target}"

@@ -294,3 +294,35 @@ def test_non_content_failures_and_their_terminal_class_consume_no_content_attemp
     events[5]["error_class"] = "AUDIT_REPAIR_REQUIRED"
     records = replay.failure_records({"run": "demo", "events": events}, {})
     assert [record["consumed_attempt"] for record in records] == [False, False, True]
+
+
+def test_stage_catalog_v2_removes_the_paper_segment_loops(fixtures):
+    """Phase 2 exit condition, replayed on the 16 recorded runs.
+
+    v2 must remove the abstract/polish math loop (Stage 9 -> 8), the final-audit
+    projection loop (Stage 10 -> 8), and the reopens a revision caused only by
+    editing documentation (Stage 8 -> 3/6 with no computation input changed).
+    """
+
+    decided = [
+        row for row in replay.replay_decisions(fixtures, replay.RULES["v2"])
+        if row["evaluated"] and row["decided"]["reopen"]
+    ]
+    current = [
+        row for row in replay.replay_decisions(fixtures, replay.RULES["current"])
+        if row["evaluated"] and row["decided"]["reopen"]
+    ]
+    pairs = {(row["stage"], row["decided"]["owner_stage"]) for row in decided}
+
+    assert len(decided) <= 27 < len(current)
+    assert (9, 8) not in pairs and (10, 8) not in pairs
+    assert (8, 6) not in pairs
+    # Every remaining Stage 8 -> 3/4 reopen changed executable model code or a
+    # solver result, which phase 4 handles; none is documentation alone.
+    from factory_core.stage_catalog_v2_policy import FORWARD_REPAIR_DOCUMENTS
+
+    by_key = {(c.run, c.rev): c for f in fixtures for c in replay.change_sets(f)}
+    for row in decided:
+        if row["stage"] == 8 and row["decided"]["owner_stage"] in (3, 4):
+            artifacts = {change["artifact"] for change in by_key[(row["run"], row["rev"])].changes}
+            assert artifacts - FORWARD_REPAIR_DOCUMENTS, artifacts

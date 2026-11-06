@@ -88,8 +88,20 @@ class FinalAuditService:
         analysis_only: bool = True,
         workflow_id: str | None = None,
         run_generation: str | None = None,
+        promote_analysis_pass: bool = False,
     ) -> AuditOutcome:
+        """Run the final audit.
+
+        ``promote_analysis_pass`` (acceptance only, Stage catalog v2): when an
+        analysis-only PASS with a verified judgment receipt exists for exactly
+        the current snapshot, that judgment is the Judge result and is not
+        rerun.  Every acceptance-side check still runs on it: decision routing,
+        the snapshot recheck, the judgment receipt rebuild, the delivery fence
+        and the final acceptance receipt.
+        """
         project = context.project_dir.resolve()
+        if promote_analysis_pass and analysis_only:
+            raise ValueError("promote_analysis_pass requires acceptance mode")
         if analysis_only:
             if workflow_id is not None or run_generation is not None:
                 raise ValueError(
@@ -112,6 +124,7 @@ class FinalAuditService:
                         analysis_only=analysis_only,
                         workflow_id=workflow_id,
                         run_generation=run_generation,
+                        promote_analysis_pass=promote_analysis_pass,
                     )
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -144,6 +157,7 @@ class FinalAuditService:
         analysis_only: bool,
         workflow_id: str | None,
         run_generation: str | None,
+        promote_analysis_pass: bool = False,
     ) -> AuditOutcome:
         project = context.project_dir.resolve()
         base = project.name
@@ -275,6 +289,31 @@ class FinalAuditService:
                     gate2_delivery_override=cached.override,
                 )
                 return AuditOutcome(execution, cached, candidate)
+            if promote_analysis_pass and not analysis_only:
+                # Probed before compilation, so the analysis PDF bytes are the
+                # ones the snapshot (and the judgment receipt) name.
+                judged = self._load_reusable(project, candidate, analysis_only=True)
+                if (
+                    judged is not None
+                    and judged.status is AuditStatus.PASS
+                    and judged.decision == "PASS"
+                    and judged.judge_completed
+                    and not judged.override
+                ):
+                    return self._finish_judge_result(
+                        project,
+                        context,
+                        ExecutionResult.succeeded(
+                            judge_completed=True,
+                            judge_verdict="PASS",
+                            promoted_analysis_snapshot=candidate.snapshot_id,
+                            promoted_analysis_created_at=judged.created_at,
+                        ),
+                        snapshot=candidate,
+                        analysis_only=False,
+                        workflow_id=workflow_id,
+                        run_generation=run_generation,
+                    )
             # A cache miss proceeds through compilation and fresh acceptance
             # checks. Their reports may differ from the probe packet, so the
             # eventual judge snapshot must be prepared again after those checks.

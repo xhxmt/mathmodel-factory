@@ -377,9 +377,52 @@ def recorded_rule(change_set: ChangeSet) -> Decision:
     )
 
 
+def stage_catalog_v2_rule(change_set: ChangeSet) -> Decision:
+    """The same change set under Stage catalog v2 (optimization plan, phase 2).
+
+    The initiating Step is mapped to its v2 Stage (Step 13, recorded as the v1
+    Stage-8 precheck, becomes the v2 Stage-10 final Judge), each classified
+    change goes through the v2 owner rules, and the reopen target is the v2
+    catalog position of the earliest upstream owner.  The engine applies the
+    same rules in ``FactoryEngine._stage_manifest_delta``.
+    """
+
+    from factory_core.current_dirty import classify_manifest_changes
+    from factory_core.dirty import solver_receipt_job_id
+    from factory_core.stage_catalog_v2_policy import v2_owner_stage
+    from factory_core.stages import CATALOG_V2
+
+    if change_set.step is None and change_set.stage is None:
+        return Decision(reopen=False)
+    stage = (
+        CATALOG_V2.stage_for_step(change_set.step).id
+        if change_set.step is not None
+        else change_set.stage
+    )
+    before, after, passthrough = rebuild_manifests(change_set.changes)
+    owners: set[int] = {int(row["owner_stage"]) for row in passthrough}
+    for change in classify_manifest_changes(before, after):
+        record = change.to_dict()
+        job_id = solver_receipt_job_id(change.cause_artifact)
+        if job_id is not None and job_id in change_set.solver_job_owners:
+            record["owner_stage"] = change_set.solver_job_owners[job_id]
+        owner, _rule = v2_owner_stage(record, initiator_stage=stage)
+        owners.add(int(owner))
+    upstream = tuple(sorted(owner for owner in owners if owner < stage))
+    if not upstream:
+        return Decision(reopen=False)
+    return Decision(
+        reopen=True,
+        owner_stage=upstream[0],
+        resume_after_step=CATALOG_V2.resume_after_step_for_stage(upstream[0]),
+        owners=upstream,
+    )
+
+
 RULES: dict[str, Callable[[ChangeSet], Decision]] = {
     "recorded": recorded_rule,
     "current": current_rule,
+    "v2": stage_catalog_v2_rule,
 }
 
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-06 — 活性优化阶段 2（第一部分）：论文段重排的 v2 阶段编排（可选启用）
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 2 与决策 1、2（11 月 6 日：允许改合同、采用重排，Gate 2 放在 Step 13 之前）。新项目默认仍是 v1，现有项目不迁移；`factory create --stage-catalog v2` 显式启用。
+
+- **v2 阶段编排**：`factory_core/stages.py` 新增 `StageCatalog` 与 `factory-stage-catalog-v2`，顺序为 12 → 14 → 15 → content freeze → 13 → 16（Stage 8 = 11、12；Stage 9 = 14、15；Stage 10 = content freeze、`final_judge`、16）。Step 编号含义不变，v2 的先后一律按编排位置判断：检查点失效（`storage._invalidate_stage_checkpoints_after`）、回退目标、初始化种子、content-freeze 拒绝后的回退点（v2 退到 Step 12 之后）。v1 的原函数不变，测试断言通用实现与其逐项一致。
+- **一次 Judge**：v2 的 Step 13（`FinalJudgeStep`）是 analysis 模式的完整最终审计，以 execution Step 16 的身份运行（三角色 Judge，不是 v1 的数学预审），不写验收或交付产物。`FinalAuditService.run(promote_analysis_pass=True)`（仅验收模式，仅 v2 的 Step 16 使用）在编译前探测到同一快照、判定凭证校验通过的 analysis PASS 时，不重跑 Judge，其余验收检查照常执行；快照一变就完整重跑。
+- **v2 归属规则**：`factory_core/stage_catalog_v2_policy.py`，只并入 v2 的分类器身份，v1 身份逐字节不变。`judge_evaluation.md` 和 Judge 阶段写的 `audit_issue_ledger.md` 归 Stage 10；论文源文件的 MATH 域归 Stage 10；Stage 7 起改 `model.md`、`symbol_table.md`、`evaluation.md`、`sensitivity_report.md`、`visualization_log.md`、`reviewer_entry_map.md`、`anchor_figure_plan.md` 是向前修复。模型代码、数据、结果、求解收据和 `claim_registry.json` 仍按原规则回退。`dirty_rebase` 对 v2 项目使用 v2 身份并重新套用这些规则；溯源词表新增 `stage_catalog_v2`。
+- **随之调整**：v2 的 8.5 门禁只在 Step 9 开始前校验；Stage 8 出口的未解决问题检查在 v2 移到 Step 12；v2 的 Step 13 受比赛终点约束（与 v1 的 Step 16 相同），也受 T−2h 交付冻结约束；v1 的 Step 13 技术续跑对 v2 项目拒绝。
+- **回放**：`scripts/replay_run_history.py` 新增规则 `v2`。16 次运行中判定的回退由 46 降到 27；Stage 9 → 8、Stage 10 → 8、修订只改文档引起的 Stage 8 → 3/6 全部归零；剩余的 Stage 8 → 3/4 都改了模型代码或重跑了求解，属于阶段 4。
+- 测试：新增 `tests/test_stage_catalog_v2.py`（20 例），`tests/test_audit_service.py` 新增 5 例，`tests/test_run_history_replay.py` 新增 1 例。
+- 未做（第二部分）：`STEPS.md`、Step 13/14/15 与 Judge 的 prompt、比赛看板阶段映射、前端步骤展示；完成后再把新项目默认切到 v2。
+
 ## 2026-11-05 — 活性优化阶段 1c：pause / kill 真正停下进程，否则什么都不提交
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1c 与 REV3 W1b。验收运行 run2 从 rev 437 起事件链无法重放（`aggregate_valid=False`），此后三次 pause（rev 713、771、789）都先提交了 PAUSED，随后因"没有可用的启动身份"而改记 `RUNNER_EXIT_UNVERIFIED`，runner 进程仍在运行。REV3 已查明身份其实可以解析（rev 709 的 `RUN_STARTED` 带有 pid、lease 和与进程相符的 identity），是 `_recorded_runner_identity` 在库无效时直接返回了空。
