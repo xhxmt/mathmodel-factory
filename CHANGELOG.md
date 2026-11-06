@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-05 — 活性优化阶段 1e：失败事件写明真正发生的失败
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1e。run4（2026-08-19）rev 987–1005 的 5 次失败记为 `TRANSIENT_MODEL_BACKEND`，`reason` 却是 "Step 8.5 reviewer-entry gate is not ready: None"，读起来像门禁状态拒绝，人工标注也因此标成了 workflow。事件本身的证据是 codex 每次约 1 秒就以 returncode 1 退出：错误类别是对的，原因字段写错了。
+
+- **失败原因**：`factory_core/engine.py`。失败事件的 `reason` 以前一律取校验器的消息，执行层自己的 `reason` 会被覆盖。模型后端本身失败时（`BACKEND_FAILURE_ERROR_CLASSES`：后端非零退出、超时、后端不可用、模型不支持、模型配置错误），`reason` 先写后端失败（类别、模型，以及真正运行过的进程的退出码与耗时，或后端自己给出的原因），再接校验器的消息。调度器层面的配置失败（缺凭据、未登记或已隔离的模型、启动失败）没有运行进程，其退出码是填充值，因此写成 "not started, <变量> is not set" 或 "failed before running"，不写成退出；校验器原文另存 `validation_reason`。审计、Judge、门禁等其余失败保持校验器的消息，它们对这些失败本来就准确。
+- **门禁原因**：`scripts/step8_5_gate.py` 新增 `not_ready_reason`。门禁状态里没有 `reason` 字段，两处调用方 `gate.get("reason")` 总是得到 `None`；现在写明缺哪些文件、哪些输入比 PASS 新，或结论是 REVISE / 缺失。状态字典本身不变，以免改动依赖它的指纹。
+- **回放标注**：`labels.json` 中这 5 次失败改标为 provider，逐条写明各自事件里的证据（rev 987/989/996/998 为约 1 s、未记录退出码的重试；rev 1005 为 returncode 1、约 15 s）。基线中 workflow 26→21、provider 6→11；非内容原因消耗尝试仍为 56 次。
+- 测试：新增 8 例（`tests/test_failure_reason.py`）。
+
 ## 2026-11-05 — 活性优化阶段 1d：Step 0 三次尝试，模型后端故障不计次
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1d，建立在 1a 的非内容预算之上。canary 1（2026-10-11）的 Step 0 只有 1 次尝试，codex 上游一次 "high demand" 失败就结束了整个运行。
