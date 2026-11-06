@@ -9,6 +9,16 @@
 - **主错误**：全部候选失败时，返回最能解释失败的一项：提供方信号最优先（余额 > 凭据 > 限流 > 过载），其次是模型跑过但没有产物、模型不支持、一般后端故障或超时，再次是缺凭据、可执行文件不存在、其他 `PERMANENT_*` 配置失败、因隔离或 `CODEX_ONLY` 跳过；同级取最靠前的候选。返回的错误类别、退出码和元数据取自这一项，另带 `primary_candidate`；有提供方信号时带 `provider_signal`，后端没有给出（或给了空的）原因时 `reason` 为 `provider: <信号>`。以前取最后一个候选：最后的 codex 启动失败（PERMANENT）会让一个本可重试的主线路故障直接变成终止。
 - 测试：新增 14 例（`tests/test_dispatcher_attempts.py`）。
 
+## 2026-11-05 — 活性优化阶段 1d：Step 0 三次尝试，模型后端故障不计次
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1d，建立在 1a 的非内容预算之上。canary 1（2026-10-11）的 Step 0 只有 1 次尝试，codex 上游一次 "high demand" 失败就结束了整个运行。
+
+- **Step 0**：`factory_core/steps/catalog.py` 中 `max_attempts` 从 1 改为 3。
+- **后端故障不计次**：`TRANSIENT_MODEL_BACKEND`（模型进程非零退出：上游错误、连接中断、过载）加入 `NON_CONTENT_ERROR_CLASSES`，对所有 Step 生效：不消耗内容尝试次数，用尽 3 次基础设施预算后以 `PERMANENT_MODEL_BACKEND_INFRASTRUCTURE` 终止。`TRANSIENT_TIMEOUT` 不在其中：在难的 Step 上跑满时限的模型已经尝试过内容。
+- **预算按类别**：每个非内容类别各有 3 次重试预算（同一尝试序列内），审计崩溃不会耗掉模型后端的重试次数；内容次数的扣减仍按全部非内容重试计算。
+- **回放**：按新规则，非内容原因消耗的尝试从 56 次降到 48 次（5.8 h），回放门禁（不得高于基线）通过；基线文件不变，仍记录 `8e8f872` 的规则。
+- 测试：新增 5 例。
+
 ## 2026-11-05 — 活性优化阶段 1a：检查器无结论不再算内容失败
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1a。2026-10-15 的验收运行 run2 中，Step 10 的检查脚本因 `/tmp` 写满而崩溃，被记为 `PAPER_AUDIT_FAILED`（`AUDIT_REPAIR_REQUIRED`），5 次内容尝试全部耗尽。
