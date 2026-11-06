@@ -45,24 +45,24 @@
     "evidence": "engine error class PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED: a budget counter, not a new defect"
    },
    "987": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "RETRY_SCHEDULED payload: backend codex, duration_seconds 1.0, no returncode recorded; the model process failed after about one second and 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact it never wrote"
    },
    "989": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "RETRY_SCHEDULED payload: backend codex, duration_seconds 1.0, no returncode recorded; the model process failed after about one second and 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact it never wrote"
    },
    "996": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "RETRY_SCHEDULED payload: backend codex, duration_seconds 1.0, no returncode recorded; the model process failed after about one second and 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact it never wrote"
    },
    "998": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "RETRY_SCHEDULED payload: backend codex, duration_seconds 1.0, no returncode recorded; the model process failed after about one second and 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact it never wrote"
    },
    "1005": {
-    "cause": "workflow",
-    "evidence": "reason 'Step 8.5 reviewer-entry gate is not ready: None': a gate-state refusal, recorded as TRANSIENT_MODEL_BACKEND"
+    "cause": "provider",
+    "evidence": "STEP_FAILED payload: backend codex, returncode 1, duration_seconds 15.0; the model process failed and 'Step 8.5 reviewer-entry gate is not ready: None' was the validator describing the artifact it never wrote"
    },
    "1037": {
     "cause": "infrastructure",

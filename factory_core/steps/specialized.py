@@ -52,7 +52,7 @@ from .gates import prepare_human_gates
 from .prompt_step import PromptStep
 from .prompting import PromptRenderer
 from .validators import NativeArtifactValidator
-from scripts.step8_5_gate import collect_step8_5_state
+from scripts.step8_5_gate import collect_step8_5_state, not_ready_reason
 
 
 _VERDICT_RE = re.compile(r"^VERDICT:\s*(\S+)", re.MULTILINE)
@@ -326,7 +326,7 @@ class ReviewerEntryGateStep:
         if gate.get("ready"):
             return ValidationResult.valid(*evidence, metadata={"step8_5": gate})
         return ValidationResult.invalid(
-            f"Step 8.5 reviewer-entry gate is not ready: {gate.get('reason')}",
+            f"Step 8.5 reviewer-entry gate is not ready: {not_ready_reason(gate)}",
             *evidence,
             metadata={"error_class": "TRANSIENT_STEP8_5_GATE", "step8_5": gate},
         )

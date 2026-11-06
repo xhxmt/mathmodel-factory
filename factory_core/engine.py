@@ -66,6 +66,20 @@ from .stages import (
 from .transitions import TransitionCoordinator
 
 
+# A model process that failed (non-zero exit, timeout, unusable route).  The
+# validator then reports only what is missing, so the failure reason must
+# name the backend first.
+BACKEND_FAILURE_ERROR_CLASSES = frozenset(
+    {
+        "TRANSIENT_MODEL_BACKEND",
+        "TRANSIENT_TIMEOUT",
+        "PERMANENT_BACKEND_UNAVAILABLE",
+        "PERMANENT_MODEL_UNSUPPORTED",
+        "PERMANENT_MODEL_CONFIG",
+    }
+)
+
+
 # Failures that say a check or harness produced no verdict at all.  They are
 # not evidence about the content, so they never consume one of the Step's
 # content attempts (``max_attempts``).  Each class has its own budget of
@@ -881,6 +895,9 @@ class FactoryEngine:
                     else "TRANSIENT_ARTIFACT_INVALID"
                 )
             )
+            failure_reason = self._failure_reason(result, validation.reason)
+            if failure_reason != validation.reason:
+                failure_metadata["validation_reason"] = validation.reason
             permanent = error_class.startswith("PERMANENT")
             non_content = error_class in NON_CONTENT_ERROR_CLASSES
             earlier_non_content = self._non_content_retries(definition.id)
@@ -902,7 +919,7 @@ class FactoryEngine:
                 terminal_payload = {
                     **failure_metadata,
                     "error_class": terminal_error_class,
-                    "reason": validation.reason,
+                    "reason": failure_reason,
                     "returncode": result.returncode,
                 }
                 if stage_task is not None:
@@ -972,7 +989,7 @@ class FactoryEngine:
                 payload={
                     **failure_metadata,
                     "error_class": error_class,
-                    "reason": validation.reason,
+                    "reason": failure_reason,
                     "delay_seconds": retry_delay,
                 },
             )
@@ -2497,6 +2514,40 @@ class FactoryEngine:
             if not (self.project_dir / path).is_file():
                 missing.append(relative)
         return missing
+
+    @staticmethod
+    def _failure_reason(result: ExecutionResult, validation_reason: str) -> str:
+        """The reason a failure event records.
+
+        When the model backend itself failed, the validator's message only
+        describes the consequence (an artifact the model never wrote), so it
+        used to read as a content or gate refusal.  The event then names the
+        backend failure first and keeps the validator's message after it (and
+        in ``validation_reason``).  Every other failure keeps the validator's
+        message, which is the precise one for audits, judges and gates.
+        """
+
+        if result.error_class not in BACKEND_FAILURE_ERROR_CLASSES:
+            return validation_reason
+        metadata = result.metadata
+        own = str(metadata.get("reason") or "").strip()
+        backend = str(metadata.get("model_id") or metadata.get("backend") or "model backend")
+        duration = metadata.get("duration_seconds")
+        # Dispatcher-level config failures (unknown or quarantined model,
+        # missing credential, launch error) never ran a process; their
+        # returncode is synthetic and must not be reported as an exit.
+        ran = metadata.get("process_pid") is not None or isinstance(duration, (int, float))
+        if own:
+            head = f"{result.error_class} from {backend}: {own}"
+        elif metadata.get("missing_key_env"):
+            head = f"{result.error_class}: {backend} not started, {metadata['missing_key_env']} is not set"
+        elif ran and not metadata.get("launch_error"):
+            head = f"{result.error_class}: {backend} exited with returncode {result.returncode}"
+            if isinstance(duration, (int, float)):
+                head += f" after {float(duration):.1f} s"
+        else:
+            head = f"{result.error_class}: {backend} failed before running"
+        return f"{head}; then {validation_reason}" if validation_reason else head
 
     @staticmethod
     def _terminal_error_class(error_class: str, *, exhausted: bool) -> str:
