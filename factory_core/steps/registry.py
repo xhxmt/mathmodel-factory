@@ -121,14 +121,19 @@ def build_native_registry(
     assert delivery_step is not None
     # Stage catalog v2 runs Step 13 as the one final Judge (analysis-only final
     # audit); v1 projects keep the registered Step-13 precheck above.
+    from ..stages import CATALOG_V2, FINAL_JUDGE_SUBTASK
+
+    final_judge = CATALOG_V2.subtask_for_key(FINAL_JUDGE_SUBTASK)[1].step_contract
     registry.register_stage_subtask(
-        "final_judge",
+        FINAL_JUDGE_SUBTASK,
         StepDefinition(
             id=13,
-            name="final_judge",
-            timeout_seconds=max(step13.timeout_seconds, 21_600),
-            max_attempts=step13.max_attempts,
-            max_reopens=step13.max_reopens,
+            name=FINAL_JUDGE_SUBTASK,
+            # Read from the catalog so the shown budget, the deadline cap and
+            # the executed budget are one contract.
+            timeout_seconds=final_judge.timeout_seconds,
+            max_attempts=final_judge.max_attempts,
+            max_reopens=final_judge.max_reopens,
             step=FinalJudgeStep(delivery_step),
         ),
     )

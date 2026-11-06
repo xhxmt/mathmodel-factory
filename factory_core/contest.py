@@ -95,12 +95,27 @@ _PHASE_BY_STEP_V2 = {
 }
 
 
+# ``stages.STAGE_CATALOG_VERSION`` (literal for the same import reason).
+CONTEST_CATALOG_V1 = "factory-stage-catalog-v1"
+
+
+def _is_v2(catalog_version: str | None) -> bool:
+    # Same resolution as ``stages.catalog_for_version``: no version (a Step
+    # scheduler project) projects v1; an unknown version is rejected rather
+    # than silently shown with the v1 phases.
+    if catalog_version is None or catalog_version == CONTEST_CATALOG_V1:
+        return False
+    if catalog_version == CONTEST_CATALOG_V2:
+        return True
+    raise ValueError(f"unsupported Stage catalog version: {catalog_version}")
+
+
 def contest_phases_for(catalog_version: str | None = None) -> tuple[ContestPhase, ...]:
-    return CONTEST_PHASES_V2 if catalog_version == CONTEST_CATALOG_V2 else CONTEST_PHASES
+    return CONTEST_PHASES_V2 if _is_v2(catalog_version) else CONTEST_PHASES
 
 
 def phase_for_step(step_id: int, *, catalog_version: str | None = None) -> ContestPhase:
-    phases = _PHASE_BY_STEP_V2 if catalog_version == CONTEST_CATALOG_V2 else _PHASE_BY_STEP
+    phases = _PHASE_BY_STEP_V2 if _is_v2(catalog_version) else _PHASE_BY_STEP
     try:
         return phases[int(step_id)]
     except KeyError as exc:

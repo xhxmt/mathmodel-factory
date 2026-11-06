@@ -1,5 +1,5 @@
 import { needsHuman, humanLabel, executionStatus, stepText } from './projectState.js'
-import { contestPhasesFor } from './stageCatalog.js'
+import { CONTEST_PHASES_V1, contestPhasesFor } from './stageCatalog.js'
 
 export { contestPhasesFor }
 
@@ -61,16 +61,7 @@ export function workspaceTabs({ consultationPending = false, selectionPending = 
   return tabs
 }
 
-export const CONTEST_PHASES = [
-  { id: 1, key: 'problem_understanding', label: '题意与数据', steps: [0, 1] },
-  { id: 2, key: 'model_tournament', label: '模型竞赛', steps: [2, 3], humanGate: 'step3' },
-  { id: 3, key: 'model_and_solve', label: '建模与求解', steps: [4, 5] },
-  { id: 4, key: 'validation', label: '结果验证', steps: [6, 7] },
-  { id: 5, key: 'paper_construction', label: '论文构建', steps: [8, '8_5', 9] },
-  { id: 6, key: 'deterministic_paper_audit', label: '确定性审计', steps: [10] },
-  { id: 7, key: 'review_and_revision', label: '审稿与修订', steps: [11, 12, 13, 14, 15], humanGate: 'content_freeze' },
-  { id: 8, key: 'final_audit_and_delivery', label: '最终交付', steps: [16] },
-]
+export const CONTEST_PHASES = CONTEST_PHASES_V1
 
 export function phaseForStep(step, project = null) {
   const key = step === '8_5' ? '8_5' : Number(step)

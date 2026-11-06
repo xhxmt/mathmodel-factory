@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ import pytest
 from scripts import extract_run_history as extract_module
 from scripts import replay_run_history as replay
 
+ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).parent / "fixtures" / "run_history"
 BASELINE = json.loads((FIXTURES / "_baseline_8e8f872.json").read_text(encoding="utf-8"))
 BASELINE_CLASSIFIER = BASELINE["current_classifier"]
@@ -302,7 +304,12 @@ def test_stage_catalog_v2_removes_the_paper_segment_loops(fixtures):
     v2 must remove the abstract/polish math loop (Stage 9 -> 8), the final-audit
     projection loop (Stage 10 -> 8), and the reopens a revision caused only by
     editing documentation (Stage 8 -> 3/6 with no computation input changed).
+
+    Stage pairs use the Stage the rule evaluated in: a Step-13 change set is
+    recorded in v1 Stage 8 but evaluated in v2 Stage 10.
     """
+
+    from factory_core.stage_catalog_v2_policy import FORWARD_REPAIR_DOCUMENTS
 
     decided = [
         row for row in replay.replay_decisions(fixtures, replay.RULES["v2"])
@@ -312,17 +319,38 @@ def test_stage_catalog_v2_removes_the_paper_segment_loops(fixtures):
         row for row in replay.replay_decisions(fixtures, replay.RULES["current"])
         if row["evaluated"] and row["decided"]["reopen"]
     ]
-    pairs = {(row["stage"], row["decided"]["owner_stage"]) for row in decided}
+    pairs = Counter((row["evaluated_stage"], row["decided"]["owner_stage"]) for row in decided)
 
     assert len(decided) <= 27 < len(current)
-    assert (9, 8) not in pairs and (10, 8) not in pairs
+    assert (9, 8) not in pairs
     assert (8, 6) not in pairs
+    by_key = {(c.run, c.rev): c for f in fixtures for c in replay.change_sets(f)}
+
+    def artifacts(row):
+        return {change["artifact"] for change in by_key[(row["run"], row["rev"])].changes}
+
     # Every remaining Stage 8 -> 3/4 reopen changed executable model code or a
     # solver result, which phase 4 handles; none is documentation alone.
-    from factory_core.stage_catalog_v2_policy import FORWARD_REPAIR_DOCUMENTS
-
-    by_key = {(c.run, c.rev): c for f in fixtures for c in replay.change_sets(f)}
     for row in decided:
-        if row["stage"] == 8 and row["decided"]["owner_stage"] in (3, 4):
-            artifacts = {change["artifact"] for change in by_key[(row["run"], row["rev"])].changes}
-            assert artifacts - FORWARD_REPAIR_DOCUMENTS, artifacts
+        if row["evaluated_stage"] == 8 and row["decided"]["owner_stage"] in (3, 4):
+            assert artifacts(row) - FORWARD_REPAIR_DOCUMENTS, artifacts(row)
+    # The Judge-projection loop is gone.  The one Stage 10 -> 8 reopen left is
+    # the v1 precheck agent editing revision_summary.md (Stage-8 prose); the
+    # v2 Step 13 is the analysis-only final audit, which never writes it.
+    stage10_to_8 = [row for row in decided if (row["evaluated_stage"], row["decided"]["owner_stage"]) == (10, 8)]
+    assert len(stage10_to_8) <= 1
+    for row in stage10_to_8:
+        assert row["step"] == 13
+        assert "revision_summary.md" in artifacts(row)
+    audit_sources = (ROOT / "factory_core" / "audit").rglob("*.py")
+    assert not any("revision_summary" in path.read_text(encoding="utf-8") for path in audit_sources)
+
+
+def test_replay_rows_keep_the_recorded_and_the_evaluated_stage(fixtures):
+    v1_rows = replay.replay_decisions(fixtures, replay.RULES["current"])
+    v2_rows = replay.replay_decisions(fixtures, replay.RULES["v2"])
+    assert all(row["evaluated_stage"] == row["recorded_stage"] for row in v1_rows)
+    step13 = [row for row in v2_rows if row["step"] == 13 and row["evaluated"]]
+    assert step13
+    assert {row["recorded_stage"] for row in step13} == {8}
+    assert {row["evaluated_stage"] for row in step13} == {10}

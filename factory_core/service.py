@@ -50,13 +50,16 @@ from .stages import (
     STAGE_CATALOG_VERSION_V2,
     STAGE_SCHEDULER_GENERATION,
     STEP_SCHEDULER_GENERATION,
+    catalog_for_version,
     initial_stage_checkpoints,
     projected_stage_cursor,
 )
 
 # The Stage catalog of newly created projects (optimization plan, phase 2).
-# Existing projects keep the version recorded in their state database.
-NEW_PROJECT_STAGE_CATALOG = STAGE_CATALOG_VERSION_V2
+# Existing projects keep the version recorded in their state database.  v2
+# stays opt-in (``stage_catalog_version=`` / ``--stage-catalog v2``) until its
+# first real end-to-end acceptance run passes; only then does the default move.
+NEW_PROJECT_STAGE_CATALOG = STAGE_CATALOG_VERSION
 from scripts.solver_job_receipt import (
     ReceiptError,
     build_completion_receipt,
@@ -276,6 +279,11 @@ class FactoryService:
         """
         if not BASE_NAME_RE.fullmatch(base_name):
             raise ValueError("base_name must contain only letters, numbers, '_' or '-'")
+        # Resolve the catalog before anything is written: an unsupported
+        # version must not leave a half-provisioned project directory behind.
+        stage_catalog_version = catalog_for_version(
+            stage_catalog_version or NEW_PROJECT_STAGE_CATALOG
+        ).version
         ongoing = self.root / "ongoing"
         complete = self.root / "complete"
         project = ongoing / base_name
@@ -334,7 +342,7 @@ class FactoryService:
             project_type="modeling",
             runtime_generation="native_v2",
             scheduler_generation=STAGE_SCHEDULER_GENERATION,
-            stage_catalog_version=stage_catalog_version or NEW_PROJECT_STAGE_CATALOG,
+            stage_catalog_version=stage_catalog_version,
             contest_policy=contest_policy.to_dict(),
         )
         write_compatibility_projections(project, state)

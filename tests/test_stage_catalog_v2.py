@@ -455,26 +455,30 @@ def test_final_judge_step_runs_the_full_final_audit_as_analysis(tmp_path, monkey
     assert not step.validate(context).is_valid
 
 
-def test_new_projects_default_to_v2_and_v1_stays_available(tmp_path):
+def test_new_projects_default_to_v1_and_v2_is_opt_in(tmp_path):
     from factory_core.service import FactoryService
 
     service = FactoryService(tmp_path)
     default, _ = service.create_project("default_demo", "q", start=False)
-    legacy, _ = service.create_project(
-        "v1_demo", "q", start=False, stage_catalog_version=STAGE_CATALOG_VERSION
+    opted, _ = service.create_project(
+        "v2_demo", "q", start=False, stage_catalog_version=STAGE_CATALOG_VERSION_V2
     )
-    assert default.stage_catalog_version == STAGE_CATALOG_VERSION_V2
-    assert legacy.stage_catalog_version == STAGE_CATALOG_VERSION
+    assert default.stage_catalog_version == STAGE_CATALOG_VERSION
+    assert opted.stage_catalog_version == STAGE_CATALOG_VERSION_V2
     with pytest.raises(ValueError, match="unsupported Stage catalog"):
         service.create_project("bad", "q", stage_catalog_version="factory-stage-catalog-v7")
+    # Rejected before anything is written, so the name stays usable.
+    assert not (tmp_path / "ongoing" / "bad").exists()
+    retried, _ = service.create_project("bad", "q", start=False)
+    assert retried.project_id == "bad"
 
 
 def test_cli_create_accepts_the_v2_catalog():
     from factory_core.cli import build_parser
 
-    args = build_parser().parse_args(["create", "demo", "q", "--stage-catalog", "v1"])
-    assert args.stage_catalog == "v1"
-    assert build_parser().parse_args(["create", "demo", "q"]).stage_catalog == "v2"
+    args = build_parser().parse_args(["create", "demo", "q", "--stage-catalog", "v2"])
+    assert args.stage_catalog == "v2"
+    assert build_parser().parse_args(["create", "demo", "q"]).stage_catalog == "v1"
 
 
 # -- prompts and projections -----------------------------------------------
@@ -492,7 +496,10 @@ def test_v2_prompt_overlay_matches_every_template_exactly_once():
             assert old != new
 
 
-@pytest.mark.parametrize("template", ["step12_revision.txt", "step14_abstract.txt", "step15_polish.txt"])
+@pytest.mark.parametrize("template", [
+    "step10_gate1_numerical.txt", "step11_constructive_review.txt",
+    "step12_revision.txt", "step14_abstract.txt", "step15_polish.txt",
+])
 def test_v1_prompts_are_untouched_and_v2_prompts_drop_the_precheck(tmp_path, template):
     from pathlib import Path as _Path
 
@@ -530,3 +537,128 @@ def test_v2_contest_phase_moves_step13_to_final_audit():
     judge = next(s for stage in payload["stages"] for s in stage["subtasks"] if s["key"] == "final_judge")
     assert judge["contest_phase"] == 8
     assert payload["schema_version"] == STAGE_CATALOG_VERSION_V2
+
+
+@pytest.mark.parametrize("catalog, expected_owner", [
+    (STAGE_CATALOG_VERSION_V2, 10),
+    (STAGE_CATALOG_VERSION, 8),
+])
+def test_dirty_rebase_moves_a_persisted_paper_math_cause_only_in_v2(tmp_path, catalog, expected_owner):
+    from factory_core.dirty_rebase import rebase_dirty_classifier_state
+    from factory_core.storage import SCHEMA_VERSION
+
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling", last_completed_step=12,
+                     scheduler_generation=STAGE_SCHEDULER_GENERATION, stage_catalog_version=catalog)
+    state = store.load()
+    # A cause written without the engine's v2 remap (e.g. by an older worker).
+    store.transition(
+        expected_revision=state.revision, event_type="TEST_PERSISTED_PAPER_MATH", changes={},
+        dirty_changes=[{
+            "flag": "MATH_DIRTY", "owner_stage": 8, "cause_artifact": "demo_paper.tex",
+            "baseline_fingerprint": "a" * 64, "current_fingerprint": "b" * 64,
+            "classifier_contract_sha256": "0" * 64,
+        }],
+    )
+    with store._session() as connection:
+        rebase_dirty_classifier_state(
+            connection, source_schema_version=SCHEMA_VERSION, target_schema_version=SCHEMA_VERSION
+        )
+
+    keys = {(flag["flag"], int(flag["owner_stage"])) for flag in store.dirty_flags()}
+    assert ("MATH_DIRTY", expected_owner) in keys
+    assert len([k for k in keys if k[0] == "MATH_DIRTY"]) == 1
+
+
+def test_remaining_step_count_follows_the_catalog_cursor():
+    # v1 counts exactly as before (16 - step).
+    for step in range(17):
+        assert CATALOG_V1.checkpoint_steps_after(step_id=step) == 16 - step
+    # v2: after Step 15 the Judge and delivery remain, also while the
+    # content-freeze gate (source Step 16) is the active subtask.
+    assert CATALOG_V2.checkpoint_steps_after(step_id=15) == 2
+    assert CATALOG_V2.checkpoint_steps_after(subtask_key="content_freeze_guard") == 2
+    assert CATALOG_V2.checkpoint_steps_after(subtask_key="final_judge") == 1
+    assert CATALOG_V2.checkpoint_steps_after(step_id=12) == 4
+
+
+def test_final_judge_budget_is_one_contract_for_display_deadline_and_execution(tmp_path):
+    from pathlib import Path
+
+    from factory_core.stages import FINAL_JUDGE_SUBTASK, FINAL_JUDGE_TIMEOUT_SECONDS
+    from factory_core.steps.catalog import contract_for
+    from factory_core.steps.registry import build_native_registry
+
+    # The Judge runs the Step-16 final audit, so it has the final-audit budget.
+    assert FINAL_JUDGE_TIMEOUT_SECONDS == contract_for(16).timeout_seconds
+    shown = next(
+        subtask["step_budget"]
+        for stage in CATALOG_V2.payload()["stages"]
+        for subtask in stage["subtasks"]
+        if subtask["key"] == FINAL_JUDGE_SUBTASK
+    )
+    executed = build_native_registry(Path(__file__).resolve().parents[1]).stage_subtask(FINAL_JUDGE_SUBTASK)
+    assert shown["timeout_seconds"] == executed.timeout_seconds == FINAL_JUDGE_TIMEOUT_SECONDS
+    assert (shown["max_attempts"], shown["max_reopens"]) == (executed.max_attempts, executed.max_reopens)
+    # The override is published only as the budget: v1 subtask fields and
+    # budgets stay as they were.
+    v1_judge = next(
+        subtask for stage in CATALOG_V1.payload()["stages"] for subtask in stage["subtasks"]
+        if subtask["source_step_id"] == 13 and subtask["kind"] != "human_gate"
+    )
+    assert "budget_timeout_seconds" not in v1_judge
+    assert v1_judge["step_budget"]["timeout_seconds"] == contract_for(13).timeout_seconds
+
+    # The deadline cap starts from the same executed budget.
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling", last_completed_step=15,
+                     scheduler_generation=STAGE_SCHEDULER_GENERATION,
+                     stage_catalog_version=STAGE_CATALOG_VERSION_V2)
+    engine = FactoryEngine(tmp_path, store=store, registry=StepRegistry())
+    assert engine._contest_timeout(executed) == FINAL_JUDGE_TIMEOUT_SECONDS
+
+
+def test_no_rendered_v2_prompt_describes_the_v1_precheck(tmp_path):
+    """Every active prompt, rendered for a v2 project, drops the v1 handoff.
+
+    v2 has no Step-13 math precheck and no "final audit after Step 15":
+    Step 13 is that final audit.  Scanning the rendered text (not the overlay
+    table) catches a template that mentions the precheck but has no overlay.
+    """
+
+    from pathlib import Path as _Path
+
+    from factory_core.steps.prompting import PromptRenderer
+
+    root = _Path(__file__).resolve().parents[1]
+    renderer = PromptRenderer(root)
+    project = tmp_path / "v2"
+    v2_store(project)
+    templates = sorted((root / "prompts").glob("step*.txt")) + sorted((root / "prompts" / "judges").glob("*.txt"))
+    assert {"step10_gate1_numerical.txt", "step11_constructive_review.txt"} <= {path.name for path in templates}
+    v1_phrases = ("PRECHECK", "预审", "Step 15 后的 `final` 审计")
+    for path in templates:
+        template = str(path.relative_to(root / "prompts"))
+        step = path.stem.removeprefix("step").split("_")[0]
+        text = renderer.render(template, project, step_key=step, include_preamble=True, researcher_note="")
+        # The Step-12 overlay states the absence on purpose.
+        text = text.replace("本项目没有 Step 13 数学预审", "")
+        leftover = [phrase for phrase in v1_phrases if phrase in text]
+        assert not leftover, (template, leftover)
+
+
+def test_contest_phases_reject_an_unknown_catalog_version():
+    from factory_core.contest import (
+        CONTEST_CATALOG_V1,
+        CONTEST_CATALOG_V2,
+        contest_phases_for,
+        phase_for_step,
+    )
+
+    assert (CONTEST_CATALOG_V1, CONTEST_CATALOG_V2) == (STAGE_CATALOG_VERSION, STAGE_CATALOG_VERSION_V2)
+    assert phase_for_step(13).id == phase_for_step(13, catalog_version=STAGE_CATALOG_VERSION).id == 7
+    assert phase_for_step(13, catalog_version=STAGE_CATALOG_VERSION_V2).id == 8
+    with pytest.raises(ValueError, match="unsupported Stage catalog"):
+        phase_for_step(13, catalog_version="factory-stage-catalog-v7")
+    with pytest.raises(ValueError, match="unsupported Stage catalog"):
+        contest_phases_for("factory-stage-catalog-v7")

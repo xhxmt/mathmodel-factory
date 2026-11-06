@@ -257,10 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--stage-catalog",
         choices=("v1", "v2"),
-        default="v2",
-        help="Stage catalog for the new project (default v2: the one final Judge, "
-        "Step 13, runs after abstract, polish and the content freeze; v1 keeps "
-        "the Step-13 precheck before abstract and polish)",
+        default="v1",
+        help="Stage catalog for the new project (default v1: Step-13 math "
+        "precheck before abstract and polish, full Judge in Step 16; v2, opt-in "
+        "until its first real acceptance run: the one final Judge, Step 13, runs "
+        "after abstract, polish and the content freeze)",
     )
 
     start = sub.add_parser("start")

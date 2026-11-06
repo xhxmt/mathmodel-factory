@@ -11,7 +11,8 @@ approval, and Step 16 only accepts it.
 Every ``old`` string must occur exactly once in its rendered template.  If a
 template edit removes one, rendering a v2 prompt fails instead of silently
 telling the agent about a precheck that does not exist; the test suite checks
-the same condition for every entry.
+the same condition for every entry, and renders every active prompt of a v2
+project to check that none still mentions the precheck.
 """
 
 from __future__ import annotations
@@ -19,6 +20,20 @@ from __future__ import annotations
 from pathlib import Path
 
 V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
+    "step10_gate1_numerical.txt": (
+        (
+            "Step 13 只做隔离的数学预审，完整的数学、执行和论文质量 Gate 2 由 Step 15 后的 `final` 审计执行。",
+            "完整的数学、执行和论文质量 Gate 2 由 Step 13 最终审计执行：它在 Step 14 摘要、Step 15 润色和"
+            "内容冻结审批之后，对最终文本运行唯一一次完整三角色 `final` 审计。",
+        ),
+    ),
+    "step11_constructive_review.txt": (
+        (
+            "Step 13 只做数学预审，完整的数学、执行和论文质量判决由 Step 15 后的 `final` 审计执行。",
+            "完整的数学、执行和论文质量判决由 Step 13 最终审计执行：它在 Step 14 摘要、Step 15 润色和"
+            "内容冻结审批之后，对最终文本运行唯一一次完整三角色 `final` 审计。",
+        ),
+    ),
     "step12_revision.txt": (
         (
             "如果 Step 16 消费的 `final` 审计给出 `VERDICT: REOPEN_REVISION_TEXT`",

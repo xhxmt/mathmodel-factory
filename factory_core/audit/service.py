@@ -94,10 +94,12 @@ class FinalAuditService:
 
         ``promote_analysis_pass`` (acceptance only, Stage catalog v2): when an
         analysis-only PASS with a verified judgment receipt exists for exactly
-        the current snapshot, that judgment is the Judge result and is not
-        rerun.  Every acceptance-side check still runs on it: decision routing,
-        the snapshot recheck, the judgment receipt rebuild, the delivery fence
-        and the final acceptance receipt.
+        the current snapshot, only the Judge is not rerun.  The bibliography
+        receipt, the full paper/provenance checks and the visual gate run again
+        on the judged PDF; the judgment is promoted only if the snapshot is
+        still the judged one afterwards (otherwise the full audit runs).  The
+        decision routing, snapshot recheck, judgment receipt rebuild, delivery
+        fence and final acceptance receipt then run as on every acceptance.
         """
         project = context.project_dir.resolve()
         if promote_analysis_pass and analysis_only:
@@ -300,20 +302,34 @@ class FinalAuditService:
                     and judged.judge_completed
                     and not judged.override
                 ):
-                    return self._finish_judge_result(
-                        project,
-                        context,
-                        ExecutionResult.succeeded(
-                            judge_completed=True,
-                            judge_verdict="PASS",
-                            promoted_analysis_snapshot=candidate.snapshot_id,
-                            promoted_analysis_created_at=judged.created_at,
-                        ),
-                        snapshot=candidate,
-                        analysis_only=False,
-                        workflow_id=workflow_id,
-                        run_generation=run_generation,
-                    )
+                    # Only the Judge is reused.  Every other acceptance check
+                    # runs again on the judged PDF; their reports feed the
+                    # packets and the snapshot, so the judgment is promoted
+                    # only if the rechecked snapshot is still the judged one.
+                    pre_judge_failure = self._pre_judge_checks(project, base, pdf)
+                    if pre_judge_failure is not None:
+                        return pre_judge_failure
+                    packets_prepared = False
+                    packet_failure = prepare_for_snapshot()
+                    if packet_failure is not None:
+                        return packet_failure
+                    rechecked = self._snapshot(project)
+                    if rechecked.snapshot_id == candidate.snapshot_id:
+                        return self._finish_judge_result(
+                            project,
+                            context,
+                            ExecutionResult.succeeded(
+                                judge_completed=True,
+                                judge_verdict="PASS",
+                                promoted_analysis_snapshot=candidate.snapshot_id,
+                                promoted_analysis_created_at=judged.created_at,
+                                promoted_after_rechecks=True,
+                            ),
+                            snapshot=rechecked,
+                            analysis_only=False,
+                            workflow_id=workflow_id,
+                            run_generation=run_generation,
+                        )
             # A cache miss proceeds through compilation and fresh acceptance
             # checks. Their reports may differ from the probe packet, so the
             # eventual judge snapshot must be prepared again after those checks.
@@ -345,45 +361,9 @@ class FinalAuditService:
                     returncode=2,
                 )
 
-        if self.fingerprinter is None:
-            from ..bibliography import verify_bibliography_receipt
-
-            bibliography_valid, bibliography_errors, _ = (
-                verify_bibliography_receipt(project, base)
-            )
-            if not bibliography_valid:
-                return self._failure(
-                    project,
-                    decision="BIBLIOGRAPHY_EVIDENCE_INVALID",
-                    status=AuditStatus.FAIL,
-                    error_class="PERMANENT_BIBLIOGRAPHY_RECEIPT",
-                    returncode=2,
-                    evidence={"bibliography_errors": bibliography_errors},
-                )
-
-        acceptance_checks, acceptance = self._run_acceptance_checks(project)
-        if acceptance is not None and not self.technical_flow_validation:
-            return self._failure(
-                project,
-                decision="CONTENT_NOT_READY",
-                status=AuditStatus.FAIL,
-                error_class="PERMANENT_DELIVERY_ACCEPTANCE",
-                returncode=acceptance.returncode,
-                evidence={
-                    "failed_check": acceptance.metadata.get("check"),
-                    "paper_checks": acceptance_checks,
-                },
-            )
-
-        visual = self._run_visual_gate(project, pdf)
-        if visual is not None:
-            return self._failure(
-                project,
-                decision="VISUAL_GATE_UNAVAILABLE",
-                status=AuditStatus.INDETERMINATE,
-                error_class="TRANSIENT_VISUAL_GATE",
-                returncode=visual.returncode,
-            )
+        pre_judge_failure = self._pre_judge_checks(project, base, pdf)
+        if pre_judge_failure is not None:
+            return pre_judge_failure
 
         packet_failure = prepare_for_snapshot()
         if packet_failure is not None:
@@ -935,6 +915,54 @@ class FinalAuditService:
             record,
             snapshot,
         )
+
+    def _pre_judge_checks(self, project: Path, base: str, pdf: Path) -> AuditOutcome | None:
+        """Bibliography receipt, full paper/provenance checks and the visual gate.
+
+        Run on every path that ends in a judgment or acceptance, including the
+        Stage catalog v2 promotion of an analysis PASS.
+        """
+
+        if self.fingerprinter is None:
+            from ..bibliography import verify_bibliography_receipt
+
+            bibliography_valid, bibliography_errors, _ = (
+                verify_bibliography_receipt(project, base)
+            )
+            if not bibliography_valid:
+                return self._failure(
+                    project,
+                    decision="BIBLIOGRAPHY_EVIDENCE_INVALID",
+                    status=AuditStatus.FAIL,
+                    error_class="PERMANENT_BIBLIOGRAPHY_RECEIPT",
+                    returncode=2,
+                    evidence={"bibliography_errors": bibliography_errors},
+                )
+
+        acceptance_checks, acceptance = self._run_acceptance_checks(project)
+        if acceptance is not None and not self.technical_flow_validation:
+            return self._failure(
+                project,
+                decision="CONTENT_NOT_READY",
+                status=AuditStatus.FAIL,
+                error_class="PERMANENT_DELIVERY_ACCEPTANCE",
+                returncode=acceptance.returncode,
+                evidence={
+                    "failed_check": acceptance.metadata.get("check"),
+                    "paper_checks": acceptance_checks,
+                },
+            )
+
+        visual = self._run_visual_gate(project, pdf)
+        if visual is not None:
+            return self._failure(
+                project,
+                decision="VISUAL_GATE_UNAVAILABLE",
+                status=AuditStatus.INDETERMINATE,
+                error_class="TRANSIENT_VISUAL_GATE",
+                returncode=visual.returncode,
+            )
+        return None
 
     def _run_acceptance_checks(
         self, project: Path

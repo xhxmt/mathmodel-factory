@@ -92,7 +92,7 @@
 1. `factory_core/stages.py`：把 Step 13 移到 14、15 之后（整理为 Stage 8 评审与修订、Stage 9 摘要与润色、Stage 10 Judge 与交付），同步 `contest.py` 的阶段映射。
 2. `factory_core/engine.py` 第 1044–1069 行（`reviewer_current` 与 "reviewer-entry fingerprint changed"）：改成只在 Step 9 入口校验。
 3. 在版本化扩展层 `factory_core/current_dirty.py` / `artifact_policy.py` 加策略条目（与 `8e8f872` 对 `scripts/submit_*.sh` 的做法相同），不改冻结的 `dirty.py`。
-4. Step 16 的最终审计复用 Step 13 的判定：按快照指纹命中审计缓存，未命中才重跑。Gate 2（content_freeze）位置不变。
+4. Step 16 的最终审计复用 Step 13 的判定：按快照指纹命中审计缓存，未命中才重跑。（原计划"Gate 2 位置不变"已被决策 2 取代：Gate 2 放在 Step 13 之前，执行顺序为 12 → 14 → 15 → Gate 2 → 13 → 16，见阶段 2 执行记录。）
 5. 更新 `STEPS.md`、`prompts/step14_abstract.txt`、`step15_polish.txt`、Judge 的 prompt，以及前端的步骤展示与 `tests/step-display.test.mjs`。
 
 **退出条件**：回放中 F-C、F-D 两类回退和纯文档引起的回退归零；前端测试与核心测试全绿；CHANGELOG 记录合同变更。
@@ -281,17 +281,21 @@
 | 判定的回退 | 46 | 27 |
 | Stage 9 → 8（摘要、润色改公式） | 6 | 0 |
 | Stage 10 → 8（最终审计改写 Judge 投影） | 5 | 0 |
+| Stage 10 → 8（v1 预审 agent 改 `revision_summary.md`，v2 的 Step 13 不写该文件） | — | 1 |
+| Stage 10 → 3（Step 13 期间改了 `claim_registry.json`，按原规则回退） | — | 1 |
 | Stage 8 → 3 / 6（修订只改文档） | 13 | 0 |
-| Stage 8 → 3 / 4（修订改了模型代码或重跑求解，留给阶段 4） | — | 4 |
+| Stage 8 → 3 / 4（修订改了模型代码或重跑求解，留给阶段 4） | — | 3 |
 | Stage 10 → 9（Step 16 期间改了论文正文） | 2 | 2 |
+
+回放行同时记录 `recorded_stage`（事件记录时的 v1 Stage）和 `evaluated_stage`（规则判定所在的 Stage），Stage 对统计一律用后者。早先版本的 v2 统计按记录 Stage 归类，把 Step 13 的两次回退算进了 Stage 8，上表已按判定 Stage 重新生成。
 
 **验证**：核心套件 2797 passed；新增 `tests/test_stage_catalog_v2.py`（20 例）、`test_audit_service.py` 中 5 例提升测试、`test_run_history_replay.py` 中 1 例 v2 回放门禁。
 
-**第二部分：合同、prompt、看板与前端（已完成，新项目默认 v2）**
+**第二部分：合同、prompt、看板与前端（已完成；v2 显式试运行，默认仍为 v1）**
 
 - `STEPS.md`、README、CLAUDE.md 写明 v2 合同，v1 合同保留并标注适用范围。
 - prompt 模板不改：v1 渲染结果逐字节不变；v2 在渲染后按 `factory_core/steps/catalog_prompts.py` 整句改写 Step 12/14/15，原句缺失即报错。Judge prompt 不需改动。
 - 比赛看板与前端按项目编排的位置判断步骤完成、下一步与所属阶段；v2 的 Step 13 归入"最终审计与交付"。
-- 新项目默认 v2；现有项目不迁移，`--stage-catalog v1` 仍可用。
+- 新项目默认仍为 v1，`--stage-catalog v2` 显式试运行；验收 A（v2 的第一次真实运行）通过后再切换默认值。现有项目不迁移。
 
 阶段 2 的退出条件（回放中 F-C、F-D 与纯文档回退归零、前端与核心测试全绿、CHANGELOG 记录合同变更）已满足。验收 A 将是 v2 的第一次真实运行。

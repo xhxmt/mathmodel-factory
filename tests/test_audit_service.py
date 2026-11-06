@@ -1174,6 +1174,51 @@ def test_acceptance_without_promotion_keeps_rerunning_the_judge(tmp_path, monkey
     assert judge.judge_calls == 2
 
 
+def test_promotion_reruns_the_non_judge_acceptance_checks(tmp_path, monkeypatch):
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    runner = RecordingRunner()
+    judge = PassingJudge()
+    service = FinalAuditService(root, judge, FakeValidator(), runner,
+                                fingerprinter=lambda _p, _b: "c" * 64)
+    service.run(make_context(project), analysis_only=True)
+    monkeypatch.setattr("scripts.judgment_receipt.verify_receipt", lambda *_a, **_k: (True, []))
+    runner.labels.clear()
+    runner.calls.clear()
+
+    accepted = service.run(make_context(project), compile_pdf=False, analysis_only=False,
+                           promote_analysis_pass=True)
+
+    assert judge.judge_calls == 1
+    assert accepted.record.evidence["judge"]["promoted_after_rechecks"] is True
+    scripts = [script for script, _args in runner.calls]
+    assert any(script.endswith("pdf_visual_gate.py") for script in scripts), scripts
+    assert "audit_final_provenance" in runner.labels
+
+
+def test_promotion_is_refused_when_a_recheck_fails(tmp_path, monkeypatch):
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    judge = PassingJudge()
+    service = FinalAuditService(root, judge, FakeValidator(), RecordingRunner(),
+                                fingerprinter=lambda _p, _b: "c" * 64)
+    service.run(make_context(project), analysis_only=True)
+    monkeypatch.setattr("scripts.judgment_receipt.verify_receipt", lambda *_a, **_k: (True, []))
+    monkeypatch.setattr(service, "_run_visual_gate",
+                        lambda *_a, **_k: ExecutionResult.failed("TRANSIENT_VISUAL_GATE", returncode=1))
+
+    refused = service.run(make_context(project), compile_pdf=False, analysis_only=False,
+                          promote_analysis_pass=True)
+
+    assert refused.record.decision == "VISUAL_GATE_UNAVAILABLE"
+    assert refused.record.delivery_allowed is False
+    assert judge.judge_calls == 1
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
+
+
 def test_promotion_is_acceptance_only(tmp_path):
     service = FinalAuditService(tmp_path, PassingJudge(), FakeValidator(), RecordingRunner(),
                                 fingerprinter=lambda _p, _b: "e" * 64)

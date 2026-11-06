@@ -43,7 +43,9 @@ export function nextStepAfter(step, project) {
   return next === undefined ? 16 : next
 }
 
-const STAGES_V1 = [
+// The canonical v1 definitions; `STAGES` (projectState.js) and
+// `CONTEST_PHASES` (workspaceUi.js) re-export these.
+export const STAGES_V1 = [
   { id: 1, name: '题意与数据', steps: [0, 1] },
   { id: 2, name: '候选与选模', steps: [2, 3] },
   { id: 3, name: '模型构建', steps: [4] },
@@ -67,7 +69,7 @@ export function stagesFor(project) {
   return isCatalogV2(project) ? STAGES_V2 : STAGES_V1
 }
 
-const CONTEST_PHASES_V1 = [
+export const CONTEST_PHASES_V1 = [
   { id: 1, key: 'problem_understanding', label: '题意与数据', steps: [0, 1] },
   { id: 2, key: 'model_tournament', label: '模型竞赛', steps: [2, 3], humanGate: 'step3' },
   { id: 3, key: 'model_and_solve', label: '建模与求解', steps: [4, 5] },
@@ -96,6 +98,17 @@ const V2_STEP_LABELS = {
 
 export function stepLabelOverride(index, project) {
   return isCatalogV2(project) ? V2_STEP_LABELS[Number(index)] || null : null
+}
+
+// Short timeline captions of the review/delivery Steps, per catalog: v1's
+// Step 13 is the math precheck and Step 16 the final audit; in v2 Step 13 is
+// the final Judge and Step 16 only accepts its judgment.
+const STEP_CAPTIONS_V1 = { 13: 'PRECHECK', 16: 'FINAL AUDIT' }
+const STEP_CAPTIONS_V2 = { 13: 'FINAL JUDGE', 16: 'ACCEPTANCE' }
+
+export function stepCaption(index, project) {
+  const captions = isCatalogV2(project) ? STEP_CAPTIONS_V2 : STEP_CAPTIONS_V1
+  return captions[Number(index)] || null
 }
 
 // "11–13" for consecutive Steps (the v1 label), "13、16" when a group skips

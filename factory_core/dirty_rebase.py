@@ -195,6 +195,16 @@ def rebase_dirty_classifier_state(
         # Re-routing it through the raw path fallback would lose the domain
         # (prose/citation/format/math), so retain that proven semantic key.
         if artifact.lower().endswith(".tex") and source_key[0] in semantic_paper_flags:
+            if catalog_v2:
+                # The v2 paper-math rule applies to the retained semantic key
+                # too, so a persisted MATH_DIRTY@8 moves to the Judge Stage.
+                owner, rule = v2_owner_stage(
+                    {"flag": source_key[0], "owner_stage": source_key[1],
+                     "cause_artifact": artifact},
+                    initiator_stage=source_key[1],
+                )
+                if rule is not None:
+                    return (source_key[0], owner)
             return source_key
         job_id = solver_receipt_job_id(artifact)
         if job_id is not None and _table_exists(connection, "solver_jobs"):

@@ -233,10 +233,10 @@ Phase9 acceptance、release、submission 或 delivery 副作用仍永久 fail cl
 - Step 12：论文修订。
 - Step 14：撰写摘要。
 - Step 15：引用、图表及排版润色。通过校验后形成 `CONTENT_READY` 内容边界，随后是内容冻结人工确认（Gate 2）。
-- Step 13：最终审计，全流程唯一一次完整 Judge。新项目（阶段编排 v2）在 Step 15 和内容冻结确认之后运行：编译、完整论文/溯源检查、视觉页数门禁、三角色 Judge，生成绑定已批准快照的 judgment receipt，不做任何交付动作。判退时回到 Step 12 或负责的建模/求解步骤。
-- Step 16：新项目在快照与 Step 13 评审的完全一致且 judgment receipt 校验通过时直接采用该判定，其余验收检查照常执行；快照变化则重跑完整最终审计。Native 适配器调用独立 Final Audit，并在副作用边界显式请求 acceptance。依次完成最终编译、完整论文/溯源检查、视觉页数门禁、三角色 Judge、快照复核及 judgment/acceptance receipt。只有Native 工作流的审计 PASS，或管理员在 `web/auth.db` 中签发并绑定精确快照的 `OVERRIDDEN` 结果，才会在同文件系统 staging 中构建不可变 release，并以一次原子替换切换 `papers/<base>/current.json` 后归档。真正的 Phase9 acceptance、release、submission 和 delivery 永久禁用；项目内 override JSON 没有授权能力。
+- Step 13：最终审计，全流程唯一一次完整 Judge。阶段编排 v2 的项目在 Step 15 和内容冻结确认之后运行：编译、完整论文/溯源检查、视觉页数门禁、三角色 Judge，生成绑定已批准快照的 judgment receipt，不做任何交付动作。判退时回到 Step 12 或负责的建模/求解步骤。
+- Step 16：v2 项目在快照与 Step 13 评审的完全一致且 judgment receipt 校验通过时直接采用该判定，其余验收检查照常执行（重跑参考文献凭证、完整论文/溯源检查与视觉页数门禁，任一项失败或快照因此改变都不采用该判定）；快照变化则重跑完整最终审计。Native 适配器调用独立 Final Audit，并在副作用边界显式请求 acceptance。v1 项目以及 v2 快照变化或缓存未命中时，依次完成最终编译、完整论文/溯源检查、视觉页数门禁、三角色 Judge、快照复核及 judgment/acceptance receipt。只有Native 工作流的审计 PASS，或管理员在 `web/auth.db` 中签发并绑定精确快照的 `OVERRIDDEN` 结果，才会在同文件系统 staging 中构建不可变 release，并以一次原子替换切换 `papers/<base>/current.json` 后归档。真正的 Phase9 acceptance、release、submission 和 delivery 永久禁用；项目内 override JSON 没有授权能力。
 
-步骤编号含义不变，新项目只是把 Step 13 挪到了 14、15 之后（执行顺序 12 → 14 → 15 → 内容冻结 → 13 → 16）。v2 之前创建的项目保持阶段编排 v1：Step 13 在 Step 14 之前运行隔离的数学预审，`PRECHECK_PASS` 只允许继续写摘要和润色，Step 15 的修改会使它失效，完整三角色评审在 Step 16 运行；`factory create --stage-catalog v1` 仍可创建 v1 项目。
+步骤编号含义不变，v2 只是把 Step 13 挪到了 14、15 之后（执行顺序 12 → 14 → 15 → 内容冻结 → 13 → 16）。**新项目目前仍默认阶段编排 v1**：Step 13 在 Step 14 之前运行隔离的数学预审，`PRECHECK_PASS` 只允许继续写摘要和润色，Step 15 的修改会使它失效，完整三角色评审在 Step 16 运行。v2 尚未完成真实的端到端验收运行，只能用 `factory create --stage-catalog v2` 显式试运行，重要比赛请保持 v1；第一次 v2 验收运行通过后再切换默认值。现有项目保持库里记录的编排，不迁移。
 
 完整的详细步骤要求请参阅 `STEPS.md`。这些文件仍是产物与验证契约；项目的运行状态权威见下节。
 

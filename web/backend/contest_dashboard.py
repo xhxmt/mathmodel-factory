@@ -98,6 +98,7 @@ def _timing(
     current_step: int,
     now_epoch: int,
     catalog_version: str | None = None,
+    active_subtask: str | None = None,
 ) -> dict[str, Any]:
     policy = store.contest_policy()
     if policy is None:
@@ -121,16 +122,26 @@ def _timing(
         if event.type == "STEP_STARTED" and event.step in phase.steps
     ]
     phase_started = min(phase_events) if phase_events else now_epoch
-    # Steps still to run, by position in the project's catalog (v2 runs Step
-    # 13 after 14 and 15, so 16 - step would undercount there).
-    from factory_core.stages import catalog_for_version
+    # Steps still to run after the cursor.  v1 runs Steps in numeric order,
+    # so 16 - step is exact there.  v2 runs Step 13 after 14 and 15 (and after
+    # the content-freeze gate), so it counts the Step checkpoints that follow
+    # the active subtask in the project's own catalog.
+    from factory_core.stages import STAGE_CATALOG_VERSION_V2, catalog_for_version
 
-    remaining_content_steps = max(
-        0,
-        16 - catalog_for_version(catalog_version).step_position(
-            min(max(current_step, 0), 16)
-        ),
-    )
+    if catalog_version == STAGE_CATALOG_VERSION_V2:
+        catalog = catalog_for_version(catalog_version)
+        try:
+            remaining_content_steps = catalog.checkpoint_steps_after(
+                subtask_key=active_subtask
+            ) if active_subtask else catalog.checkpoint_steps_after(
+                step_id=min(max(current_step, 0), 16)
+            )
+        except KeyError:
+            remaining_content_steps = catalog.checkpoint_steps_after(
+                step_id=min(max(current_step, 0), 16)
+            )
+    else:
+        remaining_content_steps = max(0, 16 - max(current_step, 0))
     projected_content_finish = now_epoch + remaining_content_steps * average
     content_freeze = int(policy["content_freeze_at"])
     delivery_freeze = int(policy["delivery_freeze_at"])
@@ -257,7 +268,11 @@ def build_contest_dashboard(
     )
     catalog_version = state.stage_catalog_version if state is not None else None
     timing = _timing(
-        store, current_step=current_step, now_epoch=now, catalog_version=catalog_version
+        store,
+        current_step=current_step,
+        now_epoch=now,
+        catalog_version=catalog_version,
+        active_subtask=(stage_cursor or {}).get("active_subtask"),
     ) if state else {
         "configured": False,
         "risk_level": "unconfigured",

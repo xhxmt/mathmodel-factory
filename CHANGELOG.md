@@ -1,15 +1,31 @@
 # Changelog
 
-## 2026-11-06 — 活性优化阶段 2（第二部分）：合同、prompt、看板与前端；新项目默认 v2
+## 2026-11-06 — 阶段 2 审计修复（PR #48）
 
-接第一部分。完成后新项目默认使用 `factory-stage-catalog-v2`；现有项目保持记录在库里的 v1，不迁移；`factory create --stage-catalog v1` 仍可创建 v1 项目。
+根据 PR #48 的独立审计与自动审查意见修复：
 
-- **默认切换**：`FactoryService.create_project` 不指定时使用 `NEW_PROJECT_STAGE_CATALOG`（v2），CLI `--stage-catalog` 默认 `v2`。Web 建项目和 `launch_agents.sh new` 都经过这里。
+- **Step 16 复用 Step 13 判定**：复用前重跑参考文献凭证、完整论文/溯源检查与视觉页数门禁（与完整路径共用同一方法），之后重算快照；任一检查失败或快照改变都不采用该判定，也不写验收产物。
+- **dirty rebase**：保留 `.tex` 语义记录的提前返回也套用 v2 论文数学规则，持久化的 `MATH_DIRTY@8` 在 v2 项目中移到 Stage 10。
+- **建项目**：先解析 catalog 版本再写文件，非法版本不留半初始化目录。`contest.py` 对未知版本报错，不再静默按 v1 处理。
+- **比赛看板剩余步数**：v1 仍为 `16 - step`；v2 用 `StageCatalog.checkpoint_steps_after()` 按当前子任务计数（含 Gate 2 期间）。
+- **Final Judge 预算**：`final_judge` 的预算写在 v2 编排的子任务合同里（等于 Step 16 最终审计的 21,600 秒），编排载荷、截止时间约束与执行注册表读同一值；v1 载荷不变。
+- **v2 prompt**：补 Step 10、11 的覆盖句；测试渲染全部 v2 prompt（含 Judge）并扫描预审说法。
+- **回放**：行同时记录 `recorded_stage` 与 `evaluated_stage`，Stage 对统计用后者。重新生成的 v2 统计中有 1 次 Stage 10 → 8（v1 预审 agent 修改 `revision_summary.md`，v2 的 Step 13 不写该文件）和 1 次 Stage 10 → 3（`claim_registry.json`，按原规则回退），此前被误记在 Stage 8 下。
+- **前端**：时间线的 Step 13/16 标签按编排取值（v2 为 FINAL JUDGE / ACCEPTANCE）；`STAGES`、`CONTEST_PHASES` 改为重新导出 `stageCatalog.js` 的定义；`stage-catalog-v2.test.mjs` 改用 `node:test` 并加入 `test:state`。
+- **默认值**：新项目默认改回 v1，v2 用 `--stage-catalog v2` 显式试运行，直到第一次真实验收运行通过。
+- 文档：STEPS.md、README、CLAUDE.md 补充 v1/v2 适用范围、v2 判退后 Gate 2 需重新审批、v2 dirty 规则是 `artifact_ownership.py` 之上的覆盖层。
+- 验证：核心套件 2818 passed（5 skipped），Web 78 passed，前端 22 passed；`tests/test_stage_catalog_v2.py` 增至 33 例，`test_run_history_replay.py` 新增 1 例（回放行的两种 Stage）。
+
+## 2026-11-06 — 活性优化阶段 2（第二部分）：合同、prompt、看板与前端；v2 可显式试运行
+
+接第一部分。**新项目默认仍是 `factory-stage-catalog-v1`**：v2 尚未完成真实的端到端验收运行，只能用 `factory create --stage-catalog v2` 显式试运行，重要比赛请保持 v1；第一次 v2 验收运行通过后再单独切换默认值。现有项目保持库里记录的编排，不迁移。
+
+- **默认值**：`FactoryService.create_project` 不指定时使用 `NEW_PROJECT_STAGE_CATALOG`（v1），CLI `--stage-catalog` 默认 `v1`。Web 建项目和 `launch_agents.sh new` 都经过这里，因此都创建 v1 项目。
 - **合同**：`STEPS.md` 写明 v2 的阶段划分、Step 13 最终审计的产出与判退路径、v2 不再有预审 / 跳过凭证 / `PRECHECK_PASS` / 技术续跑、向前修复的文档清单、Gate 2 在 Step 13 之前、Step 16 复用判定的条件；v1 合同原样保留并标注适用范围。README、CLAUDE.md 同步。
 - **prompt**：模板文件不改，v1 项目渲染出的 prompt 与模板哈希逐字节不变。v2 项目在渲染后按 `factory_core/steps/catalog_prompts.py` 的整句替换改写 Step 12、14、15 中关于"Step 13 数学预审"和"Step 16 审计"的说法；任一原句缺失时渲染直接报错，测试也逐条检查。Judge 的 prompt 无需修改：v2 的 Step 13 以 Step 16 的评审身份运行，走 `FINAL_SUBMISSION` 分支。
 - **比赛看板**：`contest.py` 新增 v2 的阶段划分（Step 13 归入"最终审计与交付"），`runtime_payload`、v2 阶段编排载荷、`contest_dashboard` 的阶段与剩余步数估计、"交付尚未就绪"提醒都按项目自己的编排判断。
 - **前端**：新增 `web/frontend/src/lib/stageCatalog.js`。步骤是否完成、下一步、所属阶段与比赛阶段、v2 下 Step 13/16 的名称都按项目编排的位置判断；`StepRail`、`PipelineTimeline`、`StageProgressPanel` 按项目的实际执行顺序展示，不连续的步骤组显示为"13、16"。v1 项目的显示不变。
-- 测试：`tests/test_stage_catalog_v2.py` 增至 25 例（prompt 覆盖、比赛阶段、默认值），新增 `web/frontend/tests/stage-catalog-v2.test.mjs` 并加入 CI；`test_factory_service.py` 中固定默认版本的断言改为 v2。
+- 测试：`tests/test_stage_catalog_v2.py` 增至 25 例（prompt 覆盖、比赛阶段、默认值），新增 `web/frontend/tests/stage-catalog-v2.test.mjs` 并加入 CI；`test_factory_service.py` 中固定默认版本的断言仍为 v1。
 
 ## 2026-11-06 — 活性优化阶段 2（第一部分）：论文段重排的 v2 阶段编排（可选启用）
 

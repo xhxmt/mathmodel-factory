@@ -1,19 +1,8 @@
 import { stepByIndex } from './steps.js'
-import { isCatalogV2, isStepDone, nextStepAfter, stagesFor, stepPosition } from './stageCatalog.js'
+import { STAGES_V1, isCatalogV2, isStepDone, nextStepAfter, stagesFor, stepPosition } from './stageCatalog.js'
 import { statusLabel } from './status.js'
 
-export const STAGES = [
-  { id: 1, name: '题意与数据', steps: [0, 1] },
-  { id: 2, name: '候选与选模', steps: [2, 3] },
-  { id: 3, name: '模型构建', steps: [4] },
-  { id: 4, name: '模型求解', steps: [5] },
-  { id: 5, name: '验证与评价', steps: [6, 7] },
-  { id: 6, name: '图表与入口', steps: [8] },
-  { id: 7, name: '初稿与核验', steps: [9, 10] },
-  { id: 8, name: '评审与修订', steps: [11, 12, 13] },
-  { id: 9, name: '摘要与定稿', steps: [14, 15] },
-  { id: 10, name: '终审与交付', steps: [16] },
-]
+export const STAGES = STAGES_V1
 
 const index = (value) => value != null && Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 16 ? Number(value) : null
 export function executionStatus(project = {}) { return project.execution_state || project.status || 'unknown' }

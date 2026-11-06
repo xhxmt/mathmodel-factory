@@ -205,7 +205,7 @@ import Icon from './Icon.vue'
 import { EDITORIAL_GATE_STEP, projectStepIndex, projectStepStatus, hasNativeStepCursor, VERDICT_LABEL, stepModelMeta, stepConfigKey, stepsInOrder } from '../lib/steps.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { phaseForStep } from '../lib/workspaceUi.js'
-import { contestPhasesFor, stepRangeLabel } from '../lib/stageCatalog.js'
+import { contestPhasesFor, stepCaption, stepRangeLabel } from '../lib/stageCatalog.js'
 import { currentStepIndex, completedStepIndex, workflowStepState, verdictLabel as auditVerdictLabel } from '../lib/projectState.js'
 
 export default {
@@ -349,11 +349,10 @@ export default {
     capFor(s) {
       if (s.key === '8_5') return 'ENTRY'
       if (s.index === 10) return 'GATE 1'
-      if (s.index === 13) return 'PRECHECK'
+      if (s.index === 13 || s.index === 16) return stepCaption(s.index, this.project)
       if (s.index === 3) return '选型'
       if (s.index === 14) return '摘要'
       if (s.index === 0) return 'SETUP'
-      if (s.index === 16) return 'FINAL AUDIT'
       return ''
     },
     tip(s) {

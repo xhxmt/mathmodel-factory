@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Iterable
 
 from .contest import phase_for_step
@@ -20,10 +20,25 @@ class StageSubtaskContract:
     checkpoint_step_id: int | None
     kind: str = "step"
     conditional: bool = False
+    # A subtask whose run budget differs from its source Step's contract.  The
+    # catalog payload, the deadline cap and the executing registry all read
+    # ``step_contract``, so this is the one place such a budget is stated.
+    budget_timeout_seconds: int | None = None
 
     @property
     def step_contract(self):
-        return contract_for(self.source_step_id)
+        contract = contract_for(self.source_step_id)
+        if self.budget_timeout_seconds is not None:
+            return replace(contract, timeout_seconds=self.budget_timeout_seconds)
+        return contract
+
+
+def _subtask_fields(subtask: "StageSubtaskContract") -> dict[str, Any]:
+    # The budget is published under ``step_budget``; leaving the override out
+    # of the subtask fields keeps the v1 payload unchanged.
+    fields = asdict(subtask)
+    fields.pop("budget_timeout_seconds")
+    return fields
 
 
 @dataclass(frozen=True)
@@ -448,7 +463,7 @@ def stage_catalog_payload() -> dict[str, Any]:
                 "name": stage.name,
                 "subtasks": [
                     {
-                        **asdict(subtask),
+                        **_subtask_fields(subtask),
                         "contest_phase": phase_for_step(subtask.source_step_id).id,
                         "step_budget": {
                             "timeout_seconds": subtask.step_contract.timeout_seconds,
@@ -486,6 +501,10 @@ def stage_catalog_payload() -> dict[str, Any]:
 STAGE_CATALOG_VERSION_V2 = "factory-stage-catalog-v2"
 
 FINAL_JUDGE_SUBTASK = "final_judge"
+# The v2 final Judge runs the whole final audit under the execution identity
+# of Step 16 (compile, checks, visual gate, three-role Judge), not the v1
+# Step-13 math precheck, so it gets the final audit's budget.
+FINAL_JUDGE_TIMEOUT_SECONDS = contract_for(16).timeout_seconds
 
 STAGE_CONTRACTS_V2: tuple[StageContract, ...] = (
     *STAGE_CONTRACTS[:7],
@@ -506,6 +525,7 @@ STAGE_CONTRACTS_V2: tuple[StageContract, ...] = (
                 source_step_id=13,
                 checkpoint_step_id=13,
                 kind="final_judge",
+                budget_timeout_seconds=FINAL_JUDGE_TIMEOUT_SECONDS,
             ),
             _step(16),
         ),
@@ -595,6 +615,25 @@ class StageCatalog:
             (stage.id, subtask.key)
             for index, (stage, subtask) in enumerate(self.order)
             if index > position
+        )
+
+    def checkpoint_steps_after(
+        self, *, subtask_key: str | None = None, step_id: int | None = None
+    ) -> int:
+        """How many Step checkpoints still follow a cursor (gates excluded).
+
+        The cursor is the active subtask when one is known (a gate such as the
+        content-freeze guard has no Step position of its own), else a Step.
+        """
+
+        if subtask_key is not None:
+            position = self.order.index(self.subtask_for_key(subtask_key))
+        else:
+            position = self.step_position(-1 if step_id is None else step_id)
+        return sum(
+            1
+            for index, (_stage, subtask) in enumerate(self.order)
+            if index > position and subtask.checkpoint_step_id is not None
         )
 
     def next_stage_subtask(
@@ -705,7 +744,7 @@ class StageCatalog:
                     "name": stage.name,
                     "subtasks": [
                         {
-                            **asdict(subtask),
+                            **_subtask_fields(subtask),
                             "contest_phase": phase_for_step(
                                 subtask.checkpoint_step_id
                                 if subtask.checkpoint_step_id is not None

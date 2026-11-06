@@ -56,20 +56,25 @@ the competition-facing workflow is grouped into eight phases:
 7. Review & Revision (Steps 11, 12, 14, 15; Human Gate 2 and content freeze)
 8. Final Audit & Delivery (Step 13 final Judge, Step 16 acceptance)
 
-New projects use Stage catalog v2 (`factory-stage-catalog-v2`), which runs the
-paper segment as 11 → 12 → 14 → 15 → content freeze → 13 → 16. Step numbers
-keep their meaning; only the order changed, so Step 13 runs after Steps 14 and
-15. Projects created before v2 keep `factory-stage-catalog-v1`
+Phases 7 and 8 above are the catalog v2 grouping; in catalog v1 Step 13 is in
+phase 7 and phase 8 is Step 16 alone.
+
+Stage catalog v2 (`factory-stage-catalog-v2`) runs the paper segment as
+11 → 12 → 14 → 15 → content freeze → 13 → 16. Step numbers keep their
+meaning; only the order changed, so Step 13 runs after Steps 14 and 15. New
+projects still default to `factory-stage-catalog-v1`
 (11 → 12 → 13 → 14 → 15 → content freeze → 16, with Step 13 in phase 7) and
-the v1 Step 13 contract below; they are not migrated. `factory create
---stage-catalog v1` still creates a v1 project.
+the v1 Step 13 contract below; v2 is opt-in (`factory create --stage-catalog
+v2`) until its first real end-to-end acceptance run passes. Existing projects
+keep the catalog they recorded and are not migrated.
 
 This is the stable user-facing and validation contract. New projects are
 scheduled and recovered through ten persistent Stages, while Step 0–16 remain
 the artifact, validator, budget, evidence, and compatibility contracts. Do not
 delete or renumber Step 0–16, and do not treat the eight user-facing phases as
 scheduler or recovery boundaries. The Stage mapping, dirty-flag routing,
-conditional Step 13, migration/rollback contract, and remaining operational
+conditional Step 13 (catalog v1 only; v2 runs Step 13 unconditionally as the
+final Judge), migration/rollback contract, and remaining operational
 acceptance item are documented in
 [`docs/architecture/STAGE_SIMPLIFICATION_PLAN.md`](docs/architecture/STAGE_SIMPLIFICATION_PLAN.md).
 
@@ -295,7 +300,7 @@ Produce:
 
 ### Step 13: Final Judge (catalog v2) / Preliminary Mathematical Audit (catalog v1)
 
-**Catalog v2 (new projects).** Step 13 is the one full Judge of the paper. It
+**Catalog v2 (opt-in).** Step 13 is the one full Judge of the paper. It
 runs after Step 15 and after the content-freeze approval (Human Gate 2), as an
 analysis-only final audit executed under the Step-16 evaluator identity:
 compile the final PDF, rerun the complete Step-10 paper checks plus provenance,
@@ -307,7 +312,11 @@ Its verdicts are the final-audit tokens (`VERDICT: PASS`,
 `VERDICT: REOPEN_REVISION_TEXT`, `VERDICT: REOPEN_REVISION_MODEL`); a reopen
 returns to Step 12 (text) or the owning modeling/solving Step (model), and
 after T−2h requires a `delivery_freeze_override` exactly as a Step-16 reopen
-does. Step 13 is bounded by the contest deadline, inside the terminal reserve.
+does. The content-freeze approval binds the approved content fingerprint, so
+a reopen that changes the paper leaves that approval stale: the repaired text
+comes back to Human Gate 2 for a new approval before Step 13 runs again, as
+after a Step-16 rejection. Step 13 is bounded by the contest deadline, inside
+the terminal reserve.
 There is no math precheck, no conditional skip receipt, no `PRECHECK_PASS`,
 and no Step-13 technical continuation in v2.
 
@@ -322,7 +331,7 @@ Changes to model code, data, canonical results, solver receipts or
 entry gate is validated once, before Step 9. The Stage-8 exit check for
 unresolved BLOCKING/MAJOR issues runs after Step 12.
 
-**Catalog v1 (existing projects).** The rest of this section is the v1 Step 13
+**Catalog v1 (the default).** The rest of this section is the v1 Step 13
 contract.
 
 For an explicitly requested technical evaluation after an unsuccessful Step13,
