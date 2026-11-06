@@ -92,6 +92,57 @@ def _step_durations(store: SQLiteStateStore) -> list[dict[str, int]]:
     return durations
 
 
+# Phase 3e: the contest clock cannot pause, so the dashboard keeps its deadline
+# semantics and instead splits the elapsed contest time by what the run was
+# doing, rebuilt from each event's replay patch.  ``waiting_external`` is the
+# part spent on someone else: a human decision or a provider/disk outage.
+_TIME_BUCKETS = ("working", "waiting_human", "waiting_provider", "stopped")
+
+
+def _bucket(status: str | None, pause_subcode: str | None) -> str:
+    if status in {"running", "retrying"}:
+        return "working"
+    if status in {"awaiting_selection", "awaiting_consultation"}:
+        return "waiting_human"
+    if status == "paused" and pause_subcode == "SEMANTIC_REOPEN_BUDGET":
+        return "waiting_human"
+    if status == "paused" and pause_subcode == "PROVIDER_UNAVAILABLE":
+        return "waiting_provider"
+    return "stopped"  # operator pause, failure, idle between runs
+
+
+def _time_split(store: SQLiteStateStore, *, started_at: int, now_epoch: int) -> dict[str, Any]:
+    from factory_core.workflow_events import ENVELOPE_KEY
+
+    seconds = dict.fromkeys(_TIME_BUCKETS, 0)
+    status: str | None = None
+    subcode: str | None = None
+    since: int | None = None
+    for event in store.events():
+        at = int(event.created_at)
+        if since is not None:
+            start, end = max(since, started_at), min(at, now_epoch)
+            if end > start:
+                seconds[_bucket(status, subcode)] += end - start
+        patch = (event.payload.get(ENVELOPE_KEY) or {}).get("state_patch") or {}
+        if "status" in patch:
+            status = str(patch["status"])
+        if event.type == "PAUSED":
+            reason = event.payload.get("reason") or {}
+            subcode = str(reason.get("subcode") or "") if isinstance(reason, dict) else ""
+        elif "status" in patch:
+            subcode = None
+        since = at
+    if since is not None:
+        start, end = max(since, started_at), now_epoch
+        if end > start:
+            seconds[_bucket(status, subcode)] += end - start
+    return {
+        **{f"{name}_seconds": value for name, value in seconds.items()},
+        "waiting_external_seconds": seconds["waiting_human"] + seconds["waiting_provider"],
+    }
+
+
 def _timing(
     store: SQLiteStateStore,
     *,
@@ -189,6 +240,9 @@ def _timing(
         "mode_label": label,
         "recommendation": recommendation,
         "recent_steps": durations[-3:],
+        "time_split": _time_split(
+            store, started_at=int(policy["contest_started_at"]), now_epoch=now_epoch
+        ),
     }
 
 

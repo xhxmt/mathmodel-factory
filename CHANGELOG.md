@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-06 — 活性优化阶段 3：回退上限暂停、重试入口、非内容失败、派发前预检、时间分布
+
+- **回退上限（3a）**：每个发起阶段 2 次 + 每次运行共 5 次（决策 4），用尽改为 `PAUSED`（`SEMANTIC_REOPEN_BUDGET`）并附说明，不再判 `PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED`。新增 `factory action grant-reopen` 与 Web"批准一次回退"（`SEMANTIC_REOPEN_GRANTED`）。
+- **重试入口（3b）**：新增 `factory action retry-step --step N --reason`、Web"重试失败的步骤"与 `FactoryService.retry_step`（`STEP_RETRY_AUTHORIZED`），替代直接改库和一次性授权事件。
+- **非内容失败（3c）**：`TRANSIENT_JUDGE_*` 不再消耗内容尝试，共用一份基础设施预算；基础设施预算按终止类计数。
+- **派发前预检（3d）**：新增 `factory_core/dispatch_preflight.py`，Step 派发前检查模型路由与临时空间，确定失败时以 `PROVIDER_UNAVAILABLE` 暂停且不消耗尝试；`FACTORY_DISPATCH_PREFLIGHT=0` 关闭（测试默认关闭）。
+- **时间分布（3e）**：比赛看板新增 `timing.time_split`（工作 / 等人工 / 等外部服务 / 已停止）。
+- 诊断接口新增 `SEMANTIC_REOPEN_BUDGET`、`PROVIDER_UNAVAILABLE` 两种原因及 `reopen_budget`、`preflight` 详情；`PAUSED` 的合法 subcode 增加这两项。
+- 修复 CLAUDE.md 中一处重复句。
+
 ## 2026-11-06 — 阶段 2 审计修复（PR #48）
 
 根据 PR #48 的独立审计与自动审查意见修复：

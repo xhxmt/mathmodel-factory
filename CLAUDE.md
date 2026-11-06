@@ -476,7 +476,11 @@ The authenticated project workspace uses `contest-dashboard-v1` from
 `GET /api/projects/{base}/contest-dashboard` for the eight-phase view, timing
 forecast, persistent action center, evidence cockpit, and delivery-readiness
 checks. It must show Legacy projects as unconfigured instead of inventing a
-contest clock. Human Gate submissions remain revision-checked and SQLite
+contest clock. The contest clock never pauses; `timing.time_split` instead
+splits elapsed contest time, rebuilt from the events' replay patches, into
+`working` (running/retrying), `waiting_human` (awaiting a decision or a spent
+reopen budget), `waiting_provider` (`PROVIDER_UNAVAILABLE`) and `stopped`
+(operator pause, failure, idle), with `waiting_external = human + provider`. Human Gate submissions remain revision-checked and SQLite
 append-only. `GET /api/projects/{base}/submission` resolves and verifies the
 atomic current release before serving a ZIP; it must never trust a flat alias
 or an arbitrary project path. Both endpoints enforce the same `project_acl` as

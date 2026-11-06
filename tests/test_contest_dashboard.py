@@ -197,3 +197,39 @@ def test_v2_forecast_follows_the_active_subtask(tmp_path, active_subtask, expect
                      catalog_version=STAGE_CATALOG_VERSION_V2, active_subtask=active_subtask)
 
     assert (timing["projected_content_finish_at"] - 10_000) // timing["recent_step_average_seconds"] == expected
+def test_dashboard_splits_contest_time_into_work_and_external_waits(tmp_path):
+    from factory_core.domain import WorkflowStatus
+    from factory_core.stages import STAGE_SCHEDULER_GENERATION
+
+    clock = {"now": 1_000}
+    project = tmp_path / "ongoing/demo"
+    project.mkdir(parents=True)
+    policy = ContestPolicy.for_deadline(started_at=1_000, deadline_at=1_000_000)
+    store = SQLiteStateStore(project, clock=lambda: clock["now"])
+    store.initialize(project_id="demo", project_type="modeling", last_completed_step=3,
+                     scheduler_generation=STAGE_SCHEDULER_GENERATION, contest_policy=policy.to_dict())
+
+    def at(when, event_type, status, **payload):
+        clock["now"] = when
+        state = store.load()
+        store.transition(expected_revision=state.revision, event_type=event_type,
+                         changes={"status": status}, payload=payload)
+
+    at(1_000, "RUN_STARTED", WorkflowStatus.RUNNING)
+    at(1_600, "PAUSED", WorkflowStatus.PAUSED,
+       reason={"code": "PAUSED", "subcode": "PROVIDER_UNAVAILABLE", "actor": "engine"})
+    at(2_000, "RESUMED", WorkflowStatus.READY)
+    at(2_100, "RUN_STARTED", WorkflowStatus.RUNNING)
+    at(2_500, "AWAITING_ACTION", WorkflowStatus.AWAITING_SELECTION)
+    at(2_700, "PAUSED", WorkflowStatus.PAUSED,
+       reason={"code": "PAUSED", "subcode": "OPERATOR", "actor": "operator"})
+
+    split = build_contest_dashboard(project, tmp_path / "papers", now_epoch=3_000)["timing"]["time_split"]
+
+    assert split["working_seconds"] == 600 + 400
+    assert split["waiting_provider_seconds"] == 400
+    assert split["waiting_human_seconds"] == 200
+    assert split["stopped_seconds"] == 100 + 300  # idle between runs, operator pause
+    assert split["waiting_external_seconds"] == 600
+    assert sum(split[key] for key in ("working_seconds", "waiting_human_seconds",
+                                      "waiting_provider_seconds", "stopped_seconds")) == 3_000 - 1_000

@@ -299,3 +299,15 @@
 - 新项目默认仍为 v1，`--stage-catalog v2` 显式试运行；验收 A（v2 的第一次真实运行）通过后再切换默认值。现有项目不迁移。
 
 阶段 2 的退出条件（回放中 F-C、F-D 与纯文档回退归零、前端与核心测试全绿、CHANGELOG 记录合同变更）已满足，有一处例外需要说明：按判定 Stage 重新统计后，v2 回放里仍有 1 次由文档引起的 Stage 10 → 8（`revision_summary.md`）。它来自历史上 v1 预审 agent 写该文件，v2 的 Step 13 是只读分析的最终审计，不写这个文件，回放门禁测试也断言了这一点；这次回退在 v2 里不会发生，但它不是规则消除的，而是行为不同。验收 A 将是 v2 的第一次真实运行。
+
+## 阶段 3 执行记录（2026-11-06，分支 `feat/phase3-recovery`，基于 `bd197bc`）
+
+决策 4（11 月 6 日）：保留"每个发起阶段 2 次"，另加"每次运行共 5 次"，任一用尽都暂停。依据是 v2 规则下的回放：只用"每次运行共 3 次"会让 16 次运行中的 4 次暂停，改成"每阶段 2 次 + 每次运行 5 次"约 3 次；按阶段的上限防同一处反复打转，总上限防多个阶段分散累积。
+
+- **3a 回退上限**：两个上限都按当前分类器身份计数。用尽时写 `PAUSED`（subcode `SEMANTIC_REOPEN_BUDGET`），保留 Stage 游标，并记录 `reopen_budget` 说明（哪个上限、计数、待回退的上游文件、已发生的回退）。继续的两条正式路径：撤销上游改动后恢复（经 recovery 重新检查，不重跑模型）；或 `factory action grant-reopen --reason`（Web："批准一次回退"），记录 `SEMANTIC_REOPEN_GRANTED`，恰好多允许一次，每次暂停只能批准一次。
+- **3b 重试入口**：`factory action retry-step <project> --step N --reason …`（Web："重试失败的步骤"）。只对 FAILED 且游标在该 Step 的项目生效，记录 `STEP_RETRY_AUTHORIZED` 并把尝试次数清零，下一次从第 1 次尝试重跑。替代历史上的 `FAILED_SUBTASK_RETRY_AUTHORIZED`、`TECHNICAL_FLOW_ATTEMPT_BUDGET_RESET` 与各种 `USER_AUTHORIZED_*` 重试事件。
+- **3c 只有发现缺陷才计次**：六个 `TRANSIENT_JUDGE_*`（Judge 没给出可用判定）不再消耗内容尝试，改为重试基础设施，共用一份预算，用尽为 `PERMANENT_JUDGE_INFRASTRUCTURE`。基础设施预算改为按终止类计数。回放中"非内容原因消耗尝试"从 48 次（5.8 h）降到 20 次（4.5 h）；剩余为后端不可用（3d 处理）、阶段 1a 之前的检查脚本崩溃、流程上限用尽（3a/3b 处理）。
+- **3d 派发前资源预检**：引擎在 `STEP_STARTED` 之前对该 Step 的候选模型和临时空间做检查（复用阶段 0 的 `factory preflight`）。只有确定的 FAIL 才拦截（所有候选都不可用，例如 HTTP 402 余额不足；或空间低于 2 GiB），UNKNOWN/WARN 和检查本身出错都不拦。拦截时写 `PAUSED`（subcode `PROVIDER_UNAVAILABLE`），不消耗尝试次数，恢复后从第 1 次尝试派发。v2 的 `final_judge` 不在此检查（它的 Judge 按 Step 16 路由）。`FACTORY_DISPATCH_PREFLIGHT=0` 可关闭。
+- **3e 比赛时钟**：截止时间语义不变；看板的 `timing.time_split` 把已用比赛时间分成工作、等人工、等外部服务、已停止四类。
+
+**退出条件**：`PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED` 改为可恢复的暂停（3a）；`PERMANENT_ATTEMPT_BUDGET_EXHAUSTED` 有正式的重试入口（3b）；模拟的 402 在第一次模型调用前被拦下（3d，`tests/test_dispatch_preflight.py`）。回放无法重新模拟暂停之后的历史，这些由引擎级测试覆盖。
