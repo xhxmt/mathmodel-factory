@@ -332,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     action = sub.add_parser("action")
     action.add_argument(
-        "name", choices=["pause", "resume", "kill", "resolve", "grant-reopen"]
+        "name", choices=["pause", "resume", "kill", "resolve", "grant-reopen", "retry-step"]
     )
     action.add_argument("project_dir")
     action.add_argument("--expected-revision", type=int)
@@ -340,7 +340,10 @@ def build_parser() -> argparse.ArgumentParser:
     action.add_argument("--no-start", action="store_true")
     action.add_argument(
         "--reason",
-        help="grant-reopen: why the reopen a spent semantic-reopen budget paused is allowed",
+        help="grant-reopen / retry-step: why the operator allows it (recorded in the event)",
+    )
+    action.add_argument(
+        "--step", type=int, help="retry-step: the failed Step at the cursor"
     )
 
     migrate = sub.add_parser("migrate")
@@ -719,6 +722,14 @@ def main(argv: list[str] | None = None) -> int:
                     )
             elif args.name == "kill":
                 updated = service.kill(project, expected_revision=revision)
+            elif args.name == "retry-step":
+                if args.step is None or not args.reason:
+                    raise InvalidTransition("retry-step requires --step and --reason")
+                updated = service.retry_step(
+                    project, step_id=args.step, reason=args.reason, expected_revision=revision
+                )
+                if not args.no_start:
+                    updated = service.start(project, expected_revision=updated.revision).state
             elif args.name == "grant-reopen":
                 if not args.reason:
                     raise InvalidTransition("grant-reopen requires --reason")

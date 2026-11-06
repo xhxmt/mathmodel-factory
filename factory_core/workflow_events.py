@@ -645,6 +645,9 @@ def project_runtime_diagnostics(
         ]
         if latest_recovery["canonical_type"] == "GATE_BLOCKED":
             suggested = ["open_gate_evidence", "open_audit_timeline", "refresh_status"]
+        if state.status is WorkflowStatus.FAILED and state.active_step is not None:
+            # Phase 3b: the formal retry with a fresh attempt budget.
+            suggested = ["retry_failed_step", *suggested]
     return {
         "status": {
             "version": 3,

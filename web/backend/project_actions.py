@@ -24,15 +24,26 @@ def run_action(
     base_name: str,
     expected_revision: int | None = None,
     reason: str | None = None,
+    step: int | None = None,
 ) -> ActionResult:
-    if action not in {"pause", "resume", "kill", "grant_reopen"}:
+    if action not in {"pause", "resume", "kill", "grant_reopen", "retry_step"}:
         return ActionResult(False, "", f"unsupported project action: {action}")
-    if action == "grant_reopen" and not str(reason or "").strip():
-        return ActionResult(False, "", "grant_reopen requires a reason")
+    if action in {"grant_reopen", "retry_step"} and not str(reason or "").strip():
+        return ActionResult(False, "", f"{action} requires a reason")
+    if action == "retry_step" and step is None:
+        return ActionResult(False, "", "retry_step requires a step")
     try:
         service = FactoryService(factory_root)
         worker = None
-        if action == "grant_reopen":
+        if action == "retry_step":
+            # A fresh attempt budget for the failed Step at the cursor.
+            retried = service.retry_step(
+                base_name, step_id=int(step), reason=str(reason),
+                expected_revision=expected_revision,
+            )
+            worker = service.start(base_name, expected_revision=retried.revision)
+            state = worker.state
+        elif action == "grant_reopen":
             # Allow the reopen the budget pause stopped, then resume: recovery
             # rechecks the change set and performs the reopen.
             granted = service.grant_semantic_reopen(

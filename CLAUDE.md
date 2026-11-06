@@ -211,6 +211,16 @@ grant-reopen <project> --reason ...` (Web: "批准一次回退"), which records
 `SEMANTIC_REOPEN_GRANTED` for that Stage and classifier, allows exactly one
 more reopen, and resumes. One grant per pause.
 
+A `FAILED` project whose cursor is on a Step is retried only through
+`factory action retry-step <project> --step N --reason ...` (Web diagnostics:
+"重试失败的步骤"; `FactoryService.retry_step`). It records
+`STEP_RETRY_AUTHORIZED` (previous attempt, the failure's revision and error
+class, the operator's reason), resets the attempt count with the Stage cursor
+kept, and starts a fresh attempt 1; dirty state, checkpoints, the contest
+deadline and other budgets still apply. A plain resume of such a project
+recovers the failed attempt and stops at `PERMANENT_ATTEMPT_BUDGET_EXHAUSTED`.
+Do not edit the state database or write one-off authorization events instead.
+
 Pause and kill decide how to stop the runner before committing anything. The
 launch identity recorded for the current pid and lease is verified against the
 live process, independently of `aggregate_valid`; a gone or reused pid needs no

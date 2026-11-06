@@ -552,6 +552,28 @@ class FactoryService:
             expected_revision=state.revision, note=reason, actor=actor
         )
 
+    def retry_step(
+        self,
+        project: str | Path,
+        *,
+        step_id: int,
+        reason: str,
+        expected_revision: int | None = None,
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Retry the failed Step at the cursor with a fresh attempt budget (3b)."""
+
+        if actor not in REASON_ACTORS:
+            raise InvalidTransition(
+                f"retry actor must be one of {sorted(REASON_ACTORS)}, got {actor!r}"
+            )
+        engine = self.engine(project)
+        state = engine.get_state()
+        self._assert_expected_revision(state, expected_revision)
+        return engine.retry_step(
+            expected_revision=state.revision, step_id=step_id, note=reason, actor=actor
+        )
+
     def kill(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
         engine = self.engine(project)
         snapshot = engine.store.status_snapshot()

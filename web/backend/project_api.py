@@ -1579,6 +1579,7 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
             base_name,
             expected_revision=action.expected_revision,
             reason=action.reason,
+            step=action.step,
         )
         if not result.ok:
             raise HTTPException(

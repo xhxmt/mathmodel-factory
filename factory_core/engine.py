@@ -112,6 +112,9 @@ STAGE_SEMANTIC_REOPEN_LIMIT = 2
 RUN_SEMANTIC_REOPEN_LIMIT = 5
 SEMANTIC_REOPEN_PAUSE_SUBCODE = "SEMANTIC_REOPEN_BUDGET"
 SEMANTIC_REOPEN_GRANTED = "SEMANTIC_REOPEN_GRANTED"
+# Phase 3b: the one formal way to retry a failed Step with a fresh attempt
+# budget, replacing direct database edits and one-off authorization events.
+STEP_RETRY_AUTHORIZED = "STEP_RETRY_AUTHORIZED"
 
 
 @dataclass(frozen=True)
@@ -2337,6 +2340,68 @@ class FactoryEngine:
                 "classifier_contract_sha256": self._classifier_sha(state),
                 "reason": {
                     "code": SEMANTIC_REOPEN_GRANTED,
+                    "subcode": "OPERATOR",
+                    "actor": actor,
+                    "message": str(note).strip(),
+                },
+            },
+        )
+
+    def retry_step(
+        self,
+        *,
+        expected_revision: int,
+        step_id: int,
+        note: str,
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Retry the failed Step at the cursor with a fresh attempt budget (3b).
+
+        Only a ``FAILED`` project whose cursor is on ``step_id`` qualifies; the
+        Stage cursor is kept and the attempt count reset, so the next run
+        starts that Step's attempt 1 instead of recovering the failed attempt.
+        Nothing else changes: dirty state, checkpoints, the contest deadline
+        and every other budget still apply.
+        """
+
+        state = self.store.load()
+        if not str(note or "").strip():
+            raise InvalidTransition("a Step retry needs a reason")
+        if state.status is not WorkflowStatus.FAILED:
+            raise InvalidTransition(
+                f"only a failed project can retry a Step (status {state.status.value})"
+            )
+        if state.pending_action is not None:
+            raise InvalidTransition("pending action must be resolved before a retry")
+        if state.active_step is None or int(state.active_step) != int(step_id):
+            raise InvalidTransition(
+                f"the failed cursor is on Step {state.active_step}, not Step {step_id}"
+            )
+        failure = next(
+            (event for event in reversed(self.store.events()) if event.type == "STEP_FAILED"),
+            None,
+        )
+        return self._transition(
+            expected_revision=expected_revision,
+            event_type=STEP_RETRY_AUTHORIZED,
+            changes={
+                "status": WorkflowStatus.READY,
+                "attempt": 0,
+                "runner_pid": None,
+                "runner_lease_id": None,
+                "heartbeat_at": None,
+            },
+            payload={
+                "stage": state.active_stage,
+                "subtask": state.active_subtask,
+                "source_step": int(step_id),
+                "previous_attempt": state.attempt,
+                "failed_revision": failure.revision if failure is not None else None,
+                "failed_error_class": (
+                    failure.payload.get("error_class") if failure is not None else None
+                ),
+                "reason": {
+                    "code": STEP_RETRY_AUTHORIZED,
                     "subcode": "OPERATOR",
                     "actor": actor,
                     "message": str(note).strip(),

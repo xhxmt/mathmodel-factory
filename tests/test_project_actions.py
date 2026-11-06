@@ -156,3 +156,46 @@ def test_web_grant_reopen_requires_a_reason(monkeypatch, tmp_path):
 
     assert result.ok is False
     assert "requires a reason" in result.stderr
+
+
+def test_web_retry_step_records_the_retry_then_starts(monkeypatch, tmp_path):
+    calls = []
+
+    class Retried:
+        revision = 11
+
+    class Handle:
+        state = State()
+        pid = 4242
+        log_path = "/tmp/worker.log"
+
+    class Service:
+        def __init__(self, _root):
+            pass
+
+        def retry_step(self, project, *, step_id, reason, expected_revision=None):
+            calls.append(("retry", project, step_id, reason, expected_revision))
+            return Retried()
+
+        def start(self, project, *, expected_revision=None):
+            calls.append(("start", project, expected_revision))
+            return Handle()
+
+    monkeypatch.setattr(project_actions, "FactoryService", Service)
+
+    result = project_actions.run_action(
+        tmp_path, "retry_step", "demo", expected_revision=10, reason="fixed", step=14
+    )
+
+    assert result.ok is True, result.stderr
+    assert calls == [("retry", "demo", 14, "fixed", 10), ("start", "demo", 11)]
+    assert run_without_step(tmp_path, monkeypatch).ok is False
+
+
+def run_without_step(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        project_actions,
+        "FactoryService",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not construct")),
+    )
+    return project_actions.run_action(tmp_path, "retry_step", "demo", reason="fixed")

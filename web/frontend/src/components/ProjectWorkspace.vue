@@ -508,6 +508,14 @@ export default {
         }
         return
       }
+      if (actionId === 'retry_failed_step') {
+        const step = diagnostics.value?.status?.current_step
+        const reason = typeof window === 'undefined' ? '' : window.prompt(`重试 Step ${step}（尝试次数清零）的理由，会记录到工作流事件`)
+        if (reason && reason.trim() && step !== null && step !== undefined) {
+          emit('action', props.project, 'retry_step', { reason: reason.trim(), step })
+        }
+        return
+      }
       if (actionId === 'grant_semantic_reopen') {
         const reason = typeof window === 'undefined' ? '' : window.prompt('批准这次回退的理由（会记录到工作流事件）')
         if (reason && reason.trim()) {

@@ -12,6 +12,7 @@ export const DIAGNOSTIC_ACTION_LABEL = {
   resume_project: '恢复运行',
   revert_upstream_edits_and_resume: '已撤销上游改动，恢复运行',
   grant_semantic_reopen: '批准一次回退',
+  retry_failed_step: '重试失败的步骤',
 }
 
 // A run paused because its semantic-reopen budget is spent (phase 3a): one
