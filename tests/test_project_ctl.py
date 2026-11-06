@@ -171,6 +171,10 @@ def test_engine_control_commits_state_before_terminating_runner(tmp_path, monkey
         payload={"worker_pid": 424242, "lease_id": "controlled-lease", "worker_identity": "controlled-start"},
     )
     observed = []
+    # Pid 424242 stands for the live runner recorded above.
+    from factory_core.adapters.infrastructure import process as processes
+
+    monkeypatch.setattr(processes, "_process_identity", lambda pid: "controlled-start")
     monkeypatch.setattr(
         mod.FactoryService,
         "_terminate_runner",

@@ -182,6 +182,13 @@ terminal class (`PERMANENT_AUDIT_INFRASTRUCTURE`; `PERMANENT_MODEL_BACKEND_INFRA
 for `TRANSIENT_MODEL_BACKEND`, a model process that exited non-zero; a timeout
 still consumes a content attempt).
 
+Pause and kill decide how to stop the runner before committing anything. The
+launch identity recorded for the current pid and lease is verified against the
+live process, independently of `aggregate_valid`; a gone or reused pid needs no
+signal, and a live pid without a verifiable identity (or the controller's own
+pid) refuses the operation with `InvalidTransition` (message prefixed
+`STOP_IDENTITY_UNAVAILABLE` or `STOP_SELF`) and commits nothing.
+
 `run_paper.sh --infer-step` reads Native SQLite state only. Projects without
 Native state remain historical artifacts and cannot execute here.
 

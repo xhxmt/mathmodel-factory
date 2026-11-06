@@ -450,10 +450,15 @@ class FactoryService:
         snapshot = engine.store.status_snapshot()
         state = snapshot["state"]
         revision = state.revision if expected_revision is None else expected_revision
+        # A stale revision is reported as such, not masked by process checks.
+        self._assert_expected_revision(state, expected_revision)
+        # Decide whether the runner can be stopped before anything is
+        # committed: a pause the process tree contradicts is never recorded.
+        stop_identity = self._runner_stop_identity(snapshot)
         updated = engine.pause(
             expected_revision=revision, subcode=subcode, actor=actor
         )
-        self._verify_runner_stop(engine.project_dir, snapshot)
+        self._verify_runner_stop(engine.project_dir, snapshot, stop_identity)
         return updated
 
     def resume(
@@ -494,8 +499,10 @@ class FactoryService:
         snapshot = engine.store.status_snapshot()
         state = snapshot["state"]
         revision = state.revision if expected_revision is None else expected_revision
+        self._assert_expected_revision(state, expected_revision)
+        stop_identity = self._runner_stop_identity(snapshot)
         updated = engine.kill(expected_revision=revision)
-        self._verify_runner_stop(engine.project_dir, snapshot)
+        self._verify_runner_stop(engine.project_dir, snapshot, stop_identity)
         return updated
 
     @staticmethod
@@ -1426,8 +1433,17 @@ class FactoryService:
 
     @staticmethod
     def _recorded_runner_identity(snapshot: dict[str, Any]) -> str | None:
+        """The launch identity recorded for the current runner pid and lease.
+
+        Deliberately independent of ``aggregate_valid``: the token is checked
+        against the live process (``_process_identity``), which is evidence
+        on its own.  Gating it on the store's replay validity made a project
+        whose event chain had broken impossible to stop (run2, rev 713, 771,
+        789), while it could still be committed to.
+        """
+
         state = snapshot["state"]
-        if not snapshot["aggregate_valid"] or not state.runner_lease_id:
+        if not state.runner_lease_id:
             return None
         for event in reversed(snapshot["events"]):
             if event.type not in {"WORKER_LAUNCHED", "RUN_STARTED"}:
@@ -1441,10 +1457,58 @@ class FactoryService:
             return None  # Never fall back to an earlier owner's identity.
         return None
 
-    def _verify_runner_stop(self, project: Path, snapshot: dict[str, Any]) -> None:
+    def _runner_stop_identity(self, snapshot: dict[str, Any]) -> str | None:
+        """Decide, before any commit, how the recorded runner is stopped.
+
+        Returns the identity token to signal, or ``None`` when no live runner
+        process remains (no pid, the pid is gone, or it now belongs to a
+        different process because the recorded owner exited and the pid was
+        reused).  Raises when a live process holds the pid and no launch
+        identity proves it is the runner: it can neither be signalled safely
+        nor be assumed gone, so the pause or kill is refused and nothing is
+        committed.
+        """
+
+        from .adapters.infrastructure.process import _process_identity
+
         pid = snapshot["state"].runner_pid
+        if not pid:
+            return None
+        if pid == os.getpid():
+            raise InvalidTransition(
+                f"STOP_SELF: runner pid {pid} is this controller process; its exit cannot be "
+                "verified from here, so nothing was changed. Stop it from another process."
+            )
+        live = _process_identity(pid)
+        if live is None:
+            if self._pid_is_live(pid):
+                # The pid exists but its identity cannot be read (for
+                # example /proc/<pid>/stat is unreadable): not proof it is gone.
+                raise InvalidTransition(
+                    f"STOP_IDENTITY_UNAVAILABLE: runner pid {pid} still exists but its process "
+                    "identity cannot be read, so it can neither be verified nor assumed gone; "
+                    "nothing was changed. Stop that process yourself, then retry."
+                )
+            return None
+        expected = self._recorded_runner_identity(snapshot)
+        if not expected:
+            raise InvalidTransition(
+                f"STOP_IDENTITY_UNAVAILABLE: runner pid {pid} is alive but no WORKER_LAUNCHED or "
+                "RUN_STARTED event records an identity for this pid and lease, so it cannot be "
+                "verified as the runner; nothing was changed. Stop that process yourself, then retry."
+            )
+        if live != expected:
+            return None  # the recorded runner exited and its pid now belongs to another process
+        return expected
+
+    def _verify_runner_stop(
+        self, project: Path, snapshot: dict[str, Any], stop_identity: str | None
+    ) -> None:
+        pid = snapshot["state"].runner_pid
+        if stop_identity is None:
+            return
         try:
-            self._terminate_runner(pid, self._recorded_runner_identity(snapshot))
+            self._terminate_runner(pid, stop_identity)
         except (OSError, RuntimeError) as exc:
             store = SQLiteStateStore(project)
             state = store.load()

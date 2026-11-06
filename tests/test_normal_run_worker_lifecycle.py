@@ -120,6 +120,8 @@ def test_cancel_failure_persists_unverified_interruption(tmp_path, monkeypatch):
     def failed_stop(_pid, _identity):
         raise RuntimeError('controlled exit verification failure')
     monkeypatch.setattr(service, '_terminate_runner', failed_stop)
+    # A live, verified runner whose termination then cannot be confirmed.
+    monkeypatch.setattr(service, '_runner_stop_identity', lambda _snapshot: 'controlled-start')
     with pytest.raises(RuntimeError, match='controlled exit verification failure'):
         service.kill('demo', expected_revision=state.revision)
     store = SQLiteStateStore(tmp_path / 'ongoing/demo')
