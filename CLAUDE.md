@@ -84,6 +84,22 @@ The only active workflow is `engine` / `native_v2` / `stage_v1`, backed by
 validation contracts. Existing `step_v2` Native projects require explicit
 `factory migrate scheduler-activate`; Legacy migration and rollback are retired.
 
+Each Stage project records its catalog in `stage_catalog_version`. New
+projects default to `factory-stage-catalog-v1`; `factory create --stage-catalog
+v2` opts into `factory-stage-catalog-v2` for trial runs until its first real
+end-to-end acceptance run passes. v2 reorders the paper segment to
+12 → 14 → 15 → content freeze → 13 (the one final Judge, an analysis-only final
+audit) → 16 (acceptance that promotes that judgment for an unchanged snapshot).
+Existing projects keep the version they recorded and are not migrated. Step numbers keep their
+meaning, so v2 ordering questions must go through `factory_core.stages.StageCatalog`
+positions (frontend: `web/frontend/src/lib/stageCatalog.js`), never step-number
+comparison. v2 dirty-owner rules live in `factory_core/stage_catalog_v2_policy.py`,
+a catalog-specific overlay applied to the owners the `artifact_ownership.py`
+registry returns (it re-owns three named kinds of change; it is not a second
+path-owner table);
+v2 prompt wording is a rendering overlay in `factory_core/steps/catalog_prompts.py`
+so v1 prompts stay byte-identical.
+
 `factory_core/` owns revisioned transitions, events, retry budgets, recovery,
 pending actions, native Stage/Step registration, audit, delivery and solver jobs.
 The full pre-split source and experimental development contracts live separately
@@ -306,14 +322,15 @@ See `STEPS.md` for exact outputs and line/file gates. In short:
 - Step 10: `paper` profile for numerical, code, result, and deliverable consistency; symbol findings are warnings.
 - Step 11: constructive review.
 - Step 12: revision and archive of the pre-revision draft.
-- Step 13: isolated math-only precheck; `PRECHECK_PASS` allows progress but never delivery.
+- Step 13: in catalog v2 (opt-in), the one final Judge: an analysis-only full final audit run after Step 15 and the content freeze. In catalog v1, an isolated math-only precheck before Step 14; `PRECHECK_PASS` allows progress but never delivery.
 - Step 14: abstract replacement.
-- Step 15: citation audit, table/prose polish, de-robotification; these edits make the Step-13 precheck non-final and produce the `CONTENT_READY` boundary.
-- Step 16: require Human Gate 2 (`content_freeze`) before execution, then explicitly request acceptance for the independent final-audit result . On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. Only a Native accepted result may then be copied, packaged, cleaned, and moved to `complete/`; default audit alone performs none of those delivery mutations or acceptance writes.
+- Step 15: citation audit, table/prose polish, de-robotification; these edits produce the `CONTENT_READY` boundary (in catalog v1 they also make the Step-13 precheck non-final).
+- Step 16: in catalog v2, accept the Step-13 judgment when the snapshot is unchanged (otherwise rerun the full final audit). In catalog v1, require Human Gate 2 (`content_freeze`) before execution, then explicitly request acceptance for the independent final-audit result . On a cache miss the audit subsystem compiles a fresh PDF, reruns Gate 2 on the post-Step-15 packets, and binds the decision to the evaluator and exact PDF bytes. Only a Native accepted result may then be copied, packaged, cleaned, and moved to `complete/`; default audit alone performs none of those delivery mutations or acceptance writes.
 
-Step 13 precheck verdict tokens are `PRECHECK_PASS`,
-`REOPEN_REVISION_MODEL`, and `INDETERMINATE_REVIEW`. Final-audit Gate 2 verdict
-tokens are:
+Catalog v1 Step 13 precheck verdict tokens are `PRECHECK_PASS`,
+`REOPEN_REVISION_MODEL`, and `INDETERMINATE_REVIEW` (catalog v2 has no
+precheck). Final-audit Gate 2 verdict tokens, used by the v2 Step 13 and by
+Step 16, are:
 
 - `VERDICT: PASS`
 - `VERDICT: REOPEN_REVISION_TEXT`

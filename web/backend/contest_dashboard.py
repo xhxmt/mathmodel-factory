@@ -67,6 +67,14 @@ def _audit(project: Path, profile: str) -> dict[str, Any]:
     }
 
 
+def _at_or_after_final_prose(current_step: int, catalog_version: str | None) -> bool:
+    from factory_core.stages import catalog_for_version
+
+    catalog = catalog_for_version(catalog_version)
+    step = min(max(int(current_step), 0), 16)
+    return catalog.step_position(step) >= catalog.step_position(15)
+
+
 def _step_durations(store: SQLiteStateStore) -> list[dict[str, int]]:
     starts: dict[int, int] = {}
     durations: list[dict[str, int]] = []
@@ -89,6 +97,8 @@ def _timing(
     *,
     current_step: int,
     now_epoch: int,
+    catalog_version: str | None = None,
+    active_subtask: str | None = None,
 ) -> dict[str, Any]:
     policy = store.contest_policy()
     if policy is None:
@@ -103,14 +113,35 @@ def _timing(
     recent = [item["duration_seconds"] for item in durations[-3:] if item["duration_seconds"] > 0]
     average = int(statistics.mean(recent)) if recent else 3_600
     confidence = "observed" if recent else "default"
-    phase = phase_for_step(min(max(current_step, 0), 16))
+    phase = phase_for_step(
+        min(max(current_step, 0), 16), catalog_version=catalog_version
+    )
     phase_events = [
         event.created_at
         for event in store.events()
         if event.type == "STEP_STARTED" and event.step in phase.steps
     ]
     phase_started = min(phase_events) if phase_events else now_epoch
-    remaining_content_steps = max(0, 16 - max(current_step, 0))
+    # Steps still to run after the cursor.  v1 runs Steps in numeric order,
+    # so 16 - step is exact there.  v2 runs Step 13 after 14 and 15 (and after
+    # the content-freeze gate), so it counts the Step checkpoints that follow
+    # the active subtask in the project's own catalog.
+    from factory_core.stages import STAGE_CATALOG_VERSION_V2, catalog_for_version
+
+    if catalog_version == STAGE_CATALOG_VERSION_V2:
+        catalog = catalog_for_version(catalog_version)
+        try:
+            remaining_content_steps = catalog.checkpoint_steps_after(
+                subtask_key=active_subtask
+            ) if active_subtask else catalog.checkpoint_steps_after(
+                step_id=min(max(current_step, 0), 16)
+            )
+        except KeyError:
+            remaining_content_steps = catalog.checkpoint_steps_after(
+                step_id=min(max(current_step, 0), 16)
+            )
+    else:
+        remaining_content_steps = max(0, 16 - max(current_step, 0))
     projected_content_finish = now_epoch + remaining_content_steps * average
     content_freeze = int(policy["content_freeze_at"])
     delivery_freeze = int(policy["delivery_freeze_at"])
@@ -235,7 +266,14 @@ def build_contest_dashboard(
         if stage_cursor is not None and stage_cursor["source_step_id"] is not None
         else max(0, state.last_completed_step) if state is not None else 0
     )
-    timing = _timing(store, current_step=current_step, now_epoch=now) if state else {
+    catalog_version = state.stage_catalog_version if state is not None else None
+    timing = _timing(
+        store,
+        current_step=current_step,
+        now_epoch=now,
+        catalog_version=catalog_version,
+        active_subtask=(stage_cursor or {}).get("active_subtask"),
+    ) if state else {
         "configured": False,
         "risk_level": "unconfigured",
         "mode": "legacy",
@@ -357,7 +395,7 @@ def build_contest_dashboard(
         actions.append({"id": "solver-failures", "severity": "warning", "title": "求解任务异常", "summary": f"{solver['failed']} 个任务失败、超时或取消", "tab": "solver"})
     if blocking:
         actions.append({"id": "delivery-blockers", "severity": "critical", "title": "交付存在阻塞", "summary": f"{len(blocking)} 项硬检查失败", "tab": "delivery"})
-    elif current_step >= 15 and pending:
+    elif _at_or_after_final_prose(current_step, catalog_version) and pending:
         actions.append({"id": "delivery-pending", "severity": "warning", "title": "交付尚未就绪", "summary": f"{len(pending)} 项检查待完成", "tab": "delivery"})
     if state and state.status.value == "failed":
         actions.append({"id": "workflow-failed", "severity": "critical", "title": "工作流失败", "summary": "打开诊断查看失败原因和恢复建议", "tab": "diagnostics"})

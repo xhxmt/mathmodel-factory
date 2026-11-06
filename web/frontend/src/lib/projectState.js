@@ -1,18 +1,8 @@
 import { stepByIndex } from './steps.js'
+import { STAGES_V1, isCatalogV2, isStepDone, nextStepAfter, stagesFor, stepPosition } from './stageCatalog.js'
 import { statusLabel } from './status.js'
 
-export const STAGES = [
-  { id: 1, name: '题意与数据', steps: [0, 1] },
-  { id: 2, name: '候选与选模', steps: [2, 3] },
-  { id: 3, name: '模型构建', steps: [4] },
-  { id: 4, name: '模型求解', steps: [5] },
-  { id: 5, name: '验证与评价', steps: [6, 7] },
-  { id: 6, name: '图表与入口', steps: [8] },
-  { id: 7, name: '初稿与核验', steps: [9, 10] },
-  { id: 8, name: '评审与修订', steps: [11, 12, 13] },
-  { id: 9, name: '摘要与定稿', steps: [14, 15] },
-  { id: 10, name: '终审与交付', steps: [16] },
-]
+export const STAGES = STAGES_V1
 
 const index = (value) => value != null && Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 16 ? Number(value) : null
 export function executionStatus(project = {}) { return project.execution_state || project.status || 'unknown' }
@@ -26,7 +16,7 @@ export function currentStepIndex(project = {}) {
   const source = index(project.source_step_id)
   if (source !== null) return source
   if (project.last_completed_step == null && project.scheduler_generation && index(project.current_step) !== null) return index(project.current_step)
-  if (project.last_completed_step != null) return Math.min(16, Math.max(0, Number(project.last_completed_step) + 1))
+  if (project.last_completed_step != null) return nextStepAfter(project.last_completed_step, project)
   // Legacy API: current_step is a completed checkpoint. Native status has source_step_id.
   return Math.min(16, Math.max(0, Number(project.current_step ?? -1) + 1))
 }
@@ -37,10 +27,11 @@ export function completedStepIndex(project = {}) {
 }
 export function projectProgress(project = {}) {
   if (executionStatus(project) === 'completed') return 100
-  return Math.min(99, Math.max(0, Math.round((completedStepIndex(project) + 1) / 17 * 100)))
+  return Math.min(99, Math.max(0, Math.round((stepPosition(completedStepIndex(project), project) + 1) / 17 * 100)))
 }
 export function currentStage(project = {}) {
-  return STAGES.find(stage => stage.id === Number(project.active_stage)) || STAGES.find(stage => stage.steps.includes(currentStepIndex(project)))
+  const stages = stagesFor(project)
+  return stages.find(stage => stage.id === Number(project.active_stage)) || stages.find(stage => stage.steps.includes(currentStepIndex(project)))
 }
 export function humanLabel(project = {}) {
   if (project.consultation_pending) {
@@ -50,10 +41,12 @@ export function humanLabel(project = {}) {
 }
 export function stepText(project = {}) {
   if (executionStatus(project) === 'completed') return '全部步骤已完成'
-  if (project.active_subtask === 'content_freeze_guard' || project.selection_gate === 'content_freeze') return 'Step 16 前置 · 内容冻结确认'
+  if (project.active_subtask === 'content_freeze_guard' || project.selection_gate === 'content_freeze') {
+    return isCatalogV2(project) ? '最终审计前 · 内容冻结确认' : 'Step 16 前置 · 内容冻结确认'
+  }
   if (project.active_subtask === 'reviewer_entry_gate') return 'Step 8.5 · 阅卷入口设计'
   const step = currentStepIndex(project)
-  return `Step ${step} · ${stepByIndex(step)?.name || '等待调度'}`
+  return `Step ${step} · ${stepByIndex(step, project)?.name || '等待调度'}`
 }
 export function workflowStepState(step, project = {}) {
   const state = executionStatus(project)
@@ -66,7 +59,7 @@ export function workflowStepState(step, project = {}) {
     if (state === 'retrying') return 'retrying'
     return state === 'running' || state === 'archiving' ? 'live' : 'pending'
   }
-  return step <= completedStepIndex(project) ? 'done' : 'pending'
+  return isStepDone(step, completedStepIndex(project), project) ? 'done' : 'pending'
 }
 export function primaryControl(project = {}) {
   const state = executionStatus(project)

@@ -15,6 +15,7 @@ from .specialized import (
     ConditionalMathPreflightSkipStep,
     ContentFreezeGuardStep,
     DeliveryStep,
+    FinalJudgeStep,
     JudgeStep,
     PaperDraftStep,
     ParallelProposalStep,
@@ -40,6 +41,7 @@ def build_native_registry(
     runner = runner or CommandRunner()
     registry = StepRegistry()
     judge_step: JudgeStep | None = None
+    delivery_step: DeliveryStep | None = None
     for contract in STEP_CONTRACTS:
         validator = (
             validator_factory(root, contract.id)
@@ -65,7 +67,7 @@ def build_native_registry(
         elif contract.implementation == "delivery":
             if judge_step is None:
                 raise RuntimeError("judge Step must be registered before delivery Step")
-            step = DeliveryStep(
+            step = delivery_step = DeliveryStep(
                 contract,
                 root,
                 judge_step,
@@ -114,6 +116,27 @@ def build_native_registry(
             max_attempts=1,
             max_reopens=0,
             step=ConditionalMathPreflightSkipStep(root),
+        ),
+    )
+    assert delivery_step is not None
+    # Stage catalog v2 runs Step 13 as the one final Judge (analysis-only final
+    # audit); v1 projects keep the registered Step-13 precheck above.
+    # Imported here, not at module level: stages -> steps.catalog ->
+    # steps/__init__ -> steps.registry would otherwise be circular.
+    from ..stages import CATALOG_V2, FINAL_JUDGE_SUBTASK
+
+    final_judge = CATALOG_V2.subtask_for_key(FINAL_JUDGE_SUBTASK)[1].step_contract
+    registry.register_stage_subtask(
+        FINAL_JUDGE_SUBTASK,
+        StepDefinition(
+            id=13,
+            name=FINAL_JUDGE_SUBTASK,
+            # Read from the catalog so the shown budget, the deadline cap and
+            # the executed budget are one contract.
+            timeout_seconds=final_judge.timeout_seconds,
+            max_attempts=final_judge.max_attempts,
+            max_reopens=final_judge.max_reopens,
+            step=FinalJudgeStep(delivery_step),
         ),
     )
     registry.register_stage_subtask(

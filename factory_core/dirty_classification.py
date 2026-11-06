@@ -40,6 +40,7 @@ CLASSIFICATION_SOURCES = (
     "explicit_fail_closed",  # constructed deliberately as a fail-closed cause
     "bespoke_recovery",      # created by the bespoke final-evidence recovery path
     "policy_only",           # S1-D: routed by a policy entry with no Stage owner
+    "stage_catalog_v2",      # re-owned by a Stage catalog v2 rule (stage_catalog_v2_policy)
 )
 
 #: Recordable values.  ``legacy_unrecorded`` is included so that a v10 cause

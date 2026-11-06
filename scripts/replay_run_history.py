@@ -273,6 +273,10 @@ class Decision:
     owner_stage: int | None = None
     resume_after_step: int | None = None
     owners: tuple[int, ...] = ()
+    # The Stage the rule evaluated the change set in.  None means the recorded
+    # Stage; a catalog that moves the initiating Step (v2 runs Step 13 in
+    # Stage 10, recorded as the v1 Stage-8 precheck) states its own.
+    stage: int | None = None
 
 
 def change_sets(fixture: dict[str, Any]) -> list[ChangeSet]:
@@ -377,9 +381,59 @@ def recorded_rule(change_set: ChangeSet) -> Decision:
     )
 
 
+def stage_catalog_v2_rule(change_set: ChangeSet) -> Decision:
+    """The same change set under Stage catalog v2 (optimization plan, phase 2).
+
+    The initiating Step is mapped to its v2 Stage (Step 13, recorded as the v1
+    Stage-8 precheck, becomes the v2 Stage-10 final Judge), each classified
+    change goes through the v2 owner rules, and the reopen target is the v2
+    catalog position of the earliest upstream owner.  The engine applies the
+    same rules in ``FactoryEngine._stage_manifest_delta``.
+    """
+
+    from factory_core.current_dirty import classify_manifest_changes
+    from factory_core.dirty import solver_receipt_job_id
+    from factory_core.stage_catalog_v2_policy import v2_owner_stage
+    from factory_core.stages import CATALOG_V2
+
+    if change_set.step is None and change_set.stage is None:
+        return Decision(reopen=False)
+    stage = v2_stage(change_set)
+    before, after, passthrough = rebuild_manifests(change_set.changes)
+    owners: set[int] = {int(row["owner_stage"]) for row in passthrough}
+    for change in classify_manifest_changes(before, after):
+        record = change.to_dict()
+        job_id = solver_receipt_job_id(change.cause_artifact)
+        if job_id is not None and job_id in change_set.solver_job_owners:
+            record["owner_stage"] = change_set.solver_job_owners[job_id]
+        owner, _rule = v2_owner_stage(record, initiator_stage=stage)
+        owners.add(int(owner))
+    upstream = tuple(sorted(owner for owner in owners if owner < stage))
+    if not upstream:
+        return Decision(reopen=False, stage=stage)
+    return Decision(
+        reopen=True,
+        owner_stage=upstream[0],
+        resume_after_step=CATALOG_V2.resume_after_step_for_stage(upstream[0]),
+        owners=upstream,
+        stage=stage,
+    )
+
+
+def v2_stage(change_set: ChangeSet) -> int | None:
+    """The v2 Stage of a change set's initiating Step (recorded Stage if none)."""
+
+    from factory_core.stages import CATALOG_V2
+
+    if change_set.step is not None:
+        return CATALOG_V2.stage_for_step(change_set.step).id
+    return change_set.stage
+
+
 RULES: dict[str, Callable[[ChangeSet], Decision]] = {
     "recorded": recorded_rule,
     "current": current_rule,
+    "v2": stage_catalog_v2_rule,
 }
 
 
@@ -395,12 +449,25 @@ def replay_decisions(fixtures: list[dict[str, Any]], rule: Callable[[ChangeSet],
         for change_set in change_sets(fixture):
             evaluated = change_set.event_type in _DECIDING_EVENTS
             decision = rule(change_set) if evaluated else Decision(reopen=False)
+            # The Stage the rule judged in.  Stage-pair statistics must use
+            # this, not the recorded Stage: under v2 a Step-13 change set is
+            # recorded in v1 Stage 8 but evaluated in Stage 10.
+            if decision.stage is not None:
+                evaluated_stage = decision.stage
+            elif rule is stage_catalog_v2_rule:
+                evaluated_stage = v2_stage(change_set)
+            else:
+                evaluated_stage = change_set.stage
             rows.append(
                 {
                     "run": change_set.run,
                     "rev": change_set.rev,
                     "event_type": change_set.event_type,
+                    # ``stage`` keeps the v1 report shape (it is the
+                    # recorded Stage); pair statistics use evaluated_stage.
                     "stage": change_set.stage,
+                    "recorded_stage": change_set.stage,
+                    "evaluated_stage": evaluated_stage,
                     "step": change_set.step,
                     "subtask": change_set.subtask,
                     "classifier": list(change_set.classifier),
@@ -504,7 +571,7 @@ def build_report(fixtures: list[dict[str, Any]], rule_name: str = "current", lab
     reopen_pairs: Counter[str] = Counter()
     for row in decisions:
         if row["decided"]["reopen"]:
-            reopen_pairs[f"stage{row['stage']}->owner{row['decided']['owner_stage']}"] += 1
+            reopen_pairs[f"stage{row['evaluated_stage']}->owner{row['decided']['owner_stage']}"] += 1
 
     failures = []
     for fixture in fixtures:
@@ -535,7 +602,7 @@ def build_report(fixtures: list[dict[str, Any]], rule_name: str = "current", lab
             "fidelity": {
                 "change_sets_under_current_classifier": len(same_classifier),
                 "mismatches": [
-                    {key: row[key] for key in ("run", "rev", "stage", "subtask", "recorded", "decided")}
+                    {key: row[key] for key in ("run", "rev", "recorded_stage", "evaluated_stage", "subtask", "recorded", "decided")}
                     for row in fidelity_mismatches
                 ],
             },

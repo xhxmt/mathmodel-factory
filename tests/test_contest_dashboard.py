@@ -142,3 +142,58 @@ def test_verified_current_release_is_download_ready_and_zero_required_attachment
     assert payload["delivery"]["ready"] is True
     assert payload["delivery"]["release"]["submission_available"] is True
     assert payload["evidence"]["canonical"]["items"][0]["headline"] == 42
+
+
+def _remaining_steps(payload, now):
+    timing = payload["timing"]
+    return (timing["projected_content_finish_at"] - now) // timing["recent_step_average_seconds"]
+
+
+@pytest.mark.parametrize("catalog, last_completed, expected", [
+    ("factory-stage-catalog-v2", 12, 4),  # 14, 15, 13, 16
+    ("factory-stage-catalog-v2", 15, 2),  # 13, 16
+    ("factory-stage-catalog-v2", 13, 1),  # 16
+    ("factory-stage-catalog-v1", 12, 4),  # 16 - step, unchanged
+    ("factory-stage-catalog-v1", 15, 1),
+])
+def test_dashboard_forecast_counts_the_steps_left_in_the_project_catalog(
+    tmp_path, catalog, last_completed, expected
+):
+    from factory_core.stages import STAGE_SCHEDULER_GENERATION
+
+    project = tmp_path / "ongoing/demo"
+    project.mkdir(parents=True)
+    policy = ContestPolicy.for_deadline(started_at=1_000, deadline_at=1_000_000)
+    SQLiteStateStore(project, clock=lambda: 2_000).initialize(
+        project_id="demo", project_type="modeling", last_completed_step=last_completed,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION, stage_catalog_version=catalog,
+        contest_policy=policy.to_dict(),
+    )
+
+    payload = build_contest_dashboard(project, tmp_path / "papers", now_epoch=10_000)
+
+    assert _remaining_steps(payload, 10_000) == expected
+
+
+@pytest.mark.parametrize("active_subtask, expected", [
+    ("content_freeze_guard", 2),  # the gate has no Step position: 13 and 16 remain
+    ("final_judge", 1),
+    ("no_such_subtask", 2),  # unknown cursor: fall back to the Step (15)
+])
+def test_v2_forecast_follows_the_active_subtask(tmp_path, active_subtask, expected):
+    from factory_core.stages import STAGE_CATALOG_VERSION_V2, STAGE_SCHEDULER_GENERATION
+    from web.backend.contest_dashboard import _timing
+
+    project = tmp_path / "demo"
+    policy = ContestPolicy.for_deadline(started_at=1_000, deadline_at=1_000_000)
+    store = SQLiteStateStore(project, clock=lambda: 2_000)
+    store.initialize(
+        project_id="demo", project_type="modeling", last_completed_step=15,
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+        stage_catalog_version=STAGE_CATALOG_VERSION_V2, contest_policy=policy.to_dict(),
+    )
+
+    timing = _timing(store, current_step=15, now_epoch=10_000,
+                     catalog_version=STAGE_CATALOG_VERSION_V2, active_subtask=active_subtask)
+
+    assert (timing["projected_content_finish_at"] - 10_000) // timing["recent_step_average_seconds"] == expected

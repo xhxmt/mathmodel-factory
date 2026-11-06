@@ -77,14 +77,47 @@ CONTEST_PHASES: tuple[ContestPhase, ...] = (
     ContestPhase(8, "final_audit_and_delivery", (16,)),
 )
 
+# Stage catalog v2 runs Step 13 as the final Judge after the content freeze,
+# so it belongs to the final-audit phase.  (The literal is
+# ``stages.STAGE_CATALOG_VERSION_V2``; stages imports this module.)
+CONTEST_CATALOG_V2 = "factory-stage-catalog-v2"
+CONTEST_PHASES_V2: tuple[ContestPhase, ...] = (
+    *CONTEST_PHASES[:6],
+    ContestPhase(7, "review_and_revision", (11, 12, 14, 15), "content_freeze"),
+    ContestPhase(8, "final_audit_and_delivery", (13, 16)),
+)
+
 _PHASE_BY_STEP = {
     step_id: phase for phase in CONTEST_PHASES for step_id in phase.steps
 }
+_PHASE_BY_STEP_V2 = {
+    step_id: phase for phase in CONTEST_PHASES_V2 for step_id in phase.steps
+}
 
 
-def phase_for_step(step_id: int) -> ContestPhase:
+# ``stages.STAGE_CATALOG_VERSION`` (literal for the same import reason).
+CONTEST_CATALOG_V1 = "factory-stage-catalog-v1"
+
+
+def _is_v2(catalog_version: str | None) -> bool:
+    # Same resolution as ``stages.catalog_for_version``: no version (a Step
+    # scheduler project) projects v1; an unknown version is rejected rather
+    # than silently shown with the v1 phases.
+    if catalog_version is None or catalog_version == CONTEST_CATALOG_V1:
+        return False
+    if catalog_version == CONTEST_CATALOG_V2:
+        return True
+    raise ValueError(f"unsupported Stage catalog version: {catalog_version}")
+
+
+def contest_phases_for(catalog_version: str | None = None) -> tuple[ContestPhase, ...]:
+    return CONTEST_PHASES_V2 if _is_v2(catalog_version) else CONTEST_PHASES
+
+
+def phase_for_step(step_id: int, *, catalog_version: str | None = None) -> ContestPhase:
+    phases = _PHASE_BY_STEP_V2 if _is_v2(catalog_version) else _PHASE_BY_STEP
     try:
-        return _PHASE_BY_STEP[int(step_id)]
+        return phases[int(step_id)]
     except KeyError as exc:
         raise KeyError(f"contest phase is not defined for Step {step_id}") from exc
 

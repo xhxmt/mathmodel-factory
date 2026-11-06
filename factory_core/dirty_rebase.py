@@ -78,6 +78,29 @@ def rebase_dirty_classifier_state(
     from .current_dirty import classifier_contract_sha256, solver_receipt_job_id
 
     current_classifier = classifier_contract_sha256()
+    # A migration may rebase before ``stage_catalog_version`` exists; such a
+    # database predates catalog v2 and is classified as v1.
+    catalog_row = (
+        connection.execute(
+            "SELECT stage_catalog_version FROM project_state WHERE singleton = 1"
+        ).fetchone()
+        if _table_exists(connection, "project_state")
+        and any(
+            column[1] == "stage_catalog_version"
+            for column in connection.execute("PRAGMA table_info(project_state)")
+        )
+        else None
+    )
+    from .stages import STAGE_CATALOG_VERSION_V2
+
+    catalog_v2 = (
+        catalog_row is not None
+        and catalog_row["stage_catalog_version"] == STAGE_CATALOG_VERSION_V2
+    )
+    if catalog_v2:
+        from .stage_catalog_v2_policy import v2_classifier_contract_sha256, v2_owner_stage
+
+        current_classifier = v2_classifier_contract_sha256(current_classifier)
     active_rows = {
         (str(row["flag"]), int(row["owner_stage"])): dict(row)
         for row in connection.execute(
@@ -172,6 +195,16 @@ def rebase_dirty_classifier_state(
         # Re-routing it through the raw path fallback would lose the domain
         # (prose/citation/format/math), so retain that proven semantic key.
         if artifact.lower().endswith(".tex") and source_key[0] in semantic_paper_flags:
+            if catalog_v2:
+                # The v2 paper-math rule applies to the retained semantic key
+                # too, so a persisted MATH_DIRTY@8 moves to the Judge Stage.
+                owner, rule = v2_owner_stage(
+                    {"flag": source_key[0], "owner_stage": source_key[1],
+                     "cause_artifact": artifact},
+                    initiator_stage=source_key[1],
+                )
+                if rule is not None:
+                    return (source_key[0], owner)
             return source_key
         job_id = solver_receipt_job_id(artifact)
         if job_id is not None and _table_exists(connection, "solver_jobs"):
@@ -183,7 +216,18 @@ def rebase_dirty_classifier_state(
         ownership = policy_ownership_rule(artifact)
         if ownership is None:
             return source_key
-        return (str(ownership.dirty_flag), int(ownership.owner_stage))
+        target = (str(ownership.dirty_flag), int(ownership.owner_stage))
+        if catalog_v2:
+            # Re-apply the v2 owner rules.  The stored owner stands in for the
+            # initiating Stage: a forward-repair document keeps its key only
+            # when the v2 rule assigns exactly that owner to it.
+            owner, rule = v2_owner_stage(
+                {"flag": target[0], "owner_stage": target[1], "cause_artifact": artifact},
+                initiator_stage=source_key[1],
+            )
+            if rule is not None:
+                return (target[0], owner)
+        return target
 
     obligations: dict[tuple[str, int], dict[str, Any]] = {}
     for source_key, source_record in source_obligations.items():

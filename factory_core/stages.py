@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Iterable
 
 from .contest import phase_for_step
@@ -20,10 +20,25 @@ class StageSubtaskContract:
     checkpoint_step_id: int | None
     kind: str = "step"
     conditional: bool = False
+    # A subtask whose run budget differs from its source Step's contract.  The
+    # catalog payload, the deadline cap and the executing registry all read
+    # ``step_contract``, so this is the one place such a budget is stated.
+    budget_timeout_seconds: int | None = None
 
     @property
     def step_contract(self):
-        return contract_for(self.source_step_id)
+        contract = contract_for(self.source_step_id)
+        if self.budget_timeout_seconds is not None:
+            return replace(contract, timeout_seconds=self.budget_timeout_seconds)
+        return contract
+
+
+def _subtask_fields(subtask: "StageSubtaskContract") -> dict[str, Any]:
+    # The budget is published under ``step_budget``; leaving the override out
+    # of the subtask fields keeps the v1 payload unchanged.
+    fields = asdict(subtask)
+    fields.pop("budget_timeout_seconds")
+    return fields
 
 
 @dataclass(frozen=True)
@@ -397,7 +412,7 @@ def projected_stage_cursor(state: WorkflowState) -> dict[str, Any]:
             "last_completed_stage": state.last_completed_stage,
             "active_stage": state.active_stage,
             "active_stage_name": (
-                stage_for_id(state.active_stage).name
+                catalog_for_state(state).stage_for_id(state.active_stage).name
                 if state.active_stage is not None
                 else None
             ),
@@ -448,7 +463,7 @@ def stage_catalog_payload() -> dict[str, Any]:
                 "name": stage.name,
                 "subtasks": [
                     {
-                        **asdict(subtask),
+                        **_subtask_fields(subtask),
                         "contest_phase": phase_for_step(subtask.source_step_id).id,
                         "step_budget": {
                             "timeout_seconds": subtask.step_contract.timeout_seconds,
@@ -463,3 +478,330 @@ def stage_catalog_payload() -> dict[str, Any]:
             for stage in STAGE_CONTRACTS
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Stage catalog v2: the paper-segment reorder (optimization plan, phase 2).
+#
+# Step numbers keep their meaning; only the order and Stage membership of the
+# paper segment change:
+#
+#   v1: ... 11 -> 12 -> 13 precheck -> 14 -> 15 -> [Gate 2] -> 16
+#   v2: ... 11 -> 12 -> 14 -> 15 -> [Gate 2] -> 13 final Judge -> 16
+#
+# In v2 Step 13 is the one full three-role Judge of the post-Step-15 text,
+# bound to the approved snapshot; Step 16 only accepts that judgment when the
+# snapshot is unchanged.  Because Step 13 now runs after 14 and 15, step
+# numbers no longer give the execution order, so every "after" question for a
+# v2 project is answered by catalog position, never by comparing step ids.
+# v1 keeps its original functions above byte for byte; existing projects stay
+# on v1 and only new projects can be created on v2.
+# ---------------------------------------------------------------------------
+
+STAGE_CATALOG_VERSION_V2 = "factory-stage-catalog-v2"
+
+FINAL_JUDGE_SUBTASK = "final_judge"
+# The v2 final Judge runs the whole final audit under the execution identity
+# of Step 16 (compile, checks, visual gate, three-role Judge), not the v1
+# Step-13 math precheck, so it gets the final audit's budget.
+FINAL_JUDGE_TIMEOUT_SECONDS = contract_for(16).timeout_seconds
+
+STAGE_CONTRACTS_V2: tuple[StageContract, ...] = (
+    *STAGE_CONTRACTS[:7],
+    StageContract(8, "REVIEW_AND_REVISE", (_step(11), _step(12))),
+    StageContract(9, "FINAL_PROSE", (_step(14), _step(15))),
+    StageContract(
+        10,
+        "JUDGE_AND_DELIVER",
+        (
+            StageSubtaskContract(
+                key="content_freeze_guard",
+                source_step_id=16,
+                checkpoint_step_id=None,
+                kind="human_gate",
+            ),
+            StageSubtaskContract(
+                key=FINAL_JUDGE_SUBTASK,
+                source_step_id=13,
+                checkpoint_step_id=13,
+                kind="final_judge",
+                budget_timeout_seconds=FINAL_JUDGE_TIMEOUT_SECONDS,
+            ),
+            _step(16),
+        ),
+    ),
+)
+
+# v2 has no conditional math preflight: the one Judge is unconditional.
+GATE_POLICIES_V2: tuple[GatePolicy, ...] = tuple(
+    policy for policy in GATE_POLICIES if policy.gate != "conditional_math_preflight"
+)
+
+
+class StageCatalog:
+    """One versioned Stage catalog; every ordering question uses its position.
+
+    A subtask's *position* is its index in catalog order (Stage by Stage,
+    subtask by subtask).  A Step's position is the position of the subtask
+    whose ``checkpoint_step_id`` is that Step; Step ``-1`` (nothing completed)
+    sits before everything.
+    """
+
+    def __init__(
+        self,
+        version: str,
+        contracts: tuple[StageContract, ...],
+        gate_policies: tuple[GatePolicy, ...],
+    ) -> None:
+        self.version = version
+        self.contracts = contracts
+        self.gate_policies = gate_policies
+        self.order: tuple[tuple[StageContract, StageSubtaskContract], ...] = tuple(
+            (stage, subtask) for stage in contracts for subtask in stage.subtasks
+        )
+        self._by_id = {stage.id: stage for stage in contracts}
+        self._by_step = {
+            subtask.checkpoint_step_id: stage
+            for stage, subtask in self.order
+            if subtask.checkpoint_step_id is not None
+        }
+        self._by_key = {subtask.key: (stage, subtask) for stage, subtask in self.order}
+        self._step_position = {
+            subtask.checkpoint_step_id: index
+            for index, (_stage, subtask) in enumerate(self.order)
+            if subtask.checkpoint_step_id is not None
+        }
+        self.validate()
+
+    # -- lookups ---------------------------------------------------------
+    def stage_for_id(self, stage_id: int) -> StageContract:
+        try:
+            return self._by_id[int(stage_id)]
+        except KeyError as exc:
+            raise KeyError(f"Stage {stage_id} is not defined") from exc
+
+    def stage_for_step(self, step_id: int) -> StageContract:
+        try:
+            return self._by_step[int(step_id)]
+        except KeyError as exc:
+            raise KeyError(f"Step {step_id} is not mapped to a Stage") from exc
+
+    def subtask_for_key(self, key: str) -> tuple[StageContract, StageSubtaskContract]:
+        try:
+            return self._by_key[str(key)]
+        except KeyError as exc:
+            raise KeyError(f"Stage subtask {key!r} is not defined") from exc
+
+    def gate_policy(self, gate: str) -> GatePolicy:
+        matches = tuple(p for p in self.gate_policies if p.gate == str(gate))
+        if len(matches) != 1:
+            raise KeyError(f"Gate policy {gate!r} is not uniquely defined")
+        return matches[0]
+
+    # -- ordering --------------------------------------------------------
+    def step_position(self, step_id: int) -> int:
+        if int(step_id) < 0:
+            return -1
+        try:
+            return self._step_position[int(step_id)]
+        except KeyError as exc:
+            raise KeyError(f"Step {step_id} is not mapped to a Stage") from exc
+
+    def subtasks_after_step(self, step_id: int) -> tuple[tuple[int, str], ...]:
+        """Every (stage, subtask) positioned after ``step_id``'s checkpoint."""
+
+        position = self.step_position(step_id)
+        return tuple(
+            (stage.id, subtask.key)
+            for index, (stage, subtask) in enumerate(self.order)
+            if index > position
+        )
+
+    def checkpoint_steps_after(
+        self, *, subtask_key: str | None = None, step_id: int | None = None
+    ) -> int:
+        """How many Step checkpoints still follow a cursor (gates excluded).
+
+        The cursor is the active subtask when one is known (a gate such as the
+        content-freeze guard has no Step position of its own), else a Step.
+        """
+
+        if subtask_key is not None:
+            position = self.order.index(self.subtask_for_key(subtask_key))
+        else:
+            position = self.step_position(-1 if step_id is None else step_id)
+        return sum(
+            1
+            for index, (_stage, subtask) in enumerate(self.order)
+            if index > position and subtask.checkpoint_step_id is not None
+        )
+
+    def next_stage_subtask(
+        self, *, completed_subtasks: Iterable[tuple[int, str]]
+    ) -> tuple[StageContract, StageSubtaskContract] | None:
+        completed = {(int(stage), str(subtask)) for stage, subtask in completed_subtasks}
+        for stage, subtask in self.order:
+            if (stage.id, subtask.key) not in completed:
+                return stage, subtask
+        return None
+
+    def resume_after_step_for_stage(self, stage_id: int) -> int:
+        """The checkpoint Step immediately before ``stage_id`` in catalog order."""
+
+        stage = self.stage_for_id(stage_id)
+        first = self.order.index((stage, stage.subtasks[0]))
+        previous = [
+            subtask.checkpoint_step_id
+            for _stage, subtask in self.order[:first]
+            if subtask.checkpoint_step_id is not None
+        ]
+        return previous[-1] if previous else -1
+
+    def completed_stage_for_step(self, step_id: int) -> int:
+        """The last fully completed Stage implied by a Step cursor alone.
+
+        A gate subtask is complete only when a checkpoint Step positioned after
+        it is, which is the v1 rule for the reviewer-entry and content-freeze
+        gates expressed by position.
+        """
+
+        position = self.step_position(step_id)
+        completed = 0
+        for stage in self.contracts:
+            last = self.order.index((stage, stage.subtasks[-1]))
+            if last > position:
+                break
+            completed = stage.id
+        return completed
+
+    def initial_stage_checkpoints(self, last_completed_step: int) -> list[dict[str, Any]]:
+        position = self.step_position(last_completed_step)
+        return [
+            {
+                "stage_id": stage.id,
+                "subtask": subtask.key,
+                "source_step_id": subtask.source_step_id,
+                "completed_step_id": subtask.checkpoint_step_id,
+            }
+            for index, (stage, subtask) in enumerate(self.order)
+            if index <= position
+        ]
+
+    # -- contract --------------------------------------------------------
+    def validate(self) -> None:
+        if [stage.id for stage in self.contracts] != list(range(1, 11)):
+            raise ValueError("Stage IDs must be contiguous from 1 through 10")
+        step_ids = [
+            subtask.checkpoint_step_id
+            for _stage, subtask in self.order
+            if subtask.checkpoint_step_id is not None
+        ]
+        expected = [contract.id for contract in STEP_CONTRACTS]
+        if sorted(step_ids) != expected or len(step_ids) != len(set(step_ids)):
+            raise ValueError("every Step 0-16 must map to exactly one Stage")
+        if len(self._by_key) != len(self.order):
+            raise ValueError("Stage subtask keys must be unique")
+        reviewer_gate = self._by_key.get("reviewer_entry_gate")
+        if reviewer_gate is None or reviewer_gate[0].id != 6:
+            raise ValueError("Step 8.5 reviewer-entry gate must remain in Stage 6")
+        guard = self._by_key.get("content_freeze_guard")
+        if guard is None or self.order.index(guard) >= self.step_position(16):
+            raise ValueError("the content-freeze guard must precede Step 16")
+        for gate in self.gate_policies:
+            if gate.projects_pending_action and (
+                gate.stage_id is None
+                or gate.subtask_key is None
+                or gate.source_step_id is None
+            ):
+                raise ValueError(
+                    f"projected Gate {gate.gate!r} requires a fixed Stage binding"
+                )
+            if gate.subtask_key is None:
+                continue
+            stage, subtask = self._by_key[gate.subtask_key]
+            if stage.id != gate.stage_id or subtask.source_step_id != gate.source_step_id:
+                raise ValueError(f"Gate {gate.gate!r} does not match the Stage catalog")
+        if self.version == STAGE_CATALOG_VERSION_V2:
+            judge = self._by_key.get(FINAL_JUDGE_SUBTASK)
+            if judge is None or judge[0].id != 10 or judge[1].checkpoint_step_id != 13:
+                raise ValueError("v2: Step 13 must be the final Judge of Stage 10")
+            positions = (
+                self.step_position(15),
+                self.order.index(guard),
+                self.step_position(13),
+                self.step_position(16),
+            )
+            if positions != tuple(range(positions[0], positions[0] + 4)):
+                raise ValueError("v2: order must be 15 -> content freeze -> 13 -> 16")
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.version,
+            "scheduler_generation": STAGE_SCHEDULER_GENERATION,
+            "stages": [
+                {
+                    "id": stage.id,
+                    "name": stage.name,
+                    "subtasks": [
+                        {
+                            **_subtask_fields(subtask),
+                            "contest_phase": phase_for_step(
+                                subtask.checkpoint_step_id
+                                if subtask.checkpoint_step_id is not None
+                                else subtask.source_step_id,
+                                catalog_version=self.version,
+                            ).id,
+                            "step_budget": {
+                                "timeout_seconds": subtask.step_contract.timeout_seconds,
+                                "hang_timeout_seconds": subtask.step_contract.hang_timeout_seconds,
+                                "max_attempts": subtask.step_contract.max_attempts,
+                                "max_reopens": subtask.step_contract.max_reopens,
+                            },
+                        }
+                        for subtask in stage.subtasks
+                    ],
+                }
+                for stage in self.contracts
+            ],
+        }
+
+
+class _StageCatalogV1(StageCatalog):
+    """v1 answers through its original functions so its behaviour cannot drift."""
+
+    def resume_after_step_for_stage(self, stage_id: int) -> int:
+        return resume_after_step_for_stage(stage_id)
+
+    def completed_stage_for_step(self, step_id: int) -> int:
+        return completed_stage_for_step(step_id)
+
+    def initial_stage_checkpoints(self, last_completed_step: int) -> list[dict[str, Any]]:
+        return initial_stage_checkpoints(last_completed_step)
+
+    def payload(self) -> dict[str, Any]:
+        return stage_catalog_payload()
+
+
+CATALOG_V1: StageCatalog = _StageCatalogV1(
+    STAGE_CATALOG_VERSION, STAGE_CONTRACTS, GATE_POLICIES
+)
+CATALOG_V2: StageCatalog = StageCatalog(
+    STAGE_CATALOG_VERSION_V2, STAGE_CONTRACTS_V2, GATE_POLICIES_V2
+)
+_CATALOGS = {catalog.version: catalog for catalog in (CATALOG_V1, CATALOG_V2)}
+SUPPORTED_STAGE_CATALOG_VERSIONS = tuple(_CATALOGS)
+
+
+def catalog_for_version(version: str | None) -> StageCatalog:
+    """Resolve a persisted catalog version; a Step-scheduler project projects v1."""
+
+    if version is None:
+        return CATALOG_V1
+    try:
+        return _CATALOGS[str(version)]
+    except KeyError as exc:
+        raise ValueError(f"unsupported Stage catalog version: {version}") from exc
+
+
+def catalog_for_state(state: WorkflowState) -> StageCatalog:
+    return catalog_for_version(state.stage_catalog_version)

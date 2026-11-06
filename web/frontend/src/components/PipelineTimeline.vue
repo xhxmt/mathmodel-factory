@@ -202,9 +202,10 @@
 
 <script>
 import Icon from './Icon.vue'
-import { STEPS, EDITORIAL_GATE_STEP, projectStepIndex, projectStepStatus, hasNativeStepCursor, VERDICT_LABEL, stepModelMeta, stepConfigKey } from '../lib/steps.js'
+import { EDITORIAL_GATE_STEP, projectStepIndex, projectStepStatus, hasNativeStepCursor, VERDICT_LABEL, stepModelMeta, stepConfigKey, stepsInOrder } from '../lib/steps.js'
 import { renderMarkdown } from '../lib/markdown.js'
-import { CONTEST_PHASES, phaseForStep } from '../lib/workspaceUi.js'
+import { phaseForStep } from '../lib/workspaceUi.js'
+import { contestPhasesFor, stepCaption, stepRangeLabel } from '../lib/stageCatalog.js'
 import { currentStepIndex, completedStepIndex, workflowStepState, verdictLabel as auditVerdictLabel } from '../lib/projectState.js'
 
 export default {
@@ -227,7 +228,7 @@ export default {
       userPicked: false,
       issuesOpen: false,
       viewMode: 'phase',
-      expandedPhase: phaseForStep(selectedIndex).id,
+      expandedPhase: phaseForStep(selectedIndex, this.project).id,
     }
   },
   computed: {
@@ -239,10 +240,14 @@ export default {
     openIssueItems() { return this.stepsData?.open_issue_items || [] },
     paperAvailable() { return !!this.stepsData?.paper_available },
     timelineSteps() {
-      return [...STEPS.slice(0, 9), EDITORIAL_GATE_STEP, ...STEPS.slice(9)]
+      // The project's own run order (v2 runs 14 and 15 before 13), with 8.5
+      // right after Step 8.
+      const ordered = stepsInOrder(this.project)
+      const after8 = ordered.findIndex((step) => step.index === 8) + 1
+      return [...ordered.slice(0, after8), EDITORIAL_GATE_STEP, ...ordered.slice(after8)]
     },
     phaseTimeline() {
-      return CONTEST_PHASES.map((phase) => {
+      return contestPhasesFor(this.project).map((phase) => {
         const states = phase.steps.map((id) => {
           const step = this.timelineSteps.find((item) => this.stepId(item) === id)
           return step ? this.state(step) : 'pending'
@@ -250,13 +255,12 @@ export default {
         const state = states.includes('attention') ? 'attention'
           : states.includes('live') ? 'live'
             : states.every((item) => item === 'done') ? 'done' : 'pending'
-        const numeric = phase.steps.filter((item) => item !== '8_5').map(Number)
-        const range = numeric.length === 1 ? String(numeric[0]) : `${Math.min(...numeric)}–${Math.max(...numeric)}`
-        return { ...phase, state, range }
+        return { ...phase, state, range: stepRangeLabel(phase.steps) }
       })
     },
     phaseSteps() {
-      const phase = CONTEST_PHASES.find((item) => item.id === this.expandedPhase) || CONTEST_PHASES[0]
+      const phases = contestPhasesFor(this.project)
+      const phase = phases.find((item) => item.id === this.expandedPhase) || phases[0]
       return phase.steps.map((id) => this.timelineSteps.find((step) => this.stepId(step) === id)).filter(Boolean)
     },
     sel() { return this.timelineSteps.find((s) => this.stepId(s) === this.selectedIndex) || this.timelineSteps[0] },
@@ -280,7 +284,7 @@ export default {
     currentStep() {
       if (!this.userPicked) {
         this.selectedIndex = this.defaultIndex()
-        this.expandedPhase = phaseForStep(this.selectedIndex).id
+        this.expandedPhase = phaseForStep(this.selectedIndex, this.project).id
       }
     },
     stepsData() { if (!this.userPicked) this.selectedIndex = this.defaultIndex() },
@@ -345,11 +349,10 @@ export default {
     capFor(s) {
       if (s.key === '8_5') return 'ENTRY'
       if (s.index === 10) return 'GATE 1'
-      if (s.index === 13) return 'PRECHECK'
+      if (s.index === 13 || s.index === 16) return stepCaption(s.index, this.project)
       if (s.index === 3) return '选型'
       if (s.index === 14) return '摘要'
       if (s.index === 0) return 'SETUP'
-      if (s.index === 16) return 'FINAL AUDIT'
       return ''
     },
     tip(s) {

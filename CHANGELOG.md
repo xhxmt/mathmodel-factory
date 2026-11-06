@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-11-06 — 阶段 2 审计修复（PR #48）
+
+根据 PR #48 的独立审计与自动审查意见修复：
+
+- **Step 16 复用 Step 13 判定**：复用前重跑参考文献凭证、完整论文/溯源检查与视觉页数门禁（与完整路径共用同一方法），之后重算快照；任一检查失败或快照改变都不采用该判定，也不写验收产物。
+- **dirty rebase**：保留 `.tex` 语义记录的提前返回也套用 v2 论文数学规则，持久化的 `MATH_DIRTY@8` 在 v2 项目中移到 Stage 10。
+- **建项目**：先解析 catalog 版本再写文件，非法版本不留半初始化目录。`contest.py` 对未知版本报错，不再静默按 v1 处理。
+- **比赛看板剩余步数**：v1 仍为 `16 - step`；v2 用 `StageCatalog.checkpoint_steps_after()` 按当前子任务计数（含 Gate 2 期间）。
+- **Final Judge 预算**：`final_judge` 的预算写在 v2 编排的子任务合同里（等于 Step 16 最终审计的 21,600 秒），编排载荷、截止时间约束与执行注册表读同一值；v1 载荷不变。
+- **v2 prompt**：补 Step 10、11 的覆盖句；测试渲染全部 v2 prompt（含 Judge）并扫描预审说法。
+- **回放**：行同时记录 `recorded_stage` 与 `evaluated_stage`，Stage 对统计用后者。重新生成的 v2 统计中有 1 次 Stage 10 → 8（v1 预审 agent 修改 `revision_summary.md`，v2 的 Step 13 不写该文件）和 1 次 Stage 10 → 3（`claim_registry.json`，按原规则回退），此前被误记在 Stage 8 下。
+- **前端**：时间线的 Step 13/16 标签按编排取值（v2 为 FINAL JUDGE / ACCEPTANCE）；`STAGES`、`CONTEST_PHASES` 改为重新导出 `stageCatalog.js` 的定义；`stage-catalog-v2.test.mjs` 改用 `node:test` 并加入 `test:state`。
+- **默认值**：新项目默认改回 v1，v2 用 `--stage-catalog v2` 显式试运行，直到第一次真实验收运行通过。
+- 文档：STEPS.md、README、CLAUDE.md 补充 v1/v2 适用范围、v2 判退后 Gate 2 需重新审批、v2 dirty 规则是 `artifact_ownership.py` 之上的覆盖层。
+- 验证：核心套件 2818 passed（5 skipped），Web 78 passed，前端 22 passed；`tests/test_stage_catalog_v2.py` 增至 33 例，`test_run_history_replay.py` 新增 1 例（回放行的两种 Stage）。
+
+## 2026-11-06 — 活性优化阶段 2（第二部分）：合同、prompt、看板与前端；v2 可显式试运行
+
+接第一部分。**新项目默认仍是 `factory-stage-catalog-v1`**：v2 尚未完成真实的端到端验收运行，只能用 `factory create --stage-catalog v2` 显式试运行，重要比赛请保持 v1；第一次 v2 验收运行通过后再单独切换默认值。现有项目保持库里记录的编排，不迁移。
+
+- **默认值**：`FactoryService.create_project` 不指定时使用 `NEW_PROJECT_STAGE_CATALOG`（v1），CLI `--stage-catalog` 默认 `v1`。Web 建项目和 `launch_agents.sh new` 都经过这里，因此都创建 v1 项目。
+- **合同**：`STEPS.md` 写明 v2 的阶段划分、Step 13 最终审计的产出与判退路径、v2 不再有预审 / 跳过凭证 / `PRECHECK_PASS` / 技术续跑、向前修复的文档清单、Gate 2 在 Step 13 之前、Step 16 复用判定的条件；v1 合同原样保留并标注适用范围。README、CLAUDE.md 同步。
+- **prompt**：模板文件不改，v1 项目渲染出的 prompt 与模板哈希逐字节不变。v2 项目在渲染后按 `factory_core/steps/catalog_prompts.py` 的整句替换改写 Step 12、14、15 中关于"Step 13 数学预审"和"Step 16 审计"的说法；任一原句缺失时渲染直接报错，测试也逐条检查。Judge 的 prompt 无需修改：v2 的 Step 13 以 Step 16 的评审身份运行，走 `FINAL_SUBMISSION` 分支。
+- **比赛看板**：`contest.py` 新增 v2 的阶段划分（Step 13 归入"最终审计与交付"），`runtime_payload`、v2 阶段编排载荷、`contest_dashboard` 的阶段与剩余步数估计、"交付尚未就绪"提醒都按项目自己的编排判断。
+- **前端**：新增 `web/frontend/src/lib/stageCatalog.js`。步骤是否完成、下一步、所属阶段与比赛阶段、v2 下 Step 13/16 的名称都按项目编排的位置判断；`StepRail`、`PipelineTimeline`、`StageProgressPanel` 按项目的实际执行顺序展示，不连续的步骤组显示为"13、16"。v1 项目的显示不变。
+- 测试：`tests/test_stage_catalog_v2.py` 增至 25 例（prompt 覆盖、比赛阶段、默认值），新增 `web/frontend/tests/stage-catalog-v2.test.mjs` 并加入 CI；`test_factory_service.py` 中固定默认版本的断言仍为 v1。
+
+## 2026-11-06 — 活性优化阶段 2（第一部分）：论文段重排的 v2 阶段编排（可选启用）
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 2 与决策 1、2（11 月 6 日：允许改合同、采用重排，Gate 2 放在 Step 13 之前）。新项目默认仍是 v1，现有项目不迁移；`factory create --stage-catalog v2` 显式启用。
+
+- **v2 阶段编排**：`factory_core/stages.py` 新增 `StageCatalog` 与 `factory-stage-catalog-v2`，顺序为 12 → 14 → 15 → content freeze → 13 → 16（Stage 8 = 11、12；Stage 9 = 14、15；Stage 10 = content freeze、`final_judge`、16）。Step 编号含义不变，v2 的先后一律按编排位置判断：检查点失效（`storage._invalidate_stage_checkpoints_after`）、回退目标、初始化种子、content-freeze 拒绝后的回退点（v2 退到 Step 12 之后）。v1 的原函数不变，测试断言通用实现与其逐项一致。
+- **一次 Judge**：v2 的 Step 13（`FinalJudgeStep`）是 analysis 模式的完整最终审计，以 execution Step 16 的身份运行（三角色 Judge，不是 v1 的数学预审），不写验收或交付产物。`FinalAuditService.run(promote_analysis_pass=True)`（仅验收模式，仅 v2 的 Step 16 使用）在编译前探测到同一快照、判定凭证校验通过的 analysis PASS 时，不重跑 Judge，其余验收检查照常执行；快照一变就完整重跑。
+- **v2 归属规则**：`factory_core/stage_catalog_v2_policy.py`，只并入 v2 的分类器身份，v1 身份逐字节不变。`judge_evaluation.md` 和 Judge 阶段写的 `audit_issue_ledger.md` 归 Stage 10；论文源文件的 MATH 域归 Stage 10；Stage 7 起改 `model.md`、`symbol_table.md`、`evaluation.md`、`sensitivity_report.md`、`visualization_log.md`、`reviewer_entry_map.md`、`anchor_figure_plan.md` 是向前修复。模型代码、数据、结果、求解收据和 `claim_registry.json` 仍按原规则回退。`dirty_rebase` 对 v2 项目使用 v2 身份并重新套用这些规则；溯源词表新增 `stage_catalog_v2`。
+- **随之调整**：v2 的 8.5 门禁只在 Step 9 开始前校验；Stage 8 出口的未解决问题检查在 v2 移到 Step 12；v2 的 Step 13 受比赛终点约束（与 v1 的 Step 16 相同），也受 T−2h 交付冻结约束；v1 的 Step 13 技术续跑对 v2 项目拒绝。
+- **回放**：`scripts/replay_run_history.py` 新增规则 `v2`。16 次运行中判定的回退由 46 降到 27；Stage 9 → 8、Stage 10 → 8、修订只改文档引起的 Stage 8 → 3/6 全部归零；剩余的 Stage 8 → 3/4 都改了模型代码或重跑了求解，属于阶段 4。
+- 测试：新增 `tests/test_stage_catalog_v2.py`（20 例），`tests/test_audit_service.py` 新增 5 例，`tests/test_run_history_replay.py` 新增 1 例。
+- 未做（第二部分）：`STEPS.md`、Step 13/14/15 与 Judge 的 prompt、比赛看板阶段映射、前端步骤展示；完成后再把新项目默认切到 v2。
+
 ## 2026-11-06 — worker 启动握手不再打断并发的状态快照
 
 PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_entry_completes_initialization_when_pause_arrives[web_resume]`，worker 报 `NATIVE_WORKFLOW_REQUIRED: workflow database cannot be inspected safely`。本地在满负载下大约 1/16–1/40 能复现，底层异常是 `StateLeaseError: workflow state database directory changed during snapshot`。main 上同样存在，与 #45 的改动无关。
@@ -82,7 +121,6 @@ PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_en
 - 文档：`README.md` 新增「TUI 客户端（终端）」一节及「包含内容」条目；`web/README.md` 新增「终端客户端（TUI）」一节，含启动命令、完整键位表与刷新节奏说明。
 - 测试 74 例通过（67 TUI + 7 部署 preflight）；端到端冒烟（登录 → 项目表 → 详情 → 日志 → 过滤）复跑通过。
 
-
 ## 2026-09-22 — TUI 客户端 M3：日志尾随（/logs 轮询）
 
 - `apps/tui/client.py`：新增 `project_logs(base_name, lines=200)`，行数下限夹到 1（后端为 `max(1, lines)`），使用 `HEAVY_TIMEOUT`，`base_name` 经 URL 转义。
@@ -97,7 +135,6 @@ PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_en
 ### 顺带发现的后端隐患（本里程碑未修改，避免越界）
 `/logs` 是普通 `async def`，**没有**像 `/steps`、`/diagnostics`、`/contest-dashboard` 那样走 `run_in_threadpool`（2026-09-18 那次修复只覆盖了后三个），并且它先 `read_text()` **整个文件**再切最后 N 行。本机真实日志最大 **8.2 MB**（4–6.5 MB 的有多个），因此 `?lines=200` 的每次请求都会让后端在**事件循环上同步读取整个文件**、再把其中 99% 丢掉——与 2026-09-18 记录的问题同类。TUI 因此刻意取 5s（而非计划中的 3s），并只在面板可见且项目运行时轮询，以把影响压到最小。彻底的修法是把 `/logs` 移入线程池、并只读文件尾部若干字节；那属后端改动，需另行确认。
 
-
 ## 2026-09-22 — TUI 客户端 M2：项目详情（阶段产物 + 阻塞面板）
 
 - `apps/tui/client.py`：新增只读投影 `project_steps` / `project_diagnostics`，两者使用独立的 `HEAVY_TIMEOUT`（90s）而非 15s 交互上限——后端把它们放在线程池里执行，在大项目上会合法地超过交互时限。该接缝在 M0 就已留出，此处首次真正使用。`base_name` 经 URL 转义。
@@ -110,7 +147,6 @@ PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_en
 - 非阻塞项目显示「无阻塞记录」而非留空；加载失败则接管面板（「诊断加载失败：…」）。两者视觉上可区分，「取不到」不会被误读为「没问题」。
 - 测试累计 59 例（含部署 preflight）：新增 `tests/test_tui_reads.py` 与 `tests/test_tui_detail.py`。其中超时预算是**行为验证**而非常量比对——用一个真实本地 HTTP 服务器延迟 250ms，证明 50ms 的交互上限会杀掉 login、却不会杀掉投影。（自定义 `httpx` transport 无法用于此测试：超时由具体 transport 实施，假 transport 根本不会抛 `ReadTimeout`。）
 
-
 ## 2026-09-22 — TUI 客户端 M1：实时项目表（WS 接入）
 
 - `apps/tui/realtime.py`：`/ws` 实时 feed。三条后端事实决定了它的形状：票据**一次性且 60s 过期**（因此每次连接尝试都重新签发，包括首次）；WS **只推项目状态、不推日志**（日志留待 M3 轮询）；断开是常态而非异常（后端重启、账号被禁用、空闲超时都会关闭连接），因此 feed 通过 `on_state` 上报 `connecting`/`live`/`disconnected` 而不抛异常，并以指数退避（1s → 30s 封顶）重连直到 `stop()`。
@@ -120,7 +156,6 @@ PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_en
 - 删除 M0 的 `screens/home.py` 占位屏；`ProjectsScreen` 不再接收从未被读取的 `session` 参数。
 - `tui` extra 补入 `websockets==16.0`（此前只在 `web` extra 中，`--extra tui` 单独安装不出来）。
 - 测试累计 42 例（含部署 preflight）：投递路径由**本地真实 WebSocket 服务器**端到端覆盖（票据握手、URL 构造、帧解码、归一化）；重连与退避由脚本化 connector + 注入 sleep 确定性断言（含 30s 封顶与 live 后重置）；另覆盖坏帧忽略、不可键快照不清表、`stop()` 幂等。已对真实后端确认 `/ws` 端点形状：无票据或错误票据在握手期即被拒绝。
-
 
 ## 2026-09-22 — TUI 客户端 M0：骨架与登录（Web 控制平面的终端客户端）
 
@@ -140,7 +175,6 @@ PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_en
 - 实测（本机 `complete/cumcm2024b_no_judge_rep1/logs/step_5_codex_step5_full_solve_20260605_023516.log`，8.20 MB）：结果与旧的「全量读取再切片」**完全一致**，耗时 80.2 ms → **0.541 ms（148×）**，且不再占用事件循环。
 - 测试：新增 `tests/test_log_tail.py`（16 例，含用字节计数桩**证明读取确实有界**、以 7 字节块强制跨多字节字符边界、`max_bytes` 上限行为、缺失/空文件、传入目录等）；`tests/test_web_control_plane_api.py` 新增 4 例，其中一例以**线程身份**证明该 handler 已不在事件循环线程上执行——去掉线程池跳转该测试即失败（已做 falsification 验证，确认测试非空转）。相关集合 64 例通过。
 
-
 ## 2026-09-22 — 隔离测试对生产认证库的写入（修复 admin 密码被测试覆盖的事故）
 
 - 事故：2026-09-20T12:13:33Z，`web/auth.db` 中 `admin` 的 `password_hash` 被改写为**仓库里已提交的测试字面量**（`tests/test_showcase_acl.py`、`tests/test_secret_ops_api.py`、`tests/test_control_plane_auth.py` 三处同值），而登录入口在 `0.0.0.0:443` 公网可达——等同于把 admin 凭据公开。审计依据：`audit_log` 第 45 行 `user.bootstrap_admin_sync {"password_updated": true}`，且 `web/auth.db` mtime `12:13:33.453` 与之毫秒级吻合；服务进程自 09-18 13:22 起未重启，故写入者不是服务本身。
@@ -152,7 +186,6 @@ PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_en
 - 新增 `tests/test_auth_db_isolation.py` 固定该契约：断言 `AUTH_DB_FILE` 指向仓库之外，且 import 后端 app 前后仓库库字节不变。
 - 验证：修复后相关集合 94 例通过（auth/web/hygiene/joint-modeling/secret/deploy），且仓库库始终未被创建；护栏经临时探针验证会以会话错误形式失败。
 - 运维记录：生产 admin 密码已通过重启 `paper-factory-api.service` 从 GCP Secret Manager 重新同步（审计 `user.bootstrap_admin_sync` id=46，`password_updated: true`），并确认此前泄露的测试字面量已无法登录。注意 `bootstrap_admin` 使 Secret Manager 成为权威来源，因此直接改 `web/auth.db` 或本地 `.env` 都会在下次启动时被覆盖。
-
 
 ## 2026-09-22 — Tier 0 仓库瘦身：清除退役资产与死引用
 
@@ -186,7 +219,6 @@ PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_en
 - Main entry points now use FactoryEngine + SQLite + Native Stage only. Older Native projects require explicit Stage activation; Legacy rollback/import and experimental DB dispatch are rejected.
 - Kept native audit, solver evidence, final approval and atomic delivery checks, with independent native DB/commit boundaries. Removed experimental frontend flags, API routers and CI bootstrap dependencies.
 - Runtime data, credentials, other worktrees and production processes are unchanged. See `docs/architecture/NATIVE_MAINLINE.md`.
-
 
 ## 2026-09-15: Authority solver-policy application route
 
@@ -1191,7 +1223,6 @@ PR #45 的 CI（run 42163370537）有一次 `core` 失败：`test_real_normal_en
 - **废弃**: 即将移除的功能
 
 更多技术细节请参考各版本的 commit 记录。
-
 
 ## 2026-09-10 — Linked-project artifact browsing
 

@@ -22,10 +22,12 @@ from .domain import (
 )
 from .stages import (
     STAGE_CATALOG_VERSION,
+    STAGE_CATALOG_VERSION_V2,
     STAGE_SCHEDULER_GENERATION,
     STEP_SCHEDULER_GENERATION,
+    SUPPORTED_STAGE_CATALOG_VERSIONS,
+    catalog_for_version,
     completed_stage_for_step,
-    initial_stage_checkpoints,
 )
 from .workflow_events import (
     ENVELOPE_KEY,
@@ -154,6 +156,63 @@ V9_REQUIRED_COLUMNS = {
         {"job_id", "job_revision", "owner_stage", "owner_subtask", "status"}
     ),
 }
+
+
+def _invalidate_stage_checkpoints_after(
+    connection: sqlite3.Connection, step: int
+) -> list[dict[str, Any]]:
+    """Delete every Stage checkpoint the catalog places after ``step``.
+
+    v1 keeps its original step-number predicate.  A v2 project runs Step 13
+    after Steps 14 and 15, so "after" is answered by catalog position: the
+    numeric predicate would, for example, delete the Stage 9 checkpoints when
+    Step 13 is the reopen boundary and keep Step 13 when Stage 9 is.
+    """
+
+    row = connection.execute(
+        "SELECT stage_catalog_version FROM project_state WHERE singleton = 1"
+    ).fetchone()
+    version = row["stage_catalog_version"] if row is not None else None
+    if version == STAGE_CATALOG_VERSION_V2:
+        after = set(catalog_for_version(version).subtasks_after_step(int(step)))
+        rows = [
+            {
+                "stage_id": int(item["stage_id"]),
+                "subtask": str(item["subtask"]),
+                "source_step_id": item["source_step_id"],
+            }
+            for item in connection.execute(
+                "SELECT stage_id, subtask, source_step_id FROM stage_checkpoints "
+                "ORDER BY stage_id, subtask"
+            ).fetchall()
+            if (int(item["stage_id"]), str(item["subtask"])) in after
+        ]
+        for item in rows:
+            connection.execute(
+                "DELETE FROM stage_checkpoints WHERE stage_id = ? AND subtask = ?",
+                (item["stage_id"], item["subtask"]),
+            )
+        return rows
+    rows = [
+        {
+            "stage_id": int(item["stage_id"]),
+            "subtask": str(item["subtask"]),
+            "source_step_id": item["source_step_id"],
+        }
+        for item in connection.execute(
+            "SELECT stage_id, subtask, source_step_id "
+            "FROM stage_checkpoints WHERE source_step_id > ? "
+            "OR (completed_step_id IS NULL AND source_step_id >= ?) "
+            "ORDER BY stage_id, subtask",
+            (int(step), int(step)),
+        ).fetchall()
+    ]
+    connection.execute(
+        "DELETE FROM stage_checkpoints WHERE source_step_id > ? "
+        "OR (completed_step_id IS NULL AND source_step_id >= ?)",
+        (int(step), int(step)),
+    )
+    return rows
 
 
 def read_only_uri(path: "Path | str") -> str:
@@ -1441,8 +1500,13 @@ class SQLiteStateStore:
             raise ValueError("Stage scheduling requires the native_v2 runtime")
         if scheduler_generation == STAGE_SCHEDULER_GENERATION:
             stage_catalog_version = stage_catalog_version or STAGE_CATALOG_VERSION
+            if stage_catalog_version not in SUPPORTED_STAGE_CATALOG_VERSIONS:
+                raise ValueError(
+                    f"unsupported Stage catalog version: {stage_catalog_version}"
+                )
         elif stage_catalog_version is not None:
             raise ValueError("Step scheduler projects cannot own a Stage catalog version")
+        catalog = catalog_for_version(stage_catalog_version)
         now = int(self._clock())
         scope = self.project_dir.parent.name if self.project_dir.parent.name in {"ongoing", "complete"} else "external"
         with self._session() as connection:
@@ -1478,7 +1542,7 @@ class SQLiteStateStore:
                     status.value,
                     last_completed_step,
                     active_step,
-                    completed_stage_for_step(last_completed_step),
+                    catalog.completed_stage_for_step(last_completed_step),
                     None,
                     None,
                     active_step,
@@ -1492,7 +1556,7 @@ class SQLiteStateStore:
                 ),
             )
             if scheduler_generation == STAGE_SCHEDULER_GENERATION:
-                for checkpoint in initial_stage_checkpoints(last_completed_step):
+                for checkpoint in catalog.initial_stage_checkpoints(last_completed_step):
                     receipt = {
                         "schema_version": "factory-stage-checkpoint-v1",
                         "source": "compatibility_cursor_seed",
@@ -2749,26 +2813,15 @@ class SQLiteStateStore:
                 # A rejection reopens authored work.  A replacement request is
                 # created only when the workflow reaches Gate 2 again, after
                 # the repaired content has a fresh fingerprint.
-                reopen_after_step = min(reopen_after_step, 13)
+                # Back to the start of Stage 9 (final prose): after Step 13
+                # in v1, after Step 12 in v2.
+                catalog = catalog_for_version(before["stage_catalog_version"])
+                reopen_after_step = min(
+                    reopen_after_step, catalog.resume_after_step_for_stage(9)
+                )
                 reopen_after_stage = min(reopen_after_stage, 8)
-                invalidated_checkpoints = [
-                    {
-                        "stage_id": int(row["stage_id"]),
-                        "subtask": str(row["subtask"]),
-                        "source_step_id": row["source_step_id"],
-                    }
-                    for row in connection.execute(
-                        "SELECT stage_id, subtask, source_step_id "
-                        "FROM stage_checkpoints WHERE source_step_id > ? "
-                        "OR (completed_step_id IS NULL AND source_step_id >= ?) "
-                        "ORDER BY stage_id, subtask",
-                        (reopen_after_step, reopen_after_step),
-                    ).fetchall()
-                ]
-                connection.execute(
-                    "DELETE FROM stage_checkpoints WHERE source_step_id > ? "
-                    "OR (completed_step_id IS NULL AND source_step_id >= ?)",
-                    (reopen_after_step, reopen_after_step),
+                invalidated_checkpoints = _invalidate_stage_checkpoints_after(
+                    connection, reopen_after_step
                 )
                 connection.execute(
                     "UPDATE project_state SET status=?, pending_action_json=NULL, "
@@ -3021,13 +3074,8 @@ class SQLiteStateStore:
             if replace_stage_checkpoints:
                 connection.execute("DELETE FROM stage_checkpoints")
             if invalidate_checkpoints_after_step is not None:
-                connection.execute(
-                    "DELETE FROM stage_checkpoints WHERE source_step_id > ? "
-                    "OR (completed_step_id IS NULL AND source_step_id >= ?)",
-                    (
-                        int(invalidate_checkpoints_after_step),
-                        int(invalidate_checkpoints_after_step),
-                    ),
+                _invalidate_stage_checkpoints_after(
+                    connection, int(invalidate_checkpoints_after_step)
                 )
             if stage_checkpoint is not None:
                 checkpoint = dict(stage_checkpoint)

@@ -10,8 +10,18 @@ from .domain import InvalidTransition, WorkflowStatus
 from .stages import stage_for_step
 
 
+def _catalog_v2(state):
+    from .stages import STAGE_CATALOG_VERSION_V2
+
+    return state.stage_catalog_version == STAGE_CATALOG_VERSION_V2
+
+
 def authorize(engine, *, expected_revision, reason):
     state = engine.store.load()
+    if _catalog_v2(state):
+        # In catalog v2 Step 13 is the final Judge after Steps 14 and 15, so
+        # there is no downstream technical work left to continue into.
+        raise InvalidTransition("Step13 technical continuation does not exist in Stage catalog v2")
     if not reason.strip() or not (state.active_step == 13 or state.last_completed_step == 12):
         raise InvalidTransition("explicit Step13 continuation requires its current source step and reason")
     return engine._transition(expected_revision=expected_revision,
@@ -31,7 +41,7 @@ def pending(engine):
 
 
 def stop_at_gate2(engine, state, lease, result, validation):
-    if state.active_step != 13:
+    if state.active_step != 13 or _catalog_v2(state):
         return None
     grant = pending(engine)
     if validation is not None and validation.pending_action is not None:
