@@ -20,7 +20,9 @@ class StepContract:
 
 
 STEP_CONTRACTS: tuple[StepContract, ...] = (
-    StepContract(0, "problem_setup", "step0_problem_parsing.txt", 3_600, 1_800, 1, ("codex",)),
+    # Three attempts: with one, a single failed parse ended the run before
+    # Step 1 (canary 1, 2026-10-11).
+    StepContract(0, "problem_setup", "step0_problem_parsing.txt", 3_600, 1_800, 3, ("codex",)),
     StepContract(1, "research_and_viability", "step1_research_viability.txt", 14_400, 3_600, 5, ("claude",)),
     StepContract(2, "parallel_model_proposals", None, 28_800, 3_600, 5, ("codex", "claude"), "parallel_proposals"),
     StepContract(3, "method_selection", "step3_method_selection.txt", 7_200, 1_800, 5, ("claude",)),

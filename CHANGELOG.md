@@ -9,6 +9,16 @@
 - 其余顺序不变：先提交以收回 lease，再按身份结束整个进程树；结束无法确认时仍记 `RUNNER_EXIT_UNVERIFIED`。
 - 测试：新增 8 例（事件链被篡改后仍能停下 runner、身份不可读但 pid 存在、调用方自身、过期 revision，各含 pause 与 kill），更新了 3 个固定旧行为的测试。
 
+## 2026-11-05 — 活性优化阶段 1d：Step 0 三次尝试，模型后端故障不计次
+
+依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1d，建立在 1a 的非内容预算之上。canary 1（2026-10-11）的 Step 0 只有 1 次尝试，codex 上游一次 "high demand" 失败就结束了整个运行。
+
+- **Step 0**：`factory_core/steps/catalog.py` 中 `max_attempts` 从 1 改为 3。
+- **后端故障不计次**：`TRANSIENT_MODEL_BACKEND`（模型进程非零退出：上游错误、连接中断、过载）加入 `NON_CONTENT_ERROR_CLASSES`，对所有 Step 生效：不消耗内容尝试次数，用尽 3 次基础设施预算后以 `PERMANENT_MODEL_BACKEND_INFRASTRUCTURE` 终止。`TRANSIENT_TIMEOUT` 不在其中：在难的 Step 上跑满时限的模型已经尝试过内容。
+- **预算按类别**：每个非内容类别各有 3 次重试预算（同一尝试序列内），审计崩溃不会耗掉模型后端的重试次数；内容次数的扣减仍按全部非内容重试计算。
+- **回放**：按新规则，非内容原因消耗的尝试从 56 次降到 48 次（5.8 h），回放门禁（不得高于基线）通过；基线文件不变，仍记录 `8e8f872` 的规则。
+- 测试：新增 5 例。
+
 ## 2026-11-05 — 活性优化阶段 1a：检查器无结论不再算内容失败
 
 依据 `docs/architecture/NEXT_OPTIMIZATION_EXECUTION_PLAN.md` 阶段 1a。2026-10-15 的验收运行 run2 中，Step 10 的检查脚本因 `/tmp` 写满而崩溃，被记为 `PAPER_AUDIT_FAILED`（`AUDIT_REPAIR_REQUIRED`），5 次内容尝试全部耗尽。
