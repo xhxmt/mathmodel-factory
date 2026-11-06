@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from factory_core.domain import ExecutionResult, ValidationResult, WorkflowStatus
-from factory_core.engine import FactoryEngine
+from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET, FactoryEngine
 from factory_core.registry import StepDefinition, StepRegistry
 from factory_core.storage import SQLiteStateStore
 from scripts.step8_5_gate import collect_step8_5_state, not_ready_reason
@@ -22,7 +22,7 @@ class _Step:
         return ValidationResult.invalid(self.reason)
 
 
-def _fail_once(tmp_path: Path, result: ExecutionResult, reason: str):
+def _fail_events(tmp_path: Path, result: ExecutionResult, reason: str):
     step = _Step(result, reason)
     registry = StepRegistry()
     registry.register(StepDefinition(id=1, name="first", timeout_seconds=30, max_attempts=1,
@@ -31,24 +31,39 @@ def _fail_once(tmp_path: Path, result: ExecutionResult, reason: str):
     store.initialize(project_id="demo", project_type="modeling")
     state = FactoryEngine(tmp_path, store=store, registry=registry, sleeper=lambda _: None).run()
     assert state.status is WorkflowStatus.FAILED
-    return store.events()[-1].payload
+    return store.events()
+
+
+def _fail_once(tmp_path: Path, result: ExecutionResult, reason: str):
+    return _fail_events(tmp_path, result, reason)[-1].payload
 
 
 def test_a_backend_failure_is_named_before_the_missing_artifact(tmp_path):
     # run4 rev 987-1005: codex exited after about one second and the event
     # read "Step 8.5 reviewer-entry gate is not ready: None".
-    payload = _fail_once(
+    events = _fail_events(
         tmp_path,
         ExecutionResult.failed("TRANSIENT_MODEL_BACKEND", returncode=1, backend="codex",
                                model_id="codex", duration_seconds=1.0007),
         "Step 8.5 reviewer-entry gate is not ready: missing or empty: entry_gate.md",
     )
-    assert payload["error_class"] == "TRANSIENT_MODEL_BACKEND"
-    assert payload["reason"] == (
+    payload = events[-1].payload
+    # Phase 1d: a backend failure never spends a content attempt; the Step
+    # stops only once its infrastructure retries are spent.
+    assert payload["error_class"] == "PERMANENT_MODEL_BACKEND_INFRASTRUCTURE"
+    assert payload["exhausted_error_class"] == "TRANSIENT_MODEL_BACKEND"
+    assert payload["content_attempts_used"] == 0
+    expected_reason = (
         "TRANSIENT_MODEL_BACKEND: codex exited with returncode 1 after 1.0 s; "
         "then Step 8.5 reviewer-entry gate is not ready: missing or empty: entry_gate.md"
     )
+    assert payload["reason"] == expected_reason
     assert payload["validation_reason"].startswith("Step 8.5 reviewer-entry gate is not ready")
+    # The run4 events were retries: each one must carry the same reason.
+    retries = [e.payload for e in events if e.type == "RETRY_SCHEDULED"]
+    assert len(retries) == INFRASTRUCTURE_RETRY_BUDGET
+    assert all(r["error_class"] == "TRANSIENT_MODEL_BACKEND" for r in retries)
+    assert all(r["reason"] == expected_reason for r in retries)
 
 
 def test_a_backend_failure_keeps_its_own_reason(tmp_path):
