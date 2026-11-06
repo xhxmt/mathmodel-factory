@@ -23,13 +23,25 @@ def run_action(
     action: str,
     base_name: str,
     expected_revision: int | None = None,
+    reason: str | None = None,
 ) -> ActionResult:
-    if action not in {"pause", "resume", "kill"}:
+    if action not in {"pause", "resume", "kill", "grant_reopen"}:
         return ActionResult(False, "", f"unsupported project action: {action}")
+    if action == "grant_reopen" and not str(reason or "").strip():
+        return ActionResult(False, "", "grant_reopen requires a reason")
     try:
         service = FactoryService(factory_root)
         worker = None
-        if action == "resume":
+        if action == "grant_reopen":
+            # Allow the reopen the budget pause stopped, then resume: recovery
+            # rechecks the change set and performs the reopen.
+            granted = service.grant_semantic_reopen(
+                base_name, reason=str(reason), expected_revision=expected_revision
+            )
+            state, worker = service.resume_and_start(
+                base_name, expected_revision=granted.revision
+            )
+        elif action == "resume":
             state, worker = service.resume_and_start(
                 base_name, expected_revision=expected_revision
             )

@@ -553,6 +553,18 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
     return timeline
 
 
+def _semantic_reopen_budget_pause(events: list[WorkflowEvent]) -> WorkflowEvent | None:
+    """The latest PAUSED event, when the engine recorded it for a spent budget."""
+
+    for event in reversed(events):
+        if event.type == "PAUSED":
+            reason = event.payload.get("reason") or {}
+            if isinstance(reason, dict) and reason.get("subcode") == "SEMANTIC_REOPEN_BUDGET":
+                return event
+            return None
+    return None
+
+
 def project_runtime_diagnostics(
     events: Iterable[WorkflowEvent], state: WorkflowState
 ) -> dict[str, Any]:
@@ -587,6 +599,7 @@ def project_runtime_diagnostics(
     reason_summary = ""
     suggested = ["refresh_status"]
     evidence: list[dict[str, Any]] = []
+    reopen_budget: dict[str, Any] | None = None
     if pending is not None:
         gate = pending.get("gate")
         if gate in {"reviewer_entry_gate", "step8_5"}:
@@ -605,6 +618,20 @@ def project_runtime_diagnostics(
             {"kind": "file", "path": path}
             for path in (pending.get("reason") or {}).get("evidence", [])
         ]
+    elif state.status is WorkflowStatus.PAUSED and (
+        budget_pause := _semantic_reopen_budget_pause(event_list)
+    ) is not None:
+        # Phase 3a: the run paused because its semantic-reopen budget is spent.
+        reason = budget_pause.payload.get("reason") or {}
+        reason_code = "SEMANTIC_REOPEN_BUDGET"
+        reason_summary = str(reason.get("message") or "")
+        suggested = [
+            "revert_upstream_edits_and_resume",
+            "grant_semantic_reopen",
+            "refresh_status",
+        ]
+        evidence = [{"kind": "file", "path": path} for path in reason.get("evidence", [])]
+        reopen_budget = budget_pause.payload.get("reopen_budget")
     elif latest_recovery and state.status in {
         WorkflowStatus.FAILED,
         WorkflowStatus.RETRYING,
@@ -633,6 +660,7 @@ def project_runtime_diagnostics(
             "suggested_actions": suggested,
             "evidence": evidence,
             "workflow_revision": state.revision,
+            **({"reopen_budget": reopen_budget} if reopen_budget is not None else {}),
         },
         "events": project_audit_timeline(event_list)[-5:],
         "actions": [{"id": action_id} for action_id in suggested],

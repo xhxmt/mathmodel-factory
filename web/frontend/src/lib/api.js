@@ -143,9 +143,10 @@ export const Projects = {
   selection: (b) => api.get(`/api/projects/${b}/selection`).then((r) => r.data),
   refreshSelection: (b, payload) => api.post(`/api/projects/${b}/selection/refresh`, payload).then((r) => r.data),
   selectOption: (b, payload) => api.post(`/api/projects/${b}/selection/decision`, payload).then((r) => r.data),
-  action: (b, action, expectedRevision = null) => api.post(`/api/projects/${b}/action`, {
+  action: (b, action, expectedRevision = null, reason = null) => api.post(`/api/projects/${b}/action`, {
     action,
     expected_revision: expectedRevision,
+    ...(reason ? { reason } : {}),
   }).then((r) => r.data),
   create: (payload) => api.post('/api/projects/new', payload).then((r) => r.data),
   rawUrl: (b, path) => `/api/projects/${b}/raw?path=${encodeURIComponent(path)}`,

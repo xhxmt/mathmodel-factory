@@ -139,6 +139,9 @@ class DeliveryOverrideResponse(BaseModel):
 class ProjectAction(BaseModel):
     action: str
     expected_revision: int | None = None
+    # grant_reopen only: why the reopen a spent semantic-reopen budget paused
+    # is allowed (recorded in the SEMANTIC_REOPEN_GRANTED event).
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class SolverPolicyAction(BaseModel):

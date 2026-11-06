@@ -33,6 +33,10 @@
         {{ item.path || item }}<template v-if="item.revision !== undefined"> · r{{ item.revision }}</template>
       </div>
     </div>
+    <div v-if="budgetLines.length" class="diag-events">
+      <div class="diag-section-title mono">REOPEN BUDGET</div>
+      <div v-for="line in budgetLines" :key="line" class="diag-event mono">{{ line }}</div>
+    </div>
     <div v-if="recovery" class="diag-recovery">
       <div class="diag-section-title mono">RECOVERY STATUS</div>
       <div class="diag-event mono">
@@ -59,7 +63,7 @@
 </template>
 
 <script>
-import { actionLabel } from '../lib/diagnostics.js'
+import { actionLabel, reopenBudgetLines } from '../lib/diagnostics.js'
 
 export default {
   name: 'DiagnosticsCard',
@@ -83,6 +87,9 @@ export default {
     recovery() {
       return this.diagnostics?.recovery?.latest || null
     },
+    budgetLines() {
+      return reopenBudgetLines(this.diagnostics?.status?.reopen_budget)
+    },
     evidence() {
       return Array.isArray(this.diagnostics?.status?.evidence)
         ? this.diagnostics.status.evidence
@@ -100,7 +107,7 @@ export default {
       const code = this.diagnostics?.status?.reason_code
       return {
         'is-warn': code === 'NO_LOG_PROGRESS' || code === 'LOCK_STALE_RECLAIMED',
-        'is-block': code === 'AWAITING_STEP8_5' || code === 'VERIFY_OUTPUT_FAILED' || code === 'CONSULTATION_PENDING' || code === 'HUMAN_DECISION_REQUIRED' || code === 'ORPHANED_DECISION_ARTIFACT' || code === 'DECISION_RECEIPT_MISMATCH' || code === 'WORKFLOW_REPLAY_MISMATCH' || String(code || '').startsWith('PERMANENT_'),
+        'is-block': code === 'AWAITING_STEP8_5' || code === 'VERIFY_OUTPUT_FAILED' || code === 'CONSULTATION_PENDING' || code === 'HUMAN_DECISION_REQUIRED' || code === 'ORPHANED_DECISION_ARTIFACT' || code === 'DECISION_RECEIPT_MISMATCH' || code === 'WORKFLOW_REPLAY_MISMATCH' || code === 'SEMANTIC_REOPEN_BUDGET' || String(code || '').startsWith('PERMANENT_'),
       }
     },
   },

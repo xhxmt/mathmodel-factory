@@ -11,7 +11,7 @@ from datetime import datetime
 from dataclasses import asdict
 from pathlib import Path
 
-from .domain import FactoryCoreError, MigrationConflict, WorkflowStatus
+from .domain import FactoryCoreError, InvalidTransition, MigrationConflict, WorkflowStatus
 from .engine import FactoryEngine
 from .projections import runtime_payload, write_compatibility_projections
 from .runtime_env import disk_backed_tmpdir
@@ -331,11 +331,17 @@ def build_parser() -> argparse.ArgumentParser:
     solver_policy.add_argument("--expected-revision", type=int)
 
     action = sub.add_parser("action")
-    action.add_argument("name", choices=["pause", "resume", "kill", "resolve"])
+    action.add_argument(
+        "name", choices=["pause", "resume", "kill", "resolve", "grant-reopen"]
+    )
     action.add_argument("project_dir")
     action.add_argument("--expected-revision", type=int)
     action.add_argument("--resolution-json", default="{}")
     action.add_argument("--no-start", action="store_true")
+    action.add_argument(
+        "--reason",
+        help="grant-reopen: why the reopen a spent semantic-reopen budget paused is allowed",
+    )
 
     migrate = sub.add_parser("migrate")
     migrate_sub = migrate.add_subparsers(dest="migration_command", required=True)
@@ -713,6 +719,16 @@ def main(argv: list[str] | None = None) -> int:
                     )
             elif args.name == "kill":
                 updated = service.kill(project, expected_revision=revision)
+            elif args.name == "grant-reopen":
+                if not args.reason:
+                    raise InvalidTransition("grant-reopen requires --reason")
+                updated = service.grant_semantic_reopen(
+                    project, reason=args.reason, expected_revision=revision
+                )
+                if not args.no_start:
+                    updated, _worker = service.resume_and_start(
+                        project, expected_revision=updated.revision
+                    )
             else:
                 updated = service.resolve(
                     project,

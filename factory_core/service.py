@@ -527,6 +527,31 @@ class FactoryService:
             expected_revision=state.revision, subcode=subcode, actor=actor
         )
 
+    def grant_semantic_reopen(
+        self,
+        project: str | Path,
+        *,
+        reason: str,
+        expected_revision: int | None = None,
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Allow the one reopen a spent semantic-reopen budget paused (phase 3a).
+
+        The project stays paused; ``resume``/``resume_and_start`` then rechecks
+        the change set through recovery and performs the reopen.
+        """
+
+        if actor not in REASON_ACTORS:
+            raise InvalidTransition(
+                f"grant actor must be one of {sorted(REASON_ACTORS)}, got {actor!r}"
+            )
+        engine = self.engine(project)
+        state = engine.get_state()
+        self._assert_expected_revision(state, expected_revision)
+        return engine.grant_semantic_reopen(
+            expected_revision=state.revision, note=reason, actor=actor
+        )
+
     def kill(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
         engine = self.engine(project)
         snapshot = engine.store.status_snapshot()
@@ -1622,7 +1647,7 @@ def wait_for_worker_ready(
 # ---------------------------------------------------------------------------
 
 PAUSED_SUBCODES = frozenset(
-    {"OPERATOR", "DEADLINE", "EXECUTION_SCOPE", "FREEZE_BOUNDARY"}
+    {"OPERATOR", "DEADLINE", "EXECUTION_SCOPE", "FREEZE_BOUNDARY", "SEMANTIC_REOPEN_BUDGET"}
 )
 RESUMED_SUBCODES = frozenset({"OPERATOR", "RETRY", "AUTO_RECOVERY"})
 REASON_ACTORS = frozenset({"operator", "engine", "scheduler"})

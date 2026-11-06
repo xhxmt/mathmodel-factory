@@ -105,7 +105,7 @@ pending actions, native Stage/Step registration, audit, delivery and solver jobs
 The full pre-split source and experimental development contracts live separately
 in `~/paper_new`. Do not copy experimental tables into a Native database.
 
-New projects persist a 74-hourNew projects persist a 74-hour contest policy in schema-v9 SQLite. Steps 0–15
+New projects persist a 74-hour contest policy in schema-v9 SQLite. Steps 0–15
 are capped at T−6h content freeze; Step 16 owns the six-hour terminal reserve
 and is capped at the final deadline. T−2h is delivery freeze: any audit-driven
 substantive reopen requires a separate human override. Retry sleeps are also
@@ -197,6 +197,19 @@ field) and stops after `INFRASTRUCTURE_RETRY_BUDGET` retries of the same class w
 terminal class (`PERMANENT_AUDIT_INFRASTRUCTURE`; `PERMANENT_MODEL_BACKEND_INFRASTRUCTURE`
 for `TRANSIENT_MODEL_BACKEND`, a model process that exited non-zero; a timeout
 still consumes a content attempt).
+
+A semantic reopen (a Stage changing content an earlier Stage owns) is
+budgeted per classifier identity: an initiating Stage may rewind at most
+`STAGE_SEMANTIC_REOPEN_LIMIT` (2) times and a run at most
+`RUN_SEMANTIC_REOPEN_LIMIT` (5) times. Spending either limit commits `PAUSED`
+with subcode `SEMANTIC_REOPEN_BUDGET` (actor `engine`), keeps the Stage cursor,
+and records a `reopen_budget` explanation (limits, counts, causes, history)
+that `factory diagnostics` and the Web diagnostics card show. The two ways on
+are: revert the upstream-owned edits and resume, which rechecks the change set
+through recovery without re-running the model; or `factory action
+grant-reopen <project> --reason ...` (Web: "批准一次回退"), which records
+`SEMANTIC_REOPEN_GRANTED` for that Stage and classifier, allows exactly one
+more reopen, and resumes. One grant per pause.
 
 Pause and kill decide how to stop the runner before committing anything. The
 launch identity recorded for the current pid and lease is verified against the

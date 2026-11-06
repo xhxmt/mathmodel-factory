@@ -46,6 +46,7 @@ from .domain import (
     StepContext,
     TERMINAL_STATUSES,
     ValidationResult,
+    WorkflowEvent,
     WorkflowState,
     WorkflowStatus,
 )
@@ -98,6 +99,19 @@ NON_CONTENT_ERROR_CLASSES: dict[str, str] = {
     "TRANSIENT_MODEL_BACKEND": "PERMANENT_MODEL_BACKEND_INFRASTRUCTURE",
 }
 INFRASTRUCTURE_RETRY_BUDGET = 3
+
+# Semantic-reopen budget (optimization plan, phase 3a; decision 4 taken on
+# 2026-11-06).  Under the current classifier identity an initiating Stage may
+# rewind an earlier Stage at most STAGE_SEMANTIC_REOPEN_LIMIT times, and one
+# run at most RUN_SEMANTIC_REOPEN_LIMIT times in total.  Either limit being
+# spent pauses the run with an explanation instead of failing it; an operator
+# either reverts the upstream-owned edits and resumes (the change set is
+# rechecked through recovery, without re-running the model) or grants one more
+# reopen (``SEMANTIC_REOPEN_GRANTED``).
+STAGE_SEMANTIC_REOPEN_LIMIT = 2
+RUN_SEMANTIC_REOPEN_LIMIT = 5
+SEMANTIC_REOPEN_PAUSE_SUBCODE = "SEMANTIC_REOPEN_BUDGET"
+SEMANTIC_REOPEN_GRANTED = "SEMANTIC_REOPEN_GRANTED"
 
 
 @dataclass(frozen=True)
@@ -854,6 +868,7 @@ class FactoryEngine:
                         completed_this_run += 1
                     if state.status in {
                         WorkflowStatus.FAILED,
+                        WorkflowStatus.PAUSED,
                         WorkflowStatus.AWAITING_SELECTION,
                         WorkflowStatus.AWAITING_CONSULTATION,
                     }:
@@ -1555,25 +1570,61 @@ class FactoryEngine:
             )
 
         if semantic_reopen_target is not None:
-            if not self._stage_semantic_reopen_allowed(task.stage_id, state):
+            budget = self._semantic_reopen_budget(task.stage_id, state)
+            if not budget["allowed"]:
+                # The Stage cursor stays on this subtask, so a later resume
+                # rechecks the same change set through recovery.
                 return self._stage_transition(
                     state,
                     lease,
-                    event_type="STEP_FAILED",
+                    event_type="PAUSED",
                     changes={
-                        "status": WorkflowStatus.FAILED,
+                        "status": WorkflowStatus.PAUSED,
                         "runner_pid": None,
                         "runner_lease_id": None,
                         "heartbeat_at": None,
                     },
                     payload={
-                        "error_class": "PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED",
+                        "reason": {
+                            "code": "PAUSED",
+                            "subcode": SEMANTIC_REOPEN_PAUSE_SUBCODE,
+                            "actor": "engine",
+                            "message": (
+                                f"{semantic_reason}; the semantic reopen budget "
+                                f"({budget['exhausted']} limit) is spent"
+                            ),
+                            "evidence": sorted(
+                                {
+                                    str(item["cause_artifact"])
+                                    for item in dirty_changes
+                                    if int(item["owner_stage"]) < task.stage_id
+                                    and item.get("cause_artifact")
+                                }
+                            ),
+                        },
                         "stage": task.stage_id,
                         "subtask": task.subtask,
+                        "source_step": task.source_step_id,
                         "resume_after_step": semantic_reopen_target,
                         "semantic_owner_stage": semantic_owner_stage,
-                        "reason": semantic_reason,
+                        "dirty_owner_stages": upstream_owners,
                         "classifier_contract_sha256": self._classifier_sha(state),
+                        "reopen_budget": {
+                            **{key: value for key, value in budget.items() if key != "allowed"},
+                            "causes": [
+                                {
+                                    "flag": str(item["flag"]),
+                                    "owner_stage": int(item["owner_stage"]),
+                                    "cause_artifact": str(item.get("cause_artifact") or ""),
+                                }
+                                for item in dirty_changes
+                                if int(item["owner_stage"]) < task.stage_id
+                            ],
+                            "options": [
+                                "revert_upstream_edits_and_resume",
+                                "grant_semantic_reopen",
+                            ],
+                        },
                     },
                     dirty_changes=dirty_changes,
                     event_step=task.source_step_id,
@@ -1797,6 +1848,21 @@ class FactoryEngine:
     def _stage_semantic_reopen_allowed(
         self, stage_id: int, state: WorkflowState | None = None
     ) -> bool:
+        return bool(self._semantic_reopen_budget(stage_id, state)["allowed"])
+
+    def _semantic_reopen_budget(
+        self, stage_id: int, state: WorkflowState | None = None
+    ) -> dict:
+        """How much of the semantic-reopen budget the current classifier used.
+
+        Counts ``STAGE_SEMANTIC_REOPENED`` events decided under the current
+        classifier identity, per initiating Stage and for the whole run, and
+        the operator grants recorded under the same identity.  A grant names
+        the Stage it was given for and allows exactly one more reopen: it
+        raises that Stage's limit and the run limit by one, and the reopen it
+        allows then counts like any other.
+        """
+
         current_classifier = (
             self._classifier_sha(state) if state is not None else classifier_contract_sha256()
         )
@@ -1812,10 +1878,21 @@ class FactoryEngine:
             default=0,
         )
         count = 0
+        run_count = 0
+        stage_grants = 0
+        run_grants = 0
+        history: list[dict] = []
         for event in events:
-            if event.type != "STAGE_SEMANTIC_REOPENED":
+            if event.type == SEMANTIC_REOPEN_GRANTED:
+                # A grant is bound to the classifier it was given under, like
+                # the reopens it allows: a classifier change resets both.
+                if str(event.payload.get("classifier_contract_sha256", "")) != current_classifier:
+                    continue
+                run_grants += 1
+                if int(event.payload.get("stage", -1)) == int(stage_id):
+                    stage_grants += 1
                 continue
-            if int(event.payload.get("stage", -1)) != int(stage_id):
+            if event.type != "STAGE_SEMANTIC_REOPENED":
                 continue
             event_classifier = event.payload.get("classifier_contract_sha256")
             if event_classifier is None:
@@ -1826,8 +1903,33 @@ class FactoryEngine:
                     continue
             elif str(event_classifier) != current_classifier:
                 continue
-            count += 1
-        return count < 2
+            run_count += 1
+            history.append(
+                {
+                    "revision": event.revision,
+                    "stage": int(event.payload.get("stage", -1)),
+                    "owner_stage": event.payload.get("semantic_owner_stage"),
+                    "resume_after_step": event.payload.get("resume_after_step"),
+                }
+            )
+            if int(event.payload.get("stage", -1)) == int(stage_id):
+                count += 1
+        stage_limit = STAGE_SEMANTIC_REOPEN_LIMIT + stage_grants
+        run_limit = RUN_SEMANTIC_REOPEN_LIMIT + run_grants
+        exhausted = (
+            "stage" if count >= stage_limit else "run" if run_count >= run_limit else None
+        )
+        return {
+            "allowed": exhausted is None,
+            "exhausted": exhausted,
+            "stage": int(stage_id),
+            "stage_count": count,
+            "stage_limit": stage_limit,
+            "run_count": run_count,
+            "run_limit": run_limit,
+            "grants": run_grants,
+            "history": history,
+        }
 
     def recover(
         self,
@@ -2172,6 +2274,74 @@ class FactoryEngine:
                 "pending_action": action,
             },
             **kwargs,
+        )
+
+    def semantic_reopen_pause(self, state: WorkflowState | None = None) -> WorkflowEvent | None:
+        """The budget pause the project is currently stopped at, if any.
+
+        It is the latest ``PAUSED`` event, provided the engine recorded it for
+        a spent semantic-reopen budget and the project is still paused.
+        """
+
+        state = state or self.store.load()
+        if state.status is not WorkflowStatus.PAUSED:
+            return None
+        for event in reversed(self.store.events()):
+            if event.type == "PAUSED":
+                reason = event.payload.get("reason") or {}
+                if (
+                    isinstance(reason, dict)
+                    and reason.get("subcode") == SEMANTIC_REOPEN_PAUSE_SUBCODE
+                ):
+                    return event
+                return None
+        return None
+
+    def grant_semantic_reopen(
+        self,
+        *,
+        expected_revision: int,
+        note: str,
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Allow the one reopen a budget pause stopped (phase 3a).
+
+        Recorded as ``SEMANTIC_REOPEN_GRANTED`` for the paused Stage under the
+        current classifier identity; the project stays paused, and the next
+        resume rechecks the change set through recovery, which then performs
+        the reopen.  One grant per pause.
+        """
+
+        state = self.store.load()
+        if not str(note or "").strip():
+            raise InvalidTransition("a semantic reopen grant needs a reason")
+        pause = self.semantic_reopen_pause(state)
+        if pause is None:
+            raise InvalidTransition(
+                "the project is not paused at a spent semantic reopen budget"
+            )
+        if any(
+            event.type == SEMANTIC_REOPEN_GRANTED and event.revision > pause.revision
+            for event in self.store.events()
+        ):
+            raise InvalidTransition("this budget pause already has a grant")
+        return self._transition(
+            expected_revision=expected_revision,
+            event_type=SEMANTIC_REOPEN_GRANTED,
+            changes={},
+            payload={
+                "stage": int(pause.payload["stage"]),
+                "subtask": pause.payload.get("subtask"),
+                "paused_revision": pause.revision,
+                "resume_after_step": pause.payload.get("resume_after_step"),
+                "classifier_contract_sha256": self._classifier_sha(state),
+                "reason": {
+                    "code": SEMANTIC_REOPEN_GRANTED,
+                    "subcode": "OPERATOR",
+                    "actor": actor,
+                    "message": str(note).strip(),
+                },
+            },
         )
 
     def pause(

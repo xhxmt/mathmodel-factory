@@ -115,3 +115,44 @@ def test_web_action_reports_service_error(monkeypatch, tmp_path):
     assert result.ok is False
     assert result.stdout == ""
     assert result.stderr == "revision conflict"
+
+
+def test_web_grant_reopen_records_the_grant_then_resumes(monkeypatch, tmp_path):
+    calls = []
+
+    class Granted:
+        revision = 9
+
+    class Service:
+        def __init__(self, _root):
+            pass
+
+        def grant_semantic_reopen(self, project, *, reason, expected_revision=None):
+            calls.append(("grant", project, reason, expected_revision))
+            return Granted()
+
+        def resume_and_start(self, project, *, expected_revision=None):
+            calls.append(("resume", project, expected_revision))
+            return State(), Worker()
+
+    monkeypatch.setattr(project_actions, "FactoryService", Service)
+
+    result = project_actions.run_action(
+        tmp_path, "grant_reopen", "demo", expected_revision=8, reason="upstream fix is real"
+    )
+
+    assert result.ok is True
+    assert calls == [("grant", "demo", "upstream fix is real", 8), ("resume", "demo", 9)]
+
+
+def test_web_grant_reopen_requires_a_reason(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        project_actions,
+        "FactoryService",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not construct")),
+    )
+
+    result = project_actions.run_action(tmp_path, "grant_reopen", "demo", reason="  ")
+
+    assert result.ok is False
+    assert "requires a reason" in result.stderr
