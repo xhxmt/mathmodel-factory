@@ -121,6 +121,8 @@ def build_native_registry(
     assert delivery_step is not None
     # Stage catalog v2 runs Step 13 as the one final Judge (analysis-only final
     # audit); v1 projects keep the registered Step-13 precheck above.
+    # Imported here, not at module level: stages -> steps.catalog ->
+    # steps/__init__ -> steps.registry would otherwise be circular.
     from ..stages import CATALOG_V2, FINAL_JUDGE_SUBTASK
 
     final_judge = CATALOG_V2.subtask_for_key(FINAL_JUDGE_SUBTASK)[1].step_contract

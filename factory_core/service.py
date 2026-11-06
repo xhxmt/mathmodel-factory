@@ -273,9 +273,10 @@ class FactoryService:
         """Create a Native project.
 
         ``stage_catalog_version`` selects the Stage catalog.  New projects
-        default to ``factory-stage-catalog-v2`` (the paper-segment reorder:
-        one final Judge after final prose and the content freeze); pass
-        ``factory-stage-catalog-v1`` to create a v1 project.
+        default to ``factory-stage-catalog-v1``; pass
+        ``factory-stage-catalog-v2`` (the paper-segment reorder: one final Judge
+        after abstract, polish and the content freeze) to opt in until its first
+        real end-to-end acceptance run passes.
         """
         if not BASE_NAME_RE.fullmatch(base_name):
             raise ValueError("base_name must contain only letters, numbers, '_' or '-'")

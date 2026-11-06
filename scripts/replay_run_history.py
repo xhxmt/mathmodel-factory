@@ -463,6 +463,9 @@ def replay_decisions(fixtures: list[dict[str, Any]], rule: Callable[[ChangeSet],
                     "run": change_set.run,
                     "rev": change_set.rev,
                     "event_type": change_set.event_type,
+                    # ``stage`` keeps the v1 report shape (it is the
+                    # recorded Stage); pair statistics use evaluated_stage.
+                    "stage": change_set.stage,
                     "recorded_stage": change_set.stage,
                     "evaluated_stage": evaluated_stage,
                     "step": change_set.step,

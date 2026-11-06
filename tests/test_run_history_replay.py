@@ -350,6 +350,8 @@ def test_replay_rows_keep_the_recorded_and_the_evaluated_stage(fixtures):
     v1_rows = replay.replay_decisions(fixtures, replay.RULES["current"])
     v2_rows = replay.replay_decisions(fixtures, replay.RULES["v2"])
     assert all(row["evaluated_stage"] == row["recorded_stage"] for row in v1_rows)
+    # The v1 report shape keeps ``stage`` (the recorded Stage).
+    assert all(row["stage"] == row["recorded_stage"] for row in v1_rows + v2_rows)
     step13 = [row for row in v2_rows if row["step"] == 13 and row["evaluated"]]
     assert step13
     assert {row["recorded_stage"] for row in step13} == {8}
