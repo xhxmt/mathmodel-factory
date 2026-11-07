@@ -19,13 +19,13 @@
 
 - **回退上限（3a）**：每个发起阶段 2 次 + 每次运行共 5 次（决策 4），用尽改为 `PAUSED`（`SEMANTIC_REOPEN_BUDGET`）并附说明，不再判 `PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED`。继续的两条路径：撤销上游改动后恢复（经 recovery 重新检查变更集，不重跑模型）；或 `factory action grant-reopen` 与 Web"批准一次回退"（`SEMANTIC_REOPEN_GRANTED`，恰好多允许一次）。
 - **重试入口（3b）**：新增 `factory action retry-step --step N --reason`、Web"重试失败的步骤"与 `FactoryService.retry_step`（`STEP_RETRY_AUTHORIZED`），替代直接改库和一次性授权事件。
-- **非内容失败（3c）**：六个 Judge 类别（`TRANSIENT_JUDGE_INDETERMINATE`、`_ROLE`、`_PACKET`、`_INFRASTRUCTURE`、`_PROVENANCE`、`_AGGREGATION`）不再消耗内容尝试，共用一份基础设施预算（3 次），用尽为 `PERMANENT_JUDGE_INFRASTRUCTURE`；`TRANSIENT_JUDGE_ROUTING` 与 `TRANSIENT_JUDGE_INCOMPLETE` 仍消耗内容尝试（`_ROUTING` 已在 PR #49 审查修复中改为不计次）。基础设施预算按终止类计数。
+- **非内容失败（3c）**：六个 Judge 类别（`TRANSIENT_JUDGE_INDETERMINATE`、`_ROLE`、`_PACKET`、`_INFRASTRUCTURE`、`_PROVENANCE`、`_AGGREGATION`）不再消耗内容尝试，共用一份基础设施预算（3 次），用尽为 `PERMANENT_JUDGE_INFRASTRUCTURE`；`TRANSIENT_JUDGE_INCOMPLETE` 仍消耗内容尝试；`TRANSIENT_JUDGE_ROUTING` 起初也计次，已在 PR #49 审查修复中改为不计次（见上一条目）。基础设施预算按终止类计数。
   - **v1 项目也受影响**：Step 16 只有 1 次内容尝试，以前 Judge 一次给不出可用判定就直接失败；现在会在这份预算内再重跑最多 3 轮完整 Judge，每轮仍受 Step 16 时限和比赛截止时间约束。v1 Step 13 的数学预审同理。
 - **派发前预检（3d）**：新增 `factory_core/dispatch_preflight.py`，Step 派发前检查模型路由与临时空间，确定失败（所有候选模型都不可用，或临时空间低于 2 GiB）时以 `PROVIDER_UNAVAILABLE` 暂停且不消耗尝试；`FACTORY_DISPATCH_PREFLIGHT=0` 关闭（测试默认关闭）。
 - **时间分布（3e）**：比赛看板新增 `timing.time_split`（工作 / 等人工 / 等外部服务 / 已停止）。
 - 诊断接口新增 `SEMANTIC_REOPEN_BUDGET`、`PROVIDER_UNAVAILABLE` 两种原因及 `reopen_budget`、`preflight` 详情。这两个 subcode 只由引擎写入（`actor=engine`），操作员的 `pause()` 不接受（见 PR #49 审查修复）。
 - 修复 CLAUDE.md 中一处重复句。
-- 验证：核心套件 2854 passed（5 skipped），Web 78 passed，前端 26 passed；回放中"非内容原因消耗尝试"由 48 次（5.8 h）降到 20 次（4.5 h）。
+- 验证：核心套件 2854 passed（5 skipped），Web 78 passed，前端 26 passed；回放中"非内容原因消耗尝试"由阶段 3 起点 `bd197bc` 的 48 次（5.8 h；`8e8f872` 基线为 56 次，阶段 1e 降到 48 次）降到 20 次（4.5 h）。
 
 ## 2026-11-06 — 阶段 2 审计修复（PR #48）
 

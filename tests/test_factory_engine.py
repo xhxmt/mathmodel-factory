@@ -135,8 +135,10 @@ def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_pa
 def test_judge_infrastructure_classes_share_one_retry_budget(tmp_path):
     from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET
 
-    classes = ["TRANSIENT_JUDGE_ROLE", "TRANSIENT_JUDGE_PACKET", "TRANSIENT_JUDGE_ROUTING",
-               "TRANSIENT_JUDGE_PROVENANCE", "TRANSIENT_JUDGE_ROLE"]
+    # Exactly budget + 1 failures, so every listed class is actually consumed.
+    classes = ["TRANSIENT_JUDGE_ROLE", "TRANSIENT_JUDGE_PACKET", "TRANSIENT_JUDGE_INDETERMINATE",
+               "TRANSIENT_JUDGE_ROUTING"]
+    assert len(classes) == INFRASTRUCTURE_RETRY_BUDGET + 1
     handler = FakeHandler([ExecutionResult.failed(name, returncode=2) for name in classes])
     validator = FakeValidator([ValidationResult.invalid("no usable verdict") for _ in classes])
     store = SQLiteStateStore(tmp_path)
