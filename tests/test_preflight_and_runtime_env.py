@@ -225,7 +225,7 @@ def test_step_route_verdicts(tmp_path, monkeypatch):
     monkeypatch.setattr(pf, "_entry", lambda root, model_id: {"backend": "x"})
     monkeypatch.setattr(pf, "check_model", lambda model_id, *a, **k: pf.Check(f"model:{model_id}", statuses[model_id], ""))
     chains = {0: ["b", "a"], 1: ["a", "b"], 2: ["a", "c"], 3: ["d", "a"]}
-    monkeypatch.setattr(pf, "step_candidates", lambda root, project, step, defaults: chains[step])
+    monkeypatch.setattr(pf, "step_candidates", lambda root, project, step, defaults, **_kwargs: chains[step])
     steps, models = pf.check_routes(tmp_path, "_default", [0, 1, 2, 3], environ={}, http_get=None)
     assert [check.status for check in steps] == [pf.PASS, pf.WARN, pf.FAIL, pf.WARN]
     assert sorted(check.name for check in models) == ["model:a", "model:b", "model:c", "model:d"]

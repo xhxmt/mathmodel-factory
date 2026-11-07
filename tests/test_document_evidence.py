@@ -229,6 +229,11 @@ def test_claude_delivers_pages_only_when_every_image_was_read(tmp_path):
     sent = supervisor.argv[2]
     assert sent.startswith('Audit.') and all(path in sent for path in paths)
     assert observed == ['Audit.']  # the bound prompt is the original one
+    from factory_core.adapters.models.backends import claude_image_transport_suffix_sha256
+    # The Judge recomputes the suffix from the page list it expected.
+    assert result.metadata["image_transport_suffix_sha256"] == claude_image_transport_suffix_sha256(
+        tmp_path, request.image_files
+    )
 
 
 def test_claude_reports_unread_pages_as_a_backend_failure(tmp_path):

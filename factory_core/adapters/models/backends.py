@@ -183,6 +183,13 @@ def _claude_image_instructions(paths: list[str]) -> str:
     )
 
 
+def claude_image_transport_suffix_sha256(project_dir: Path, image_files) -> str:
+    """The hash of the prompt suffix the Claude CLI receives for these images."""
+
+    paths = [str((Path(project_dir) / image).resolve()) for image in image_files]
+    return hashlib.sha256(_claude_image_instructions(paths).encode("utf-8")).hexdigest()
+
+
 def _claude_read_paths(log: Path) -> set[str]:
     """Absolute paths the Claude CLI opened with its Read tool (stream-json log)."""
 

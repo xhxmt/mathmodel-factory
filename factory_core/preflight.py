@@ -246,7 +246,14 @@ def check_model(
     return Check(f"model:{model_id}", status, detail, {"backend": backend, "parts": [asdict(c) for c in findings]})
 
 
-def step_candidates(factory_root: Path, project_id: str, step_key: str | int, defaults: Iterable[str]) -> list[str]:
+def step_candidates(
+    factory_root: Path,
+    project_id: str,
+    step_key: str | int,
+    defaults: Iterable[str],
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> list[str]:
     """The candidate chain the dispatcher would try for one Step, in order."""
 
     from .adapters.models.dispatcher import ModelDispatcher
@@ -264,7 +271,7 @@ def step_candidates(factory_root: Path, project_id: str, step_key: str | int, de
 
     # The dispatcher skips candidates outside FACTORY_MODEL_ALLOWLIST, so the
     # preflight judges only the models that would actually run.
-    return [model_id for model_id in candidates if model_allowed(model_id)]
+    return [model_id for model_id in candidates if model_allowed(model_id, environ)]
 
 
 def _entry(factory_root: Path, model_id: str) -> dict[str, str] | None:
@@ -354,7 +361,9 @@ def check_routes(
                                      f"joint modeling enabled: {executor.detail}",
                                      {"candidates": [executor.name]}))
             continue
-        candidates = step_candidates(factory_root, project_id, step, contract.default_models)
+        candidates = step_candidates(
+            factory_root, project_id, step, contract.default_models, environ=environ
+        )
         verdicts = []
         for model_id in candidates:
             if model_id not in model_checks:

@@ -184,6 +184,40 @@ def test_the_model_allowlist_lets_the_allowed_model_run(monkeypatch, tmp_path):
     assert result.metadata["model_id"] == "claude-x"
 
 
+def test_every_disallowed_candidate_carries_the_allowlist_note(monkeypatch, tmp_path):
+    # Not registered, and outside the list: the list is what the run reports.
+    monkeypatch.setenv("FACTORY_MODEL_ALLOWLIST", "claude-x")
+    backends = ModelBackendRegistry()
+    backends.register("claude-x", _Backend(ExecutionResult.failed("TRANSIENT_MODEL_BACKEND", returncode=1)))
+    monkeypatch.setattr("factory_core.adapters.models.dispatcher.get_step_model_ids",
+                        lambda *_args: ("ghost", "claude-x"))
+    monkeypatch.setattr(
+        "factory_core.adapters.models.dispatcher.get_model_entry",
+        lambda _path, model_id: (
+            {"backend": model_id, "model": model_id, "effort": "", "base_url": "", "key_env": ""}
+            if model_id == "claude-x" else None
+        ),
+    )
+    request = ModelRequest(project_dir=tmp_path, step_id=9, attempt=1, prompt="draft",
+                           timeout_seconds=10, hang_timeout_seconds=5)
+    result = ModelDispatcher(tmp_path, backends).execute(request, step_key=9, defaults=("codex",))
+    assert result.returncode != 0
+    notes = {a["model_id"]: a.get("note") for a in result.metadata["candidate_attempts"]}
+    skipped = "skipped: FACTORY_MODEL_ALLOWLIST allows only claude-x"
+    assert notes["ghost"] == skipped and notes["codex"] == skipped  # unregistered and default alike
+    assert notes["claude-x"] != skipped
+
+
+def test_preflight_uses_the_callers_environment_for_the_allowlist(monkeypatch, tmp_path):
+    from factory_core import preflight
+
+    monkeypatch.setattr(
+        "factory_core.adapters.models.dispatcher.get_step_model_ids", lambda *_a: ("a", "b")
+    )
+    assert preflight.step_candidates(tmp_path, "demo", 9, ("c",), environ={"FACTORY_MODEL_ALLOWLIST": "a"}) == ["a"]
+    assert preflight.step_candidates(tmp_path, "demo", 9, ("c",), environ={}) == ["a", "b", "c"]
+
+
 def test_preflight_and_joint_modeling_respect_the_allowlist(monkeypatch, tmp_path):
     from factory_core import joint_modeling_executor, preflight
 

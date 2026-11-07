@@ -203,13 +203,18 @@ first, a fallback that could not launch last) and lists all of them in
 dispatcher skips every other candidate -- including the catalog defaults it
 otherwise appends after an assignment -- with a recorded note, `factory
 preflight` judges only allowed candidates, and joint modeling (which pins
-`claude-fable-5-1`) refuses to start unless its model is allowed. The Claude CLI
+`claude-fable-5-1`) refuses to start unless its model is allowed. The list
+filters model ids, so a single-model run also needs that id registered in
+`web/model_registry.json` and assigned to every `step_*` (e.g. under `_default`
+in `web/model_config.json`); the builtin `claude` id names no model and is
+skipped unless listed. The Claude CLI
 backend delivers Judge page images by naming each file in the prompt and
 requiring a Read-tool call, run with `--output-format stream-json`; an image
 counts as delivered (`image_inputs`, `image_transport=claude-read-tool-v1`)
 only when the log shows a Read of it, otherwise the call is
 `TRANSIENT_MODEL_BACKEND` with `images_not_read`. The input observer still binds
-the original prompt; the transport suffix is bound by hash. Unlike codex, the
+the original prompt; the transport suffix is bound by hash, which the Judge
+recomputes from the page list and records in the role's receipt metadata. Unlike codex, the
 Claude backend gives Judge roles no sandbox: isolation there is prompt-only.
 
 An incremental-audit check that ends without a verdict (timeout, signal, a log

@@ -186,7 +186,7 @@
 | 2 | 论文段采用"重排到 14→15→13"还是"直接去掉 Step 13 预审" | 已定（11 月 6 日）：重排；Gate 2 放在 Step 13 之前（见阶段 2 执行记录） | 阶段 2 开工前 |
 | 3 | 新的返工规则只用于新项目，还是也迁移现有项目 | 已定（11 月 7 日）：只用于新项目 | 阶段 4 开工前 |
 | 4 | 运行级回退上限的数值，用尽时暂停还是失败 | 已定（11 月 6 日）：每个发起阶段 2 次 + 每次运行 5 次，任一用尽都暂停并报告（见阶段 3 执行记录） | 阶段 3 |
-| 5 | 验收运行的模型线路与充值金额 | 已定（11 月 7 日）：验收 A 全部 Step 与全部 Judge 角色只用 Claude Haiku 5.5（`claude-haiku-5-5`，Claude CLI），由 `FACTORY_MODEL_ALLOWLIST` 强制；赛题 CUMCM 2026 A | 验收 A 前 |
+| 5 | 验收运行的模型线路与充值金额 | 已定（11 月 7 日）：验收 A 全部 Step 与全部 Judge 角色只用 Claude Haiku 5.5（`claude-haiku-5-5`，Claude CLI），由 `FACTORY_MODEL_ALLOWLIST=claude-haiku-5-5` 强制（验收区 `web/model_registry.json` 需登记 `{"id": "claude-haiku-5-5", "backend": "claude", "model": "claude-haiku-5-5", "effort": "max"}`，`web/model_config.json` 的 `_default` 把每个 `step_*` 的 primary 设为它；内置的 `claude` 候选没有具体模型，会被名单跳过）；费用由本机 Claude CLI 登录账户承担，不单独充值；赛题 CUMCM 2026 A | 验收 A 前 |
 | 6 | 存储层是否放弃按域哈希链 | 验收 B 后再定 | 阶段 6 |
 | 7 | REV3 修复计划怎么处理 | 已定（11 月 5 日，按此建议）：REV3 作为参考，它的 W1b、W3、W4、W8 并入本方案阶段 1–4，W0 写入屏障类推迟到阶段 6 | 阶段 0 |
 | 8 | `chore/retire-dead-assets-batch1` 的 5 个提交 | 已完成：重新基于 main 提 PR #40，11 月 5 日合入 main（`1f35d66`） | 阶段 0 |
