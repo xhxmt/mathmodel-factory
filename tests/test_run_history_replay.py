@@ -356,3 +356,33 @@ def test_replay_rows_keep_the_recorded_and_the_evaluated_stage(fixtures):
     assert step13
     assert {row["recorded_stage"] for row in step13} == {8}
     assert {row["evaluated_stage"] for row in step13} == {10}
+
+
+def test_input_dependency_rule_recomputes_only_when_a_completed_step_consumed_the_change(fixtures):
+    """Phase 4 exit condition, replayed on the 16 recorded runs.
+
+    Of the recorded reopens, only the change sets in which a completed
+    computation Step (5-8) consumed a changed input re-run anything, and each
+    lists that input.  Everything else is a forward repair.
+    """
+
+    rows = replay.replay_decisions(fixtures, replay.RULES["v2-inputs"])
+    recorded = [row for row in rows if row["evaluated"] and row["recorded"]["reopen"]]
+    decided = [row for row in rows if row["evaluated"] and row["decided"]["reopen"]]
+
+    assert len(recorded) == 49
+    assert {(row["run"][-24:], row["rev"]) for row in decided} == {
+        ("cumcm_2026_a_fable_pro_20260910"[-24:], 199),  # Step 10 edited solve code
+        ("cumcm_2026_a_fable_pro_20260910"[-24:], 310),  # Step 12 edited solve code
+        ("cumcm_2026_a_postmerge_run2"[-24:], 490),  # Step 12 edited code and main results
+    }
+    for row in decided:
+        decision = row["decided"]
+        # Re-run the computation Steps from the consumer on, never Step 4.
+        assert decision["recompute_steps"] == [5, 6, 7, 8]
+        assert decision["owner_stage"] == 4
+        assert decision["reasons"], row
+        assert all("consumed by Step" in reason for reason in decision["reasons"])
+        assert not any(reason.split(":")[0].endswith(".md") for reason in decision["reasons"])
+    # No decision rewinds to model construction or earlier.
+    assert all(row["decided"]["owner_stage"] >= 4 for row in decided)

@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from .adapters.infrastructure.process import _process_identity
 from .contest import ContestDeadlineExceeded, ContestPolicy, effective_timeout
 from .deadline import deadline_scope, ensure_deadline
@@ -1360,6 +1360,9 @@ class FactoryEngine:
         # that dirty.py's bytes (part of the frozen classifier contract identity)
         # stay untouched.
         sources = classification_sources(before, after)
+        v2 = state.stage_catalog_version == STAGE_CATALOG_VERSION_V2
+        if v2:
+            completed_computation_steps = self._completed_computation_steps(state)
         for change in classify_manifest_changes(before, after):
             record = {
                 **change.to_dict(),
@@ -1371,7 +1374,8 @@ class FactoryEngine:
             receipt_owner = self._solver_receipt_owner_stage(change.cause_artifact)
             if receipt_owner is not None:
                 record["owner_stage"] = receipt_owner
-            if state.stage_catalog_version == STAGE_CATALOG_VERSION_V2:
+            if v2:
+                from .input_dependency_policy import apply_to_record
                 from .stage_catalog_v2_policy import v2_owner_stage
 
                 owner, rule = v2_owner_stage(record, initiator_stage=task.stage_id)
@@ -1380,6 +1384,13 @@ class FactoryEngine:
                     record["v2_owner_rule"] = rule
                     record["owner_stage"] = owner
                     record["classification_source"] = "stage_catalog_v2"
+                # Phase 4: rework by input dependency, not by ownership.
+                apply_to_record(
+                    record,
+                    initiator_stage=task.stage_id,
+                    completed_steps=completed_computation_steps,
+                    stage_of_step=lambda step: self._catalog(state).stage_for_step(step).id,
+                )
             dirty_changes.append(record)
         return (
             str(baseline["input_fingerprint"]),
@@ -1387,6 +1398,68 @@ class FactoryEngine:
             after,
             dirty_changes,
         )
+
+    def _input_recompute_plan(
+        self, state: WorkflowState, dirty_changes: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Which computation subtasks re-run for consumed inputs (phase 4).
+
+        The earliest completed computation Step that consumed a changed input
+        and the completed computation Steps after it lose their checkpoints;
+        every other checkpoint stays, so the scheduler re-runs them and then
+        returns to the first unfinished subtask, the initiating one.
+        """
+
+        from .input_dependency_policy import recompute_steps
+
+        causes = [item for item in dirty_changes if item.get("input_consumer_step") is not None]
+        if not causes:
+            return None
+        start = min(int(item["input_consumer_step"]) for item in causes)
+        completed = self._completed_computation_steps(state)
+        steps = [step for step in recompute_steps(start) if step in completed]
+        catalog = self._catalog(state)
+        subtasks = [
+            (stage.id, subtask.key)
+            for stage, subtask in catalog.order
+            if subtask.kind == "step" and subtask.source_step_id in steps
+        ]
+        first = next(
+            index
+            for index, (_stage, subtask) in enumerate(catalog.order)
+            if subtask.kind == "step" and subtask.source_step_id == start
+        )
+        previous = [
+            subtask.checkpoint_step_id
+            for _stage, subtask in catalog.order[:first]
+            if subtask.checkpoint_step_id is not None
+        ]
+        return {
+            "start_step": start,
+            "steps": steps,
+            "subtasks": subtasks,
+            "owner_stage": catalog.stage_for_step(start).id,
+            "resume_after_step": previous[-1] if previous else -1,
+            "causes": causes,
+            "reasons": sorted(
+                f"{item.get('cause_artifact')}: consumed by Step {item['input_consumer_step']}"
+                for item in causes
+            ),
+        }
+
+    def _completed_computation_steps(self, state: WorkflowState) -> set[int]:
+        """The computation Steps (5-8) whose Stage checkpoint is present."""
+
+        from .input_dependency_policy import COMPUTATION_STEPS
+
+        completed = self.store.completed_stage_subtasks()
+        return {
+            subtask.source_step_id
+            for stage, subtask in self._catalog(state).order
+            if subtask.kind == "step"
+            and subtask.source_step_id in COMPUTATION_STEPS
+            and (stage.id, subtask.key) in completed
+        }
 
     def _solver_receipt_owner_stage(self, artifact: str) -> int | None:
         """Resolve shared receipt infrastructure to its durable job owner."""
@@ -1615,13 +1688,17 @@ class FactoryEngine:
         semantic_reopen_target: int | None = None
         semantic_owner_stage: int | None = None
         semantic_reason = ""
-        upstream_owners = sorted(
-            {
-                int(item["owner_stage"])
-                for item in dirty_changes
-                if int(item["owner_stage"]) < task.stage_id
-            }
-        )
+        recompute: dict[str, Any] | None = None
+        # Phase 4 (Stage catalog v2): a change a completed computation Step
+        # consumed is re-owned by that Step's Stage but re-runs only the
+        # computation Steps (a recompute), not everything after its owner.
+        reopen_causes = [
+            item
+            for item in dirty_changes
+            if int(item["owner_stage"]) < task.stage_id
+            and not str(item.get("v2_owner_rule", "")).startswith("v2_input_consumer")
+        ]
+        upstream_owners = sorted({int(item["owner_stage"]) for item in reopen_causes})
         if upstream_owners:
             semantic_owner_stage = upstream_owners[0]
             semantic_reopen_target = self._catalog(state).resume_after_step_for_stage(
@@ -1631,6 +1708,17 @@ class FactoryEngine:
                 f"Stage {task.stage_id} changed content owned by "
                 f"Stage {semantic_owner_stage}"
             )
+        elif state.stage_catalog_version == STAGE_CATALOG_VERSION_V2:
+            recompute = self._input_recompute_plan(state, dirty_changes)
+            if recompute is not None:
+                semantic_owner_stage = recompute["owner_stage"]
+                semantic_reopen_target = recompute["resume_after_step"]
+                reopen_causes = recompute["causes"]
+                semantic_reason = (
+                    f"Stage {task.stage_id} changed an input of completed "
+                    f"Step {recompute['start_step']}; recompute Steps "
+                    + ", ".join(str(step) for step in recompute["steps"])
+                )
 
         if semantic_reopen_target is not None:
             budget = self._semantic_reopen_budget(task.stage_id, state)
@@ -1659,9 +1747,8 @@ class FactoryEngine:
                             "evidence": sorted(
                                 {
                                     str(item["cause_artifact"])
-                                    for item in dirty_changes
-                                    if int(item["owner_stage"]) < task.stage_id
-                                    and item.get("cause_artifact")
+                                    for item in reopen_causes
+                                    if item.get("cause_artifact")
                                 }
                             ),
                         },
@@ -1680,8 +1767,7 @@ class FactoryEngine:
                                     "owner_stage": int(item["owner_stage"]),
                                     "cause_artifact": str(item.get("cause_artifact") or ""),
                                 }
-                                for item in dirty_changes
-                                if int(item["owner_stage"]) < task.stage_id
+                                for item in reopen_causes
                             ],
                             "options": [
                                 "revert_upstream_edits_and_resume",
@@ -1718,9 +1804,23 @@ class FactoryEngine:
                     "reason": semantic_reason,
                     "dirty_flags": sorted(new_flags),
                     "classifier_contract_sha256": self._classifier_sha(state),
+                    **(
+                        {
+                            "rework_rule": "input_dependency",
+                            "recompute_steps": recompute["steps"],
+                            "return_subtask": task.subtask,
+                            "recompute_reasons": recompute["reasons"],
+                        }
+                        if recompute is not None
+                        else {}
+                    ),
                 },
                 dirty_changes=dirty_changes,
-                invalidate_checkpoints_after_step=semantic_reopen_target,
+                **(
+                    {"invalidate_stage_subtasks": recompute["subtasks"]}
+                    if recompute is not None
+                    else {"invalidate_checkpoints_after_step": semantic_reopen_target}
+                ),
                 subtask_baseline=None,
                 event_step=task.source_step_id,
             )

@@ -2951,6 +2951,7 @@ class SQLiteStateStore:
         clear_dirty_stage: dict[str, Any] | None = None,
         invalidate_checkpoints_after_step: int | None = None,
         replace_stage_checkpoints: bool = False,
+        invalidate_stage_subtasks: list[tuple[int, str]] | None = None,
         event_step: int | None | object = _UNSET,
     ) -> WorkflowState:
         changes = dict(changes or {})
@@ -3076,6 +3077,14 @@ class SQLiteStateStore:
             if invalidate_checkpoints_after_step is not None:
                 _invalidate_stage_checkpoints_after(
                     connection, int(invalidate_checkpoints_after_step)
+                )
+            # Phase 4 (Stage catalog v2): a recompute re-runs only the named
+            # computation subtasks; the checkpoints between them and the
+            # initiating subtask stay, so the scheduler returns to it.
+            for stage_id, subtask in invalidate_stage_subtasks or ():
+                connection.execute(
+                    "DELETE FROM stage_checkpoints WHERE stage_id = ? AND subtask = ?",
+                    (int(stage_id), str(subtask)),
                 )
             if stage_checkpoint is not None:
                 checkpoint = dict(stage_checkpoint)

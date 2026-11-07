@@ -97,7 +97,13 @@ def v2_owner_stage(record: dict[str, Any], *, initiator_stage: int) -> tuple[int
 
 
 def v2_classifier_contract_sha256(base_classifier_sha256: str) -> str:
-    """The v2 classifier identity: the shared classifier plus these rules."""
+    """The v2 classifier identity: the shared classifier plus these rules.
+
+    Phase 4 folds in the input-dependency rework rule
+    (``input_dependency_policy``), which v2 applies after these owner rules.
+    """
+
+    from .input_dependency_policy import input_dependency_contract_sha256
 
     return hashlib.sha256(
         b"\0".join(
@@ -105,6 +111,7 @@ def v2_classifier_contract_sha256(base_classifier_sha256: str) -> str:
                 V2_DIRTY_POLICY_SCHEMA.encode(),
                 base_classifier_sha256.encode(),
                 Path(__file__).read_bytes(),
+                input_dependency_contract_sha256().encode(),
             ]
         )
     ).hexdigest()

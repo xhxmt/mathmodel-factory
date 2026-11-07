@@ -277,6 +277,12 @@ class Decision:
     # Stage; a catalog that moves the initiating Step (v2 runs Step 13 in
     # Stage 10, recorded as the v1 Stage-8 precheck) states its own.
     stage: int | None = None
+    # Phase 4: why the rule decided as it did, one line per changed artifact
+    # that a completed computation Step consumed (empty for other rules).
+    reasons: tuple[str, ...] = ()
+    # Phase 4: the computation Steps re-run before returning to the
+    # initiating Step (empty for rules that rewind by ownership).
+    recompute_steps: tuple[int, ...] = ()
 
 
 def change_sets(fixture: dict[str, Any]) -> list[ChangeSet]:
@@ -430,10 +436,65 @@ def v2_stage(change_set: ChangeSet) -> int | None:
     return change_set.stage
 
 
+def input_dependency_rule(change_set: ChangeSet) -> Decision:
+    """Stage catalog v2 with the phase-4 input-dependency rework rule.
+
+    A change obliges a re-run only when a computation Step (5-8) that already
+    ran consumed it (``factory_core.input_dependency_policy``).  The earliest
+    such Step and the computation Steps after it re-run, then the workflow
+    returns to the initiating Step; documents are forward repairs.  The
+    initiating Step is placed by its v2 catalog position, as in the ``v2`` rule.
+    """
+
+    from factory_core.input_dependency_policy import (
+        COMPUTATION_STEPS,
+        classify_input,
+        recompute_start,
+        recompute_steps,
+    )
+    from factory_core.stages import CATALOG_V2
+
+    if change_set.step is None:
+        return Decision(reopen=False, stage=v2_stage(change_set))
+    stage = v2_stage(change_set)
+    position = CATALOG_V2.step_position(change_set.step)
+    completed = {step for step in COMPUTATION_STEPS if CATALOG_V2.step_position(step) < position}
+    dependencies = [
+        classify_input(
+            str(row["artifact"]),
+            baseline=str(row.get("baseline", "")),
+            v1_owner_stage=int(row["owner_stage"]),
+        )
+        for row in change_set.changes
+    ]
+    start = recompute_start(dependencies, completed_steps=completed)
+    if start is None:
+        return Decision(reopen=False, stage=stage)
+    steps = tuple(step for step in recompute_steps(start) if step in completed)
+    reasons = tuple(
+        sorted(
+            f"{item.artifact}: {item.reason}"
+            for item in dependencies
+            if item.consumer_step is not None and item.consumer_step in completed
+        )
+    )
+    owner = CATALOG_V2.stage_for_step(start).id
+    return Decision(
+        reopen=True,
+        owner_stage=owner,
+        resume_after_step=CATALOG_V2.resume_after_step_for_stage(owner),
+        owners=(owner,),
+        stage=stage,
+        reasons=reasons,
+        recompute_steps=steps,
+    )
+
+
 RULES: dict[str, Callable[[ChangeSet], Decision]] = {
     "recorded": recorded_rule,
     "current": current_rule,
     "v2": stage_catalog_v2_rule,
+    "v2-inputs": input_dependency_rule,
 }
 
 
@@ -454,7 +515,7 @@ def replay_decisions(fixtures: list[dict[str, Any]], rule: Callable[[ChangeSet],
             # recorded in v1 Stage 8 but evaluated in Stage 10.
             if decision.stage is not None:
                 evaluated_stage = decision.stage
-            elif rule is stage_catalog_v2_rule:
+            elif rule in (stage_catalog_v2_rule, input_dependency_rule):
                 evaluated_stage = v2_stage(change_set)
             else:
                 evaluated_stage = change_set.stage
@@ -482,6 +543,8 @@ def replay_decisions(fixtures: list[dict[str, Any]], rule: Callable[[ChangeSet],
                         "owner_stage": decision.owner_stage,
                         "resume_after_step": decision.resume_after_step,
                         "owners": list(decision.owners),
+                        "reasons": list(decision.reasons),
+                        "recompute_steps": list(decision.recompute_steps),
                     },
                 }
             )
