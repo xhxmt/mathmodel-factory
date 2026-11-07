@@ -40,6 +40,8 @@ ALL_COMPUTATION = {5, 6, 7, 8}
         ("results/problem1/values.json", 4, "result", 6),
         ("results/sensitivity/summary.json", 5, "result", 7),
         ("results/derived_artifacts.json", 9, "result", None),
+        # The solve's quick-look plots are what visualization redraws.
+        ("results/problem1/plots.pdf", 4, "result", 8),
         # Machine evidence is never an input.
         (".factory/solver_receipts/job-1/completion.json", 4, "evidence", None),
         ("run_state/solver_jobs/job-1.json", 4, "evidence", None),

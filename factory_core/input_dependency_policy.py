@@ -65,7 +65,6 @@ _EVIDENCE_PATTERNS = (
     "results/**/bound.json",
     "results/**/convergence.json",
     "results/**/cross_check.json",
-    "results/**/plots.pdf",
     "results/**/*provenance*",
     "results/**/*source_mapping*",
     "results/**/*solver_evidence*",
@@ -86,6 +85,10 @@ _CODE_CONSUMER_BY_OWNER = {3: 5, 4: 5, 5: 6, 6: 8}
 # results (Stage 5) feed evaluation.  Results owned by the paper Stages
 # (derived artifacts, revision diagnostics) feed no computation Step.
 _RESULT_CONSUMER_BY_OWNER = {4: 6, 5: 7}
+# Result files whose reader is not the one their owner Stage implies.  The
+# solve's quick-look ``plots.pdf`` is what visualization redraws as paper
+# figures (prompts/step8_visualization.txt), so it feeds Step 8.
+_RESULT_CONSUMER_BY_PATTERN = (("results/**/plots.pdf", 8),)
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,9 @@ def classify_input(artifact: str, *, baseline: str, v1_owner_stage: int) -> Inpu
     if path.startswith(_DATA_ROOTS):
         return InputDependency(path, "data", 5)
     if path.startswith(_RESULT_ROOT):
+        for pattern, consumer in _RESULT_CONSUMER_BY_PATTERN:
+            if fnmatch.fnmatchcase(path, pattern):
+                return InputDependency(path, "result", consumer)
         return InputDependency(path, "result", _RESULT_CONSUMER_BY_OWNER.get(owner))
     return InputDependency(path, "document", None)
 

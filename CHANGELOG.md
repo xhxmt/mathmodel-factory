@@ -4,10 +4,11 @@
 
 决策 3（新规则只用于新项目）落实为：只对 Stage catalog v2 项目生效（11 月 7 日决定，现有项目均为 v1 或旧格式，没有受影响的项目）；Step 4 不算计算步骤（同日决定）。
 
-- **规则**：新增 `factory_core/input_dependency_policy.py`，并入 v2 分类器身份。只有已完成的计算步骤（5 求解、6 灵敏度、7 评价、8 可视化）消费过的输入变了，才重算：模型 / 求解代码、数据、主结果与灵敏度结果；消费者按所有权注册表的 owner Stage 确定（求解代码 → 5，灵敏度脚本 → 6，图脚本 → 8；主结果 → 6，灵敏度结果 → 7）。文档、机器证据（回执、作业状态、日志、输入快照，以及 `bound.json`、`convergence.json`、`cross_check.json` 等求解诊断）、本子任务新建的文件一律向前修复；`data/` 下任意路径都算数据输入。
+- **规则**：新增 `factory_core/input_dependency_policy.py`，并入 v2 分类器身份。只有已完成的计算步骤（5 求解、6 灵敏度、7 评价、8 可视化）消费过的输入变了，才重算：模型 / 求解代码、数据、主结果与灵敏度结果；消费者按所有权注册表的 owner Stage 确定（求解代码 → 5，灵敏度脚本 → 6，图脚本 → 8；主结果 → 6，灵敏度结果 → 7）。文档、机器证据（回执、作业状态、日志、输入快照，以及 `bound.json`、`convergence.json`、`cross_check.json` 等求解诊断）、本子任务新建的文件一律向前修复；`data/` 下已存在、且不属于上述证据的路径都算数据输入；求解的 quick-look 图 `results/**/plots.pdf` 是 Step 8 的输入（可视化据此重画论文图）。
 - **绕道重算**：重算时只删除这些计算子任务的检查点（`SQLiteStateStore.transition(invalidate_stage_subtasks=...)`），论文段检查点保留；调度器按检查点集合重跑它们，然后回到发起的子任务。`STAGE_SEMANTIC_REOPENED` 增加 `rework_rule`、`recompute_steps`、`return_subtask`、`recompute_reasons`。消费者与发起者同在一个 Stage 时（如 Step 7 改了 Step 6 读的结果）同样触发。
 - **不变的部分**：失败关闭类记录（缺少 Stage 基线、未登记路径 `fallback`、受保护条目、专门恢复记录）仍按归属回退；v1 项目逐字节不变；阶段 3 的回退预算（每发起阶段 2 次、每次运行 5 次）对重算同样计数。
 - **回放**：新增规则 `v2-inputs`，与引擎走同一条链（当前分类器 → v2 归属规则 → 输入依赖规则）。49 次记录在案的回退中 1 次触发重算（run2 rev490：修订改了求解代码和主结果，重跑 5–8、不回到 Step 4），2 次为未登记文件的失败关闭回退（gpt_formal rev902、rev948），其余 46 次为向前修复，每条决定附理由。
+- **PR #51 第二轮审查修复（cubic 2 条）**：`results/**/plots.pdf` 不再归为证据，改为 Step 8 的输入；CHANGELOG 中 `data/` 的说法补上限定。
 - **PR #51 审查修复（cubic 8 条）**：未登记路径保持失败关闭；求解诊断归为证据；回放对无 Step 的变更集退回 v2 归属规则、对失败关闭记录保留归属回退，并改用当前分类器重新分类（此前按夹具记录的旧 owner，把 fable_pro 的报告范围清单误判为求解代码，多算了 2 次重算）；补测试（两个消费者取最早者、失败关闭记录不动、结果改动不重跑求解、未登记文件回退）；执行记录补充"规则 1、2 未按初稿实现"，决策表新增第 10、11 条。
 - 测试：新增 `tests/test_input_dependency_policy.py`；`tests/test_stage_catalog_v2.py` 用 4 例替换原"代码改动回到 Stage 3"的用例（代码改动绕道重算后回到修订、结果改动从灵敏度重算、文档改动不重算、同 Stage 消费者），另加 v1 对照；`tests/test_run_history_replay.py` 新增 1 例。
 
