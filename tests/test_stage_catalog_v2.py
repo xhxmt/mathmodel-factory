@@ -283,18 +283,148 @@ def test_v2_revision_document_edit_is_a_forward_repair(tmp_path):
     assert state.active_subtask == "abstract"
 
 
-def test_v2_revision_model_code_change_still_reopens(tmp_path):
+def _checkpoint_steps(store):
+    return sorted(
+        item["completed_step_id"] for item in store.stage_checkpoints()
+        if item["completed_step_id"] is not None
+    )
+
+
+def test_v2_revision_model_code_change_recomputes_then_returns_to_revision(tmp_path):
+    """Phase 4: changed solve code re-runs Steps 5-8 only, then revision resumes."""
+
     (tmp_path / "models").mkdir()
     (tmp_path / "models" / "solve.py").write_text("x = 1\n", encoding="utf-8")
     revision = Lifecycle(writes={"models/solve.py": "x = 2\n"})
+    registry, lifecycles = v2_registry(overrides={12: revision})
+    store = v2_store(tmp_path, last_completed_step=11)
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+
+    engine.run(max_steps=1)
+
+    [reopen] = reopens(store)
+    assert reopen.payload["rework_rule"] == "input_dependency"
+    assert reopen.payload["recompute_steps"] == [5, 6, 7, 8]
+    assert reopen.payload["return_subtask"] == "revision"
+    assert reopen.payload["semantic_owner_stage"] == 4  # the solve, not model construction
+    assert reopen.payload["resume_after_step"] == 4
+    assert reopen.payload["recompute_reasons"] == ["models/solve.py: consumed by Step 5"]
+    # Only the computation checkpoints went; the paper segment's stayed.  The
+    # same run already re-ran the solve (the reopen is not a counted step).
+    assert _checkpoint_steps(store) == [0, 1, 2, 3, 4, 5, 9, 10, 11]
+    assert lifecycles[5].calls == [1]
+
+    state = engine.run(max_steps=4)  # sensitivity, evaluation, visualization, revision
+
+    for step in (5, 6, 7, 8):
+        assert lifecycles[step].calls == [1], step
+    for step in (4, 9, 10, 11):
+        assert lifecycles[step].calls == [], step  # not re-run
+    assert len(revision.calls) == 2  # revision runs again on the recomputed results
+    assert len(reopens(store)) == 1
+    assert state.last_completed_step == 12
+    assert _checkpoint_steps(store) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+
+def test_v2_revision_result_change_recomputes_from_sensitivity(tmp_path):
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "canonical_results.json").write_text("{}\n", encoding="utf-8")
+    revision = Lifecycle(writes={"results/canonical_results.json": '{"p1": 1}\n'})
+    registry, lifecycles = v2_registry(overrides={12: revision})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    [reopen] = reopens(store)
+    assert reopen.payload["recompute_steps"] == [6, 7, 8]
+    assert reopen.payload["return_subtask"] == "revision"
+    assert reopen.payload["semantic_owner_stage"] == 5
+    assert lifecycles[5].calls == []  # the solve did not consume the result
+    assert lifecycles[6].calls == [1]
+    # The solve keeps its checkpoint; sensitivity already re-ran in this run.
+    assert _checkpoint_steps(store) == [0, 1, 2, 3, 4, 5, 6, 9, 10, 11]
+
+
+def test_v2_revision_document_change_recomputes_nothing(tmp_path):
+    for name in ("symbol_table.md", "model.md", "evaluation.md"):
+        (tmp_path / name).write_text("# v1\n", encoding="utf-8")
+    revision = Lifecycle(writes={name: "# v2\n" for name in ("symbol_table.md", "model.md", "evaluation.md")})
+    registry, lifecycles = v2_registry(overrides={12: revision})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    assert reopens(store) == []
+    assert state.last_completed_step == 12
+    assert all(lifecycles[step].calls == [] for step in range(4, 12))
+    succeeded = [e for e in store.events() if e.type == "STEP_SUCCEEDED"][-1]
+    assert succeeded.payload["subtask"] == "revision"  # forward repair, no recompute
+
+
+def test_v2_evaluation_changing_main_results_recomputes_sensitivity_in_its_own_stage(tmp_path):
+    # Steps 6 and 7 share Stage 5: the consumer is completed though not upstream.
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "canonical_results.json").write_text("{}\n", encoding="utf-8")
+    evaluation = Lifecycle(writes={"results/canonical_results.json": '{"p1": 1}\n'})
+    registry, lifecycles = v2_registry(overrides={7: evaluation})
+    store = v2_store(tmp_path, last_completed_step=6)
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+
+    engine.run(max_steps=1)
+
+    [reopen] = reopens(store)
+    assert reopen.payload["recompute_steps"] == [6]
+    assert reopen.payload["return_subtask"] == "model_evaluation"
+    engine.run(max_steps=2)
+    assert lifecycles[6].calls == [1] and len(evaluation.calls) == 2
+    assert lifecycles[5].calls == []
+
+
+def test_v2_unregistered_file_keeps_the_fail_closed_rewind(tmp_path):
+    # No ownership rule covers it, so its role is unknown: the rule does not
+    # guess "document" for it.
+    (tmp_path / "m2_peak_groups.csv").write_text("a\n", encoding="utf-8")
+    revision = Lifecycle(writes={"m2_peak_groups.csv": "b\n"})
     registry, _ = v2_registry(overrides={12: revision})
     store = v2_store(tmp_path, last_completed_step=11)
 
     FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
 
     [reopen] = reopens(store)
+    assert "rework_rule" not in reopen.payload
+    assert reopen.payload["semantic_owner_stage"] == 4  # fail-closed RESULT@4
+
+
+def test_v1_project_keeps_the_ownership_rewind_for_the_same_code_edit(tmp_path):
+    from factory_core.stages import STAGE_CATALOG_VERSION as V1
+
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "solve.py").write_text("x = 1\n", encoding="utf-8")
+    revision = Lifecycle(writes={"models/solve.py": "x = 2\n"})
+    registry, _ = v2_registry(overrides={12: revision})
+    registry.register_stage_subtask(
+        "conditional_math_preflight_skip",
+        StepDefinition(13, "conditional_math_preflight_skip", 10_800, 1, max_reopens=0, step=Lifecycle()),
+    )
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling", last_completed_step=11,
+                     scheduler_generation=STAGE_SCHEDULER_GENERATION, stage_catalog_version=V1)
+    write_reviewer_reports(tmp_path)
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision, event_type="TRUST_REVIEWER_GATE_FOR_TEST", changes={},
+        stage_checkpoint={"stage_id": 6, "subtask": "reviewer_entry_gate", "source_step_id": 8,
+                          "completed_step_id": None, "input_fingerprint": "t", "output_fingerprint": "t",
+                          "receipt": {"schema_version": "factory-stage-checkpoint-v1",
+                                      "validation": {"step8_5": collect_step8_5_state(tmp_path)},
+                                      "result": {}}},
+    )
+
+    FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    [reopen] = reopens(store)
     assert reopen.payload["semantic_owner_stage"] == 3
-    assert reopen.payload["resume_after_step"] == 3
+    assert "rework_rule" not in reopen.payload
 
 
 def test_v2_v1_project_keeps_v1_reopen_for_the_same_edit(tmp_path):

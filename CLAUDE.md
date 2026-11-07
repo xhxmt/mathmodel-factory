@@ -97,6 +97,18 @@ comparison. v2 dirty-owner rules live in `factory_core/stage_catalog_v2_policy.p
 a catalog-specific overlay applied to the owners the `artifact_ownership.py`
 registry returns (it re-owns three named kinds of change; it is not a second
 path-owner table);
+v2 rework is by input dependency (phase 4, `factory_core/input_dependency_policy.py`,
+part of the v2 classifier identity): a change re-runs work only when a completed
+computation Step (5 solve, 6 sensitivity, 7 evaluation, 8 visualization) consumed
+it -- code, data, or main/sensitivity results, with consumers resolved from the
+ownership registry's owner Stage. Then only those computation subtasks lose their
+checkpoints (`invalidate_stage_subtasks`), the scheduler re-runs them and returns
+to the initiating subtask; `STAGE_SEMANTIC_REOPENED` carries `rework_rule=input_dependency`,
+`recompute_steps`, `return_subtask` and `recompute_reasons`. Documents, machine
+evidence and files the subtask created are forward repairs, Step 4 is never re-run
+by this rule, and fail-closed records (`explicit_fail_closed`, `fallback` -- an
+unregistered path --, `protected`, `bespoke_recovery`) keep the ownership rewind.
+The replay rule `v2-inputs` mirrors this chain. v1 projects are unchanged;
 v2 prompt wording is a rendering overlay in `factory_core/steps/catalog_prompts.py`
 so v1 prompts stay byte-identical.
 

@@ -277,6 +277,12 @@ class Decision:
     # Stage; a catalog that moves the initiating Step (v2 runs Step 13 in
     # Stage 10, recorded as the v1 Stage-8 precheck) states its own.
     stage: int | None = None
+    # Phase 4: why the rule decided as it did, one line per changed artifact
+    # that a completed computation Step consumed (empty for other rules).
+    reasons: tuple[str, ...] = ()
+    # Phase 4: the computation Steps re-run before returning to the
+    # initiating Step (empty for rules that rewind by ownership).
+    recompute_steps: tuple[int, ...] = ()
 
 
 def change_sets(fixture: dict[str, Any]) -> list[ChangeSet]:
@@ -430,10 +436,120 @@ def v2_stage(change_set: ChangeSet) -> int | None:
     return change_set.stage
 
 
+def input_dependency_rule(change_set: ChangeSet) -> Decision:
+    """Stage catalog v2 with the phase-4 input-dependency rework rule.
+
+    Mirrors ``FactoryEngine._stage_manifest_delta`` and its reopen decision:
+    the change set is re-classified with the checked-out classifier, each
+    change goes through the v2 owner rules and then
+    ``input_dependency_policy.apply_to_record``.  Fail-closed changes
+    (unregistered paths, a missing Stage baseline) keep the ownership rewind;
+    otherwise a change a completed computation Step (5-8) consumed re-runs the
+    computation Steps from that consumer on, and documents are forward
+    repairs.  The initiating Step is placed by its v2 catalog position.
+    """
+
+    from factory_core.current_dirty import classify_manifest_changes
+    from factory_core.dirty import solver_receipt_job_id
+    from factory_core.dirty_classification import classification_sources, source_for
+    from factory_core.input_dependency_policy import (
+        COMPUTATION_STEPS,
+        apply_to_record,
+        recompute_steps,
+    )
+    from factory_core.stage_catalog_v2_policy import v2_owner_stage
+    from factory_core.stages import CATALOG_V2
+
+    if change_set.step is None:
+        # Without an initiating Step there is no position to judge consumers
+        # from; keep the v2 ownership decision rather than hiding it.
+        return stage_catalog_v2_rule(change_set)
+    stage = v2_stage(change_set)
+    position = CATALOG_V2.step_position(change_set.step)
+    completed = {step for step in COMPUTATION_STEPS if CATALOG_V2.step_position(step) < position}
+    before, after, passthrough = rebuild_manifests(change_set.changes)
+    sources = classification_sources(before, after)
+    records: list[dict[str, Any]] = [
+        {
+            "flag": row["flag"],
+            "owner_stage": int(row["owner_stage"]),
+            "cause_artifact": row["artifact"],
+            "baseline_fingerprint": row["baseline"],
+            "classification_source": "explicit_fail_closed",
+        }
+        for row in passthrough
+    ]
+    for change in classify_manifest_changes(before, after):
+        record = {
+            **change.to_dict(),
+            "classification_source": source_for(sources, change.flag.value, change.cause_artifact),
+        }
+        job_id = solver_receipt_job_id(change.cause_artifact)
+        if job_id is not None and job_id in change_set.solver_job_owners:
+            record["owner_stage"] = change_set.solver_job_owners[job_id]
+        owner, rule = v2_owner_stage(record, initiator_stage=stage)
+        if rule is not None:
+            record["v1_owner_stage"] = record["owner_stage"]
+            record["owner_stage"] = owner
+        apply_to_record(
+            record,
+            initiator_stage=stage,
+            completed_steps=completed,
+            stage_of_step=lambda step: CATALOG_V2.stage_for_step(step).id,
+        )
+        records.append(record)
+
+    rewind = [
+        item
+        for item in records
+        if int(item["owner_stage"]) < stage
+        and not str(item.get("v2_owner_rule", "")).startswith("v2_input_consumer")
+    ]
+    if rewind:
+        owners = tuple(sorted({int(item["owner_stage"]) for item in rewind}))
+        return Decision(
+            reopen=True,
+            owner_stage=owners[0],
+            resume_after_step=CATALOG_V2.resume_after_step_for_stage(owners[0]),
+            owners=owners,
+            stage=stage,
+            reasons=tuple(
+                sorted(
+                    {
+                        f"{item['cause_artifact']}: {item['classification_source']}; ownership rewind"
+                        for item in rewind
+                    }
+                )
+            ),
+        )
+    consumed = [item for item in records if item.get("input_consumer_step") is not None]
+    if not consumed:
+        return Decision(reopen=False, stage=stage)
+    start = min(int(item["input_consumer_step"]) for item in consumed)
+    owner = CATALOG_V2.stage_for_step(start).id
+    return Decision(
+        reopen=True,
+        owner_stage=owner,
+        resume_after_step=CATALOG_V2.resume_after_step_for_stage(owner),
+        owners=(owner,),
+        stage=stage,
+        reasons=tuple(
+            sorted(
+                {
+                    f"{item['cause_artifact']}: consumed by Step {item['input_consumer_step']}"
+                    for item in consumed
+                }
+            )
+        ),
+        recompute_steps=tuple(step for step in recompute_steps(start) if step in completed),
+    )
+
+
 RULES: dict[str, Callable[[ChangeSet], Decision]] = {
     "recorded": recorded_rule,
     "current": current_rule,
     "v2": stage_catalog_v2_rule,
+    "v2-inputs": input_dependency_rule,
 }
 
 
@@ -454,7 +570,7 @@ def replay_decisions(fixtures: list[dict[str, Any]], rule: Callable[[ChangeSet],
             # recorded in v1 Stage 8 but evaluated in Stage 10.
             if decision.stage is not None:
                 evaluated_stage = decision.stage
-            elif rule is stage_catalog_v2_rule:
+            elif rule in (stage_catalog_v2_rule, input_dependency_rule):
                 evaluated_stage = v2_stage(change_set)
             else:
                 evaluated_stage = change_set.stage
@@ -482,6 +598,8 @@ def replay_decisions(fixtures: list[dict[str, Any]], rule: Callable[[ChangeSet],
                         "owner_stage": decision.owner_stage,
                         "resume_after_step": decision.resume_after_step,
                         "owners": list(decision.owners),
+                        "reasons": list(decision.reasons),
+                        "recompute_steps": list(decision.recompute_steps),
                     },
                 }
             )
