@@ -224,7 +224,20 @@ class ModelDispatcher:
         # Every candidate that did not succeed, in order.  The step's failure is
         # reported from the most explanatory one, not just the last fallback.
         attempts: list[CandidateAttempt] = []
+        from ...model_allowlist import model_allowed, skip_reason
+
         for model_id in candidates:
+            if not model_allowed(model_id):
+                # A single-model run: never continue on a different model.
+                # Checked first, so every disallowed candidate carries this note.
+                attempts.append(
+                    CandidateAttempt(
+                        model_id,
+                        ExecutionResult.failed("PERMANENT_MODEL_CONFIG", returncode=2, model_id=model_id),
+                        skip_reason(),
+                    )
+                )
+                continue
             if model_id in self._quarantined_models:
                 last = ExecutionResult.failed(
                     "PERMANENT_MODEL_CONFIG",
