@@ -84,7 +84,7 @@ figures/
 | `figures/solve_p1_sprt.pdf` | §模型求解 §4.1 problem1 | problem1 | `report_result` | `solve_log.md`, `results/problem1/values.json` | 图 2: SPRT 抽样规则下样本量 N 的累积分布。横轴 N, 纵轴 P(stop ≤ N), 三条曲线对应 p0=0.10, p=0.12, p1=0.15。中位 N≈187 (虚线), 与 Wald 公式预测一致 (5000 蒙卡, 误差 <0.5%). |
 | `figures/solve_p3_milp.pdf` | §模型求解 §4.3 problem3 | problem3 | `report_result` | `solve_log.md`, `results/problem3/values.json` | 图 3: problem3 DAG MILP 的最优决策可视化。... |
 | `figures/sensitivity_tornado_p2c1.pdf` | §灵敏度分析 §5.1 | problem2 case 1 | `validate_result` | `sensitivity_report.md` | 图 4: problem2 case 1 的 tornado 图。... |
-| `figures/compare_rejected_branch.pdf` | §模型评价 §8 | 总览 | `show_limitation` | `evaluation.md` | 图 5: 备选分支与最终方案的总成本对照（目标为最小化总成本）。横轴为情形编号，纵轴为总成本；备选分支在 6 种情形中有 2 种违反产能约束，其余情形成本高 3.1%–7.4%。... |
+| `figures/compare_rejected_branch.pdf` | §模型评价 §8 | 总览 | `show_limitation` | `evaluation.md` | 图 5: 备选分支与最终方案的总成本对照（目标为最小化总成本）。横轴为情形编号，纵轴为总成本；备选分支在 <K> 种情形中有 <k> 种违反产能约束，其余情形成本高 <a>%–<b>%（数值取自 `evaluation.md` / 对应结果文件，不得照抄示例）。... |
 
 ## 新增图的源代码位置
 

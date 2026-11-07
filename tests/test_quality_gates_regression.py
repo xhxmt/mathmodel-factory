@@ -517,7 +517,8 @@ def test_step15_disclaimer_count_separates_limitation_sections(tmp_path):
     command = re.search(r"`(.+)`", line).group(1).replace("__BASE_NAME___paper.tex", "paper.tex")
     (tmp_path / "paper.tex").write_text(
         "\\section{模型求解}\n本图不代表最终结论。\n"
-        "\\section{灵敏度分析}\n扰动 10% 时不改变排序，但不保证更大扰动。\n"
+        "\\section*{灵敏度分析}\n扰动 10% 时不改变排序，但不保证更大扰动。\n"
+        "\\caption{扰动曲线。该图不作为最终依据。}\n"
         "\\subsection{局限性}\n连续误差界未证明。\n"
         "\\section{结论}\n该结果不构成工业保证。\n",
         encoding="utf-8",
@@ -525,4 +526,7 @@ def test_step15_disclaimer_count_separates_limitation_sections(tmp_path):
     outside = subprocess.run(
         ["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True, check=True
     ).stdout.strip()
-    assert outside == "2"  # 不代表 (求解) + 不构成 (结论); 不保证/未证明 are in allowed sections
+    # 不代表 (求解) + 不作为 (a caption, counted in any section) + 不构成 (结论).
+    # 不保证 / 未证明 are body text in the allowed (starred) sensitivity and
+    # limitations sections.
+    assert outside == "3"
