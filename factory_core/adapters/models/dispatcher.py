@@ -242,6 +242,19 @@ class ModelDispatcher:
                 attempts.append(CandidateAttempt(model_id, last, "not in the model registry"))
                 continue
             backend_name = entry["backend"]
+            from ...model_allowlist import model_allowed, skip_reason
+
+            if not model_allowed(model_id):
+                # A single-model run: never continue on a different model.
+                attempts.append(
+                    CandidateAttempt(
+                        model_id,
+                        ExecutionResult.failed("PERMANENT_MODEL_CONFIG", returncode=2,
+                                               model_id=model_id, backend=backend_name),
+                        skip_reason(),
+                    )
+                )
+                continue
             if os.getenv("CODEX_ONLY", "0").lower() in {"1", "true", "yes", "on"} and backend_name != "codex":
                 attempts.append(
                     CandidateAttempt(

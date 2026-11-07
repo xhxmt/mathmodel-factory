@@ -260,7 +260,11 @@ def step_candidates(factory_root: Path, project_id: str, step_key: str | int, de
             candidates.append(model_id)
     if os.getenv("CODEX_ONLY", "0").lower() in {"1", "true", "yes", "on"}:
         candidates = [model_id for model_id in candidates if _entry(factory_root, model_id) and _entry(factory_root, model_id).get("backend") == "codex"]
-    return candidates
+    from .model_allowlist import model_allowed
+
+    # The dispatcher skips candidates outside FACTORY_MODEL_ALLOWLIST, so the
+    # preflight judges only the models that would actually run.
+    return [model_id for model_id in candidates if model_allowed(model_id)]
 
 
 def _entry(factory_root: Path, model_id: str) -> dict[str, str] | None:

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-07 — 单模型运行：模型白名单与 Claude 图片传递（验收 A 准备）
+
+验收 A 要求所有 Step 与所有 Judge 角色只用 Claude Haiku 5.5（决策 5，11 月 7 日）。原有机制做不到：调度器在指定模型之后总会追加各 Step 的默认模型，Claude CLI 后端也拒绝带图片的 Judge 请求。
+
+- **模型白名单**：新增 `factory_core/model_allowlist.py` 与环境变量 `FACTORY_MODEL_ALLOWLIST`。调度器跳过名单外的每个候选（含默认模型）并在 `candidate_attempts` 记下原因；`factory preflight` 只评估名单内的候选；联合建模固定用 `claude-fable-5-1`，不在名单内时拒绝启动。未设置时行为不变。
+- **Claude 图片传递**：Claude CLI 没有附图参数。带图请求在 prompt 末尾列出每张图片的绝对路径并要求用 Read 工具逐个打开，以 `--output-format stream-json` 运行，再从日志核对每张图片都被 Read 过：通过才写入 `image_inputs`（`image_transport=claude-read-tool-v1`，后缀按哈希记录），否则为 `TRANSIENT_MODEL_BACKEND`（`images_not_read`）。输入观察者仍绑定原始 prompt。已用 Haiku 5.5 实测：模型读取图片并正确回答，解析器识别出该次 Read。
+- **已知差异**：codex 运行 Judge 有沙箱，Claude 后端没有，Judge 隔离只靠 prompt 约束；验收 A 记录这一点。
+- 执行方案：补上决策表第 7–9 行的完成状态（原在 liveness-phase0 工作区未提交，清理前抢救）；决策 5 标为已定。
+- 测试：`tests/test_dispatcher_attempts.py` 新增 3 例（白名单跳过其他候选、放行名单内模型、预检与联合建模），`tests/test_document_evidence.py` 以 2 例替换"Claude 遇图即失败"（全部读到才交付、漏读即后端失败）。
+
 ## 2026-11-07 — 活性优化阶段 4：v2 按输入依赖返工
 
 决策 3（新规则只用于新项目）落实为：只对 Stage catalog v2 项目生效（11 月 7 日决定，现有项目均为 v1 或旧格式，没有受影响的项目）；Step 4 不算计算步骤（同日决定）。

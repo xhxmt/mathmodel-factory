@@ -156,6 +156,48 @@ def test_candidates_skipped_by_codex_only_are_reported(monkeypatch, tmp_path):
     ] * 3
 
 
+def test_the_model_allowlist_skips_every_other_candidate(monkeypatch, tmp_path):
+    # A single-model run: an allowed model that fails must not continue on a
+    # catalog default.
+    monkeypatch.setenv("FACTORY_MODEL_ALLOWLIST", "claude-x")
+    result = _dispatch(monkeypatch, tmp_path, {
+        "dsh-x": ExecutionResult.succeeded(),
+        "claude-x": ExecutionResult.failed("TRANSIENT_MODEL_BACKEND", returncode=1),
+        "codex-x": ExecutionResult.succeeded(),
+    })
+    assert result.returncode != 0
+    notes = [(attempt["model_id"], attempt.get("note", "")) for attempt in result.metadata["candidate_attempts"]]
+    skipped = "skipped: FACTORY_MODEL_ALLOWLIST allows only claude-x"
+    assert notes[0] == ("dsh-x", skipped)
+    assert notes[2] == ("codex-x", skipped)
+    assert notes[1][0] == "claude-x" and notes[1][1] != skipped
+
+
+def test_the_model_allowlist_lets_the_allowed_model_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTORY_MODEL_ALLOWLIST", "claude-x, other")
+    result = _dispatch(monkeypatch, tmp_path, {
+        "dsh-x": ExecutionResult.succeeded(),
+        "claude-x": ExecutionResult.succeeded(),
+        "codex-x": ExecutionResult.succeeded(),
+    })
+    assert result.returncode == 0
+    assert result.metadata["model_id"] == "claude-x"
+
+
+def test_preflight_and_joint_modeling_respect_the_allowlist(monkeypatch, tmp_path):
+    from factory_core import joint_modeling_executor, preflight
+
+    monkeypatch.setattr(
+        "factory_core.adapters.models.dispatcher.get_step_model_ids", lambda *_a: ("a", "b")
+    )
+    monkeypatch.setenv("FACTORY_MODEL_ALLOWLIST", "b")
+    assert preflight.step_candidates(tmp_path, "demo", 9, ("c",)) == ["b"]
+    monkeypatch.setattr(joint_modeling_executor, "claude_executable", lambda: "/bin/true")
+    assert "FACTORY_MODEL_ALLOWLIST" in joint_modeling_executor.executor_blocker()
+    monkeypatch.setenv("FACTORY_MODEL_ALLOWLIST", joint_modeling_executor.MODEL)
+    assert joint_modeling_executor.executor_blocker() == ""
+
+
 @pytest.mark.parametrize("text, signal", [
     ("# backoff: respect the provider rate limit when batching\nTraceback: KeyError 'x'\n", None),
     ("the overloaded operator is defined in model.py\n", None),

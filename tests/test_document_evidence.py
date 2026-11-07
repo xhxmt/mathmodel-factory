@@ -180,8 +180,67 @@ def test_codex_attaches_every_page_and_other_cli_adapters_fail_closed(tmp_path):
     _, command = CodexCliBackend(tmp_path).command(request)
     assert [command[i+1] for i, value in enumerate(command) if value == '--image'] == [str(tmp_path/i['path']) for i in images]
     assert command[-2:] == ['--','Audit.']
-    assert ClaudeCliBackend(tmp_path).execute(request).error_class == 'PERMANENT_MULTIMODAL_UNSUPPORTED'
     assert AgyBackend(tmp_path).execute(request).error_class == 'PERMANENT_MULTIMODAL_UNSUPPORTED'
+
+
+class _ClaudeStreamSupervisor:
+    """Writes a stream-json log in which the model opened ``read`` with Read."""
+
+    def __init__(self, read):
+        self.read = read
+        self.argv = None
+
+    def run(self, request):
+        import json as _json
+        from factory_core.adapters.infrastructure.process import ProcessResult
+        self.argv = request.argv
+        lines = [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Read", "input": {"file_path": path}}]}}
+            for path in self.read
+        ] + [{"type": "result", "result": "done"}]
+        request.stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        request.stdout_path.write_text("\n".join(_json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+        return ProcessResult(0, False, 0.01, 123)
+
+
+def _claude_image_request(tmp_path):
+    from factory_core.adapters.models.backends import ModelRequest
+    manifests = document_project(tmp_path, pdf=True)
+    images = doc.image_records(manifests['execution'])
+    observed = []
+    request = ModelRequest(tmp_path, 16, 1, 'Audit.', 30, 30, isolated=True,
+        image_files=tuple(i['path'] for i in images),
+        input_observer=lambda prompt, _format: observed.append(prompt))
+    return request, [str((tmp_path / i['path']).resolve()) for i in images], observed
+
+
+def test_claude_delivers_pages_only_when_every_image_was_read(tmp_path):
+    from factory_core.adapters.models.backends import CLAUDE_IMAGE_TRANSPORT, ClaudeCliBackend
+    request, paths, observed = _claude_image_request(tmp_path)
+    supervisor = _ClaudeStreamSupervisor(paths)
+
+    result = ClaudeCliBackend(tmp_path, supervisor).execute(request)
+
+    assert result.returncode == 0
+    assert [item["path"] for item in result.metadata["image_inputs"]] == list(request.image_files)
+    assert result.metadata["image_transport"] == CLAUDE_IMAGE_TRANSPORT
+    assert "--output-format" in supervisor.argv and "stream-json" in supervisor.argv
+    sent = supervisor.argv[2]
+    assert sent.startswith('Audit.') and all(path in sent for path in paths)
+    assert observed == ['Audit.']  # the bound prompt is the original one
+
+
+def test_claude_reports_unread_pages_as_a_backend_failure(tmp_path):
+    from factory_core.adapters.models.backends import ClaudeCliBackend
+    request, paths, _ = _claude_image_request(tmp_path)
+
+    result = ClaudeCliBackend(tmp_path, _ClaudeStreamSupervisor(paths[:-1])).execute(request)
+
+    assert result.error_class == 'TRANSIENT_MODEL_BACKEND'
+    assert result.metadata["reason"] == "image_transport_unverified"
+    assert result.metadata["images_not_read"] == [request.image_files[-1]]
+    assert "image_inputs" not in result.metadata
 
 
 def test_api_capacity_includes_task_prompt_and_framing(tmp_path, monkeypatch):

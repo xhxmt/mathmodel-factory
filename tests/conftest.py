@@ -77,4 +77,5 @@ def live_auth_db_is_never_written():
 def isolate_model_launcher_environment(monkeypatch):
     """Tests opt into routing/argv environment explicitly; host settings are not fixtures."""
     monkeypatch.delenv("CODEX_ONLY", raising=False)
+    monkeypatch.delenv("FACTORY_MODEL_ALLOWLIST", raising=False)
     monkeypatch.delenv("CODEX_CLI_PATH", raising=False)

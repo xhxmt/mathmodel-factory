@@ -198,6 +198,20 @@ most explanatory one (a provider signal such as an exhausted balance in its log
 first, a fallback that could not launch last) and lists all of them in
 `candidate_attempts`.
 
+`FACTORY_MODEL_ALLOWLIST` (comma/space-separated model ids,
+`factory_core/model_allowlist.py`) restricts a whole run to those models: the
+dispatcher skips every other candidate -- including the catalog defaults it
+otherwise appends after an assignment -- with a recorded note, `factory
+preflight` judges only allowed candidates, and joint modeling (which pins
+`claude-fable-5-1`) refuses to start unless its model is allowed. The Claude CLI
+backend delivers Judge page images by naming each file in the prompt and
+requiring a Read-tool call, run with `--output-format stream-json`; an image
+counts as delivered (`image_inputs`, `image_transport=claude-read-tool-v1`)
+only when the log shows a Read of it, otherwise the call is
+`TRANSIENT_MODEL_BACKEND` with `images_not_read`. The input observer still binds
+the original prompt; the transport suffix is bound by hash. Unlike codex, the
+Claude backend gives Judge roles no sandbox: isolation there is prompt-only.
+
 An incremental-audit check that ends without a verdict (timeout, signal, a log
 ending in an uncaught traceback, or a last line naming an exhausted host
 resource such as a full disk) is `INDETERMINATE` / `TRANSIENT_INCREMENTAL_AUDIT`,
