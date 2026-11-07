@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-07 — retry-step 后的提示词输入键冲突（验收 A 发现）
+
+验收 A 的 Step 5 因 `PERMANENT_CLAIM_BINDING` 失败后，操作员加了一条研究员备注再 `retry-step`，worker 一启动就退出：`immutable prompt attempt input already exists with different content`，项目停在 `running`，PID 已不存在，也没有失败事件。
+
+- **根因**：`retry_step` 只把 attempt 归零、保留 Stage 游标，而提示词输入键是 `stage:<id>:<subtask>:selected-revision:<游标选定 revision>:attempt:<n>`，重试后的第 1 次尝试与失败的第 1 次尝试同键。为重试而修正的任何输入（研究员备注、`human_review.md`、模型配置）都会与旧的不可变回执冲突。
+- **修复一**：`PromptStep._attempt_selected_revision` 在游标基线之后若有同 Stage / 子任务 / Step 的 `STEP_RETRY_AUTHORIZED`，改用该事件的 revision，重试尝试因此有独立的键；不改输入的重试行为不变，恢复路径用同一函数，键保持一致。
+- **修复二**：绑定提示词输入时的 `InvalidTransition` 不再逃出 worker，而是让该 Step 以 `PERMANENT_PROMPT_INPUT_CONFLICT` 失败并记录尝试键与错误；`RevisionConflict` 仍照常抛出。
+- 测试：`tests/test_retry_step.py` 新增 2 例（重试后带修正备注绑定到新键；无重试时的冲突让 Step 失败而不是让 worker 崩溃），两例在修复前均失败。
+
 ## 2026-11-07 — 单模型运行：模型白名单与 Claude 图片传递（验收 A 准备）
 
 验收 A 要求所有 Step 与所有 Judge 角色只用 Claude Haiku 5.5（决策 5，11 月 7 日）。原有机制做不到：调度器在指定模型之后总会追加各 Step 的默认模型，Claude CLI 后端也拒绝带图片的 Judge 请求。

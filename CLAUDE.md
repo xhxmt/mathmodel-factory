@@ -261,7 +261,12 @@ A `FAILED` project whose cursor is on a Step is retried only through
 `STEP_RETRY_AUTHORIZED` (previous attempt, the failure's revision and error
 class, the operator's reason), resets the attempt count with the Stage cursor
 kept, and starts a fresh attempt 1; dirty state, checkpoints, the contest
-deadline and other budgets still apply. A plain resume of such a project
+deadline and other budgets still apply. The retried attempt binds its prompt
+inputs under a key derived from the `STEP_RETRY_AUTHORIZED` revision, so an
+input corrected for the retry (a researcher note, `human_review.md`) does not
+collide with the failed attempt's immutable receipt. Any prompt-input binding
+conflict fails the Step as `PERMANENT_PROMPT_INPUT_CONFLICT` instead of killing
+the worker and leaving the project `running` with a dead runner. A plain resume of such a project
 recovers the failed attempt and stops at `PERMANENT_ATTEMPT_BUDGET_EXHAUSTED`.
 Do not edit the state database or write one-off authorization events instead.
 

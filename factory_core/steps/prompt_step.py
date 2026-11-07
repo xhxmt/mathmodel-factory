@@ -6,9 +6,11 @@ from ..adapters.models.backends import ModelRequest
 from ..adapters.models.dispatcher import ModelDispatcher
 from ..domain import (
     ExecutionResult,
+    InvalidTransition,
     PrepareResult,
     RecoveryDecision,
     RecoveryDisposition,
+    RevisionConflict,
     StepError,
     ValidationResult,
 )
@@ -124,7 +126,23 @@ class PromptStep:
             and str(baseline["subtask"]) == str(state.active_subtask or "")
             and int(baseline["source_step_id"]) == int(context.step_id)
         ):
-            return int(baseline["selected_revision"])
+            selected = int(baseline["selected_revision"])
+            # An operator retry keeps the Stage cursor but restarts the attempt
+            # count, so without this the retried attempt 1 would reuse the
+            # failed attempt 1's immutable key and any input corrected for the
+            # retry (a researcher note, human_review.md) would collide with it.
+            for event in reversed(store.events()):
+                if event.revision <= selected:
+                    break
+                if (
+                    event.type == "STEP_RETRY_AUTHORIZED"
+                    and event.payload.get("stage") == state.active_stage
+                    and str(event.payload.get("subtask") or "")
+                    == str(state.active_subtask or "")
+                    and event.payload.get("source_step") == int(context.step_id)
+                ):
+                    return int(event.revision)
+            return selected
         for event in reversed(store.events()):
             if (
                 event.type == "STEP_STARTED"
@@ -326,10 +344,23 @@ class PromptStep:
                 active_stage=state.active_stage,
             )
         prompt, _researcher_note, proposed = self._build_inputs(context)
-        _bound_state, stored = store.bind_prompt_attempt_input(
-            expected_revision=context.revision,
-            receipt=proposed,
-        )
+        try:
+            _bound_state, stored = store.bind_prompt_attempt_input(
+                expected_revision=context.revision,
+                receipt=proposed,
+            )
+        except RevisionConflict:
+            raise
+        except InvalidTransition as exc:
+            # Escaping here kills the worker and leaves the project "running"
+            # with a dead runner and no failure event; fail the Step instead.
+            return ExecutionResult.failed(
+                "PERMANENT_PROMPT_INPUT_CONFLICT",
+                returncode=2,
+                prompt_input_attempt_key=str(proposed.get("attempt_key") or ""),
+                prompt_input_receipt_durable=False,
+                prompt_input_errors=[str(exc)],
+            )
         result = self.dispatcher.execute(
             ModelRequest(
                 project_dir=context.project_dir,
