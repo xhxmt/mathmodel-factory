@@ -39,6 +39,14 @@ class JudgeExecutor(Protocol):
 
 Fingerprinter = Callable[[Path, str], str]
 
+# Decision-router outcomes (scripts/judge_decision_router.py) that say the
+# Judge produced nothing judgeable, mapped to the transient class the engine
+# retries as Judge infrastructure (engine.NON_CONTENT_ERROR_CLASSES).
+_ROUTED_INFRASTRUCTURE_DECISIONS = {
+    "INFRA_RETRY": "TRANSIENT_JUDGE_INFRASTRUCTURE",
+    "PACKET_REBUILD": "TRANSIENT_JUDGE_PACKET",
+}
+
 
 class FinalAuditService:
     """Run final analysis, with an explicit optional acceptance boundary.
@@ -542,6 +550,22 @@ class FinalAuditService:
                     judge_completed=judge_completed,
                     evidence=judge_result.metadata,
                 )
+        elif decision in _ROUTED_INFRASTRUCTURE_DECISIONS and not override:
+            # The router found no judgeable result -- a visual gate that could
+            # not render (INFRA_RETRY) or packets the aggregate reports as
+            # incomplete (PACKET_REBUILD).  That is a retryable Judge
+            # infrastructure state, not a verdict on the content, so it must
+            # not end the run as PERMANENT_FINAL_JUDGE.
+            return self._failure(
+                project,
+                snapshot=snapshot,
+                decision=decision,
+                status=AuditStatus.INDETERMINATE,
+                error_class=_ROUTED_INFRASTRUCTURE_DECISIONS[decision],
+                returncode=75,
+                judge_completed=judge_completed,
+                evidence=judge_result.metadata,
+            )
         elif decision != "PASS" and not override:
             return self._failure(
                 project,

@@ -553,6 +553,44 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
     return timeline
 
 
+_ENGINE_PAUSE_SUBCODES = frozenset({"SEMANTIC_REOPEN_BUDGET", "PROVIDER_UNAVAILABLE"})
+
+
+def current_engine_pause(
+    events: Iterable[WorkflowEvent], subcodes: Iterable[str] = _ENGINE_PAUSE_SUBCODES
+) -> WorkflowEvent | None:
+    """The engine-recorded PAUSED event that set the project's current pause.
+
+    Phase 3a (spent reopen budget) and 3d (dispatch preflight failure) pause
+    with ``actor="engine"`` and one of ``subcodes``.  The event counts only
+    while it is still the latest status change: a later event that changed the
+    status (a resume, or another transition such as ``RUN_BOUNDARY_REACHED``
+    that pauses again) supersedes it, so a stale explanation is never shown
+    for an unrelated pause.
+    """
+
+    wanted = frozenset(subcodes)
+    for event in reversed(list(events)):
+        if event.type == "PAUSED":
+            reason = event.payload.get("reason") or {}
+            if (
+                isinstance(reason, dict)
+                and reason.get("actor") == "engine"
+                and reason.get("subcode") in wanted
+            ):
+                return event
+            return None
+        envelope = event.payload.get(ENVELOPE_KEY)
+        patch = envelope.get("state_patch") if isinstance(envelope, dict) else None
+        if isinstance(patch, dict) and "status" in patch:
+            return None
+    return None
+
+
+def _engine_pause(events: list[WorkflowEvent]) -> WorkflowEvent | None:
+    return current_engine_pause(events)
+
+
 def project_runtime_diagnostics(
     events: Iterable[WorkflowEvent], state: WorkflowState
 ) -> dict[str, Any]:
@@ -587,6 +625,8 @@ def project_runtime_diagnostics(
     reason_summary = ""
     suggested = ["refresh_status"]
     evidence: list[dict[str, Any]] = []
+    reopen_budget: dict[str, Any] | None = None
+    preflight: dict[str, Any] | None = None
     if pending is not None:
         gate = pending.get("gate")
         if gate in {"reviewer_entry_gate", "step8_5"}:
@@ -605,6 +645,26 @@ def project_runtime_diagnostics(
             {"kind": "file", "path": path}
             for path in (pending.get("reason") or {}).get("evidence", [])
         ]
+    elif state.status is WorkflowStatus.PAUSED and (
+        engine_pause := _engine_pause(event_list)
+    ) is not None:
+        reason = engine_pause.payload.get("reason") or {}
+        reason_code = str(reason.get("subcode"))
+        reason_summary = str(reason.get("message") or "")
+        evidence = [{"kind": "file", "path": path} for path in reason.get("evidence", [])]
+        if reason_code == "SEMANTIC_REOPEN_BUDGET":
+            # Phase 3a: the run paused because its semantic-reopen budget is spent.
+            suggested = [
+                "revert_upstream_edits_and_resume",
+                "grant_semantic_reopen",
+                "refresh_status",
+            ]
+            reopen_budget = engine_pause.payload.get("reopen_budget")
+        else:
+            # Phase 3d: a model route or scratch space failed before dispatch;
+            # nothing was attempted, so resuming after the fix is enough.
+            suggested = ["resume_project", "refresh_status"]
+            preflight = engine_pause.payload.get("preflight")
     elif latest_recovery and state.status in {
         WorkflowStatus.FAILED,
         WorkflowStatus.RETRYING,
@@ -618,6 +678,9 @@ def project_runtime_diagnostics(
         ]
         if latest_recovery["canonical_type"] == "GATE_BLOCKED":
             suggested = ["open_gate_evidence", "open_audit_timeline", "refresh_status"]
+        if state.status is WorkflowStatus.FAILED and state.active_step is not None:
+            # Phase 3b: the formal retry with a fresh attempt budget.
+            suggested = ["retry_failed_step", *suggested]
     return {
         "status": {
             "version": 3,
@@ -633,6 +696,8 @@ def project_runtime_diagnostics(
             "suggested_actions": suggested,
             "evidence": evidence,
             "workflow_revision": state.revision,
+            **({"reopen_budget": reopen_budget} if reopen_budget is not None else {}),
+            **({"preflight": preflight} if preflight is not None else {}),
         },
         "events": project_audit_timeline(event_list)[-5:],
         "actions": [{"id": action_id} for action_id in suggested],

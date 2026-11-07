@@ -392,10 +392,10 @@ export default {
     }
 
     // ---- actions ----
-    async function onAction(project, action) {
+    async function onAction(project, action, extra = {}) {
       try {
-        await Projects.action(project.base_name, action, project.revision)
-        const labels = { pause: '已暂停', resume: '已恢复', kill: '已终止' }
+        await Projects.action(project.base_name, action, project.revision, extra.reason ?? null, extra.step ?? null)
+        const labels = { pause: '已暂停', resume: '已恢复', kill: '已终止', grant_reopen: '已批准回退并恢复', retry_step: '已重试失败的步骤' }
         toasts.success(`${project.base_name} ${labels[action] || action}`)
         if (action === 'kill') selectedBase.value = null
         await refreshProjects()

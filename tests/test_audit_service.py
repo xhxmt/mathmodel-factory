@@ -1224,3 +1224,78 @@ def test_promotion_is_acceptance_only(tmp_path):
                                 fingerprinter=lambda _p, _b: "e" * 64)
     with pytest.raises(ValueError, match="acceptance mode"):
         service.run(make_context(tmp_path), analysis_only=True, promote_analysis_pass=True)
+
+
+class _RealRouterRunner(RecordingRunner):
+    """Runs the real decision router; the visual gate writes a given report."""
+
+    def __init__(self, visual: dict) -> None:
+        super().__init__()
+        self.visual = visual
+
+    def python(self, root, project, script, args, *, label, **kwargs):
+        project = Path(project)
+        if script.endswith("pdf_visual_gate.py"):
+            self.calls.append((script, list(args)))
+            output = project / "judge_outputs/visual_gate.json"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            # Exit 2 (INDETERMINATE) is an accepted visual-gate exit code.
+            output.write_text(json.dumps(self.visual), encoding="utf-8")
+            return self._ok(project, label)
+        if script.endswith("judge_decision_router.py"):
+            self.calls.append((script, list(args)))
+            routed = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / script), *map(str, args)],
+                capture_output=True, text=True, check=False,
+            )
+            assert routed.returncode == 0, routed.stderr
+            return self._ok(project, label)
+        return super().python(root, project, script, args, label=label, **kwargs)
+
+
+class _AggregateJudge(PassingJudge):
+    def __init__(self, aggregate: dict) -> None:
+        super().__init__()
+        self.aggregate = aggregate
+
+    def execute_prepared(self, context):
+        result = super().execute_prepared(context)
+        (context.project_dir / "judge_outputs/aggregate.json").write_text(
+            json.dumps(self.aggregate), encoding="utf-8"
+        )
+        return result
+
+
+@pytest.mark.parametrize(
+    ("eligible", "visual", "decision", "error_class"),
+    [
+        # The visual gate could not render: the router asks for a retry.
+        (True, {"status": "INDETERMINATE", "error": "pdftoppm exited 1"},
+         "INFRA_RETRY", "TRANSIENT_JUDGE_INFRASTRUCTURE"),
+        # The aggregate reports incomplete packets: the router asks for a rebuild.
+        (False, {"status": "PASS"}, "PACKET_REBUILD", "TRANSIENT_JUDGE_PACKET"),
+    ],
+)
+def test_a_routed_infrastructure_decision_is_retryable_not_a_final_verdict(
+    tmp_path: Path, eligible, visual, decision, error_class
+) -> None:
+    from factory_core.engine import NON_CONTENT_ERROR_CLASSES
+    from tests.test_judge_decision_router import _aggregate
+
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    judge = _AggregateJudge(_aggregate("PASS", eligible=eligible))
+    service = FinalAuditService(
+        root, judge, FakeValidator(), _RealRouterRunner(visual),
+        fingerprinter=lambda _project, _base: "a" * 64,
+    )
+
+    outcome = service.run(make_context(project), analysis_only=False)
+
+    assert judge.judge_calls == 1
+    assert outcome.record.decision == decision
+    assert outcome.record.status is AuditStatus.INDETERMINATE
+    assert outcome.record.delivery_allowed is False
+    assert outcome.execution.error_class == error_class
+    assert error_class in NON_CONTENT_ERROR_CLASSES  # the engine retries, no content attempt

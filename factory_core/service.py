@@ -254,10 +254,13 @@ class FactoryService:
                 "historical runtimes are preserved in paper_new"
             )
         registry = self._native_registry_factory(self.code_root)
+        from .dispatch_preflight import for_project
+
         return FactoryEngine(
             resolved,
             registry=registry,
             projector=write_compatibility_projections,
+            dispatch_preflight=for_project(self.code_root, resolved),
         )
 
     def create_project(
@@ -525,6 +528,53 @@ class FactoryService:
         _require_reason_detail("RESUMED", subcode, actor)
         return engine.resume(
             expected_revision=state.revision, subcode=subcode, actor=actor
+        )
+
+    def grant_semantic_reopen(
+        self,
+        project: str | Path,
+        *,
+        reason: str,
+        expected_revision: int | None = None,
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Allow the one reopen a spent semantic-reopen budget paused (phase 3a).
+
+        The project stays paused; ``resume``/``resume_and_start`` then rechecks
+        the change set through recovery and performs the reopen.
+        """
+
+        if actor not in REASON_ACTORS:
+            raise InvalidTransition(
+                f"grant actor must be one of {sorted(REASON_ACTORS)}, got {actor!r}"
+            )
+        engine = self.engine(project)
+        state = engine.get_state()
+        self._assert_expected_revision(state, expected_revision)
+        return engine.grant_semantic_reopen(
+            expected_revision=state.revision, note=reason, actor=actor
+        )
+
+    def retry_step(
+        self,
+        project: str | Path,
+        *,
+        step_id: int,
+        reason: str,
+        expected_revision: int | None = None,
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Retry the failed Step at the cursor with a fresh attempt budget (3b)."""
+
+        if actor not in REASON_ACTORS:
+            raise InvalidTransition(
+                f"retry actor must be one of {sorted(REASON_ACTORS)}, got {actor!r}"
+            )
+        engine = self.engine(project)
+        state = engine.get_state()
+        self._assert_expected_revision(state, expected_revision)
+        return engine.retry_step(
+            expected_revision=state.revision, step_id=step_id, note=reason, actor=actor
         )
 
     def kill(self, project: str | Path, *, expected_revision: int | None = None) -> WorkflowState:
@@ -1622,8 +1672,17 @@ def wait_for_worker_ready(
 # ---------------------------------------------------------------------------
 
 PAUSED_SUBCODES = frozenset(
-    {"OPERATOR", "DEADLINE", "EXECUTION_SCOPE", "FREEZE_BOUNDARY"}
+    {
+        "OPERATOR",
+        "DEADLINE",
+        "EXECUTION_SCOPE",
+        "FREEZE_BOUNDARY",
+    }
 )
+# SEMANTIC_REOPEN_BUDGET (phase 3a) and PROVIDER_UNAVAILABLE (phase 3d) are
+# engine-owned: the engine records them directly with ``actor="engine"``, and
+# they are deliberately not accepted from ``pause()``, so an operator cannot
+# record a pause that the grant and diagnostics paths would mistake for one.
 RESUMED_SUBCODES = frozenset({"OPERATOR", "RETRY", "AUTO_RECOVERY"})
 REASON_ACTORS = frozenset({"operator", "engine", "scheduler"})
 
