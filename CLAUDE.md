@@ -240,6 +240,19 @@ returns `INFRA_RETRY` (e.g. an `INDETERMINATE` visual gate) or
 `PERMANENT_FINAL_JUDGE`. A timeout still consumes a content attempt,
 and so does a determinate audit finding (`AUDIT_REPAIR_REQUIRED`).
 
+The v2 Stage 8 exit (Step 12; v2 has no Judge before it) routes the
+ledger's open BLOCKING/MAJOR rows outside `## Incremental audit findings`
+(`audit.ledger.open_review_issues`; the machine `AUDIT-*` rows never block it,
+since no Stage 8 subtask reruns a profile) by Category: `results`/`model` rows
+recompute Steps 5-8 and return to the revision (`STAGE_SEMANTIC_REOPENED`,
+`rework_rule=review_issue`, `review_issues`, at most `V2_REVIEW_RECOMPUTE_LIMIT`
+= 1, also counted against the semantic-reopen budget), the rest re-run Steps
+11-12 (`STEP_REOPENED`, `rework_rule=review_loop`, at most
+`V2_REVIEW_LOOP_LIMIT` = 1); after that the run fails with
+`PERMANENT_REVIEW_LOOP_EXHAUSTED` naming the rows. The v2 prompt overlays tell
+Steps 5-8 to read those rows and Step 12 to categorize them. v1 keeps its
+Step-13 exit unchanged.
+
 A semantic reopen (a Stage changing content an earlier Stage owns) is
 budgeted per classifier identity: an initiating Stage may rewind at most
 `STAGE_SEMANTIC_REOPEN_LIMIT` (2) times and a run at most

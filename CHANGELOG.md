@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-07 — v2 Stage 8 出口按审稿问题类别返工（验收 A 发现 F6/F7/F8）
+
+验收 A 的 Step 12 第 1 次尝试就以 `PERMANENT_REVIEW_LOOP_EXHAUSTED` 失败，一轮返修都没跑（rev 304）。
+
+- **F6 根因**：v2 把 Stage 8 出口移到 Step 12，而 Step 12 的 `max_reopens=0`，台账里只要还有 OPEN 的 BLOCKING/MAJOR 就立刻失败。v2 的 Step 12 提示词又让模型把结果层问题记作"需回 Step 5/6 重跑"，交给 Step 13 最终审计判 `REOPEN_REVISION_MODEL`，但 v2 的 Step 13 在 Step 14/15 和内容冻结之后才运行，这条路走不到。
+- **F7 根因**：警告级增量检查（`verify_symbols`）写入的台账行是 MAJOR，Stage 8 出口把 MAJOR 当成阻断，而 Stage 8 内没有任何步骤会重跑 `paper` 审计，`AUDIT-PAPER-SYMBOLS` 在那里永远关不掉。即使 Step 12 修得完美也会失败。
+- **修复（仅 v2）**：Stage 8 出口改读 `audit.ledger.open_review_issues`，即 `## Incremental audit findings` 以外的 OPEN BLOCKING/MAJOR 行，机器行不再阻断，按 Category 分流。`results`/`model` 类重算 Step 5–8 后回到 Step 12（`STAGE_SEMANTIC_REOPENED`，`rework_rule=review_issue`，最多 1 次，同时计入语义回退预算）；其余类别重跑一次 Step 11–12（`STEP_REOPENED`，`rework_rule=review_loop`）；之后仍未解决，按原错误类失败，并在事件里列出这些行。v1 不变。
+- **提示词**：v2 overlay 让 Step 5–8 读取这些审稿行，修复根因在本步骤产物中的问题；Step 12 的 v2 措辞改为说明这条分流，并要求把根因在求解、结果、灵敏度或图代码的行标为 `results` 或 `model`。
+- **F8**：Step 12 改了生成器却没有重新 pin `results/derived_artifacts.json`。Step 12 提示词补上重新 pin 与 `verify_derived_artifacts.py` 必须 PASS 的要求；Step 9 提示词注明生成器可以另读 `results/sensitivity/*.json`（由重生成比对保证一致），与 Step 10 的派生值修法一致。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 5 例（机器警告行不阻断；results 类先重算再回到返修并通过；重算后仍未解决则失败；paper 类只循环一次；循环中修复后通过）。
+
 ## 2026-11-07 — 数字追溯门禁的误报与合约缺口（验收 A 发现 F4/F5）
 
 验收 A 的 Step 10 连续两次 `AUDIT_REPAIR_REQUIRED`（`failed_check=numbers`），两次报出同样 31 个"未追溯数字"。其中一部分是校验器误报，另一部分在 Step 10 内没有合法的修法，重试无法收敛。

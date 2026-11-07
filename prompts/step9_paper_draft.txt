@@ -473,7 +473,7 @@ Step 9 是论文质量的中央枢纽 —— 评委读到的只有这份 PDF。�
 3. 每问先用 `reviewer_entry_map.md` 的“正文首段承接版”起段，再展开公式、过程和数值。
 4. 起草每个章节, 先骨架后填充。骨架阶段每个 section 一行 placeholder; 一气呵成填完再回头编辑。
 5. 嵌图: 主图 / 主表优先按 `anchor_figure_plan.md` 摆放，再按 `visualization_log.md` 表格顺序和叙事角色逐张引用; caption 用 visualization_log.md 起草的版本 (Step 8 已经精修过)。`explain_model` 放在问题分析/模型建立, `report_result` 放在模型求解, `validate_result` 放在灵敏度或结果验证, `show_limitation` 放在模型评价/局限/附录。
-6. 嵌表与 headline 数字：创建或更新版本化 `models/generate_derived.py`，固定接口为 `--canonical <path> --output-dir <dir>`；它只从 canonical JSON 读取，生成 `tables/*.tex`、`tables/headline_values.tex` 和题面要求的 `result*.xlsx`。先生成到项目目录，正文通过 `\input{tables/...}` 和 `headline_values.tex` 的 `\newcommand` 宏引用，不手填另一套数。
+6. 嵌表与 headline 数字：创建或更新版本化 `models/generate_derived.py`，固定接口为 `--canonical <path> --output-dir <dir>`；它从 canonical JSON 读取（派生的灵敏度数字可另读 `results/sensitivity/*.json`；`verify_derived_artifacts.py` 会按当前文件重生成并逐字节比对），生成 `tables/*.tex`、`tables/headline_values.tex` 和题面要求的 `result*.xlsx`。先生成到项目目录，正文通过 `\input{tables/...}` 和 `headline_values.tex` 的 `\newcommand` 宏引用，不手填另一套数。
 6.5. 生成 `results/derived_artifacts.json`：
    ```bash
    python3 ../../scripts/create_derived_manifest.py "$(pwd)" \

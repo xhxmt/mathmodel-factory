@@ -457,6 +457,132 @@ def test_v2_v1_project_keeps_v1_reopen_for_the_same_edit(tmp_path):
     assert reopen.payload["semantic_owner_stage"] == 8
 
 
+LEDGER_HEADER = (
+    "| Issue ID | First Raised In | Category | Severity | Blocking Until | Status | Notes |\n"
+    "|---|---|---|---|---|---|---|\n"
+)
+
+
+def write_ledger(project, review_rows, machine_rows=()):
+    """An issue ledger shaped like the one acceptance A's Step 11 left."""
+
+    def row(issue_id, category, severity, status):
+        return f"| {issue_id} | review:step11 | {category} | {severity} | Step 12 | {status} | n |\n"
+
+    (project / "audit_issue_ledger.md").write_text(
+        "# Audit Issue Ledger\n\n## Incremental audit findings\n\n" + LEDGER_HEADER
+        + "".join(row(*item) for item in machine_rows)
+        + "\n## Step 11 constructive review issues\n\n" + LEDGER_HEADER
+        + "".join(row(*item) for item in review_rows),
+        encoding="utf-8",
+    )
+
+
+class ResolvingRevision(Lifecycle):
+    """Step 12 that resolves every review row from its second run on."""
+
+    def __init__(self, rows):
+        super().__init__()
+        self.rows = rows
+
+    def execute(self, context):
+        self.calls.append(context.attempt)
+        if len(self.calls) >= 2:
+            write_ledger(context.project_dir, [(i, c, s, "RESOLVED") for i, c, s, _ in self.rows])
+        return ExecutionResult.succeeded()
+
+
+def failures(store):
+    return [event for event in store.events() if event.type == "STEP_FAILED"]
+
+
+def test_v2_review_exit_ignores_machine_warning_rows(tmp_path):
+    """F7: a MAJOR AUDIT-* row (the symbols warning) does not block the v2 exit."""
+
+    write_ledger(tmp_path, [("S11-m1", "paper", "MINOR", "OPEN")],
+                 machine_rows=[("AUDIT-PAPER-SYMBOLS", "paper", "MAJOR", "OPEN")])
+    registry, _ = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    assert failures(store) == [] and reopens(store) == []
+    assert state.last_completed_step == 12
+    assert state.active_subtask == "abstract"
+
+
+def test_v2_review_exit_recomputes_for_results_issue_then_returns_to_revision(tmp_path):
+    rows = [("S11-B4", "results", "BLOCKING", "OPEN"), ("S11-M9", "paper", "MAJOR", "OPEN")]
+    write_ledger(tmp_path, rows)
+    revision = ResolvingRevision(rows)
+    registry, lifecycles = v2_registry(overrides={12: revision})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    [reopen] = reopens(store)
+    assert reopen.payload["rework_rule"] == "review_issue"
+    assert reopen.payload["recompute_steps"] == [5, 6, 7, 8]
+    assert reopen.payload["return_subtask"] == "revision"
+    assert reopen.payload["semantic_owner_stage"] == 4
+    assert reopen.payload["review_issues"] == ["S11-B4 (results, BLOCKING)"]
+    assert reopen.payload["recompute_reasons"] == [
+        "audit_issue_ledger.md#S11-B4: open results BLOCKING review issue"
+    ]
+    for step in (5, 6, 7, 8):
+        assert lifecycles[step].calls == [1], step
+    assert lifecycles[11].calls == []  # the review is not re-run
+    assert len(revision.calls) == 2
+    assert failures(store) == []
+    assert state.status is WorkflowStatus.COMPLETED
+
+
+def test_v2_review_exit_fails_when_results_issue_survives_the_recompute(tmp_path):
+    write_ledger(tmp_path, [("S11-B3", "model", "BLOCKING", "OPEN")])
+    registry, lifecycles = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert len(reopens(store)) == 1
+    assert lifecycles[12].calls == [1, 1]
+    [failed] = failures(store)
+    assert failed.payload["error_class"] == "PERMANENT_REVIEW_LOOP_EXHAUSTED"
+    assert failed.payload["review_issues"] == ["S11-B3 (model, BLOCKING)"]
+    assert "review recompute" in failed.payload["reason"]
+    assert state.status is WorkflowStatus.FAILED
+
+
+def test_v2_review_exit_loops_the_review_once_for_paper_issues(tmp_path):
+    write_ledger(tmp_path, [("S11-B5", "paper", "BLOCKING", "OPEN")])
+    registry, lifecycles = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert reopens(store) == []
+    [loop] = [e for e in store.events() if e.type == "STEP_REOPENED"]
+    assert loop.payload["rework_rule"] == "review_loop"
+    assert loop.payload["resume_after_step"] == 10
+    assert loop.payload["review_issues"] == ["S11-B5 (paper, BLOCKING)"]
+    assert lifecycles[11].calls == [1] and lifecycles[12].calls == [1, 1]
+    [failed] = failures(store)
+    assert "after the review loop" in failed.payload["reason"]
+    assert state.status is WorkflowStatus.FAILED
+
+
+def test_v2_review_exit_passes_once_a_paper_loop_resolves_the_issue(tmp_path):
+    rows = [("S11-B5", "paper", "BLOCKING", "OPEN")]
+    write_ledger(tmp_path, rows)
+    registry, _ = v2_registry(overrides={12: ResolvingRevision(rows)})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert failures(store) == []
+    assert state.status is WorkflowStatus.COMPLETED
+
+
 def test_v2_judge_reopen_returns_to_revision(tmp_path):
     judge = Lifecycle(result={"resume_after_step": 11, "final_decision": "REOPEN_REVISION_TEXT"})
     registry, lifecycles = v2_registry(final_judge=judge)

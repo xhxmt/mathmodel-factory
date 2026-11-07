@@ -86,6 +86,63 @@ def has_unresolved_critical(path: Path) -> bool:
     return has_unresolved_severity(path, {"BLOCKING", "MAJOR"})
 
 
+@dataclass(frozen=True)
+class OpenIssue:
+    issue_id: str
+    category: str
+    severity: str
+
+
+def open_review_issues(path: Path, severities: set[str]) -> list[OpenIssue]:
+    """Unresolved rows outside ``## Incremental audit findings``.
+
+    The machine section is excluded: its ``AUDIT-*`` rows are written and
+    closed only by the audit profiles, so a Step that runs no profile cannot
+    act on them (a hard row blocked its own Step already; a warning row is
+    reviewed by the final audit). Only tables with Severity and Status
+    columns are read; a row without a Category column reports ``""``.
+    """
+
+    if not path.is_file():
+        return []
+    targets = {str(value).upper() for value in severities}
+    issues: list[OpenIssue] = []
+    in_machine_section = False
+    header: dict[str, int] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("## "):
+            in_machine_section = line.strip() == SECTION_HEADING
+            header = {}
+            continue
+        if "|" not in line:
+            header = {}
+            continue
+        if in_machine_section:
+            continue
+        cells = _cells(line)
+        lowered = [cell.lower() for cell in cells]
+        if "severity" in lowered and "status" in lowered:
+            header = {
+                name: lowered.index(name)
+                for name in ("issue id", "category", "severity", "status")
+                if name in lowered
+            }
+            continue
+        if not header or not cells or all(set(cell) <= {"-", ":"} for cell in cells if cell):
+            continue
+        try:
+            severity = cells[header["severity"]].upper()
+            status = cells[header["status"]].upper()
+        except IndexError:
+            continue
+        if severity not in targets or status in RESOLVED_STATUSES:
+            continue
+        category = cells[header["category"]].lower() if "category" in header and header["category"] < len(cells) else ""
+        issue_id = cells[header["issue id"]] if "issue id" in header and header["issue id"] < len(cells) else cells[0]
+        issues.append(OpenIssue(issue_id, category, severity))
+    return issues
+
+
 def sync_incremental_findings(path: Path, findings: list[LedgerFinding]) -> None:
     if path.is_file():
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()

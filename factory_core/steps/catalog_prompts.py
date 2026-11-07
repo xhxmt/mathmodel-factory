@@ -19,7 +19,34 @@ from __future__ import annotations
 
 from pathlib import Path
 
+V2_REVIEW_REWORK_LINE = (
+    "- 审稿返工：读取 `audit_issue_ledger.md` 中 `## Incremental audit findings` 以外各段状态为 OPEN 的 "
+    "BLOCKING/MAJOR 审稿行。本步骤若是因这些行被引擎重算（事件 `rework_rule=review_issue`），凡根因在"
+    "本步骤产物（代码、结果、图、报告）的行，在本步骤按 Notes 修复并在本步骤日志/报告中写明修复证据；"
+    "不在本步骤范围的不要改，也不要改这些行的状态（由 Step 12 复核后更新）。"
+)
+
 V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
+    # The v2 Stage 8 exit routes open results/model review issues back to
+    # Steps 5-8 (engine.REVIEW_ISSUE_REWORK_RULE); the re-run Steps read them.
+    "step5_full_solve.txt": (
+        (
+            "修复真相源和执行证据后让 runner 重跑 Step-5 `results` profile 自动更新。",
+            "修复真相源和执行证据后让 runner 重跑 Step-5 `results` profile 自动更新。\n" + V2_REVIEW_REWORK_LINE,
+        ),
+    ),
+    "step6_sensitivity.txt": (
+        (
+            "修复对应产物后由 runner 重跑 Step-6 `results` profile 自动关闭，不要手工改状态。",
+            "修复对应产物后由 runner 重跑 Step-6 `results` profile 自动关闭，不要手工改状态。\n" + V2_REVIEW_REWORK_LINE,
+        ),
+    ),
+    "step7_model_eval.txt": (
+        ("本步骤只产新文档。", "本步骤只产新文档。\n" + V2_REVIEW_REWORK_LINE),
+    ),
+    "step8_visualization.txt": (
+        ("[重要 — 风格规范]", V2_REVIEW_REWORK_LINE + "\n\n[重要 — 风格规范]"),
+    ),
     "step10_gate1_numerical.txt": (
         (
             "Step 13 只做隔离的数学预审，完整的数学、执行和论文质量 Gate 2 由 Step 15 后的 `final` 审计执行。",
@@ -65,8 +92,12 @@ V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
             "让 Step 13 最终审计知道哪些 issue 已经被处理",
         ),
         (
-            "供 Step 13 数学预审或最终审计判定",
-            "供 Step 13 最终审计判定",
+            "供 Step 13 数学预审或最终审计判定（可能触发 `REOPEN_REVISION_MODEL`）。",
+            "并在 `audit_issue_ledger.md` 的对应行把 Category 写成 `results`（求解、结果、灵敏度或图生成代码）"
+            "或 `model`，Notes 写清要改的文件与具体改法。本项目在本步骤结束时由引擎读取台账中"
+            "`## Incremental audit findings` 以外的 OPEN BLOCKING/MAJOR 行：`results`/`model` 类触发一次"
+            " Step 5–8 重算（重跑的步骤会读这些行并修复）后回到本步骤复核，其余类别重跑一次 Step 11–12；"
+            "之后仍未解决则运行失败。已真正修复的行改为 RESOLVED 并写明证据。",
         ),
         (
             "后续预审或最终审计返修需要 diff",

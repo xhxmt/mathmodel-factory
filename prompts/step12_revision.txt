@@ -177,5 +177,6 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 - ❌ 改任何来自 `results/*` 的数值；删除或替换图表（Step 8 已定稿）。
 - 若某条 review issue 的根因是"结果本身有问题 / 灵敏度结论站不住 / 数字与模型对不上"——这**不能靠改论文措辞解决**。在 `revision_summary.md §未处理 issue` 记一条并标注"需回 Step 5/6 重跑"，供 Step 13 数学预审或最终审计判定（可能触发 `REOPEN_REVISION_MODEL`）。绝不允许"改论文描述去迎合一个错的数字"。
 - 修订后，§模型求解 / 灵敏度 表格里的数值应与 `results/*` 仍然一致（上方 item 5 的数字 sanity check 会复核）。
+- 由生成器产出的内容（`tables/headline_values.tex` 的宏、`tables/*.tex`、`result*.xlsx`）只能改 `models/generate_derived.py` 后整体重生成，不得手改输出。改了生成器就必须重新 pin：按现有 `results/derived_artifacts.json` 的 `outputs` 逐项重复 `--output` 运行 `python3 ../../scripts/create_derived_manifest.py "$(pwd)" --output <path>=<comparison> ...`，再运行 `python3 ../../scripts/verify_derived_artifacts.py "$(pwd)" --json-out derived_artifacts_verification.latest.json`，必须 `VERDICT: PASS`。不得留下未 pin 的生成器改动。
 
 完成本步骤后立即停止。
