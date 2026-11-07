@@ -98,13 +98,101 @@ def test_retry_step_needs_a_failed_project(tmp_path):
         engine.retry_step(expected_revision=store.load().revision, step_id=14, note="why")
 
 
-def test_cli_retry_step_requires_step_and_reason():
+def test_cli_retry_step_parses_step_and_reason():
     from factory_core import cli
 
     args = cli.build_parser().parse_args(
         ["action", "retry-step", "demo", "--step", "14", "--reason", "fixed", "--no-start"]
     )
     assert (args.name, args.step, args.reason) == ("retry-step", 14, "fixed")
+
+
+class _CliService:
+    """A FactoryService stand-in that records calls and uses the real engine."""
+
+    calls: list = []
+    start_error: Exception | None = None
+
+    def __init__(self, engine, failed):
+        self.engine, self.failed = engine, failed
+
+    def inspect(self, _project):
+        return self.engine.get_state()
+
+    def retry_step(self, _project, *, step_id, reason, expected_revision=None):
+        self.calls.append(("retry", step_id, reason, expected_revision))
+        return self.engine.retry_step(
+            expected_revision=expected_revision, step_id=step_id, note=reason
+        )
+
+    def start(self, _project, *, expected_revision=None):
+        self.calls.append(("start", expected_revision))
+        if self.start_error is not None:
+            raise self.start_error
+        from types import SimpleNamespace
+
+        return SimpleNamespace(state=self.engine.get_state())
+
+
+def _cli_with(monkeypatch, tmp_path, *, start_error=None):
+    from factory_core import cli
+
+    engine, _store, _step14, failed = _failed_project(tmp_path)
+    service = _CliService(engine, failed)
+    service.calls = []
+    service.start_error = start_error
+    monkeypatch.setattr(cli, "FactoryService", lambda *_a, **_k: service)
+    return cli, service, failed
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--reason", "fixed"],  # no --step
+        ["--step", "14"],  # no --reason
+        ["--step", "14", "--reason", ""],
+    ],
+)
+def test_cli_retry_step_refuses_without_step_or_reason(monkeypatch, tmp_path, capsys, argv):
+    cli, service, failed = _cli_with(monkeypatch, tmp_path)
+
+    code = cli.main(["action", "retry-step", str(tmp_path), *argv, "--no-start"])
+
+    assert code == 1
+    assert "retry-step requires --step and --reason" in capsys.readouterr().err
+    assert service.calls == []
+    assert service.engine.get_state().revision == failed.revision
+
+
+def test_cli_retry_step_starts_the_runner_at_the_retried_revision(monkeypatch, tmp_path):
+    cli, service, failed = _cli_with(monkeypatch, tmp_path)
+
+    code = cli.main(["action", "retry-step", str(tmp_path), "--step", "14", "--reason", "fixed"])
+
+    retried = service.engine.get_state()
+    assert code == 0
+    assert retried.revision > failed.revision
+    assert service.calls == [
+        ("retry", 14, "fixed", failed.revision),
+        ("start", retried.revision),
+    ]
+
+
+def test_cli_retry_step_names_the_recorded_retry_when_start_fails(monkeypatch, tmp_path, capsys):
+    from factory_core.domain import FactoryCoreError
+
+    cli, service, failed = _cli_with(
+        monkeypatch, tmp_path, start_error=FactoryCoreError("runner launch failed")
+    )
+
+    code = cli.main(["action", "retry-step", str(tmp_path), "--step", "14", "--reason", "fixed"])
+
+    retried = service.engine.get_state()
+    err = capsys.readouterr().err
+    assert code == 1
+    assert retried.status is WorkflowStatus.READY  # the retry stays committed
+    assert f"recorded at revision {retried.revision}" in err
+    assert "runner launch failed" in err and "resume the project" in err
 
 
 def test_a_plain_resume_does_not_reset_the_budget(tmp_path):

@@ -556,17 +556,39 @@ def project_audit_timeline(events: Iterable[WorkflowEvent]) -> list[dict[str, An
 _ENGINE_PAUSE_SUBCODES = frozenset({"SEMANTIC_REOPEN_BUDGET", "PROVIDER_UNAVAILABLE"})
 
 
-def _engine_pause(events: list[WorkflowEvent]) -> WorkflowEvent | None:
-    """The latest PAUSED event, when the engine recorded it with an explanation
-    (phase 3a: spent reopen budget; phase 3d: dispatch preflight failure)."""
+def current_engine_pause(
+    events: Iterable[WorkflowEvent], subcodes: Iterable[str] = _ENGINE_PAUSE_SUBCODES
+) -> WorkflowEvent | None:
+    """The engine-recorded PAUSED event that set the project's current pause.
 
-    for event in reversed(events):
+    Phase 3a (spent reopen budget) and 3d (dispatch preflight failure) pause
+    with ``actor="engine"`` and one of ``subcodes``.  The event counts only
+    while it is still the latest status change: a later event that changed the
+    status (a resume, or another transition such as ``RUN_BOUNDARY_REACHED``
+    that pauses again) supersedes it, so a stale explanation is never shown
+    for an unrelated pause.
+    """
+
+    wanted = frozenset(subcodes)
+    for event in reversed(list(events)):
         if event.type == "PAUSED":
             reason = event.payload.get("reason") or {}
-            if isinstance(reason, dict) and reason.get("subcode") in _ENGINE_PAUSE_SUBCODES:
+            if (
+                isinstance(reason, dict)
+                and reason.get("actor") == "engine"
+                and reason.get("subcode") in wanted
+            ):
                 return event
             return None
+        envelope = event.payload.get(ENVELOPE_KEY)
+        patch = envelope.get("state_patch") if isinstance(envelope, dict) else None
+        if isinstance(patch, dict) and "status" in patch:
+            return None
     return None
+
+
+def _engine_pause(events: list[WorkflowEvent]) -> WorkflowEvent | None:
+    return current_engine_pause(events)
 
 
 def project_runtime_diagnostics(

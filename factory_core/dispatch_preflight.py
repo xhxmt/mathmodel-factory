@@ -16,6 +16,7 @@ not a new way to stop a healthy run.  The report carries no credential.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -26,18 +27,22 @@ from .preflight import FAIL, HttpGet, _urllib_get, check_routes, check_scratch_s
 if TYPE_CHECKING:
     from .registry import StepDefinition
 
+logger = logging.getLogger(__name__)
+
 PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
 DISPATCH_MIN_FREE_BYTES = 2 * 2**30
 ENABLE_ENV = "FACTORY_DISPATCH_PREFLIGHT"
 
 DispatchPreflight = Callable[["StepDefinition"], "dict | None"]
 
-# Subtasks whose models are not routed by their own Step id: the v2 final
-# Judge runs the final audit as execution Step 16, so its Judge roles use the
-# Step-16 assignments, not Step 13's.  Probing Step 13's routes for it could
-# block a healthy run, so it is not checked here (Step 16 itself has no
-# default model and always passes).
-_ROUTED_ELSEWHERE = frozenset({"final_judge"})
+# Subtasks whose Step id does not name the models they call, so probing that
+# Step's routes could block a healthy run:
+# - ``final_judge`` (v2): runs the final audit as execution Step 16, so its
+#   Judge roles use the Step-16 assignments, not Step 13's (Step 16 itself has
+#   no default model and always passes);
+# - ``conditional_math_preflight_skip`` (v1 Step 13 when no math changed):
+#   writes the skip receipt and calls no model at all.
+_ROUTED_ELSEWHERE = frozenset({"final_judge", "conditional_math_preflight_skip"})
 
 
 def enabled(environ: Mapping[str, str] | None = None) -> bool:
@@ -68,6 +73,13 @@ def check_dispatch(
             environ=environ, http_get=http_get, timeout=timeout,
         )
     except Exception:  # noqa: BLE001 - a crashing check must not stop a healthy run
+        # Not blocking, but not silent either: a broken preflight would
+        # otherwise switch the gate off without a trace.
+        logger.warning(
+            "dispatch preflight for Step %s crashed; dispatching without it",
+            step_id,
+            exc_info=True,
+        )
         return None
     blocking = [check for check in scratch + steps if check.status == FAIL]
     if not blocking:

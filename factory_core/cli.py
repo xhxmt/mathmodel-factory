@@ -395,6 +395,20 @@ def _default_http_get():
     return _urllib_get
 
 
+def _committed_but_not_started(what: str, recorded, exc: Exception) -> FactoryCoreError:
+    """A retry or grant is committed but its runner did not start.
+
+    Repeating the action would be refused, so name the recorded revision and
+    point at a plain resume instead.
+    """
+
+    return FactoryCoreError(
+        f"the {what} was recorded at revision {recorded.revision} "
+        f"(status {recorded.status.value}) but the runner did not start: {exc}. "
+        f"Do not repeat the {what}; resume the project to start it."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] == "compat":
@@ -729,7 +743,12 @@ def main(argv: list[str] | None = None) -> int:
                     project, step_id=args.step, reason=args.reason, expected_revision=revision
                 )
                 if not args.no_start:
-                    updated = service.start(project, expected_revision=updated.revision).state
+                    try:
+                        updated = service.start(
+                            project, expected_revision=updated.revision
+                        ).state
+                    except (FactoryCoreError, OSError) as exc:
+                        raise _committed_but_not_started("retry", updated, exc) from exc
             elif args.name == "grant-reopen":
                 if not args.reason:
                     raise InvalidTransition("grant-reopen requires --reason")
@@ -737,9 +756,12 @@ def main(argv: list[str] | None = None) -> int:
                     project, reason=args.reason, expected_revision=revision
                 )
                 if not args.no_start:
-                    updated, _worker = service.resume_and_start(
-                        project, expected_revision=updated.revision
-                    )
+                    try:
+                        updated, _worker = service.resume_and_start(
+                            project, expected_revision=updated.revision
+                        )
+                    except (FactoryCoreError, OSError) as exc:
+                        raise _committed_but_not_started("grant", updated, exc) from exc
             else:
                 updated = service.resolve(
                     project,

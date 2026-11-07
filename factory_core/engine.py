@@ -2334,23 +2334,19 @@ class FactoryEngine:
     def semantic_reopen_pause(self, state: WorkflowState | None = None) -> WorkflowEvent | None:
         """The budget pause the project is currently stopped at, if any.
 
-        It is the latest ``PAUSED`` event, provided the engine recorded it for
-        a spent semantic-reopen budget and the project is still paused.
+        It is the latest ``PAUSED`` event, provided the engine (not an
+        operator) recorded it for a spent semantic-reopen budget and no later
+        event has changed the status.
         """
+
+        from .workflow_events import current_engine_pause
 
         state = state or self.store.load()
         if state.status is not WorkflowStatus.PAUSED:
             return None
-        for event in reversed(self.store.events()):
-            if event.type == "PAUSED":
-                reason = event.payload.get("reason") or {}
-                if (
-                    isinstance(reason, dict)
-                    and reason.get("subcode") == SEMANTIC_REOPEN_PAUSE_SUBCODE
-                ):
-                    return event
-                return None
-        return None
+        return current_engine_pause(
+            self.store.events(), {SEMANTIC_REOPEN_PAUSE_SUBCODE}
+        )
 
     def grant_semantic_reopen(
         self,

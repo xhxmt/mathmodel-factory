@@ -35,8 +35,10 @@ _TEST_TMP_ROOT = Path(tempfile.mkdtemp(prefix="paper-factory-tests-"))
 atexit.register(shutil.rmtree, _TEST_TMP_ROOT, ignore_errors=True)
 os.environ.setdefault("AUTH_DB_FILE", str(_TEST_TMP_ROOT / "auth.db"))
 # The dispatch preflight (phase 3d) probes model routes over the network and
-# the host's credentials; tests that need it build the hook explicitly.
-os.environ.setdefault("FACTORY_DISPATCH_PREFLIGHT", "0")
+# the host's credentials; tests that need it build the hook explicitly.  Assigned,
+# not ``setdefault``: a host that exports FACTORY_DISPATCH_PREFLIGHT=1 must not
+# turn the network probe back on for the whole suite.
+os.environ["FACTORY_DISPATCH_PREFLIGHT"] = "0"
 
 PRODUCTION_AUTH_DB = Path(REPO_ROOT) / "web" / "auth.db"
 

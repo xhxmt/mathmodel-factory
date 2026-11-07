@@ -71,9 +71,13 @@ def test_low_scratch_space_blocks(tmp_path):
     assert any(item["name"].startswith("scratch:") for item in report["blocking"])
 
 
-def test_a_crashing_check_never_blocks(tmp_path, monkeypatch):
+def test_a_crashing_check_never_blocks_but_is_logged(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(dispatch_preflight, "check_routes", lambda *a, **k: 1 / 0)
-    assert _check(tmp_path, None) is None
+    with caplog.at_level("WARNING", logger=dispatch_preflight.__name__):
+        assert _check(tmp_path, None) is None
+    (record,) = [r for r in caplog.records if r.name == dispatch_preflight.__name__]
+    assert "Step 13 crashed" in record.getMessage()
+    assert record.exc_info is not None and record.exc_info[0] is ZeroDivisionError
 
 
 def test_the_engine_pauses_before_starting_the_step_and_spends_no_attempt(tmp_path):
@@ -119,7 +123,7 @@ def test_the_service_hook_honours_the_switch(tmp_path, monkeypatch):
     assert callable(hook)
 
 
-def test_the_v2_final_judge_is_not_probed_on_step_13_routes(tmp_path, monkeypatch):
+def test_subtasks_routed_elsewhere_are_not_probed_on_step_13_routes(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.setenv(dispatch_preflight.ENABLE_ENV, "1")
@@ -128,5 +132,7 @@ def test_the_v2_final_judge_is_not_probed_on_step_13_routes(tmp_path, monkeypatc
     hook = dispatch_preflight.for_project(ROOT, tmp_path)
 
     assert hook(SimpleNamespace(id=13, name="final_judge")) is None
+    # v1 Step 13 with no math change only writes the skip receipt: no model.
+    assert hook(SimpleNamespace(id=13, name="conditional_math_preflight_skip")) is None
     assert hook(SimpleNamespace(id=13, name="judge_gate")) == {"x": 1}
     assert probed == [13]

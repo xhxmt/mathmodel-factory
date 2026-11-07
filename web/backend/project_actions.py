@@ -18,6 +18,28 @@ class ActionResult:
         return 0 if self.ok else 1
 
 
+def _committed_but_not_started(what: str, recorded, exc: Exception) -> ActionResult:
+    """The retry or grant is already committed but the runner did not start.
+
+    Repeating the action would be refused (the project is no longer failed, or
+    the pause already has its grant), so say what was recorded and that a
+    plain resume is the way on.
+    """
+
+    payload = {
+        "status": recorded.status.value,
+        "revision": recorded.revision,
+        "started": False,
+    }
+    return ActionResult(
+        False,
+        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        f"the {what} was recorded at revision {recorded.revision} "
+        f"(status {recorded.status.value}) but the runner did not start: {exc}. "
+        f"Do not repeat the {what}; resume the project to start it.",
+    )
+
+
 def run_action(
     factory_root: Path,
     action: str,
@@ -41,7 +63,10 @@ def run_action(
                 base_name, step_id=int(step), reason=str(reason),
                 expected_revision=expected_revision,
             )
-            worker = service.start(base_name, expected_revision=retried.revision)
+            try:
+                worker = service.start(base_name, expected_revision=retried.revision)
+            except Exception as exc:
+                return _committed_but_not_started("retry", retried, exc)
             state = worker.state
         elif action == "grant_reopen":
             # Allow the reopen the budget pause stopped, then resume: recovery
@@ -49,9 +74,12 @@ def run_action(
             granted = service.grant_semantic_reopen(
                 base_name, reason=str(reason), expected_revision=expected_revision
             )
-            state, worker = service.resume_and_start(
-                base_name, expected_revision=granted.revision
-            )
+            try:
+                state, worker = service.resume_and_start(
+                    base_name, expected_revision=granted.revision
+                )
+            except Exception as exc:
+                return _committed_but_not_started("grant", granted, exc)
         elif action == "resume":
             state, worker = service.resume_and_start(
                 base_name, expected_revision=expected_revision

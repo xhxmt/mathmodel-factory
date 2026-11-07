@@ -4,9 +4,10 @@ import json
 import statistics
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from factory_core.contest import phase_for_step
+from factory_core.domain import WorkflowEvent
 from factory_core.delivery.release import resolve_current_release
 from factory_core.storage import SQLiteStateStore
 from factory_core.stages import projected_stage_cursor
@@ -75,10 +76,10 @@ def _at_or_after_final_prose(current_step: int, catalog_version: str | None) -> 
     return catalog.step_position(step) >= catalog.step_position(15)
 
 
-def _step_durations(store: SQLiteStateStore) -> list[dict[str, int]]:
+def _step_durations(events: Sequence[WorkflowEvent]) -> list[dict[str, int]]:
     starts: dict[int, int] = {}
     durations: list[dict[str, int]] = []
-    for event in store.events():
+    for event in events:
         if event.step is None:
             continue
         step = int(event.step)
@@ -111,14 +112,19 @@ def _bucket(status: str | None, pause_subcode: str | None) -> str:
     return "stopped"  # operator pause, failure, idle between runs
 
 
-def _time_split(store: SQLiteStateStore, *, started_at: int, now_epoch: int) -> dict[str, Any]:
+def _time_split(
+    events: Sequence[WorkflowEvent], *, started_at: int, now_epoch: int
+) -> dict[str, Any]:
     from factory_core.workflow_events import ENVELOPE_KEY
 
     seconds = dict.fromkeys(_TIME_BUCKETS, 0)
     status: str | None = None
     subcode: str | None = None
-    since: int | None = None
-    for event in store.events():
+    # Start at the contest start, not the first event: a contest that began
+    # before the project recorded anything counts that time as stopped, so
+    # the buckets always add up to the elapsed contest time.
+    since: int | None = started_at
+    for event in events:
         at = int(event.created_at)
         if since is not None:
             start, end = max(since, started_at), min(at, now_epoch)
@@ -160,7 +166,9 @@ def _timing(
             "mode_label": "未配置比赛时钟",
             "recommendation": "按 Legacy 项目处理，不推断剩余比赛时间。",
         }
-    durations = _step_durations(store)
+    # One read of the event table per request, shared by every timing view.
+    events = store.events()
+    durations = _step_durations(events)
     recent = [item["duration_seconds"] for item in durations[-3:] if item["duration_seconds"] > 0]
     average = int(statistics.mean(recent)) if recent else 3_600
     confidence = "observed" if recent else "default"
@@ -169,7 +177,7 @@ def _timing(
     )
     phase_events = [
         event.created_at
-        for event in store.events()
+        for event in events
         if event.type == "STEP_STARTED" and event.step in phase.steps
     ]
     phase_started = min(phase_events) if phase_events else now_epoch
@@ -241,7 +249,7 @@ def _timing(
         "recommendation": recommendation,
         "recent_steps": durations[-3:],
         "time_split": _time_split(
-            store, started_at=int(policy["contest_started_at"]), now_epoch=now_epoch
+            events, started_at=int(policy["contest_started_at"]), now_epoch=now_epoch
         ),
     }
 

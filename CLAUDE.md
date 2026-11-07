@@ -197,8 +197,11 @@ field) and stops after `INFRASTRUCTURE_RETRY_BUDGET` retries per terminal class
 (classes that end the same way share one budget) with a distinct terminal class
 (`PERMANENT_AUDIT_INFRASTRUCTURE`; `PERMANENT_MODEL_BACKEND_INFRASTRUCTURE` for
 `TRANSIENT_MODEL_BACKEND`, a model process that exited non-zero;
-`PERMANENT_JUDGE_INFRASTRUCTURE` for the `TRANSIENT_JUDGE_*` classes, a Judge
-that produced no usable verdict). A timeout still consumes a content attempt,
+`PERMANENT_JUDGE_INFRASTRUCTURE` for the six Judge classes
+`TRANSIENT_JUDGE_INDETERMINATE`, `_ROLE`, `_PACKET`, `_INFRASTRUCTURE`,
+`_PROVENANCE` and `_AGGREGATION`, a Judge that produced no usable verdict).
+`TRANSIENT_JUDGE_ROUTING` and `TRANSIENT_JUDGE_INCOMPLETE` are not in that set
+and still consume a content attempt. A timeout still consumes a content attempt,
 and so does a determinate audit finding (`AUDIT_REPAIR_REQUIRED`).
 
 A semantic reopen (a Stage changing content an earlier Stage owns) is
@@ -212,7 +215,9 @@ are: revert the upstream-owned edits and resume, which rechecks the change set
 through recovery without re-running the model; or `factory action
 grant-reopen <project> --reason ...` (Web: "批准一次回退"), which records
 `SEMANTIC_REOPEN_GRANTED` for that Stage and classifier, allows exactly one
-more reopen, and resumes. One grant per pause.
+more reopen, and resumes. One grant per pause. If the record commits but the
+runner does not start, the error names the recorded revision: resume the
+project rather than repeating the grant (the same holds for `retry-step`).
 
 A `FAILED` project whose cursor is on a Step is retried only through
 `factory action retry-step <project> --step N --reason ...` (Web diagnostics:
@@ -231,10 +236,18 @@ reuses `factory preflight`'s route and scratch checks for that Step. Only a
 decided `FAIL` blocks — every candidate model fails (no executable or
 credential, a rejected credential, an exhausted balance such as HTTP 402), or
 scratch space is below 2 GiB; `UNKNOWN`/`WARN` and a crashing check never
-block. A block commits `PAUSED` (subcode `PROVIDER_UNAVAILABLE`, actor
-`engine`) with the credential-free report, spends no attempt, keeps the cursor,
-and a resume after the fix dispatches the same Step. The v2 `final_judge` is
-skipped: its Judge roles route as Step 16, not by Step 13's assignments.
+block (a crash is logged as a warning). A block commits `PAUSED` (subcode
+`PROVIDER_UNAVAILABLE`, actor `engine`) with the credential-free report, spends
+no attempt, keeps the cursor, and a resume after the fix dispatches the same
+Step. Two subtasks are skipped: the v2 `final_judge` (its Judge roles route as
+Step 16, not by Step 13's assignments) and v1 `conditional_math_preflight_skip`
+(it calls no model).
+
+`SEMANTIC_REOPEN_BUDGET` and `PROVIDER_UNAVAILABLE` are engine-owned: operator
+`pause()` refuses them. Diagnostics and grants recognize such a pause through
+`workflow_events.current_engine_pause` only while its `PAUSED` event (actor
+`engine`) is still the latest status change; a later resume or another pausing
+transition supersedes it.
 
 Pause and kill decide how to stop the runner before committing anything. The
 launch identity recorded for the current pid and lease is verified against the

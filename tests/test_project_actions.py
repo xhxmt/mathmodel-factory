@@ -189,13 +189,72 @@ def test_web_retry_step_records_the_retry_then_starts(monkeypatch, tmp_path):
 
     assert result.ok is True, result.stderr
     assert calls == [("retry", "demo", 14, "fixed", 10), ("start", "demo", 11)]
-    assert run_without_step(tmp_path, monkeypatch).ok is False
 
 
-def run_without_step(tmp_path, monkeypatch):
+def test_web_retry_step_requires_a_step(monkeypatch, tmp_path):
     monkeypatch.setattr(
         project_actions,
         "FactoryService",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not construct")),
     )
-    return project_actions.run_action(tmp_path, "retry_step", "demo", reason="fixed")
+
+    result = project_actions.run_action(tmp_path, "retry_step", "demo", reason="fixed")
+
+    assert result.ok is False
+    assert "requires a step" in result.stderr
+
+
+class _Ready:
+    status = type("Status", (), {"value": "ready"})()
+    revision = 11
+
+
+def test_web_retry_step_reports_a_recorded_retry_whose_start_failed(monkeypatch, tmp_path):
+    class Service:
+        def __init__(self, _root):
+            pass
+
+        def retry_step(self, project, *, step_id, reason, expected_revision=None):
+            return _Ready()
+
+        def start(self, project, *, expected_revision=None):
+            raise RuntimeError("runner launch failed")
+
+    monkeypatch.setattr(project_actions, "FactoryService", Service)
+
+    result = project_actions.run_action(
+        tmp_path, "retry_step", "demo", expected_revision=10, reason="fixed", step=14
+    )
+
+    assert result.ok is False
+    assert json.loads(result.stdout) == {"revision": 11, "started": False, "status": "ready"}
+    assert "recorded at revision 11" in result.stderr
+    assert "runner launch failed" in result.stderr
+    assert "resume the project" in result.stderr
+
+
+def test_web_grant_reopen_reports_a_recorded_grant_whose_resume_failed(monkeypatch, tmp_path):
+    class Paused:
+        status = type("Status", (), {"value": "paused"})()
+        revision = 9
+
+    class Service:
+        def __init__(self, _root):
+            pass
+
+        def grant_semantic_reopen(self, project, *, reason, expected_revision=None):
+            return Paused()
+
+        def resume_and_start(self, project, *, expected_revision=None):
+            raise RuntimeError("consultation projection drift")
+
+    monkeypatch.setattr(project_actions, "FactoryService", Service)
+
+    result = project_actions.run_action(
+        tmp_path, "grant_reopen", "demo", expected_revision=8, reason="upstream fix is real"
+    )
+
+    assert result.ok is False
+    assert json.loads(result.stdout)["revision"] == 9
+    assert "grant was recorded at revision 9" in result.stderr
+    assert "Do not repeat the grant" in result.stderr

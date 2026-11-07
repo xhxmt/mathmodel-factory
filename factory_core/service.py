@@ -1677,10 +1677,12 @@ PAUSED_SUBCODES = frozenset(
         "DEADLINE",
         "EXECUTION_SCOPE",
         "FREEZE_BOUNDARY",
-        "SEMANTIC_REOPEN_BUDGET",
-        "PROVIDER_UNAVAILABLE",
     }
 )
+# SEMANTIC_REOPEN_BUDGET (phase 3a) and PROVIDER_UNAVAILABLE (phase 3d) are
+# engine-owned: the engine records them directly with ``actor="engine"``, and
+# they are deliberately not accepted from ``pause()``, so an operator cannot
+# record a pause that the grant and diagnostics paths would mistake for one.
 RESUMED_SUBCODES = frozenset({"OPERATOR", "RETRY", "AUTO_RECOVERY"})
 REASON_ACTORS = frozenset({"operator", "engine", "scheduler"})
 

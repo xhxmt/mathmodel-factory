@@ -197,6 +197,8 @@ def test_v2_forecast_follows_the_active_subtask(tmp_path, active_subtask, expect
                      catalog_version=STAGE_CATALOG_VERSION_V2, active_subtask=active_subtask)
 
     assert (timing["projected_content_finish_at"] - 10_000) // timing["recent_step_average_seconds"] == expected
+
+
 def test_dashboard_splits_contest_time_into_work_and_external_waits(tmp_path):
     from factory_core.domain import WorkflowStatus
     from factory_core.stages import STAGE_SCHEDULER_GENERATION
@@ -233,3 +235,49 @@ def test_dashboard_splits_contest_time_into_work_and_external_waits(tmp_path):
     assert split["waiting_external_seconds"] == 600
     assert sum(split[key] for key in ("working_seconds", "waiting_human_seconds",
                                       "waiting_provider_seconds", "stopped_seconds")) == 3_000 - 1_000
+
+
+def test_time_before_the_first_event_counts_as_stopped(tmp_path):
+    """A contest that began before the project existed still adds up."""
+
+    from factory_core.stages import STAGE_SCHEDULER_GENERATION
+
+    clock = {"now": 1_500}
+    project = tmp_path / "ongoing/demo"
+    project.mkdir(parents=True)
+    policy = ContestPolicy.for_deadline(started_at=1_000, deadline_at=1_000_000)
+    store = SQLiteStateStore(project, clock=lambda: clock["now"])
+    store.initialize(project_id="demo", project_type="modeling", last_completed_step=3,
+                     scheduler_generation=STAGE_SCHEDULER_GENERATION, contest_policy=policy.to_dict())
+    clock["now"] = 1_700
+    state = store.load()
+    store.transition(expected_revision=state.revision, event_type="RUN_STARTED",
+                     changes={"status": WorkflowStatus.RUNNING}, payload={})
+
+    timing = build_contest_dashboard(project, tmp_path / "papers", now_epoch=2_000)["timing"]
+    split = timing["time_split"]
+
+    assert split["working_seconds"] == 300
+    assert split["stopped_seconds"] == 500 + 200  # before creation, then ready until the run
+    assert sum(split[key] for key in ("working_seconds", "waiting_human_seconds",
+                                      "waiting_provider_seconds", "stopped_seconds")) == timing["elapsed_seconds"]
+
+
+def test_timing_reads_the_event_table_once(tmp_path, monkeypatch):
+    from factory_core.stages import STAGE_SCHEDULER_GENERATION
+    from web.backend.contest_dashboard import _timing
+
+    project = tmp_path / "ongoing/demo"
+    project.mkdir(parents=True)
+    policy = ContestPolicy.for_deadline(started_at=1_000, deadline_at=1_000_000)
+    store = SQLiteStateStore(project, clock=lambda: 1_000)
+    store.initialize(project_id="demo", project_type="modeling", last_completed_step=3,
+                     scheduler_generation=STAGE_SCHEDULER_GENERATION, contest_policy=policy.to_dict())
+    reads = []
+    original = store.events
+    monkeypatch.setattr(store, "events", lambda *a, **k: reads.append(1) or original(*a, **k))
+
+    timing = _timing(store, current_step=4, now_epoch=2_000)
+
+    assert timing["configured"] is True and "time_split" in timing
+    assert len(reads) == 1

@@ -98,7 +98,9 @@ def test_a_spent_stage_budget_pauses_with_an_explanation(tmp_path):
     assert (budget["stage_count"], budget["stage_limit"]) == (2, 2)
     assert (budget["run_count"], budget["run_limit"]) == (2, RUN_SEMANTIC_REOPEN_LIMIT)
     assert [item["stage"] for item in budget["history"]] == [9, 9]
-    assert budget["causes"] == [{"flag": budget["causes"][0]["flag"], "owner_stage": 1, "cause_artifact": UPSTREAM}]
+    assert len(budget["causes"]) == 1
+    (cause,) = budget["causes"]
+    assert cause == {"flag": "MODEL_DIRTY", "owner_stage": 1, "cause_artifact": UPSTREAM}
     assert len(_reopens(store)) == 2  # nothing reopened
     assert any(flag["owner_stage"] == 1 for flag in store.dirty_flags())
 
@@ -140,8 +142,10 @@ def test_a_grant_lets_the_paused_reopen_happen_on_resume(tmp_path):
     assert step14.recover_calls == 1 and len(step14.calls) == 1  # rechecked, not re-run
     assert len(_reopens(store)) == 3
     assert _reopens(store)[-1].payload["stage"] == 9
-    assert state.status is not WorkflowStatus.FAILED
-    assert state.active_stage in (None, 1) and state.last_completed_step == 0
+    # The reopen rewound to the Stage-1 owner of the edited artifact.
+    assert state.status is WorkflowStatus.READY
+    assert (state.active_stage, state.active_subtask) == (1, "research_and_viability")
+    assert state.last_completed_step == 0
     assert resumed.revision < state.revision
     # The grant was used up: the same Stage is out of budget again.
     budget = engine._semantic_reopen_budget(9, state)
@@ -209,4 +213,82 @@ def test_cli_grant_reopen_needs_a_reason_and_records_the_grant(tmp_path, monkeyp
     assert cli.main(["action", "grant-reopen", str(tmp_path), "--reason", "real fix", "--no-start"]) == 0
     assert calls == [("real fix", paused.revision)]
     assert store.events()[-1].type == SEMANTIC_REOPEN_GRANTED
+    granted_revision = store.load().revision
+
     assert cli.main(["action", "grant-reopen", str(tmp_path), "--no-start"]) != 0
+    assert calls == [("real fix", paused.revision)]  # refused before the service
+    assert store.load().revision == granted_revision
+
+
+def test_a_later_status_change_supersedes_the_budget_pause(tmp_path):
+    """A budget pause that was resumed must not explain a later, unrelated pause."""
+
+    engine, store, _ = _project(tmp_path, prior_reopens=[9, 9])
+    paused = engine.run(max_steps=1)
+    resumed = engine.resume(expected_revision=paused.revision)
+    # Another transition pauses the project again without a PAUSED event.
+    store.transition(
+        expected_revision=resumed.revision,
+        event_type="RUN_BOUNDARY_REACHED",
+        changes={"status": WorkflowStatus.PAUSED},
+        payload={"reason": "selected source step outside requested run scope"},
+    )
+    state = store.load()
+
+    assert state.status is WorkflowStatus.PAUSED
+    assert engine.semantic_reopen_pause(state) is None
+    with pytest.raises(InvalidTransition, match="not paused at a spent semantic reopen budget"):
+        engine.grant_semantic_reopen(expected_revision=state.revision, note="why")
+    diagnostics = project_runtime_diagnostics(store.events(), state)["status"]
+    assert diagnostics["reason_code"] != SEMANTIC_REOPEN_PAUSE_SUBCODE
+    assert "reopen_budget" not in diagnostics
+
+
+def test_an_operator_cannot_record_an_engine_pause(tmp_path):
+    from factory_core.service import _require_reason_detail
+
+    for subcode in (SEMANTIC_REOPEN_PAUSE_SUBCODE, "PROVIDER_UNAVAILABLE"):
+        with pytest.raises(InvalidTransition, match="subcode must be one of"):
+            _require_reason_detail("PAUSED", subcode, "operator")
+
+    # Even an event written with the subcode by someone other than the engine
+    # is not a budget pause.
+    engine, store, _ = _project(tmp_path, prior_reopens=[])
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision,
+        event_type="PAUSED",
+        changes={"status": WorkflowStatus.PAUSED},
+        payload={"reason": {"code": "PAUSED", "subcode": SEMANTIC_REOPEN_PAUSE_SUBCODE,
+                            "actor": "operator", "message": "manual"}},
+    )
+    assert engine.semantic_reopen_pause(store.load()) is None
+
+
+def test_cli_grant_reopen_resumes_the_runner_at_the_granted_revision(tmp_path, monkeypatch):
+    from factory_core import cli
+
+    engine, store, _ = _project(tmp_path, prior_reopens=[9, 9])
+    paused = engine.run(max_steps=1)
+    calls = []
+
+    class Service:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def inspect(self, _project):
+            return store.load()
+
+        def grant_semantic_reopen(self, project, *, reason, expected_revision=None):
+            calls.append(("grant", expected_revision))
+            return engine.grant_semantic_reopen(expected_revision=expected_revision, note=reason)
+
+        def resume_and_start(self, project, *, expected_revision=None):
+            calls.append(("resume_and_start", expected_revision))
+            return engine.resume(expected_revision=expected_revision), object()
+
+    monkeypatch.setattr(cli, "FactoryService", Service)
+
+    assert cli.main(["action", "grant-reopen", str(tmp_path), "--reason", "real fix"]) == 0
+    granted = next(e for e in store.events() if e.type == SEMANTIC_REOPEN_GRANTED)
+    assert calls == [("grant", paused.revision), ("resume_and_start", granted.revision)]
