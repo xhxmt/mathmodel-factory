@@ -106,8 +106,9 @@ checkpoints (`invalidate_stage_subtasks`), the scheduler re-runs them and return
 to the initiating subtask; `STAGE_SEMANTIC_REOPENED` carries `rework_rule=input_dependency`,
 `recompute_steps`, `return_subtask` and `recompute_reasons`. Documents, machine
 evidence and files the subtask created are forward repairs, Step 4 is never re-run
-by this rule, and fail-closed records (`explicit_fail_closed`, `protected`,
-`bespoke_recovery`) keep the ownership rewind. v1 projects are unchanged;
+by this rule, and fail-closed records (`explicit_fail_closed`, `fallback` -- an
+unregistered path --, `protected`, `bespoke_recovery`) keep the ownership rewind.
+The replay rule `v2-inputs` mirrors this chain. v1 projects are unchanged;
 v2 prompt wording is a rendering overlay in `factory_core/steps/catalog_prompts.py`
 so v1 prompts stay byte-identical.
 

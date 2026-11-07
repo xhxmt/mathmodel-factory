@@ -361,22 +361,30 @@ def test_replay_rows_keep_the_recorded_and_the_evaluated_stage(fixtures):
 def test_input_dependency_rule_recomputes_only_when_a_completed_step_consumed_the_change(fixtures):
     """Phase 4 exit condition, replayed on the 16 recorded runs.
 
-    Of the recorded reopens, only the change sets in which a completed
-    computation Step (5-8) consumed a changed input re-run anything, and each
-    lists that input.  Everything else is a forward repair.
+    The change sets are re-classified with the checked-out classifier, as the
+    engine does.  Of the 49 recorded reopens, one re-runs computation: a
+    completed computation Step consumed a changed input, and the decision
+    lists it.  Two keep the fail-closed ownership rewind because they changed
+    files no ownership rule covers.  Everything else is a forward repair.
     """
 
     rows = replay.replay_decisions(fixtures, replay.RULES["v2-inputs"])
     recorded = [row for row in rows if row["evaluated"] and row["recorded"]["reopen"]]
     decided = [row for row in rows if row["evaluated"] and row["decided"]["reopen"]]
+    recomputes = [row for row in decided if row["decided"]["recompute_steps"]]
+    rewinds = [row for row in decided if not row["decided"]["recompute_steps"]]
 
     assert len(recorded) == 49
-    assert {(row["run"][-24:], row["rev"]) for row in decided} == {
-        ("cumcm_2026_a_fable_pro_20260910"[-24:], 199),  # Step 10 edited solve code
-        ("cumcm_2026_a_fable_pro_20260910"[-24:], 310),  # Step 12 edited solve code
-        ("cumcm_2026_a_postmerge_run2"[-24:], 490),  # Step 12 edited code and main results
+    assert {(row["run"], row["rev"]) for row in recomputes} == {
+        ("cumcm_2026_a_postmerge_run2", 490),  # revision edited solve code and main results
     }
-    for row in decided:
+    assert {(row["run"], row["rev"]) for row in rewinds} == {
+        ("cumcm_2025_b_gpt_formal_20260908t153023z", 902),
+        ("cumcm_2025_b_gpt_formal_20260908t153023z", 948),
+    }
+    for row in rewinds:
+        assert all("fallback; ownership rewind" in reason for reason in row["decided"]["reasons"])
+    for row in recomputes:
         decision = row["decided"]
         # Re-run the computation Steps from the consumer on, never Step 4.
         assert decision["recompute_steps"] == [5, 6, 7, 8]

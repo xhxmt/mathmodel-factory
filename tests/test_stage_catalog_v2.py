@@ -330,14 +330,17 @@ def test_v2_revision_result_change_recomputes_from_sensitivity(tmp_path):
     (tmp_path / "results").mkdir()
     (tmp_path / "results" / "canonical_results.json").write_text("{}\n", encoding="utf-8")
     revision = Lifecycle(writes={"results/canonical_results.json": '{"p1": 1}\n'})
-    registry, _ = v2_registry(overrides={12: revision})
+    registry, lifecycles = v2_registry(overrides={12: revision})
     store = v2_store(tmp_path, last_completed_step=11)
 
     FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
 
     [reopen] = reopens(store)
     assert reopen.payload["recompute_steps"] == [6, 7, 8]
+    assert reopen.payload["return_subtask"] == "revision"
     assert reopen.payload["semantic_owner_stage"] == 5
+    assert lifecycles[5].calls == []  # the solve did not consume the result
+    assert lifecycles[6].calls == [1]
     # The solve keeps its checkpoint; sensitivity already re-ran in this run.
     assert _checkpoint_steps(store) == [0, 1, 2, 3, 4, 5, 6, 9, 10, 11]
 
@@ -375,6 +378,21 @@ def test_v2_evaluation_changing_main_results_recomputes_sensitivity_in_its_own_s
     engine.run(max_steps=2)
     assert lifecycles[6].calls == [1] and len(evaluation.calls) == 2
     assert lifecycles[5].calls == []
+
+
+def test_v2_unregistered_file_keeps_the_fail_closed_rewind(tmp_path):
+    # No ownership rule covers it, so its role is unknown: the rule does not
+    # guess "document" for it.
+    (tmp_path / "m2_peak_groups.csv").write_text("a\n", encoding="utf-8")
+    revision = Lifecycle(writes={"m2_peak_groups.csv": "b\n"})
+    registry, _ = v2_registry(overrides={12: revision})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    [reopen] = reopens(store)
+    assert "rework_rule" not in reopen.payload
+    assert reopen.payload["semantic_owner_stage"] == 4  # fail-closed RESULT@4
 
 
 def test_v1_project_keeps_the_ownership_rewind_for_the_same_code_edit(tmp_path):

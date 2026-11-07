@@ -60,9 +60,18 @@ _EVIDENCE_PATTERNS = (
     "*.log",
     "**/*.log",
     "STEP5_RECEIPT.json",
+    # Solver diagnostics the registry files under results/: they describe how
+    # a result was obtained and are not read by sensitivity or evaluation.
+    "results/**/bound.json",
+    "results/**/convergence.json",
+    "results/**/cross_check.json",
+    "results/**/plots.pdf",
+    "results/**/*provenance*",
+    "results/**/*source_mapping*",
+    "results/**/*solver_evidence*",
 )
 _CODE_ROOTS = ("models/", "scripts/")
-_DATA_ROOTS = ("data/raw/", "data/final/", "data/intermediate/")
+_DATA_ROOTS = ("data/",)
 _RESULT_ROOT = "results/"
 
 # v1 owner Stage of a code file -> the computation Step that executes it.
@@ -150,9 +159,15 @@ def recompute_steps(start: int) -> tuple[int, ...]:
 
 
 #: Change records the rule never touches: they were constructed to fail
-#: closed (a missing Stage baseline), describe protected items, or come from
-#: a bespoke recovery path.  They keep the ownership rewind.
-FAIL_CLOSED_SOURCES = frozenset({"explicit_fail_closed", "protected", "bespoke_recovery"})
+#: closed (a missing Stage baseline), matched no ownership rule at all
+#: (``fallback``: an unregistered path, whose role is unknown), describe
+#: protected items, or come from a bespoke recovery path.  They keep the
+#: ownership rewind.
+FAIL_CLOSED_SOURCES = frozenset(
+    {"explicit_fail_closed", "fallback", "protected", "bespoke_recovery"}
+)
+#: The cause artifact the engine gives a fail-closed missing-baseline record.
+MISSING_BASELINE_ARTIFACT = "MISSING_STAGE_INPUT_BASELINE"
 
 
 def apply_to_record(
