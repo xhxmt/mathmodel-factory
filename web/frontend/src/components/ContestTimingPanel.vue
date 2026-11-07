@@ -14,6 +14,12 @@
       <div><span>内容冻结余量</span><b class="mono">{{ view.slack }}</b></div>
       <div><span>预测依据</span><b>{{ timing.forecast_confidence === 'observed' ? '真实运行耗时' : '默认 1h / Step' }}</b></div>
     </div>
+    <div v-if="view.split" class="timing-grid">
+      <div><span>工作时间</span><b class="mono">{{ view.split.working }}</b></div>
+      <div><span>等待外部依赖</span><b class="mono">{{ view.split.waitingExternal }}</b></div>
+      <div><span>其中：等人工 / 等外部服务</span><b class="mono">{{ view.split.waitingHuman }} / {{ view.split.waitingProvider }}</b></div>
+      <div><span>已停止（暂停、失败、空闲）</span><b class="mono">{{ view.split.stopped }}</b></div>
+    </div>
   </section>
 </template>
 

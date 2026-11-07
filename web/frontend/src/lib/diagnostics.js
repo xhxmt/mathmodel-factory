@@ -10,6 +10,27 @@ export const DIAGNOSTIC_ACTION_LABEL = {
   retry_human_decision_commit: '重新提交人工决策',
   refresh_status: '刷新诊断',
   resume_project: '恢复运行',
+  revert_upstream_edits_and_resume: '已撤销上游改动，恢复运行',
+  grant_semantic_reopen: '批准一次回退',
+  retry_failed_step: '重试失败的步骤',
+}
+
+// A run paused because its semantic-reopen budget is spent (phase 3a): one
+// line per fact the operator needs to choose between reverting and granting.
+export function reopenBudgetLines(budget) {
+  if (!budget || typeof budget !== 'object') return []
+  const which = budget.exhausted === 'run' ? '整次运行的回退总数' : `Stage ${budget.stage} 发起的回退次数`
+  const lines = [
+    `已用尽：${which}`,
+    `Stage ${budget.stage}：${budget.stage_count}/${budget.stage_limit} · 整次运行：${budget.run_count}/${budget.run_limit}`,
+  ]
+  for (const cause of budget.causes || []) {
+    lines.push(`待回退原因：${cause.cause_artifact || '(未知文件)'} · ${cause.flag} · 归属 Stage ${cause.owner_stage}`)
+  }
+  for (const item of budget.history || []) {
+    lines.push(`已发生：r${item.revision} · Stage ${item.stage} → Stage ${item.owner_stage}`)
+  }
+  return lines
 }
 
 export function badgeText(project) {

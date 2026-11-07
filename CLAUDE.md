@@ -105,7 +105,7 @@ pending actions, native Stage/Step registration, audit, delivery and solver jobs
 The full pre-split source and experimental development contracts live separately
 in `~/paper_new`. Do not copy experimental tables into a Native database.
 
-New projects persist a 74-hourNew projects persist a 74-hour contest policy in schema-v9 SQLite. Steps 0–15
+New projects persist a 74-hour contest policy in schema-v9 SQLite. Steps 0–15
 are capped at T−6h content freeze; Step 16 owns the six-hour terminal reserve
 and is capped at the final deadline. T−2h is delivery freeze: any audit-driven
 substantive reopen requires a separate human override. Retry sleeps are also
@@ -193,10 +193,66 @@ never a finding, and leaves its ledger row as the last verdict recorded it; a
 determinate finding in a sibling check still wins. Error classes in
 `engine.NON_CONTENT_ERROR_CLASSES` never consume a Step's content attempts:
 the engine derives their count from the event stream (no new replayed state
-field) and stops after `INFRASTRUCTURE_RETRY_BUDGET` retries of the same class with a distinct
-terminal class (`PERMANENT_AUDIT_INFRASTRUCTURE`; `PERMANENT_MODEL_BACKEND_INFRASTRUCTURE`
-for `TRANSIENT_MODEL_BACKEND`, a model process that exited non-zero; a timeout
-still consumes a content attempt).
+field) and stops after `INFRASTRUCTURE_RETRY_BUDGET` retries per terminal class
+(classes that end the same way share one budget) with a distinct terminal class
+(`PERMANENT_AUDIT_INFRASTRUCTURE`; `PERMANENT_MODEL_BACKEND_INFRASTRUCTURE` for
+`TRANSIENT_MODEL_BACKEND`, a model process that exited non-zero;
+`PERMANENT_JUDGE_INFRASTRUCTURE` for the seven Judge classes
+`TRANSIENT_JUDGE_INDETERMINATE`, `_ROLE`, `_PACKET`, `_INFRASTRUCTURE`,
+`_PROVENANCE`, `_AGGREGATION` and `_ROUTING`, a Judge whose verdict was never
+produced or routed). `TRANSIENT_JUDGE_INCOMPLETE` (a PASS from a review that
+did not complete, without a delivery override) is deliberately not in that set
+and still consumes a content attempt. When the final-audit decision router
+returns `INFRA_RETRY` (e.g. an `INDETERMINATE` visual gate) or
+`PACKET_REBUILD`, the audit reports `TRANSIENT_JUDGE_INFRASTRUCTURE` /
+`TRANSIENT_JUDGE_PACKET` with status `INDETERMINATE`, never
+`PERMANENT_FINAL_JUDGE`. A timeout still consumes a content attempt,
+and so does a determinate audit finding (`AUDIT_REPAIR_REQUIRED`).
+
+A semantic reopen (a Stage changing content an earlier Stage owns) is
+budgeted per classifier identity: an initiating Stage may rewind at most
+`STAGE_SEMANTIC_REOPEN_LIMIT` (2) times and a run at most
+`RUN_SEMANTIC_REOPEN_LIMIT` (5) times. Spending either limit commits `PAUSED`
+with subcode `SEMANTIC_REOPEN_BUDGET` (actor `engine`), keeps the Stage cursor,
+and records a `reopen_budget` explanation (limits, counts, causes, history)
+that `factory diagnostics` and the Web diagnostics card show. The two ways on
+are: revert the upstream-owned edits and resume, which rechecks the change set
+through recovery without re-running the model; or `factory action
+grant-reopen <project> --reason ...` (Web: "批准一次回退"), which records
+`SEMANTIC_REOPEN_GRANTED` for that Stage and classifier, allows exactly one
+more reopen, and resumes. One grant per pause. If the record commits but the
+runner does not start, the error names the recorded revision: resume the
+project rather than repeating the grant (the same holds for `retry-step`).
+
+A `FAILED` project whose cursor is on a Step is retried only through
+`factory action retry-step <project> --step N --reason ...` (Web diagnostics:
+"重试失败的步骤"; `FactoryService.retry_step`). It records
+`STEP_RETRY_AUTHORIZED` (previous attempt, the failure's revision and error
+class, the operator's reason), resets the attempt count with the Stage cursor
+kept, and starts a fresh attempt 1; dirty state, checkpoints, the contest
+deadline and other budgets still apply. A plain resume of such a project
+recovers the failed attempt and stops at `PERMANENT_ATTEMPT_BUDGET_EXHAUSTED`.
+Do not edit the state database or write one-off authorization events instead.
+
+Before `STEP_STARTED` (after prepare) the engine runs the dispatch preflight
+(`factory_core/dispatch_preflight.py`, wired by `FactoryService.engine`; set
+`FACTORY_DISPATCH_PREFLIGHT=0` to disable, as `tests/conftest.py` does). It
+reuses `factory preflight`'s route and scratch checks for that Step. Only a
+decided `FAIL` blocks — every candidate model fails (no executable or
+credential, a rejected credential, an exhausted balance such as HTTP 402), or
+scratch space is below 2 GiB; `UNKNOWN`/`WARN` and a crashing check never
+block (a crash is logged as a warning). A block commits `PAUSED` (subcode
+`PROVIDER_UNAVAILABLE`, actor `engine`) with the credential-free report, spends
+no attempt, keeps the cursor, and a resume after the fix dispatches the same
+Step. Two subtasks are skipped: the v2 `final_judge` (its Judge roles route as
+Step 16, not by Step 13's assignments) and v1 `conditional_math_preflight_skip`
+(it calls no model).
+
+`SEMANTIC_REOPEN_BUDGET` and `PROVIDER_UNAVAILABLE` are engine-owned: operator
+`pause()` refuses them. Diagnostics and grants recognize such a pause through
+`workflow_events.current_engine_pause` only while its `PAUSED` event (actor
+`engine`) is still the latest status change; a later resume or another pausing
+transition supersedes it.
 
 Pause and kill decide how to stop the runner before committing anything. The
 launch identity recorded for the current pid and lease is verified against the
@@ -438,7 +494,11 @@ The authenticated project workspace uses `contest-dashboard-v1` from
 `GET /api/projects/{base}/contest-dashboard` for the eight-phase view, timing
 forecast, persistent action center, evidence cockpit, and delivery-readiness
 checks. It must show Legacy projects as unconfigured instead of inventing a
-contest clock. Human Gate submissions remain revision-checked and SQLite
+contest clock. The contest clock never pauses; `timing.time_split` instead
+splits elapsed contest time, rebuilt from the events' replay patches, into
+`working` (running/retrying), `waiting_human` (awaiting a decision or a spent
+reopen budget), `waiting_provider` (`PROVIDER_UNAVAILABLE`) and `stopped`
+(operator pause, failure, idle), with `waiting_external = human + provider`. Human Gate submissions remain revision-checked and SQLite
 append-only. `GET /api/projects/{base}/submission` resolves and verifies the
 atomic current release before serving a ZIP; it must never trust a flat alias
 or an arbitrary project path. Both endpoints enforce the same `project_acl` as

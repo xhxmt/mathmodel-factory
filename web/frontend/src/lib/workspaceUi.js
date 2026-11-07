@@ -98,6 +98,21 @@ export function timingPresentation(timing = {}) {
       ? `${Number(timing.content_slack_seconds || 0) < 0 ? '超出 ' : ''}${formatDuration(Math.abs(Number(timing.content_slack_seconds || 0)))}`
       : '—',
     projectedAt: timing.projected_content_finish_at ? new Date(Number(timing.projected_content_finish_at) * 1000).toLocaleString('zh-CN', { hour12: false }) : '—',
+    split: timeSplitPresentation(timing.time_split),
+  }
+}
+
+// Phase 3e: the contest clock never pauses, so show where the elapsed time
+// went: model work versus waiting on a person or an outside provider.
+export function timeSplitPresentation(split) {
+  if (!split || typeof split !== 'object') return null
+  const value = (key) => Math.max(0, Number(split[key] || 0))
+  return {
+    working: formatDuration(value('working_seconds')),
+    waitingExternal: formatDuration(value('waiting_external_seconds')),
+    waitingHuman: formatDuration(value('waiting_human_seconds')),
+    waitingProvider: formatDuration(value('waiting_provider_seconds')),
+    stopped: formatDuration(value('stopped_seconds')),
   }
 }
 

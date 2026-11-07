@@ -4,9 +4,10 @@ import json
 import statistics
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from factory_core.contest import phase_for_step
+from factory_core.domain import WorkflowEvent
 from factory_core.delivery.release import resolve_current_release
 from factory_core.storage import SQLiteStateStore
 from factory_core.stages import projected_stage_cursor
@@ -75,10 +76,10 @@ def _at_or_after_final_prose(current_step: int, catalog_version: str | None) -> 
     return catalog.step_position(step) >= catalog.step_position(15)
 
 
-def _step_durations(store: SQLiteStateStore) -> list[dict[str, int]]:
+def _step_durations(events: Sequence[WorkflowEvent]) -> list[dict[str, int]]:
     starts: dict[int, int] = {}
     durations: list[dict[str, int]] = []
-    for event in store.events():
+    for event in events:
         if event.step is None:
             continue
         step = int(event.step)
@@ -90,6 +91,62 @@ def _step_durations(store: SQLiteStateStore) -> list[dict[str, int]]:
                 {"step": step, "duration_seconds": duration, "finished_at": int(event.created_at)}
             )
     return durations
+
+
+# Phase 3e: the contest clock cannot pause, so the dashboard keeps its deadline
+# semantics and instead splits the elapsed contest time by what the run was
+# doing, rebuilt from each event's replay patch.  ``waiting_external`` is the
+# part spent on someone else: a human decision or a provider/disk outage.
+_TIME_BUCKETS = ("working", "waiting_human", "waiting_provider", "stopped")
+
+
+def _bucket(status: str | None, pause_subcode: str | None) -> str:
+    if status in {"running", "retrying"}:
+        return "working"
+    if status in {"awaiting_selection", "awaiting_consultation"}:
+        return "waiting_human"
+    if status == "paused" and pause_subcode == "SEMANTIC_REOPEN_BUDGET":
+        return "waiting_human"
+    if status == "paused" and pause_subcode == "PROVIDER_UNAVAILABLE":
+        return "waiting_provider"
+    return "stopped"  # operator pause, failure, idle between runs
+
+
+def _time_split(
+    events: Sequence[WorkflowEvent], *, started_at: int, now_epoch: int
+) -> dict[str, Any]:
+    from factory_core.workflow_events import ENVELOPE_KEY
+
+    seconds = dict.fromkeys(_TIME_BUCKETS, 0)
+    status: str | None = None
+    subcode: str | None = None
+    # Start at the contest start, not the first event: a contest that began
+    # before the project recorded anything counts that time as stopped, so
+    # the buckets always add up to the elapsed contest time.
+    since: int | None = started_at
+    for event in events:
+        at = int(event.created_at)
+        if since is not None:
+            start, end = max(since, started_at), min(at, now_epoch)
+            if end > start:
+                seconds[_bucket(status, subcode)] += end - start
+        patch = (event.payload.get(ENVELOPE_KEY) or {}).get("state_patch") or {}
+        if "status" in patch:
+            status = str(patch["status"])
+        if event.type == "PAUSED":
+            reason = event.payload.get("reason") or {}
+            subcode = str(reason.get("subcode") or "") if isinstance(reason, dict) else ""
+        elif "status" in patch:
+            subcode = None
+        since = at
+    if since is not None:
+        start, end = max(since, started_at), now_epoch
+        if end > start:
+            seconds[_bucket(status, subcode)] += end - start
+    return {
+        **{f"{name}_seconds": value for name, value in seconds.items()},
+        "waiting_external_seconds": seconds["waiting_human"] + seconds["waiting_provider"],
+    }
 
 
 def _timing(
@@ -109,7 +166,9 @@ def _timing(
             "mode_label": "未配置比赛时钟",
             "recommendation": "按 Legacy 项目处理，不推断剩余比赛时间。",
         }
-    durations = _step_durations(store)
+    # One read of the event table per request, shared by every timing view.
+    events = store.events()
+    durations = _step_durations(events)
     recent = [item["duration_seconds"] for item in durations[-3:] if item["duration_seconds"] > 0]
     average = int(statistics.mean(recent)) if recent else 3_600
     confidence = "observed" if recent else "default"
@@ -118,7 +177,7 @@ def _timing(
     )
     phase_events = [
         event.created_at
-        for event in store.events()
+        for event in events
         if event.type == "STEP_STARTED" and event.step in phase.steps
     ]
     phase_started = min(phase_events) if phase_events else now_epoch
@@ -189,6 +248,9 @@ def _timing(
         "mode_label": label,
         "recommendation": recommendation,
         "recent_steps": durations[-3:],
+        "time_split": _time_split(
+            events, started_at=int(policy["contest_started_at"]), now_epoch=now_epoch
+        ),
     }
 
 

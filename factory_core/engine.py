@@ -46,6 +46,7 @@ from .domain import (
     StepContext,
     TERMINAL_STATUSES,
     ValidationResult,
+    WorkflowEvent,
     WorkflowState,
     WorkflowStatus,
 )
@@ -96,8 +97,43 @@ NON_CONTENT_ERROR_CLASSES: dict[str, str] = {
     # TRANSIENT_TIMEOUT is deliberately absent - a model that runs out of
     # time on a hard Step has attempted the content.
     "TRANSIENT_MODEL_BACKEND": "PERMANENT_MODEL_BACKEND_INFRASTRUCTURE",
+    # Phase 3c: a Judge that produced no usable verdict (indeterminate review,
+    # a malformed or missing role output, a packet, provenance or aggregation
+    # failure) has not judged the content, so it retries the Judge's
+    # infrastructure instead of spending one of the Step's content attempts.
+    # The classes share one budget: they all end as PERMANENT_JUDGE_INFRASTRUCTURE.
+    "TRANSIENT_JUDGE_INDETERMINATE": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_ROLE": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_PACKET": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_INFRASTRUCTURE": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_PROVENANCE": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    "TRANSIENT_JUDGE_AGGREGATION": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    # The Judge finished but the deterministic decision router
+    # (scripts/judge_decision_router.py) failed: unreadable aggregate or
+    # visual-gate input, a timeout or a crash.  No verdict was routed, so the
+    # content was not judged.  TRANSIENT_JUDGE_INCOMPLETE stays a content
+    # attempt on purpose: a PASS without a completed review and without a
+    # delivery override is an authorization/workflow state, which a retry
+    # would only reproduce.
+    "TRANSIENT_JUDGE_ROUTING": "PERMANENT_JUDGE_INFRASTRUCTURE",
 }
 INFRASTRUCTURE_RETRY_BUDGET = 3
+
+# Semantic-reopen budget (optimization plan, phase 3a; decision 4 taken on
+# 2026-11-06).  Under the current classifier identity an initiating Stage may
+# rewind an earlier Stage at most STAGE_SEMANTIC_REOPEN_LIMIT times, and one
+# run at most RUN_SEMANTIC_REOPEN_LIMIT times in total.  Either limit being
+# spent pauses the run with an explanation instead of failing it; an operator
+# either reverts the upstream-owned edits and resumes (the change set is
+# rechecked through recovery, without re-running the model) or grants one more
+# reopen (``SEMANTIC_REOPEN_GRANTED``).
+STAGE_SEMANTIC_REOPEN_LIMIT = 2
+RUN_SEMANTIC_REOPEN_LIMIT = 5
+SEMANTIC_REOPEN_PAUSE_SUBCODE = "SEMANTIC_REOPEN_BUDGET"
+SEMANTIC_REOPEN_GRANTED = "SEMANTIC_REOPEN_GRANTED"
+# Phase 3b: the one formal way to retry a failed Step with a fresh attempt
+# budget, replacing direct database edits and one-off authorization events.
+STEP_RETRY_AUTHORIZED = "STEP_RETRY_AUTHORIZED"
 
 
 @dataclass(frozen=True)
@@ -119,8 +155,12 @@ class FactoryEngine:
         registry: StepRegistry | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         projector: Callable[[Path, WorkflowState], None] | None = None,
+        dispatch_preflight: Callable[[StepDefinition], dict | None] | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
+        #: Phase 3d: called with the Step definition before ``STEP_STARTED``; a report
+        #: (not ``None``) pauses the run without consuming an attempt.
+        self._dispatch_preflight = dispatch_preflight
         self.store = store or SQLiteStateStore(self.project_dir)
         self.registry = registry or StepRegistry()
         self._sleep = sleeper
@@ -609,6 +649,39 @@ class FactoryEngine:
                         "reason": prepared.reason,
                     },
                 )
+            blocked = (
+                self._dispatch_preflight(definition)
+                if self._dispatch_preflight is not None
+                else None
+            )
+            if blocked is not None:
+                # No STEP_STARTED, so no attempt is spent; the Stage cursor
+                # stays, and a resume after the provider or disk is fixed
+                # dispatches the same Step.
+                return self._owned_transition(
+                    state,
+                    lease,
+                    event_type="PAUSED",
+                    changes={
+                        "status": WorkflowStatus.PAUSED,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "reason": {
+                            "code": "PAUSED",
+                            "subcode": "PROVIDER_UNAVAILABLE",
+                            "actor": "engine",
+                            "message": str(blocked.get("message") or "dispatch preflight failed"),
+                            "evidence": [],
+                        },
+                        "stage": stage_task.stage_id if stage_task is not None else None,
+                        "subtask": stage_task.subtask if stage_task is not None else None,
+                        "source_step": definition.id,
+                        "preflight": blocked,
+                    },
+                )
             state = self._owned_transition(
                 state,
                 lease,
@@ -854,6 +927,7 @@ class FactoryEngine:
                         completed_this_run += 1
                     if state.status in {
                         WorkflowStatus.FAILED,
+                        WorkflowStatus.PAUSED,
                         WorkflowStatus.AWAITING_SELECTION,
                         WorkflowStatus.AWAITING_CONSULTATION,
                     }:
@@ -912,8 +986,12 @@ class FactoryEngine:
             non_content = error_class in NON_CONTENT_ERROR_CLASSES
             earlier_non_content = self._non_content_retries(definition.id)
             if non_content:
-                # Spends this class's infrastructure budget, never a content attempt.
-                same_class = self._non_content_retries(definition.id, error_class)
+                # Spends the infrastructure budget of this class's terminal
+                # class (shared by every class that ends the same way), never
+                # a content attempt.
+                same_class = self._non_content_retries(
+                    definition.id, terminal_class=NON_CONTENT_ERROR_CLASSES[error_class]
+                )
                 exhausted = same_class + 1 > INFRASTRUCTURE_RETRY_BUDGET
                 failure_metadata["infrastructure_retries"] = same_class + 1
                 failure_metadata["infrastructure_retry_budget"] = INFRASTRUCTURE_RETRY_BUDGET
@@ -1555,25 +1633,61 @@ class FactoryEngine:
             )
 
         if semantic_reopen_target is not None:
-            if not self._stage_semantic_reopen_allowed(task.stage_id, state):
+            budget = self._semantic_reopen_budget(task.stage_id, state)
+            if not budget["allowed"]:
+                # The Stage cursor stays on this subtask, so a later resume
+                # rechecks the same change set through recovery.
                 return self._stage_transition(
                     state,
                     lease,
-                    event_type="STEP_FAILED",
+                    event_type="PAUSED",
                     changes={
-                        "status": WorkflowStatus.FAILED,
+                        "status": WorkflowStatus.PAUSED,
                         "runner_pid": None,
                         "runner_lease_id": None,
                         "heartbeat_at": None,
                     },
                     payload={
-                        "error_class": "PERMANENT_STAGE_SEMANTIC_REOPEN_EXHAUSTED",
+                        "reason": {
+                            "code": "PAUSED",
+                            "subcode": SEMANTIC_REOPEN_PAUSE_SUBCODE,
+                            "actor": "engine",
+                            "message": (
+                                f"{semantic_reason}; the semantic reopen budget "
+                                f"({budget['exhausted']} limit) is spent"
+                            ),
+                            "evidence": sorted(
+                                {
+                                    str(item["cause_artifact"])
+                                    for item in dirty_changes
+                                    if int(item["owner_stage"]) < task.stage_id
+                                    and item.get("cause_artifact")
+                                }
+                            ),
+                        },
                         "stage": task.stage_id,
                         "subtask": task.subtask,
+                        "source_step": task.source_step_id,
                         "resume_after_step": semantic_reopen_target,
                         "semantic_owner_stage": semantic_owner_stage,
-                        "reason": semantic_reason,
+                        "dirty_owner_stages": upstream_owners,
                         "classifier_contract_sha256": self._classifier_sha(state),
+                        "reopen_budget": {
+                            **{key: value for key, value in budget.items() if key != "allowed"},
+                            "causes": [
+                                {
+                                    "flag": str(item["flag"]),
+                                    "owner_stage": int(item["owner_stage"]),
+                                    "cause_artifact": str(item.get("cause_artifact") or ""),
+                                }
+                                for item in dirty_changes
+                                if int(item["owner_stage"]) < task.stage_id
+                            ],
+                            "options": [
+                                "revert_upstream_edits_and_resume",
+                                "grant_semantic_reopen",
+                            ],
+                        },
                     },
                     dirty_changes=dirty_changes,
                     event_step=task.source_step_id,
@@ -1797,6 +1911,21 @@ class FactoryEngine:
     def _stage_semantic_reopen_allowed(
         self, stage_id: int, state: WorkflowState | None = None
     ) -> bool:
+        return bool(self._semantic_reopen_budget(stage_id, state)["allowed"])
+
+    def _semantic_reopen_budget(
+        self, stage_id: int, state: WorkflowState | None = None
+    ) -> dict:
+        """How much of the semantic-reopen budget the current classifier used.
+
+        Counts ``STAGE_SEMANTIC_REOPENED`` events decided under the current
+        classifier identity, per initiating Stage and for the whole run, and
+        the operator grants recorded under the same identity.  A grant names
+        the Stage it was given for and allows exactly one more reopen: it
+        raises that Stage's limit and the run limit by one, and the reopen it
+        allows then counts like any other.
+        """
+
         current_classifier = (
             self._classifier_sha(state) if state is not None else classifier_contract_sha256()
         )
@@ -1812,10 +1941,21 @@ class FactoryEngine:
             default=0,
         )
         count = 0
+        run_count = 0
+        stage_grants = 0
+        run_grants = 0
+        history: list[dict] = []
         for event in events:
-            if event.type != "STAGE_SEMANTIC_REOPENED":
+            if event.type == SEMANTIC_REOPEN_GRANTED:
+                # A grant is bound to the classifier it was given under, like
+                # the reopens it allows: a classifier change resets both.
+                if str(event.payload.get("classifier_contract_sha256", "")) != current_classifier:
+                    continue
+                run_grants += 1
+                if int(event.payload.get("stage", -1)) == int(stage_id):
+                    stage_grants += 1
                 continue
-            if int(event.payload.get("stage", -1)) != int(stage_id):
+            if event.type != "STAGE_SEMANTIC_REOPENED":
                 continue
             event_classifier = event.payload.get("classifier_contract_sha256")
             if event_classifier is None:
@@ -1826,8 +1966,33 @@ class FactoryEngine:
                     continue
             elif str(event_classifier) != current_classifier:
                 continue
-            count += 1
-        return count < 2
+            run_count += 1
+            history.append(
+                {
+                    "revision": event.revision,
+                    "stage": int(event.payload.get("stage", -1)),
+                    "owner_stage": event.payload.get("semantic_owner_stage"),
+                    "resume_after_step": event.payload.get("resume_after_step"),
+                }
+            )
+            if int(event.payload.get("stage", -1)) == int(stage_id):
+                count += 1
+        stage_limit = STAGE_SEMANTIC_REOPEN_LIMIT + stage_grants
+        run_limit = RUN_SEMANTIC_REOPEN_LIMIT + run_grants
+        exhausted = (
+            "stage" if count >= stage_limit else "run" if run_count >= run_limit else None
+        )
+        return {
+            "allowed": exhausted is None,
+            "exhausted": exhausted,
+            "stage": int(stage_id),
+            "stage_count": count,
+            "stage_limit": stage_limit,
+            "run_count": run_count,
+            "run_limit": run_limit,
+            "grants": run_grants,
+            "history": history,
+        }
 
     def recover(
         self,
@@ -2172,6 +2337,132 @@ class FactoryEngine:
                 "pending_action": action,
             },
             **kwargs,
+        )
+
+    def semantic_reopen_pause(self, state: WorkflowState | None = None) -> WorkflowEvent | None:
+        """The budget pause the project is currently stopped at, if any.
+
+        It is the latest ``PAUSED`` event, provided the engine (not an
+        operator) recorded it for a spent semantic-reopen budget and no later
+        event has changed the status.
+        """
+
+        from .workflow_events import current_engine_pause
+
+        state = state or self.store.load()
+        if state.status is not WorkflowStatus.PAUSED:
+            return None
+        return current_engine_pause(
+            self.store.events(), {SEMANTIC_REOPEN_PAUSE_SUBCODE}
+        )
+
+    def grant_semantic_reopen(
+        self,
+        *,
+        expected_revision: int,
+        note: str,
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Allow the one reopen a budget pause stopped (phase 3a).
+
+        Recorded as ``SEMANTIC_REOPEN_GRANTED`` for the paused Stage under the
+        current classifier identity; the project stays paused, and the next
+        resume rechecks the change set through recovery, which then performs
+        the reopen.  One grant per pause.
+        """
+
+        state = self.store.load()
+        if not str(note or "").strip():
+            raise InvalidTransition("a semantic reopen grant needs a reason")
+        pause = self.semantic_reopen_pause(state)
+        if pause is None:
+            raise InvalidTransition(
+                "the project is not paused at a spent semantic reopen budget"
+            )
+        if any(
+            event.type == SEMANTIC_REOPEN_GRANTED and event.revision > pause.revision
+            for event in self.store.events()
+        ):
+            raise InvalidTransition("this budget pause already has a grant")
+        return self._transition(
+            expected_revision=expected_revision,
+            event_type=SEMANTIC_REOPEN_GRANTED,
+            changes={},
+            payload={
+                "stage": int(pause.payload["stage"]),
+                "subtask": pause.payload.get("subtask"),
+                "paused_revision": pause.revision,
+                "resume_after_step": pause.payload.get("resume_after_step"),
+                "classifier_contract_sha256": self._classifier_sha(state),
+                "reason": {
+                    "code": SEMANTIC_REOPEN_GRANTED,
+                    "subcode": "OPERATOR",
+                    "actor": actor,
+                    "message": str(note).strip(),
+                },
+            },
+        )
+
+    def retry_step(
+        self,
+        *,
+        expected_revision: int,
+        step_id: int,
+        note: str,
+        actor: str = "operator",
+    ) -> WorkflowState:
+        """Retry the failed Step at the cursor with a fresh attempt budget (3b).
+
+        Only a ``FAILED`` project whose cursor is on ``step_id`` qualifies; the
+        Stage cursor is kept and the attempt count reset, so the next run
+        starts that Step's attempt 1 instead of recovering the failed attempt.
+        Nothing else changes: dirty state, checkpoints, the contest deadline
+        and every other budget still apply.
+        """
+
+        state = self.store.load()
+        if not str(note or "").strip():
+            raise InvalidTransition("a Step retry needs a reason")
+        if state.status is not WorkflowStatus.FAILED:
+            raise InvalidTransition(
+                f"only a failed project can retry a Step (status {state.status.value})"
+            )
+        if state.pending_action is not None:
+            raise InvalidTransition("pending action must be resolved before a retry")
+        if state.active_step is None or int(state.active_step) != int(step_id):
+            raise InvalidTransition(
+                f"the failed cursor is on Step {state.active_step}, not Step {step_id}"
+            )
+        failure = next(
+            (event for event in reversed(self.store.events()) if event.type == "STEP_FAILED"),
+            None,
+        )
+        return self._transition(
+            expected_revision=expected_revision,
+            event_type=STEP_RETRY_AUTHORIZED,
+            changes={
+                "status": WorkflowStatus.READY,
+                "attempt": 0,
+                "runner_pid": None,
+                "runner_lease_id": None,
+                "heartbeat_at": None,
+            },
+            payload={
+                "stage": state.active_stage,
+                "subtask": state.active_subtask,
+                "source_step": int(step_id),
+                "previous_attempt": state.attempt,
+                "failed_revision": failure.revision if failure is not None else None,
+                "failed_error_class": (
+                    failure.payload.get("error_class") if failure is not None else None
+                ),
+                "reason": {
+                    "code": STEP_RETRY_AUTHORIZED,
+                    "subcode": "OPERATOR",
+                    "actor": actor,
+                    "message": str(note).strip(),
+                },
+            },
         )
 
     def pause(
@@ -2652,7 +2943,13 @@ class FactoryEngine:
             return NON_CONTENT_ERROR_CLASSES[error_class]
         return error_class
 
-    def _non_content_retries(self, step_id: int, error_class: str | None = None) -> int:
+    def _non_content_retries(
+        self,
+        step_id: int,
+        error_class: str | None = None,
+        *,
+        terminal_class: str | None = None,
+    ) -> int:
         """Non-content retries in the current attempt sequence of ``step_id``.
 
         Derived from the event stream rather than a state field, so replay
@@ -2660,7 +2957,8 @@ class FactoryEngine:
         starts at the latest Stage-subtask selection or the Step's latest
         ``STEP_STARTED`` with attempt 1, whichever is later, and every
         ``RETRY_SCHEDULED`` of a class in :data:`NON_CONTENT_ERROR_CLASSES`
-        since then is counted (only those of ``error_class`` when given).
+        since then is counted (only those of ``error_class``, or of a class
+        ending as ``terminal_class``, when given).
         """
 
         count = 0
@@ -2672,6 +2970,8 @@ class FactoryEngine:
             recorded = str(event.payload.get("error_class") or "")
             if event.type == "RETRY_SCHEDULED" and recorded in NON_CONTENT_ERROR_CLASSES and (
                 error_class is None or recorded == error_class
+            ) and (
+                terminal_class is None or NON_CONTENT_ERROR_CLASSES[recorded] == terminal_class
             ):
                 count += 1
             elif event.type == "STEP_STARTED" and event.attempt <= 1:

@@ -500,6 +500,30 @@ export default {
         act('resume')
         return
       }
+      if (actionId === 'revert_upstream_edits_and_resume') {
+        // Resuming rechecks the same change set; it only gets past the pause
+        // once the upstream-owned edits listed as evidence are reverted.
+        if (typeof window === 'undefined' || window.confirm('确认已撤销证据中列出的上游文件改动？恢复后会重新检查这次变更。')) {
+          act('resume')
+        }
+        return
+      }
+      if (actionId === 'retry_failed_step') {
+        const step = diagnostics.value?.status?.current_step
+        const reason = typeof window === 'undefined' ? '' : window.prompt(`重试 Step ${step}（尝试次数清零）的理由，会记录到工作流事件`)
+        if (reason && reason.trim() && step !== null && step !== undefined) {
+          emit('action', props.project, 'retry_step', { reason: reason.trim(), step })
+        }
+        return
+      }
+      if (actionId === 'grant_semantic_reopen') {
+        const reason = typeof window === 'undefined' ? '' : window.prompt('批准这次回退的理由（会记录到工作流事件）')
+        if (reason && reason.trim()) {
+          killArm.value = false
+          emit('action', props.project, 'grant_reopen', { reason: reason.trim() })
+        }
+        return
+      }
       if (actionId === 'open_runner_log') {
         activeTab.value = 'logs'
         return
