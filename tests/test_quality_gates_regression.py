@@ -457,3 +457,42 @@ def test_project_monitor_once_handles_missing_results_dirs():
     finally:
         shutil.rmtree(project, ignore_errors=True)
         monitor_log.unlink(missing_ok=True)
+
+
+def test_writing_prompts_separate_quantified_limits_from_defensive_disclaimers():
+    """The writing chain must not reward scattered negative disclaimers.
+
+    The 2026-09 fable_pro paper ended its abstract and conclusion with
+    "未证明" lists and filled captions with "不代表/不作为" sentences: reviewers
+    and the paper Judge praised them as honesty, and Step 15 was forbidden to
+    drop any qualifier.  The benchmark's section 7 now draws the line, and
+    every writing step points at it.
+    """
+
+    root = Path(REPO_ROOT)
+    benchmark = (root / "docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md").read_text(encoding="utf-8")
+    assert "### 7. 陈述做了什么，不写免责声明" in benchmark
+    assert "每条局限只写一次" in benchmark
+
+    for name in (
+        "step8_visualization.txt",
+        "step8_5_reviewer_entry.txt",
+        "step9_paper_draft.txt",
+        "step11_constructive_review.txt",
+        "step12_revision.txt",
+        "step14_abstract.txt",
+        "step15_polish.txt",
+    ):
+        prompt = (root / "prompts" / name).read_text(encoding="utf-8")
+        assert "写作基准 §7" in prompt, name
+        assert "采信口径" not in prompt, name
+
+    polish = (root / "prompts/step15_polish.txt").read_text(encoding="utf-8")
+    assert "不丢任何数字/结论/限定条件" not in polish
+    assert "否定式免责计数" in polish
+    review = (root / "prompts/step11_constructive_review.txt").read_text(encoding="utf-8")
+    assert "不丢失任何数字/结论/限定条件" not in review
+    visualization = (root / "prompts/step8_visualization.txt").read_text(encoding="utf-8")
+    assert "该图只用于说明局限性" not in visualization
+    judge = (root / "prompts/judges/paper_reviewer.txt").read_text(encoding="utf-8")
+    assert "不得作为 `sensitivity_limitations` 的加分依据" in judge

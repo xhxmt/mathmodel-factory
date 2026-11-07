@@ -17,7 +17,7 @@ CUMCM 评分细则里图的权重不低，且图的「self-contained caption」�
   - 每个子问题至少有一个最终交付视觉锚点：主结果图或主结果表。
   - 几何路径题优先画“全局路径 + 临界状态 + 局部放大/多时刻快照”。
   - 搜索/优化结论必须有可信度图或对比表：目标函数、可行边界、收敛曲线、算法对比四选一。
-  - 图服务最终采信口径；粗网格、失败分支、退化解只能作为验证/局限/附录图，不能抢主图位置。
+  - 图服务最终结果；粗网格、失败分支、退化解只能作为验证/局限/附录图，不能抢主图位置。
 - 中文输出（注释和 visualization_log.md 用中文；图里的文字保持英文以便 LaTeX 兼容）。
 - 图产物：`__PROJECT_PATH__/figures/*.{pdf,png}` —— 全部规范化。
 - Markdown 产物：`visualization_log.md`（新建）。
@@ -55,7 +55,7 @@ figures/
 
 每张图的合规清单（必须全过）：
 - [ ] 叙事角色明确: `explain_model` / `report_result` / `validate_result` / `show_limitation`
-- [ ] 该图服务最终采信口径；若为 `show_limitation`，已明确后置到灵敏度、模型评价或附录
+- [ ] 该图服务最终结果；若为 `show_limitation`，已明确后置到灵敏度、模型评价或附录
 - [ ] Canvas 540×324 pt PDF 或 PNG @ 600dpi
 - [ ] 配色严格在 `modeling_guide.md §Color Palette` 七色调色板内
 - [ ] 字体使用 Times New Roman 或与论文正文匹配的衬线字体
@@ -84,7 +84,7 @@ figures/
 | `figures/solve_p1_sprt.pdf` | §模型求解 §4.1 problem1 | problem1 | `report_result` | `solve_log.md`, `results/problem1/values.json` | 图 2: SPRT 抽样规则下样本量 N 的累积分布。横轴 N, 纵轴 P(stop ≤ N), 三条曲线对应 p0=0.10, p=0.12, p1=0.15。中位 N≈187 (虚线), 与 Wald 公式预测一致 (5000 蒙卡, 误差 <0.5%). |
 | `figures/solve_p3_milp.pdf` | §模型求解 §4.3 problem3 | problem3 | `report_result` | `solve_log.md`, `results/problem3/values.json` | 图 3: problem3 DAG MILP 的最优决策可视化。... |
 | `figures/sensitivity_tornado_p2c1.pdf` | §灵敏度分析 §5.1 | problem2 case 1 | `validate_result` | `sensitivity_report.md` | 图 4: problem2 case 1 的 tornado 图。... |
-| `figures/compare_rejected_branch.pdf` | §模型评价 §8 | 总览 | `show_limitation` | `evaluation.md` | 图 5: 未采信分支与最终方案的对照。该图只用于说明局限性，正文主结果仍采用前文通过可行性验证的方案。... |
+| `figures/compare_rejected_branch.pdf` | §模型评价 §8 | 总览 | `show_limitation` | `evaluation.md` | 图 5: 备选分支与最终方案的目标值对照。备选分支在约束 X 下目标值低 Y%，说明最终方案选择的依据。... |
 
 ## 新增图的源代码位置
 
@@ -136,6 +136,9 @@ figures/
 5. 评估论文 §问题分析 / §模型建立 是否需要补「概念图 / 系统结构图 / 子问题依赖 DAG / 几何判据图」 —— 如果需要（绝大多数 CUMCM 题目都需要），用 matplotlib / TikZ 画 `figures/concept_*.pdf`。
 6. 评估 §模型评价 是否需要对照图 (`figures/compare_*`)；若是退化解/失败分支/未采信方案，只能标为 `show_limitation`。
 7. 给每张图写 caption 起草 (≥ 50 字, 自含); 录入 `visualization_log.md` 表格，并写明叙事角色和依据来源。
+   caption 只写图展示了什么（坐标、曲线、标记）和支持什么结论（带数字）；字数靠这些内容达到，
+   不写"不代表 / 不作为 / 不构成……""图中无连线，不代表……"之类的免责句（写作基准 §7）。
+   局限图（`show_limitation`）也正面写它显示的差异和数字，局限本身留给 §局限性 正文。
 8. 若某问已经出现明显主图 / 主表候选，在 `visualization_log.md` 对应备注里显式标注“候选主锚点”，供 Step 8.5 生成 `anchor_figure_plan.md`。
 9. **sanity check**:
    - `ls figures/*.{pdf,png}` —— 数量 ≥ 5 张（通常 8-15 张）

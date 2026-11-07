@@ -26,8 +26,9 @@ Step 9 是论文质量的中央枢纽 —— 评委读到的只有这份 PDF。�
   - §问题分析每问必须覆盖四要素：难点、建模对象/变量、方法、输出——但**顺序和
     详略按每问真正难的地方变化**，从难点切入还是从对象切入由内容决定。各问段落
     逐句同构（每段都是同一个句式弧线）是机器味的典型来源，禁止。
-  - §模型求解先报最终采信口径；粗网格、退化分支、fallback、内部路径等诊断信息后置到验证/灵敏度/局限。
+  - §模型求解先报最终结果；粗网格、退化分支、fallback、内部路径等诊断信息后置到验证/灵敏度/局限。
   - 正文主线不得出现内部工程痕迹，如 `m1/m2`、`results/*.json`、`RELAXED`、`fallback`、`workflow`、`runner`、`cache`。题目要求的 `result*.xlsx` 可保留。
+  - 陈述做了什么、得到什么，不写免责声明（写作基准 §7）：验证段正面写检查与数字；每条局限只在 §模型评价/局限性 写一次并量化；图题表题不写"不代表/不作为……"；不反驳没人提出的主张；不使用"回执/采信/口径/保存输出"等工作流术语。
 - 优秀论文可视化基准：`__FACTORY__/docs/guides/EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md`
   - 按 `visualization_log.md` 的叙事角色摆放图表：`explain_model` 放在问题分析/模型建立，`report_result` 放在模型求解，`validate_result` 放在灵敏度或结果验证，`show_limitation` 放在模型评价/局限/附录。
   - 每个子问题至少要有一个视觉锚点：主结果图或主结果表。不要只在正文中散落数字。
@@ -430,7 +431,7 @@ Step 9 是论文质量的中央枢纽 —— 评委读到的只有这份 PDF。�
 \end{enumerate}
 
 \subsection{局限性}
-% from evaluation.md §2 — 诚实列出, 这是评委加分关键
+% from evaluation.md §2 — 诚实列出并量化, 这是评委加分关键; 正文其他位置不再重复这些局限
 \begin{enumerate}
   \item ...
 \end{enumerate}

@@ -13,7 +13,7 @@ Step 12 同时也是**最终审计文字返修的着陆点**——如果 Step 16
 [重要 — 风格规范]
 - 风格圣经：`__FACTORY__/modeling_guide.md §LaTeX Document Requirements + §Cross-step state files`
 - 优秀论文写作基准：`__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md`
-  - 修订摘要素材、问题分析、模型求解、灵敏度、模型评价和结论时，优先对齐“开头总述 + 逐问交付”“最终采信口径先行”“验证支撑可信度”“删除内部工程痕迹”四类规则。
+  - 修订摘要素材、问题分析、模型求解、灵敏度、模型评价和结论时，优先对齐“开头总述 + 逐问交付”“最终结果先行”“验证支撑可信度”“删除内部工程痕迹”四类规则。
 - 中文输出。
 - 产物:
   - `__BASE_NAME___paper.tex`（原地修订, 文字段落 + 数字 + 表格 + 章节结构 都可改）
@@ -32,7 +32,7 @@ Step 12 同时也是**最终审计文字返修的着陆点**——如果 Step 16
 5. `__PROJECT_PATH__/assumption_ledger.md` —— 修订时若新增 / 调整假设, 在此追加; PROTECTED 永不动。
 6. `__PROJECT_PATH__/audit_issue_ledger.md`（如存在）—— 跨步骤 issue ledger。
 7. 所有 Step 4-8 的素材文件 (`model.md` / `solve_log.md` / `sensitivity_report.md` / `evaluation.md` / `visualization_log.md`) —— 修订时可能需要回查素材源。
-8. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 优秀论文写作基准；用于判断应如何重排摘要素材、问题分析和结果口径。
+8. `__FACTORY__/docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md` —— 优秀论文写作基准；用于判断应如何重排摘要素材、问题分析和最终结果的呈现。
 9. `__PROJECT_PATH__/human_review.md`（如存在）—— `## Step 12 revision:` 段落, 最高优先级指令。
 
 [输出契约 — runner 用磁盘文件判定本步骤是否 ready]
@@ -60,6 +60,9 @@ cp __BASE_NAME___paper.tex paper/archive/pre_step12/
 - 重新嵌入图（图本身仍由 Step 8 / 13 提供, 本步骤不重画图）
 - 按优秀论文写作基准重排段落顺序: 每问先报最终采信结果, 粗网格/退化/失败分支后置到验证、灵敏度或局限性
 - 删除或改写正文主线中的内部工程痕迹: `m1/m2`, `results/*.json`, `RELAXED`, `fallback`, `workflow`, `runner`, `cache`
+- 修"表述过强 / 证据不足以支撑该说法"类 issue 时**改写原句**为准确的范围或数字 (写作基准 §7),
+  不保留原句再追加"但这不代表/不构成/不保证……"。新增的局限说明合并进 §局限性 的一条,
+  不在正文、图题、表题和摘要素材里重复。
 
 **不允许的操作**:
 - 改 `\\detokenize{ABSTRACT_PLACEHOLDER}` 区块（那是 Step 14 的工作; 本步骤的 paper.tex 必须**仍含 \\detokenize{ABSTRACT_PLACEHOLDER}**, infer_step 据此识别仍未进 Step 14）
