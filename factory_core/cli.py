@@ -747,7 +747,10 @@ def main(argv: list[str] | None = None) -> int:
                         updated = service.start(
                             project, expected_revision=updated.revision
                         ).state
-                    except (FactoryCoreError, OSError) as exc:
+                    except Exception as exc:  # noqa: BLE001 - the retry is already committed
+                        # Any launch failure (e.g. the worker's RuntimeError
+                        # when it exits before initialization) must still
+                        # name the recorded revision.
                         raise _committed_but_not_started("retry", updated, exc) from exc
             elif args.name == "grant-reopen":
                 if not args.reason:
@@ -760,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
                         updated, _worker = service.resume_and_start(
                             project, expected_revision=updated.revision
                         )
-                    except (FactoryCoreError, OSError) as exc:
+                    except Exception as exc:  # noqa: BLE001 - the grant is already committed
                         raise _committed_but_not_started("grant", updated, exc) from exc
             else:
                 updated = service.resolve(

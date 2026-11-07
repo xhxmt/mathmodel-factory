@@ -197,11 +197,16 @@ field) and stops after `INFRASTRUCTURE_RETRY_BUDGET` retries per terminal class
 (classes that end the same way share one budget) with a distinct terminal class
 (`PERMANENT_AUDIT_INFRASTRUCTURE`; `PERMANENT_MODEL_BACKEND_INFRASTRUCTURE` for
 `TRANSIENT_MODEL_BACKEND`, a model process that exited non-zero;
-`PERMANENT_JUDGE_INFRASTRUCTURE` for the six Judge classes
+`PERMANENT_JUDGE_INFRASTRUCTURE` for the seven Judge classes
 `TRANSIENT_JUDGE_INDETERMINATE`, `_ROLE`, `_PACKET`, `_INFRASTRUCTURE`,
-`_PROVENANCE` and `_AGGREGATION`, a Judge that produced no usable verdict).
-`TRANSIENT_JUDGE_ROUTING` and `TRANSIENT_JUDGE_INCOMPLETE` are not in that set
-and still consume a content attempt. A timeout still consumes a content attempt,
+`_PROVENANCE`, `_AGGREGATION` and `_ROUTING`, a Judge whose verdict was never
+produced or routed). `TRANSIENT_JUDGE_INCOMPLETE` (a PASS from a review that
+did not complete, without a delivery override) is deliberately not in that set
+and still consumes a content attempt. When the final-audit decision router
+returns `INFRA_RETRY` (e.g. an `INDETERMINATE` visual gate) or
+`PACKET_REBUILD`, the audit reports `TRANSIENT_JUDGE_INFRASTRUCTURE` /
+`TRANSIENT_JUDGE_PACKET` with status `INDETERMINATE`, never
+`PERMANENT_FINAL_JUDGE`. A timeout still consumes a content attempt,
 and so does a determinate audit finding (`AUDIT_REPAIR_REQUIRED`).
 
 A semantic reopen (a Stage changing content an earlier Stage owns) is

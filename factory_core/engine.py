@@ -108,6 +108,14 @@ NON_CONTENT_ERROR_CLASSES: dict[str, str] = {
     "TRANSIENT_JUDGE_INFRASTRUCTURE": "PERMANENT_JUDGE_INFRASTRUCTURE",
     "TRANSIENT_JUDGE_PROVENANCE": "PERMANENT_JUDGE_INFRASTRUCTURE",
     "TRANSIENT_JUDGE_AGGREGATION": "PERMANENT_JUDGE_INFRASTRUCTURE",
+    # The Judge finished but the deterministic decision router
+    # (scripts/judge_decision_router.py) failed: unreadable aggregate or
+    # visual-gate input, a timeout or a crash.  No verdict was routed, so the
+    # content was not judged.  TRANSIENT_JUDGE_INCOMPLETE stays a content
+    # attempt on purpose: a PASS without a completed review and without a
+    # delivery override is an authorization/workflow state, which a retry
+    # would only reproduce.
+    "TRANSIENT_JUDGE_ROUTING": "PERMANENT_JUDGE_INFRASTRUCTURE",
 }
 INFRASTRUCTURE_RETRY_BUDGET = 3
 

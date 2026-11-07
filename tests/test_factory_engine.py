@@ -135,7 +135,7 @@ def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_pa
 def test_judge_infrastructure_classes_share_one_retry_budget(tmp_path):
     from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET
 
-    classes = ["TRANSIENT_JUDGE_ROLE", "TRANSIENT_JUDGE_PACKET", "TRANSIENT_JUDGE_INDETERMINATE",
+    classes = ["TRANSIENT_JUDGE_ROLE", "TRANSIENT_JUDGE_PACKET", "TRANSIENT_JUDGE_ROUTING",
                "TRANSIENT_JUDGE_PROVENANCE", "TRANSIENT_JUDGE_ROLE"]
     handler = FakeHandler([ExecutionResult.failed(name, returncode=2) for name in classes])
     validator = FakeValidator([ValidationResult.invalid("no usable verdict") for _ in classes])
@@ -152,6 +152,35 @@ def test_judge_infrastructure_classes_share_one_retry_budget(tmp_path):
     assert state.status is WorkflowStatus.FAILED
     assert len(handler.calls) == INFRASTRUCTURE_RETRY_BUDGET + 1
     assert store.events()[-1].payload["error_class"] == "PERMANENT_JUDGE_INFRASTRUCTURE"
+
+
+@pytest.mark.parametrize(
+    ("error_class", "content_attempt"),
+    [("TRANSIENT_JUDGE_ROUTING", False), ("TRANSIENT_JUDGE_INCOMPLETE", True)],
+)
+def test_a_single_attempt_step_retries_a_routing_failure_but_not_an_incomplete_pass(
+    tmp_path, error_class, content_attempt
+):
+    # Step 16 has one content attempt.  A decision-router failure routed no
+    # verdict, so it retries the Judge's infrastructure; a PASS from a review
+    # that never completed is a workflow state and still spends the attempt.
+    handler = FakeHandler([ExecutionResult.failed(error_class, returncode=2), ExecutionResult.succeeded()])
+    validator = FakeValidator([ValidationResult.invalid("no routed verdict"), ValidationResult.valid()])
+    store = SQLiteStateStore(tmp_path)
+    store.initialize(project_id="demo", project_type="modeling")
+    engine = FactoryEngine(
+        tmp_path, store=store, registry=registry_for(handler, validator, max_attempts=1),
+        sleeper=lambda _: None,
+    )
+
+    state = engine.run()
+
+    if content_attempt:
+        assert state.status is WorkflowStatus.FAILED
+        assert handler.calls == [1]
+    else:
+        assert state.status is WorkflowStatus.COMPLETED
+        assert len(handler.calls) == 2
 
 
 def test_engine_classifies_exit_zero_with_missing_artifact(tmp_path):

@@ -178,11 +178,21 @@ def test_cli_retry_step_starts_the_runner_at_the_retried_revision(monkeypatch, t
     ]
 
 
-def test_cli_retry_step_names_the_recorded_retry_when_start_fails(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize(
+    "error",
+    [
+        "FactoryCoreError",
+        # The worker launcher raises RuntimeError when the worker exits
+        # before initialization or its readiness identity differs.
+        "RuntimeError",
+    ],
+)
+def test_cli_retry_step_names_the_recorded_retry_when_start_fails(monkeypatch, tmp_path, capsys, error):
     from factory_core.domain import FactoryCoreError
 
+    exc_type = {"FactoryCoreError": FactoryCoreError, "RuntimeError": RuntimeError}[error]
     cli, service, failed = _cli_with(
-        monkeypatch, tmp_path, start_error=FactoryCoreError("runner launch failed")
+        monkeypatch, tmp_path, start_error=exc_type("runner launch failed")
     )
 
     code = cli.main(["action", "retry-step", str(tmp_path), "--step", "14", "--reason", "fixed"])
