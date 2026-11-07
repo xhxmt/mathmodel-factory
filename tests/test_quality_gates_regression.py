@@ -472,7 +472,10 @@ def test_writing_prompts_separate_quantified_limits_from_defensive_disclaimers()
     root = Path(REPO_ROOT)
     benchmark = (root / "docs/guides/EXCELLENT_PAPER_WRITING_BENCHMARK.md").read_text(encoding="utf-8")
     assert "### 7. 陈述做了什么，不写免责声明" in benchmark
-    assert "每条局限只写一次" in benchmark
+    assert "正文中每条局限只写一次" in benchmark
+    assert "适用条件不是免责" in benchmark
+    assert "模型求解先报最终采信口径" not in benchmark  # the old heading
+    assert "采信口径" not in benchmark
 
     for name in (
         "step8_visualization.txt",
@@ -485,14 +488,41 @@ def test_writing_prompts_separate_quantified_limits_from_defensive_disclaimers()
     ):
         prompt = (root / "prompts" / name).read_text(encoding="utf-8")
         assert "写作基准 §7" in prompt, name
-        assert "采信口径" not in prompt, name
+        for legacy in ("采信口径", "最终采信", "未采信"):
+            assert legacy not in prompt, (name, legacy)
 
     polish = (root / "prompts/step15_polish.txt").read_text(encoding="utf-8")
     assert "不丢任何数字/结论/限定条件" not in polish
+    assert "不丢任何数字/结论/适用条件" in polish  # scope conditions stay protected
     assert "否定式免责计数" in polish
+    assert "动笔前" in polish and "局限 / 灵敏度节以外" in polish
+    assert "不替代|未证明" in polish  # the scan covers "not proven" lists
     review = (root / "prompts/step11_constructive_review.txt").read_text(encoding="utf-8")
     assert "不丢失任何数字/结论/限定条件" not in review
     visualization = (root / "prompts/step8_visualization.txt").read_text(encoding="utf-8")
     assert "该图只用于说明局限性" not in visualization
     judge = (root / "prompts/judges/paper_reviewer.txt").read_text(encoding="utf-8")
     assert "不得作为 `sensitivity_limitations` 的加分依据" in judge
+    assert "采信口径" not in judge
+
+
+def test_step15_disclaimer_count_separates_limitation_sections(tmp_path):
+    """The Step-15 count command, run verbatim, counts only outside the allowed sections."""
+
+    import re
+    import subprocess
+
+    polish = (Path(REPO_ROOT) / "prompts/step15_polish.txt").read_text(encoding="utf-8")
+    line = next(item for item in polish.splitlines() if "局限 / 灵敏度节以外:" in item)
+    command = re.search(r"`(.+)`", line).group(1).replace("__BASE_NAME___paper.tex", "paper.tex")
+    (tmp_path / "paper.tex").write_text(
+        "\\section{模型求解}\n本图不代表最终结论。\n"
+        "\\section{灵敏度分析}\n扰动 10% 时不改变排序，但不保证更大扰动。\n"
+        "\\subsection{局限性}\n连续误差界未证明。\n"
+        "\\section{结论}\n该结果不构成工业保证。\n",
+        encoding="utf-8",
+    )
+    outside = subprocess.run(
+        ["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert outside == "2"  # 不代表 (求解) + 不构成 (结论); 不保证/未证明 are in allowed sections

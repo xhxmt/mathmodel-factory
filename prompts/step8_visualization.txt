@@ -84,7 +84,7 @@ figures/
 | `figures/solve_p1_sprt.pdf` | §模型求解 §4.1 problem1 | problem1 | `report_result` | `solve_log.md`, `results/problem1/values.json` | 图 2: SPRT 抽样规则下样本量 N 的累积分布。横轴 N, 纵轴 P(stop ≤ N), 三条曲线对应 p0=0.10, p=0.12, p1=0.15。中位 N≈187 (虚线), 与 Wald 公式预测一致 (5000 蒙卡, 误差 <0.5%). |
 | `figures/solve_p3_milp.pdf` | §模型求解 §4.3 problem3 | problem3 | `report_result` | `solve_log.md`, `results/problem3/values.json` | 图 3: problem3 DAG MILP 的最优决策可视化。... |
 | `figures/sensitivity_tornado_p2c1.pdf` | §灵敏度分析 §5.1 | problem2 case 1 | `validate_result` | `sensitivity_report.md` | 图 4: problem2 case 1 的 tornado 图。... |
-| `figures/compare_rejected_branch.pdf` | §模型评价 §8 | 总览 | `show_limitation` | `evaluation.md` | 图 5: 备选分支与最终方案的目标值对照。备选分支在约束 X 下目标值低 Y%，说明最终方案选择的依据。... |
+| `figures/compare_rejected_branch.pdf` | §模型评价 §8 | 总览 | `show_limitation` | `evaluation.md` | 图 5: 备选分支与最终方案的总成本对照（目标为最小化总成本）。横轴为情形编号，纵轴为总成本；备选分支在 6 种情形中有 2 种违反产能约束，其余情形成本高 3.1%–7.4%。... |
 
 ## 新增图的源代码位置
 
@@ -134,9 +134,10 @@ figures/
 3. 先按 `EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md` 给每个子问题分配视觉锚点：主结果图或主结果表。若某问已有足够清晰的主表，可不强行补图，但必须在 `visualization_log.md` 说明。
 4. 把 Step 5 的 `results/<sub>/plots.pdf` 里的 quick-look 子图**逐张筛选**：能解释模型、报告最终结果、验证可信度的重画成 `figures/solve_p<N>_*.pdf`；只展示失败分支或内部流程的后置或删除。
 5. 评估论文 §问题分析 / §模型建立 是否需要补「概念图 / 系统结构图 / 子问题依赖 DAG / 几何判据图」 —— 如果需要（绝大多数 CUMCM 题目都需要），用 matplotlib / TikZ 画 `figures/concept_*.pdf`。
-6. 评估 §模型评价 是否需要对照图 (`figures/compare_*`)；若是退化解/失败分支/未采信方案，只能标为 `show_limitation`。
+6. 评估 §模型评价 是否需要对照图 (`figures/compare_*`)；若是退化解/失败分支/未选用的方案，只能标为 `show_limitation`。
 7. 给每张图写 caption 起草 (≥ 50 字, 自含); 录入 `visualization_log.md` 表格，并写明叙事角色和依据来源。
-   caption 只写图展示了什么（坐标、曲线、标记）和支持什么结论（带数字）；字数靠这些内容达到，
+   caption 只写图展示了什么（坐标、曲线、标记）和支持什么结论：定量图（`report_result` / `validate_result` /
+   `show_limitation`）带数字，概念图（`explain_model`）用对象关系和符号含义自含说明，不为凑数编造数值；字数靠这些内容达到，
    不写"不代表 / 不作为 / 不构成……""图中无连线，不代表……"之类的免责句（写作基准 §7）。
    局限图（`show_limitation`）也正面写它显示的差异和数字，局限本身留给 §局限性 正文。
 8. 若某问已经出现明显主图 / 主表候选，在 `visualization_log.md` 对应备注里显式标注“候选主锚点”，供 Step 8.5 生成 `anchor_figure_plan.md`。
