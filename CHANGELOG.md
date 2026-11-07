@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-07 — 审稿重算把问题写进提示词；retry-step 后重算预算重新计数（验收 A 发现 F9）
+
+验收 A 的第一次审稿重算（rev 310）中，Step 5 重跑只用了 112 秒，只核验了旧的 claim 绑定，`05_results.py` 没改，S11-B1/B4 原样留着。
+
+- **根因**：v2 overlay 里的返工说明是条件句"若因引擎事件 `rework_rule=review_issue` 重算……"，模型看不到引擎事件；同时操作员当初为 F1 写的 step_5 研究员备注还在 `web/notes.json` 里，主导了这次提示词。
+- **修复一**：`catalog_prompts.review_rework_block`。最近一次 `review_issue` 重算尚未回到 revision、且当前 Step 在 `recompute_steps` 之内时，在 Step 5–8 提示词开头列出触发重算的问题，包括 ID、台账当前的 Category、Severity 和 Notes，并写明逐条处理的要求、研究员备注与之无关时以该段为准。overlay 那一行改为指向这一段。
+- **修复二**：审稿重算与审稿循环的次数都从该 revision 最近一次 `retry-step` 之后开始计，和尝试次数一样，由操作员显式重试重新开始；语义回退预算照常计数。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 3 例（retry-step 后再次重算；问题写进被重算 Step 的提示词，回到 revision 后消失；不在重算范围的 Step 不注入，已关闭的行如实标注）。
+
 ## 2026-11-07 — v2 Stage 8 出口按审稿问题类别返工（验收 A 发现 F6/F7/F8）
 
 验收 A 的 Step 12 第 1 次尝试就以 `PERMANENT_REVIEW_LOOP_EXHAUSTED` 失败，一轮返修都没跑（rev 304）。

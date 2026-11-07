@@ -249,9 +249,12 @@ recompute Steps 5-8 and return to the revision (`STAGE_SEMANTIC_REOPENED`,
 = 1, also counted against the semantic-reopen budget), the rest re-run Steps
 11-12 (`STEP_REOPENED`, `rework_rule=review_loop`, at most
 `V2_REVIEW_LOOP_LIMIT` = 1); after that the run fails with
-`PERMANENT_REVIEW_LOOP_EXHAUSTED` naming the rows. The v2 prompt overlays tell
-Steps 5-8 to read those rows and Step 12 to categorize them. v1 keeps its
-Step-13 exit unchanged.
+`PERMANENT_REVIEW_LOOP_EXHAUSTED` naming the rows. Both limits count from the
+latest `retry-step` of the revision. While such a recompute has not yet
+returned to the revision, `catalog_prompts.review_rework_block` prepends the
+issues (ID, Category, Severity, current ledger Notes) to the prompts of the
+Steps it recomputes; the v2 overlay tells Step 12 to categorize them. v1 keeps
+its Step-13 exit unchanged.
 
 A semantic reopen (a Stage changing content an earlier Stage owns) is
 budgeted per classifier identity: an initiating Stage may rewind at most

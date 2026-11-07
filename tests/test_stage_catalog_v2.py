@@ -553,6 +553,86 @@ def test_v2_review_exit_fails_when_results_issue_survives_the_recompute(tmp_path
     assert state.status is WorkflowStatus.FAILED
 
 
+def test_v2_review_recompute_budget_restarts_after_retry_step(tmp_path):
+    write_ledger(tmp_path, [("S11-B4", "results", "BLOCKING", "OPEN")])
+    registry, lifecycles = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+    failed = engine.run()
+    assert failed.status is WorkflowStatus.FAILED and len(reopens(store)) == 1
+
+    engine.retry_step(expected_revision=failed.revision, step_id=12, note="fixed the rework prompt")
+    state = engine.run()
+
+    assert len(reopens(store)) == 2  # a second review recompute, from Step 5
+    assert lifecycles[5].calls == [1, 1]
+    assert state.status is WorkflowStatus.FAILED
+    assert len(failures(store)) == 2
+
+
+def _review_reopen(store, *, steps=(5, 6, 7, 8), issues=("S11-B4 (results, BLOCKING)",)):
+    state = store.load()
+    return store.transition(
+        expected_revision=state.revision,
+        event_type="STAGE_SEMANTIC_REOPENED",
+        changes={},
+        payload={
+            "stage": 8, "subtask": "revision", "rework_rule": "review_issue",
+            "recompute_steps": list(steps), "return_subtask": "revision",
+            "review_issues": list(issues),
+        },
+    )
+
+
+def test_v2_review_recompute_names_the_issues_in_the_recomputed_prompts(tmp_path):
+    from pathlib import Path as _Path
+
+    from factory_core.steps.prompting import PromptRenderer
+
+    store = v2_store(tmp_path, last_completed_step=11)
+    write_ledger(tmp_path, [("S11-B4", "results", "BLOCKING", "OPEN")])
+    renderer = PromptRenderer(_Path(__file__).resolve().parents[1])
+    render = lambda template, step: renderer.render(  # noqa: E731
+        template, tmp_path, step_key=step, include_preamble=False, researcher_note=""
+    )
+    assert "【审稿返工" not in render("step6_sensitivity.txt", "6")
+
+    _review_reopen(store)
+
+    step6 = render("step6_sensitivity.txt", "6")
+    assert step6.startswith("AGENT_KEY: step6\n\n【审稿返工 — 本次运行的原因】")
+    assert "- S11-B4（results，BLOCKING）：n" in step6
+    assert "【审稿返工" in render("step5_full_solve.txt", "5")
+    assert "【审稿返工" not in render("step9_paper_draft.txt", "9")
+
+    # Once the revision it returns to has run, the block is gone.
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision, event_type="STEP_SUCCEEDED", changes={},
+        payload={"stage": 8, "subtask": "revision"},
+    )
+    assert "【审稿返工" not in render("step6_sensitivity.txt", "6")
+
+
+def test_v2_review_recompute_block_skips_steps_it_does_not_recompute(tmp_path):
+    from pathlib import Path as _Path
+
+    from factory_core.steps.prompting import PromptRenderer
+
+    store = v2_store(tmp_path, last_completed_step=11)
+    write_ledger(tmp_path, [("S11-B4", "results", "RESOLVED", "OPEN")])
+    _review_reopen(store, steps=(6, 7, 8))
+    renderer = PromptRenderer(_Path(__file__).resolve().parents[1])
+
+    assert "【审稿返工" not in renderer.render(
+        "step5_full_solve.txt", tmp_path, step_key="5", include_preamble=False, researcher_note=""
+    )
+    step6 = renderer.render(
+        "step6_sensitivity.txt", tmp_path, step_key="6", include_preamble=False, researcher_note=""
+    )
+    assert "- S11-B4：台账中已不是 OPEN 的 BLOCKING/MAJOR 行" in step6
+
+
 def test_v2_review_exit_loops_the_review_once_for_paper_issues(tmp_path):
     write_ledger(tmp_path, [("S11-B5", "paper", "BLOCKING", "OPEN")])
     registry, lifecycles = v2_registry()

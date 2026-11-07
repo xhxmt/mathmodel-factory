@@ -140,6 +140,7 @@ STEP_RETRY_AUTHORIZED = "STEP_RETRY_AUTHORIZED"
 # results/model issues recompute the computation Steps 5-8 and return to the
 # revision, at most V2_REVIEW_RECOMPUTE_LIMIT times; the rest re-run Steps
 # 11-12 at most V2_REVIEW_LOOP_LIMIT times.  Then the run fails as before.
+# Both counts restart after an operator ``retry-step`` of the revision.
 REVIEW_UPSTREAM_CATEGORIES = frozenset({"results", "model"})
 V2_REVIEW_RECOMPUTE_LIMIT = 1
 V2_REVIEW_LOOP_LIMIT = 1
@@ -1510,10 +1511,13 @@ class FactoryEngine:
         ]
         if not upstream:
             return None
+        events = self.store.events()
+        since = self._review_budget_baseline(events)
         used = sum(
             1
-            for event in self.store.events()
-            if event.type == "STAGE_SEMANTIC_REOPENED"
+            for event in events
+            if event.revision > since
+            and event.type == "STAGE_SEMANTIC_REOPENED"
             and event.payload.get("rework_rule") == REVIEW_ISSUE_REWORK_RULE
         )
         if used >= V2_REVIEW_RECOMPUTE_LIMIT:
@@ -1543,6 +1547,25 @@ class FactoryEngine:
         plan["review_issues"] = self._review_issue_summary(upstream)
         return plan
 
+    @staticmethod
+    def _review_budget_baseline(events: list[Any]) -> int:
+        """The latest operator ``retry-step`` of the v2 revision, or 0.
+
+        The review recompute and review loop are counted after it: like the
+        attempt count, an explicit retry of the exit Step starts them afresh.
+        """
+
+        return max(
+            (
+                event.revision
+                for event in events
+                if event.type == STEP_RETRY_AUTHORIZED
+                and event.payload.get("stage") == 8
+                and event.payload.get("subtask") == "revision"
+            ),
+            default=0,
+        )
+
     def _v2_review_exit(
         self,
         state: WorkflowState,
@@ -1562,10 +1585,13 @@ class FactoryEngine:
             return None
         summary = self._review_issue_summary(issues)
         upstream = [issue for issue in issues if issue.category in REVIEW_UPSTREAM_CATEGORIES]
+        events = self.store.events()
+        since = self._review_budget_baseline(events)
         loops_used = sum(
             1
-            for event in self.store.events()
-            if event.type == "STEP_REOPENED"
+            for event in events
+            if event.revision > since
+            and event.type == "STEP_REOPENED"
             and event.payload.get("stage") == 8
             and event.payload.get("subtask") == task.subtask
         )

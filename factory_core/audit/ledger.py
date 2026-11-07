@@ -91,6 +91,7 @@ class OpenIssue:
     issue_id: str
     category: str
     severity: str
+    notes: str = ""
 
 
 def open_review_issues(path: Path, severities: set[str]) -> list[OpenIssue]:
@@ -124,7 +125,7 @@ def open_review_issues(path: Path, severities: set[str]) -> list[OpenIssue]:
         if "severity" in lowered and "status" in lowered:
             header = {
                 name: lowered.index(name)
-                for name in ("issue id", "category", "severity", "status")
+                for name in ("issue id", "category", "severity", "status", "notes")
                 if name in lowered
             }
             continue
@@ -139,7 +140,8 @@ def open_review_issues(path: Path, severities: set[str]) -> list[OpenIssue]:
             continue
         category = cells[header["category"]].lower() if "category" in header and header["category"] < len(cells) else ""
         issue_id = cells[header["issue id"]] if "issue id" in header and header["issue id"] < len(cells) else cells[0]
-        issues.append(OpenIssue(issue_id, category, severity))
+        notes = cells[header["notes"]] if "notes" in header and header["notes"] < len(cells) else ""
+        issues.append(OpenIssue(issue_id, category, severity, notes))
     return issues
 
 

@@ -20,11 +20,85 @@ from __future__ import annotations
 from pathlib import Path
 
 V2_REVIEW_REWORK_LINE = (
-    "- 审稿返工：读取 `audit_issue_ledger.md` 中 `## Incremental audit findings` 以外各段状态为 OPEN 的 "
-    "BLOCKING/MAJOR 审稿行。本步骤若是因这些行被引擎重算（事件 `rework_rule=review_issue`），凡根因在"
-    "本步骤产物（代码、结果、图、报告）的行，在本步骤按 Notes 修复并在本步骤日志/报告中写明修复证据；"
-    "不在本步骤范围的不要改，也不要改这些行的状态（由 Step 12 复核后更新）。"
+    "- 审稿返工：如果本提示词开头有「审稿返工」段，本次运行就是为那些审稿问题而重算，按该段逐条处理；"
+    "没有该段，本步骤不是因审稿问题而重跑。"
 )
+
+# The computation Step each template renders, for the review rework block.
+REVIEW_REWORK_TEMPLATES = {
+    "step5_full_solve.txt": 5,
+    "step6_sensitivity.txt": 6,
+    "step7_model_eval.txt": 7,
+    "step8_visualization.txt": 8,
+}
+
+
+def review_rework_block(project: Path, template: str) -> str:
+    """The open review issues a v2 review recompute is re-running this Step for.
+
+    Present only while the latest ``rework_rule=review_issue`` reopen has not
+    yet returned to its revision and this Step is one it recomputes. It names
+    each issue with the ledger's current Category, Severity and Notes, so the
+    re-run Step does not have to infer why it runs from events it cannot see.
+    """
+
+    step = REVIEW_REWORK_TEMPLATES.get(Path(template).name)
+    if step is None:
+        return ""
+    from ..audit.ledger import open_review_issues
+    from ..stages import STAGE_CATALOG_VERSION_V2
+    from ..storage import SQLiteStateStore
+
+    store = SQLiteStateStore(project)
+    if not store.exists or store.load().stage_catalog_version != STAGE_CATALOG_VERSION_V2:
+        return ""
+    events = store.events()
+    reopen = next(
+        (
+            event
+            for event in reversed(events)
+            if event.type == "STAGE_SEMANTIC_REOPENED"
+            and event.payload.get("rework_rule") == "review_issue"
+        ),
+        None,
+    )
+    if reopen is None or step not in (reopen.payload.get("recompute_steps") or []):
+        return ""
+    return_subtask = reopen.payload.get("return_subtask")
+    if any(
+        event.revision > reopen.revision
+        and event.type == "STEP_SUCCEEDED"
+        and event.payload.get("stage") == 8
+        and event.payload.get("subtask") == return_subtask
+        for event in events
+    ):
+        return ""
+    ids = [str(item).split(" ", 1)[0] for item in reopen.payload.get("review_issues") or []]
+    if not ids:
+        return ""
+    current = {
+        issue.issue_id: issue
+        for issue in open_review_issues(project / "audit_issue_ledger.md", {"BLOCKING", "MAJOR"})
+    }
+    lines = []
+    for issue_id in ids:
+        issue = current.get(issue_id)
+        if issue is None:
+            lines.append(f"- {issue_id}：台账中已不是 OPEN 的 BLOCKING/MAJOR 行，以台账为准。")
+        else:
+            lines.append(f"- {issue_id}（{issue.category}，{issue.severity}）：{issue.notes}")
+    steps = "、".join(str(item) for item in reopen.payload.get("recompute_steps") or [])
+    return (
+        "【审稿返工 — 本次运行的原因】\n"
+        f"引擎因下列 Step 11 审稿问题重算 Step {steps}（事件 rev {reopen.revision}，"
+        "`rework_rule=review_issue`），本步骤是这次重算的一部分；这些问题就是本次运行要解决的事。"
+        "逐条判断根因是否在本步骤的产物（代码、结果、图、报告）中：在的，必须在本步骤修复"
+        "（改代码后重新运行、重新生成产物；求解作业照常经 `solver_submit.sh` 提交），"
+        "并在本步骤的日志或报告中逐条写明改了什么、证据在哪；不在的，写明它属于哪一步、为什么本步骤不改。"
+        "不要修改这些行的 Status，Step 12 会复核后更新。研究员备注若与这些问题无关，以本段为准。\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
 
 V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
     # The v2 Stage 8 exit routes open results/model review issues back to
