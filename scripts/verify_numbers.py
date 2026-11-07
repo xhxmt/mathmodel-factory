@@ -35,8 +35,20 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script execution
 from factory_core.paper_sources import expand_latex_document, primary_paper_source
 try:
     from .number_manifest_stream import verify_sources
+    from .verify_derived_artifacts import (
+        SCHEMA as DERIVED_SCHEMA,
+        DerivedArtifactError,
+        _safe_relative as _derived_safe_relative,
+        file_sha256 as _derived_file_sha256,
+    )
 except ImportError:  # direct execution and legacy scripts-on-sys.path callers
     from number_manifest_stream import verify_sources
+    from verify_derived_artifacts import (
+        SCHEMA as DERIVED_SCHEMA,
+        DerivedArtifactError,
+        _safe_relative as _derived_safe_relative,
+        file_sha256 as _derived_file_sha256,
+    )
 
 
 def compute_checksum(value: Any) -> str:
@@ -410,6 +422,13 @@ def _strip_non_content_latex(line: str) -> str:
         '',
         line,
     )
+    # booktabs/tabular rules take a column range such as ``{2-6}``; it is a
+    # layout coordinate, and without this the ``-6`` reads as a result number.
+    line = re.sub(
+        r'\\(?:cmidrule|cline)\s*(?:\[[^\]]*\])?\s*(?:\([^)]*\))?\s*\{[^}]*\}',
+        '',
+        line,
+    )
     line = re.sub(r'\\includegraphics(?:\[[^\]]*\])?\{[^}]*\}', '', line)
     line = re.sub(
         r'\\(?:label|ref|pageref|cite[tp]?|citealp|hypersetup|bibliographystyle|bibliography)\{[^}]*\}',
@@ -440,6 +459,87 @@ def _strip_non_content_latex(line: str) -> str:
     line = re.sub(r'\\[a-zA-Z]+\*?', ' ', line)
     line = line.replace(r'\,', ' ')
     return line
+
+
+# A leading ``-`` is a sign only when it does not follow an operand: in
+# ``(C_0-0.15)`` or ``x)-2.5`` it is a binary minus and the number is positive.
+# ``\%`` (the escaped LaTeX percent sign) marks a percentage like ``%`` does.
+_PAPER_NUMBER_PATTERN = (
+    r'(?<![a-zA-Z])(?:(?<![0-9a-zA-Z.)\]}])-)?\d+\.?\d*(?:[eE][+-]?\d+)?(?:\\?%)?'
+)
+
+
+class PaperNumber(tuple):
+    """``(line_number, context, value)`` plus where it came from.
+
+    It unpacks as the historical 3-tuple; ``source`` is the project-relative
+    file the number was read from and ``percent`` records a trailing ``%``.
+    """
+
+    def __new__(cls, line_num: int, context: str, value: float, *, source: str = "", percent: bool = False):
+        instance = super().__new__(cls, (line_num, context, value))
+        instance.source = source
+        instance.percent = percent
+        return instance
+
+
+def _within_manifest_tolerance(value: float, reference: float) -> bool:
+    """The tolerance ``number_manifest_stream.verify_sources`` applies."""
+    return abs(reference - value) <= max(1e-6, abs(reference) * 5e-3)
+
+
+def problem_statement_numbers(project_dir: Path) -> List[float]:
+    """Numbers given by the problem statement (``problem/source.md``).
+
+    A value the paper quotes from the problem (a parameter, a constant inside
+    a formula) is traceable to the problem rather than to ``results/``. Signs
+    are dropped: the statement writes ``e^{-\\frac{0.45}{C}}`` where the paper
+    writes ``e^{-0.45/C}``.
+    """
+    source = project_dir / "problem" / "source.md"
+    if not source.is_file():
+        return []
+    with open(source, encoding="utf-8", errors="replace") as handle:
+        lines = [(line_num, "", line) for line_num, line in enumerate(handle, start=1)]
+    return sorted({abs(entry[2]) for entry in _extract_numbers_from_lines(lines, assume_document=True)})
+
+
+def verified_derived_tex_outputs(project_dir: Path) -> set[str]:
+    """``.tex`` outputs of ``results/derived_artifacts.json`` that are still pinned.
+
+    Such a file is written by the hash-pinned generator from the hash-pinned
+    canonical results, and ``verify_derived_artifacts.py`` (a separate hard
+    gate) regenerates it and diffs it byte for byte. A number read from it is
+    therefore traced to the canonical results even when it is a derived value
+    (a difference, a ratio). Trust requires the canonical, generator and
+    output hashes to match the manifest now; anything else trusts nothing.
+    """
+    manifest_path = project_dir / "results" / "derived_artifacts.json"
+    if not manifest_path.is_file():
+        return set()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("schema") != DERIVED_SCHEMA:
+            return set()
+        project = project_dir.resolve()
+        canonical = _derived_safe_relative(project, manifest.get("canonical_results"), must_exist=True)
+        if _derived_file_sha256(canonical) != manifest.get("canonical_results_sha256"):
+            return set()
+        generator = manifest.get("generator") or {}
+        generator_path = _derived_safe_relative(project, generator.get("path"), must_exist=True)
+        if _derived_file_sha256(generator_path) != generator.get("sha256"):
+            return set()
+        trusted: set[str] = set()
+        for item in manifest.get("outputs") or []:
+            if not isinstance(item, dict) or item.get("comparison") != "bytes":
+                continue
+            output = _derived_safe_relative(project, item.get("path"), must_exist=True)
+            relative = output.relative_to(project).as_posix()
+            if relative.endswith(".tex") and _derived_file_sha256(output) == item.get("sha256"):
+                trusted.add(relative)
+        return trusted
+    except (OSError, ValueError, TypeError, AttributeError, DerivedArtifactError):
+        return set()
 
 
 def extract_numbers_from_tex(
@@ -491,11 +591,11 @@ def _extract_numbers_from_lines(
             continue
 
         line_for_numbers = _strip_non_content_latex(line)
-        pattern = r'(?<![a-zA-Z])-?\d+\.?\d*(?:[eE][+-]?\d+)?%?'
-        for match in re.finditer(pattern, line_for_numbers):
+        for match in re.finditer(_PAPER_NUMBER_PATTERN, line_for_numbers):
             try:
                 raw = match.group(0)
-                clean = raw.rstrip('%')
+                percent = raw.endswith('%')
+                clean = raw[:-2] if raw.endswith('\\%') else raw.rstrip('%')
                 value = float(clean)
                 if (
                     value == int(value)
@@ -507,7 +607,8 @@ def _extract_numbers_from_lines(
                 context = line.strip()[:60]
                 if source_label:
                     context = f"{source_label}: {context}"
-                numbers.append((line_num, context, value))
+                source = source_label.rsplit(":", 1)[0] if source_label else ""
+                numbers.append(PaperNumber(line_num, context, value, source=source, percent=percent))
             except ValueError:
                 pass
 
@@ -555,9 +656,34 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
 
     paper_numbers = extract_numbers_from_project(project_dir, base_name)
 
-    source_mismatches, untraced = verify_sources(
-        project_dir, paper_numbers, iter_result_numbers(project_dir)
+    # A percentage in the paper (``20\%``) may be stored as a fraction (0.2).
+    candidates = list(paper_numbers) + [
+        (entry[0], entry[1], entry[2] / 100) for entry in paper_numbers if entry.percent
+    ]
+    source_mismatches, untraced_candidates = verify_sources(
+        project_dir, candidates, iter_result_numbers(project_dir)
     )
+    unmatched_values = {entry[2] for entry in untraced_candidates}
+
+    def in_results(entry: PaperNumber) -> bool:
+        return entry[2] not in unmatched_values or (
+            entry.percent and entry[2] / 100 not in unmatched_values
+        )
+
+    derived_outputs = verified_derived_tex_outputs(project_dir)
+    given_numbers = problem_statement_numbers(project_dir)
+    untraced = []
+    via_derived = []
+    via_problem = []
+    for entry in paper_numbers:
+        if in_results(entry):
+            continue
+        if entry.source in derived_outputs:
+            via_derived.append(entry)
+        elif any(_within_manifest_tolerance(abs(entry[2]), given) for given in given_numbers):
+            via_problem.append(entry)
+        else:
+            untraced.append(entry)
 
     # Report results
     report_file = project_dir / "number_verification.md"
@@ -565,6 +691,21 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
         f.write(f"# Number Verification Report — {base_name}\n\n")
         f.write(f"Paper: `{paper_file.relative_to(project_dir).as_posix()}`\n")
         f.write(f"Manifest: `numbers_manifest.json`\n\n")
+        if via_derived:
+            f.write(
+                f"Traced through pinned derived artifacts ({len(via_derived)}): numbers read from "
+                "generator outputs whose canonical, generator and output hashes match "
+                "`results/derived_artifacts.json`: "
+                + ", ".join(sorted({f"`{entry.source}`" for entry in via_derived}))
+                + "\n\n"
+            )
+        if via_problem:
+            f.write(
+                f"Traced to the problem statement ({len(via_problem)}): values given in "
+                "`problem/source.md`: "
+                + ", ".join(f"`{value:g}`" for value in sorted({abs(entry[2]) for entry in via_problem}))
+                + "\n\n"
+            )
 
         if not untraced and not source_mismatches and not key_result_source_issues:
             f.write("✓ All numerical values are traced to source files.\n")
@@ -573,7 +714,12 @@ def verify_paper(project_dir: Path, base_name: str) -> bool:
 
         if untraced:
             f.write(f"## ⚠ Untraced Numbers ({len(untraced)})\n\n")
-            f.write("These numbers appear in the paper but not in `results/*/values.json`:\n\n")
+            f.write(
+                "These numbers appear in the paper but in none of `results/**/*.json`, "
+                "a pinned derived artifact, or `problem/source.md`. Take the value from "
+                "results, or emit a derived value (difference, ratio, rounded bound) from "
+                "the derived-artifact generator as a macro and regenerate:\n\n"
+            )
             for line_num, context, value in untraced:
                 f.write(f"- Line {line_num}: `{value}` in \"{context}\"\n")
             f.write("\n")

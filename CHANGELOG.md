@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-07 — 数字追溯门禁的误报与合约缺口（验收 A 发现 F4/F5）
+
+验收 A 的 Step 10 连续两次 `AUDIT_REPAIR_REQUIRED`（`failed_check=numbers`），两次报出同样 31 个"未追溯数字"。其中一部分是校验器误报，另一部分在 Step 10 内没有合法的修法，重试无法收敛。
+
+- **F4 误报**：`_strip_non_content_latex` 去掉 `\cmidrule[..](..){a-b}` 与 `\cline{a-b}`，列范围 `2-6` 不再读成结果数字 −6；`modeling_guide.md` 要求 booktabs，这类表格规则必然出现。减号前是操作数（字母、数字、`)`、`]`、`}`）时按二元减号处理，`(C_0-0.15)` 读成 0.15；`e^{-0.45}`、`$-0.35$` 等一元负号保持不变。
+- **F5 追溯来源**：除 `results/**/*.json` 外，再认可两类来源。一是 `results/derived_artifacts.json` 中 canonical、生成器、输出三者哈希当前都匹配的 `.tex` 输出（headline 宏、表格），它们由固定生成器从固定 canonical 生成，`verify_derived_artifacts.py` 另行逐字节重生成核对；任一哈希不符即不信任。二是 `problem/source.md` 给出的题面数值（按绝对值比较，题面写 `e^{-\frac{0.45}{C}}`、论文写 `e^{-0.45/C}`）。百分数（含 `\%`）也可对应结果中的小数。报告分别列出经这两类来源追溯的数字。
+- **Step 10 提示词**：写明三种追溯来源；派生值和分析设定不在 `results/` 时，由 `models/generate_derived.py` 计算并输出为宏，重生成后更新 manifest，属于本步骤"改数字"的授权范围，不得手写 `results/*.json` 凑数。生成器、manifest 与 `tables/**` 归 Step 9 所有，与 Step 10 同在 Stage 7。
+- 效果：验收 A 当前论文的未追溯数字由 31 个降到 15 个，剩下的都是真正需要修内容的派生值、估算值与扰动幅度。
+- 测试：`tests/test_quality_gates_regression.py` 新增 6 例（表格规则与二元减号、一元负号仍按符号核对、`\%` 对应小数、题面数值、哈希仍匹配才信任派生输出、正文手写派生值仍被拒）。
+
 ## 2026-11-07 — retry-step 后的提示词输入键冲突（验收 A 发现）
 
 验收 A 的 Step 5 因 `PERMANENT_CLAIM_BINDING` 失败后，操作员加了一条研究员备注再 `retry-step`，worker 一启动就退出：`immutable prompt attempt input already exists with different content`，项目停在 `running`，PID 已不存在，也没有失败事件。
