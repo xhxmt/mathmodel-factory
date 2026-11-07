@@ -519,6 +519,8 @@ def test_step15_disclaimer_count_separates_limitation_sections(tmp_path):
         "\\section{模型求解}\n本图不代表最终结论。\n"
         "\\section*{灵敏度分析}\n扰动 10% 时不改变排序，但不保证更大扰动。\n"
         "\\caption{扰动曲线。该图不作为最终依据。}\n"
+        "\\subsection{参数扰动}\n较大扰动下的排序不保证。\n"
+        "\\section{模型评价}\n本节总述。\n"
         "\\subsection{局限性}\n连续误差界未证明。\n"
         "\\section{结论}\n该结果不构成工业保证。\n",
         encoding="utf-8",
@@ -527,6 +529,7 @@ def test_step15_disclaimer_count_separates_limitation_sections(tmp_path):
         ["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True, check=True
     ).stdout.strip()
     # 不代表 (求解) + 不作为 (a caption, counted in any section) + 不构成 (结论).
-    # 不保证 / 未证明 are body text in the allowed (starred) sensitivity and
-    # limitations sections.
+    # 不保证 (twice) / 未证明 are body text in the allowed (starred) sensitivity
+    # section -- including its ordinary 参数扰动 subsection -- and in the
+    # 局限性 subsection of a non-exempt section.
     assert outside == "3"

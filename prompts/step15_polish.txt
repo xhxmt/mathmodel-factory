@@ -231,7 +231,7 @@ formatting issues (bib entry 字段格式问题, 如缺 year / author): <数量>
    - 按优秀论文写作基准额外检查内部工程痕迹、风险措辞和否定式免责（§7）。
    - **动笔前**先统计否定式免责并把数字记进 derobotification.md 的计数表 (本步骤不另存 paper.tex 副本):
      - 全文: `grep -oE "不代表|不构成|不证明|不作为|不声称|不意味|不保证|不等于|不替代|未证明" __BASE_NAME___paper.tex | wc -l`
-     - 局限 / 灵敏度节以外: `awk '/\\(sub)*section\*?\{/{keep=($0 ~ /局限|灵敏度|敏感性/)} !keep || /\\caption/' __BASE_NAME___paper.tex | grep -oE "不代表|不构成|不证明|不作为|不声称|不意味|不保证|不等于|不替代|未证明" | wc -l`
+     - 局限 / 灵敏度节以外: `awk '/\\section\*?\{/{sec=($0 ~ /局限|灵敏度|敏感性/)} /\\(sub)*section\*?\{/{keep=sec || ($0 ~ /局限|灵敏度|敏感性/)} !keep || /\\caption/' __BASE_NAME___paper.tex | grep -oE "不代表|不构成|不证明|不作为|不声称|不意味|不保证|不等于|不替代|未证明" | wc -l`
      改写完成后用同样两条命令再统计一次。第二条统计局限 / 灵敏度节以外的正文和所有图题表题 (`\caption` 行无论在哪一节都计入); 这些逐句处理。局限 / 灵敏度节内, 每条局限只保留一句量化陈述, 重复的也删。
    - 修. 写 derobotification.md, 给具体修订前后样本 (至少 5 处)。
 
