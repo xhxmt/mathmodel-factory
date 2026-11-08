@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-08 — 最终评审退回时把评审发现写进返工步骤的提示词（验收 A 发现 F13）
+
+验收 A 的 v2 最终评审给出 `REOPEN_REVISION_MODEL`（rev 500，数学角色 1 个致命缺陷：问题四移动坐标方程的平流项违反干基守恒），引擎退回 Step 4。Step 4 只用约 1 分钟，把现有产物核对一遍就成功了：它的提示词只读 `audit_issue_ledger.md`，而评审发现不在台账里，也没有任何提示词读 `judge_evaluation.md`。机器审计全是 PASS，模型认为没有需要修的。
+
+- **修复**：`catalog_prompts.judge_rework_block`。从最终评审的 `REOPEN_REVISION_*` 退回起，到最终评审再次开始之前，在退回目标之后的每个返工 Step（4–12、14、15）的提示词开头，列出这次评审的阻断发现：硬角色的 fatal 证据（没有 fatal 时列 risk），论文角色的 blocking/major 问题，每条带角色、编号、结论、意见和论文引文。同时写明这是唯一一次修复，以及不能只复核不改。发现取自 `judge_outputs/aggregate.json`，且必须与退回事件的结论一致；不一致时改为提示去读 `judge_evaluation.md`。
+- 对所有 v2 模板生效（不限于 overlay 列表）。v1 项目与无状态库的项目不受影响，提示词保持逐字节不变。不属于 dirty 分类器身份。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 3 例。
+
 ## 2026-11-08 — 求解链里的兄弟输出改为凭回执哈希证明（验收 A 发现 F12）
 
 验收 A 第二次批准 Gate 2 后，v2 最终评审在调用模型之前就判执行角色证据不全（rev 493，`TRANSIENT_JUDGE_INFRASTRUCTURE`），15 条 `solver_chain:*` 要求未满足。

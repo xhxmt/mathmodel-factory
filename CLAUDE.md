@@ -258,7 +258,10 @@ latest `retry-step` of the revision. While such a recompute has not yet
 returned to the revision, `catalog_prompts.review_rework_block` prepends the
 issues (ID, Category, Severity, current ledger Notes) to the prompts of the
 Steps it recomputes; the v2 overlay tells Step 12 to categorize them. v1 keeps
-its Step-13 exit unchanged.
+its Step-13 exit unchanged. Likewise, after the v2 final Judge reopens with `REOPEN_REVISION_MODEL`/`_TEXT`,
+`catalog_prompts.judge_rework_block` prepends that Judge's fatal/blocking/major
+findings (from `judge_outputs/aggregate.json`, verdict-checked) to every re-run
+Step after the reopen target until the final Judge starts again.
 
 A semantic reopen (a Stage changing content an earlier Stage owns) is
 budgeted per classifier identity: an initiating Stage may rewind at most

@@ -1012,3 +1012,74 @@ def test_contest_phases_reject_an_unknown_catalog_version():
         phase_for_step(13, catalog_version="factory-stage-catalog-v7")
     with pytest.raises(ValueError, match="unsupported Stage catalog"):
         contest_phases_for("factory-stage-catalog-v7")
+
+
+def _judge_reopen(store, project, *, verdict="REOPEN_REVISION_MODEL", target=3, aggregate_verdict=None):
+    import json as _json
+
+    math = {"schema_version": "judge-hard-role-v2", "role": "math", "verdict": "FAIL", "fatal_flaws": 1,
+            "evidence": [{"ref_id": "math-e1", "claim": "移动坐标方程多出平流项", "finding": "违反干基守恒",
+                          "quote": "+\\xi R'/R", "severity": "fatal"},
+                         {"ref_id": "math-e2", "claim": "链式法则正确", "severity": "support"}]}
+    paper = {"role": "paper", "verdict": "REVISE",
+             "issues": [{"ref_id": "paper-issue-1", "severity": "major", "finding": "表述有误",
+                         "recommendation": "改写", "quote": "原句"},
+                        {"ref_id": "paper-issue-9", "severity": "minor", "finding": "小问题"}]}
+    aggregate = {"verdict": aggregate_verdict or verdict, "roles": [
+        {"role": "math", "status": "FAIL", "text": "VERDICT: FAIL\n" + _json.dumps(math, ensure_ascii=False)},
+        {"role": "execution", "status": "PASS", "text": "VERDICT: PASS\n{}"},
+        {"role": "paper", "status": "REVISE", "text": "VERDICT: REVISE\n" + _json.dumps(paper, ensure_ascii=False)}]}
+    (project / "judge_outputs").mkdir(exist_ok=True)
+    (project / "judge_outputs" / "aggregate.json").write_text(_json.dumps(aggregate, ensure_ascii=False))
+    state = store.load()
+    return store.transition(
+        expected_revision=state.revision, event_type="STEP_REOPENED", changes={},
+        payload={"stage": 10, "subtask": "final_judge", "source_step": 13,
+                 "final_decision": verdict, "resume_after_step": target},
+    )
+
+
+def _render(project, template, step):
+    from pathlib import Path as _Path
+
+    from factory_core.steps.prompting import PromptRenderer
+
+    return PromptRenderer(_Path(__file__).resolve().parents[1]).render(
+        template, project, step_key=step, include_preamble=False, researcher_note=""
+    )
+
+
+def test_v2_final_judge_reopen_names_its_findings_until_the_judge_runs_again(tmp_path):
+    store = v2_store(tmp_path, last_completed_step=15)
+    assert "【最终评审返工" not in _render(tmp_path, "step4_model_construction.txt", "4")
+
+    _judge_reopen(store, tmp_path)
+
+    step4 = _render(tmp_path, "step4_model_construction.txt", "4")
+    assert "【最终评审返工 — 本次运行的原因】" in step4
+    assert "- [math math-e1，fatal] 移动坐标方程多出平流项；违反干基守恒（论文引文：+\\xi R'/R）" in step4
+    assert "- [paper paper-issue-1，major] 表述有误；改写（论文引文：原句）" in step4
+    assert "math-e2" not in step4 and "paper-issue-9" not in step4
+    for template, step in (("step5_full_solve.txt", "5"), ("step9_paper_draft.txt", "9"),
+                           ("step12_revision.txt", "12"), ("step15_polish.txt", "15")):
+        assert "【最终评审返工" in _render(tmp_path, template, step), template
+
+    state = store.load()
+    store.transition(expected_revision=state.revision, event_type="STEP_STARTED", changes={},
+                     payload={"stage": 10, "subtask": "final_judge"})
+    assert "【最终评审返工" not in _render(tmp_path, "step4_model_construction.txt", "4")
+
+
+def test_v2_final_judge_text_reopen_skips_steps_before_its_target(tmp_path):
+    store = v2_store(tmp_path, last_completed_step=15)
+    _judge_reopen(store, tmp_path, verdict="REOPEN_REVISION_TEXT", target=8)
+    assert "【最终评审返工" not in _render(tmp_path, "step5_full_solve.txt", "5")
+    assert "【最终评审返工" in _render(tmp_path, "step9_paper_draft.txt", "9")
+
+
+def test_v2_final_judge_block_falls_back_when_findings_do_not_match(tmp_path):
+    store = v2_store(tmp_path, last_completed_step=15)
+    _judge_reopen(store, tmp_path, aggregate_verdict="PASS")
+    step4 = _render(tmp_path, "step4_model_construction.txt", "4")
+    assert "【最终评审返工" in step4 and "judge_evaluation.md" in step4
+    assert "math-e1" not in step4

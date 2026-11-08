@@ -100,6 +100,126 @@ def review_rework_block(project: Path, template: str) -> str:
         + "\n\n"
     )
 
+# The Step every rendered template belongs to, for the final-Judge rework block.
+JUDGE_REWORK_TEMPLATES = {
+    "step4_model_construction.txt": 4,
+    "step5_full_solve.txt": 5,
+    "step6_sensitivity.txt": 6,
+    "step7_model_eval.txt": 7,
+    "step8_visualization.txt": 8,
+    "step8_5_reviewer_entry.txt": 8,
+    "step9_paper_draft.txt": 9,
+    "step10_gate1_numerical.txt": 10,
+    "step11_constructive_review.txt": 11,
+    "step12_revision.txt": 12,
+    "step14_abstract.txt": 14,
+    "step15_polish.txt": 15,
+}
+JUDGE_REWORK_VERDICTS = frozenset({"REOPEN_REVISION_MODEL", "REOPEN_REVISION_TEXT"})
+JUDGE_FINDING_CHARS = 1500
+
+
+def _judge_findings(project: Path, verdict: str) -> list[str] | None:
+    """The blocking findings of the Judge run that reopened, or None if unreadable."""
+
+    import json
+
+    try:
+        aggregate = json.loads((project / "judge_outputs" / "aggregate.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(aggregate, dict) or aggregate.get("verdict") != verdict:
+        return None
+    lines: list[str] = []
+    for role in aggregate.get("roles") or []:
+        if not isinstance(role, dict) or role.get("status") in {None, "PASS"}:
+            continue
+        try:
+            body = json.loads(str(role.get("text") or "").split("\n", 1)[1])
+        except (IndexError, ValueError):
+            return None
+        name = str(role.get("role"))
+        if name == "paper":
+            picked = [item for item in body.get("issues") or []
+                      if isinstance(item, dict) and item.get("severity") in {"blocking", "major"}]
+        else:
+            evidence = [item for item in body.get("evidence") or [] if isinstance(item, dict)]
+            picked = [item for item in evidence if item.get("severity") == "fatal"] or [
+                item for item in evidence if item.get("severity") == "risk"]
+        for item in picked:
+            text = "；".join(str(item[key]) for key in ("claim", "finding", "recommendation") if item.get(key))
+            if len(text) > JUDGE_FINDING_CHARS:
+                text = text[:JUDGE_FINDING_CHARS] + "……（全文见 judge_evaluation.md）"
+            quote = str(item.get("quote") or "")
+            lines.append(
+                f"- [{name} {item.get('ref_id', '')}，{item.get('severity')}] {text}"
+                + (f"（论文引文：{quote}）" if quote else "")
+            )
+    return lines
+
+
+def judge_rework_block(project: Path, template: str) -> str:
+    """The final-Judge findings a v2 repair cycle is re-running this Step for.
+
+    Present from the final Judge's ``REOPEN_REVISION_*`` reopen until the
+    final Judge starts again, for each Step after the reopen target.  Without
+    it a re-run Step sees only machine audits that already PASS and has no way
+    to learn why it runs (acceptance A, F13).
+    """
+
+    step = JUDGE_REWORK_TEMPLATES.get(Path(template).name)
+    if step is None:
+        return ""
+    from ..stages import STAGE_CATALOG_VERSION_V2
+    from ..storage import SQLiteStateStore
+
+    store = SQLiteStateStore(project)
+    if not store.exists or store.load().stage_catalog_version != STAGE_CATALOG_VERSION_V2:
+        return ""
+    events = store.events()
+    reopen = next(
+        (
+            event
+            for event in reversed(events)
+            if event.type == "STEP_REOPENED"
+            and event.payload.get("subtask") == "final_judge"
+            and event.payload.get("final_decision") in JUDGE_REWORK_VERDICTS
+        ),
+        None,
+    )
+    if reopen is None:
+        return ""
+    if any(
+        event.revision > reopen.revision
+        and event.type == "STEP_STARTED"
+        and event.payload.get("subtask") == "final_judge"
+        for event in events
+    ):
+        return ""
+    target = reopen.payload.get("resume_after_step")
+    if type(target) is int and step <= target:
+        return ""
+    verdict = str(reopen.payload["final_decision"])
+    findings = _judge_findings(project, verdict)
+    if findings is None:
+        findings = ["- 未能从 `judge_outputs/aggregate.json` 读出与本次退回一致的评审发现；"
+                    "请直接阅读 `judge_evaluation.md` 中各角色的 FAIL/REVISE 依据。"]
+    elif not findings:
+        findings = ["- 评审未列出 fatal/blocking/major 级发现；请阅读 `judge_evaluation.md` 中各角色的结论。"]
+    return (
+        "【最终评审返工 — 本次运行的原因】\n"
+        f"Step 13 最终评审给出 `{verdict}`（事件 rev {reopen.revision}），引擎因此退回到 Step {target} 之后，"
+        "本步骤是这一轮修复的一部分。这是唯一的一次修复：若下一次最终评审仍不通过，就不能正常交付。"
+        "下列评审发现就是本次运行要解决的事；只复核现有产物、因机器审计已 PASS 而不改，等于放弃这次修复。"
+        "逐条判断根因是否在本步骤的产物中：在的，必须在本步骤从根源修复（模型推导、代码、结果、图、论文正文），"
+        "改代码后重新运行并重新生成下游产物（求解作业照常经 `solver_submit.sh` 提交），"
+        "并在本步骤的日志或报告中逐条写明改了什么、证据在哪；不在的，写明它属于哪一步、为什么本步骤不改。"
+        "完整依据见 `judge_evaluation.md`。研究员备注若与这些发现无关，以本段为准。\n"
+        + "\n".join(findings)
+        + "\n\n"
+    )
+
+
 V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
     # The v2 Stage 8 exit routes open results/model review issues back to
     # Steps 5-8 (engine.REVIEW_ISSUE_REWORK_RULE); the re-run Steps read them.
