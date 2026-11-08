@@ -1486,9 +1486,27 @@ class FactoryEngine:
 
         if validation.metadata.get("gate2_continuation_override") is True:
             return []
-        return open_review_issues(
-            self.project_dir / "audit_issue_ledger.md", {"BLOCKING", "MAJOR"}
-        )
+        return [
+            issue
+            for issue in open_review_issues(
+                self.project_dir / "audit_issue_ledger.md", {"BLOCKING", "MAJOR"}
+            )
+            if not issue.deferred_past_review
+        ]
+
+    def _deferred_review_issues(self) -> list[str]:
+        """Open rows the v2 review exit leaves to a human or to Step 14/15 (F16)."""
+
+        from .audit.ledger import open_review_issues
+
+        return [
+            f"{issue.issue_id} ({issue.category or 'uncategorized'}, {issue.severity}; "
+            f"Blocking Until: {issue.blocking_until})"
+            for issue in open_review_issues(
+                self.project_dir / "audit_issue_ledger.md", {"BLOCKING", "MAJOR"}
+            )
+            if issue.deferred_past_review
+        ]
 
     @staticmethod
     def _review_issue_summary(issues: list[Any]) -> list[str]:
@@ -1628,6 +1646,7 @@ class FactoryEngine:
                     "resume_after_step": 10,
                     "rework_rule": "review_loop",
                     "review_issues": summary,
+                    "deferred_review_issues": self._deferred_review_issues(),
                     "reason": "unresolved BLOCKING or MAJOR review issue remains",
                 },
                 dirty_changes=dirty_changes,
@@ -1650,6 +1669,7 @@ class FactoryEngine:
                 "stage": 8,
                 "subtask": task.subtask,
                 "review_issues": summary,
+                "deferred_review_issues": self._deferred_review_issues(),
                 "reason": (
                     "unresolved results/model review issue remains after the "
                     "review recompute"

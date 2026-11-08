@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-08 — 只能由人处理或归属后续步骤的审稿行不再阻断 v2 Stage 8 出口（验收 A 发现 F16）
+
+验收 A 修复轮的 Stage 8 出口第二次失败（rev 770）。剩下的开放行里，S11R-B1（封面报名号、学校、队员“待填”，`Blocking Until: Human (交付前)`）只能由参赛队填写，模型不得编造；S11R-B2（`abstract_draft.md` 仍是修正前的数字，`Blocking Until: Step 14`）由 Stage 8 之后的 Step 14 重新生成。出口把所有开放的 BLOCKING/MAJOR 行都算作阻断，所以无论重试多少次都出不去。
+
+- **修复**：`OpenIssue` 读取 `Blocking Until` 列；`deferred_past_review` 对以 `Human` 开头、或只指向 Step 14/15 的行为真。v2 Stage 8 出口与审稿重算计划跳过这些行，它们保持 OPEN，交给 Gate 2、对应步骤和最终审计。其他写法（包括 Step 16、Step 12、空值）照旧阻断。失败与审稿循环事件新增 `deferred_review_issues`，列出被跳过的行。
+- 另记录：v1 Step 13 的 `continue_after_gate2` 覆盖没有接到 v2 的 Stage 8 出口，v2 在这里没有人工覆盖通道（本次未改）。
+- 不属于 dirty 分类器身份。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 12 例（含 10 个参数化用例）。
+
 ## 2026-11-08 — 最终评审修复轮重新开始审稿返工预算（验收 A 发现 F15）
 
 验收 A 的修复轮在 Step 12 第 1 次尝试就以 `PERMANENT_REVIEW_LOOP_EXHAUSTED` 失败（rev 748），一次返工也没做。修复轮重跑 Step 11 后提出了新的 S11R-* 问题，但 Stage 8 出口的审稿重算和审稿循环次数，仍从第一轮最后一次 `retry-step`（rev 339）起计，第一轮的那次重算（rev 344）已经把预算用完。

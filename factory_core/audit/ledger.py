@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,12 +87,35 @@ def has_unresolved_critical(path: Path) -> bool:
     return has_unresolved_severity(path, {"BLOCKING", "MAJOR"})
 
 
+#: Steps after the v2 Stage 8 exit that own a deferred review row.
+DEFERRED_REVIEW_STEPS = frozenset({14, 15})
+
+
 @dataclass(frozen=True)
 class OpenIssue:
     issue_id: str
     category: str
     severity: str
     notes: str = ""
+    blocking_until: str = ""
+
+    @property
+    def deferred_past_review(self) -> bool:
+        """The row names only a resolver after the v2 Stage 8 exit.
+
+        ``Blocking Until`` starting with ``Human`` (contest-team data such as
+        cover fields, which no agent may invent) or naming only Step 14/15
+        (content those later Steps produce, such as the abstract). Such a row
+        cannot be resolved by any Stage 8 or recompute Step, so it does not
+        block the review exit; it stays OPEN for its resolver, Gate 2 and the
+        final audit. Every other value, including Step 16, keeps blocking.
+        """
+
+        text = self.blocking_until.strip()
+        if text.lower().startswith("human"):
+            return True
+        steps = {int(value) for value in re.findall(r"step\s*(\d+)", text, re.IGNORECASE)}
+        return bool(steps) and steps <= DEFERRED_REVIEW_STEPS
 
 
 def open_review_issues(path: Path, severities: set[str]) -> list[OpenIssue]:
@@ -125,7 +149,7 @@ def open_review_issues(path: Path, severities: set[str]) -> list[OpenIssue]:
         if "severity" in lowered and "status" in lowered:
             header = {
                 name: lowered.index(name)
-                for name in ("issue id", "category", "severity", "status", "notes")
+                for name in ("issue id", "category", "severity", "status", "notes", "blocking until")
                 if name in lowered
             }
             continue
@@ -141,7 +165,9 @@ def open_review_issues(path: Path, severities: set[str]) -> list[OpenIssue]:
         category = cells[header["category"]].lower() if "category" in header and header["category"] < len(cells) else ""
         issue_id = cells[header["issue id"]] if "issue id" in header and header["issue id"] < len(cells) else cells[0]
         notes = cells[header["notes"]] if "notes" in header and header["notes"] < len(cells) else ""
-        issues.append(OpenIssue(issue_id, category, severity, notes))
+        until = (cells[header["blocking until"]]
+                 if "blocking until" in header and header["blocking until"] < len(cells) else "")
+        issues.append(OpenIssue(issue_id, category, severity, notes, until))
     return issues
 
 

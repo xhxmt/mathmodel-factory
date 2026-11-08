@@ -246,6 +246,8 @@ and so does a determinate audit finding (`AUDIT_REPAIR_REQUIRED`).
 
 The v2 Stage 8 exit (Step 12; v2 has no Judge before it) routes the
 ledger's open BLOCKING/MAJOR rows outside `## Incremental audit findings`
+(except rows whose `Blocking Until` starts with `Human` or names only Step 14/15,
+which stay OPEN for Gate 2 and are listed as `deferred_review_issues`)
 (`audit.ledger.open_review_issues`; the machine `AUDIT-*` rows never block it,
 since no Stage 8 subtask reruns a profile) by Category: `results`/`model` rows
 recompute Steps 5-8 and return to the revision (`STAGE_SEMANTIC_REOPENED`,

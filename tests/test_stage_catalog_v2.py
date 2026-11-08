@@ -480,8 +480,8 @@ LEDGER_HEADER = (
 def write_ledger(project, review_rows, machine_rows=()):
     """An issue ledger shaped like the one acceptance A's Step 11 left."""
 
-    def row(issue_id, category, severity, status):
-        return f"| {issue_id} | review:step11 | {category} | {severity} | Step 12 | {status} | n |\n"
+    def row(issue_id, category, severity, status, until="Step 12"):
+        return f"| {issue_id} | review:step11 | {category} | {severity} | {until} | {status} | n |\n"
 
     (project / "audit_issue_ledger.md").write_text(
         "# Audit Issue Ledger\n\n## Incremental audit findings\n\n" + LEDGER_HEADER
@@ -1102,3 +1102,43 @@ def test_v2_review_budget_restarts_after_a_final_judge_reopen():
     events.append(E(revision=31, type="STEP_REOPENED",
                     payload={"subtask": "final_judge", "final_decision": "INDETERMINATE_REVIEW"}))
     assert FactoryEngine._review_budget_baseline(events) == 20
+
+
+@pytest.mark.parametrize("until, deferred", [
+    ("Human (交付前)", True), ("human: team fills the cover", True),
+    ("Step 14", True), ("Step 14; Step 15", True),
+    ("Step 16", False), ("Step 12", False), ("Step 4 (决策); Step 12 (文字)", False),
+    ("Step 5 日志维护", False), ("", False), ("交付前", False),
+])
+def test_review_row_deferral_reads_blocking_until(until, deferred):
+    from factory_core.audit.ledger import OpenIssue
+
+    assert OpenIssue("X", "paper", "BLOCKING", "", until).deferred_past_review is deferred
+
+
+def test_v2_review_exit_leaves_human_and_later_step_rows_to_their_owners(tmp_path):
+    write_ledger(tmp_path, [("S11R-B1", "paper", "BLOCKING", "OPEN", "Human (交付前)"),
+                            ("S11R-B2", "paper", "BLOCKING", "OPEN", "Step 14")])
+    registry, lifecycles = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert reopens(store) == [] and failures(store) == []
+    assert lifecycles[12].calls == [1]
+    assert state.status is WorkflowStatus.COMPLETED
+
+
+def test_v2_review_exit_still_blocks_on_a_row_a_review_step_owns(tmp_path):
+    write_ledger(tmp_path, [("S11R-B1", "paper", "BLOCKING", "OPEN", "Human (交付前)"),
+                            ("S11R-M2", "results", "MAJOR", "OPEN", "Step 5 日志维护")])
+    registry, _ = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    [failed] = failures(store)
+    assert failed.payload["review_issues"] == ["S11R-M2 (results, MAJOR)"]
+    assert failed.payload["deferred_review_issues"] == [
+        "S11R-B1 (paper, BLOCKING; Blocking Until: Human (交付前))"]
+    assert state.status is WorkflowStatus.FAILED
