@@ -1318,7 +1318,25 @@ class _ReopeningRunner(RecordingRunner):
         return result
 
 
-def _judged_reopen(tmp_path: Path, *, override: bool):
+class _FailingJudge(PassingJudge):
+    """A Judge whose roles all answered but whose verdict is not judgeable."""
+
+    def __init__(self, error_class: str) -> None:
+        super().__init__()
+        self.error_class = error_class
+
+    def execute_prepared(self, context):
+        super().execute_prepared(context)
+        return ExecutionResult.failed(
+            self.error_class,
+            returncode=2,
+            judge_completed=True,
+            judge_verdict="INDETERMINATE_REVIEW",
+            retry_scope="new_evidence_required",
+        )
+
+
+def _judged_reopen(tmp_path: Path, *, override: bool, judge=None, expected_status=AuditStatus.FAIL):
     root = tmp_path / "factory"
     project = root / "ongoing" / "demo"
     project.mkdir(parents=True)
@@ -1328,16 +1346,17 @@ def _judged_reopen(tmp_path: Path, *, override: bool):
     store.bootstrap_admin("correct horse battery staple test only")
     provider = SQLiteOverrideProvider(root / "web/auth.db")
     runner = _ReopeningRunner()
-    judge = PassingJudge()
+    judge = judge or PassingJudge()
     service = FinalAuditService(
         root, judge, FakeValidator(), runner,
         fingerprinter=lambda _project, _base: snapshot_id,
         override_provider=provider,
     )
     analysis = service.run(make_context(project), analysis_only=True)
-    assert analysis.record.status is AuditStatus.FAIL
-    assert analysis.record.decision == "REOPEN_REVISION_TEXT"
-    assert analysis.record.judge_completed is True
+    assert analysis.record.status is expected_status
+    if expected_status is AuditStatus.FAIL:
+        assert analysis.record.decision == "REOPEN_REVISION_TEXT"
+        assert analysis.record.judge_completed is True
     authorization = None
     if override:
         authorization = store.issue_delivery_override(
@@ -1452,3 +1471,38 @@ def test_v2_step_13_without_an_override_still_fails_the_judgment(tmp_path):
     make_context(project)
 
     assert not step.validate(context).is_valid
+
+
+def test_an_evidence_indeterminate_judgment_is_delivered_only_as_overridden(tmp_path):
+    # s16 verification: every role answered, math was INDETERMINATE.
+    project, service, judge, runner, provider, authorization, snapshot_id = _judged_reopen(
+        tmp_path, override=True,
+        judge=_FailingJudge("PERMANENT_JUDGE_EVIDENCE_INDETERMINATE"),
+        expected_status=AuditStatus.INDETERMINATE,
+    )
+
+    pending = service.overridable_judgment(make_context(project))
+    assert pending is not None and pending.judge_completed is False
+    accepted = service.run(
+        make_context(project), analysis_only=False, promote_analysis_pass=True
+    )
+
+    assert judge.judge_calls == 1
+    assert accepted.record.status is AuditStatus.OVERRIDDEN
+    assert accepted.record.decision == "INDETERMINATE_REVIEW"
+    assert accepted.record.judge_completed is False
+    assert accepted.record.delivery_allowed is True
+    assert provider.get_override(authorization.override_id).consumed_at is not None
+
+
+@pytest.mark.parametrize(
+    "error_class",
+    ["TRANSIENT_JUDGE_INFRASTRUCTURE", "TRANSIENT_JUDGE_ROLE", "PERMANENT_JUDGE_INFRASTRUCTURE"],
+)
+def test_a_judge_infrastructure_failure_is_never_overridable(tmp_path, error_class):
+    project, service, *_rest = _judged_reopen(
+        tmp_path, override=True, judge=_FailingJudge(error_class),
+        expected_status=AuditStatus.INDETERMINATE,
+    )
+
+    assert service.overridable_judgment(make_context(project)) is None

@@ -5,14 +5,14 @@
 验收 A 的最后一次最终评审（rev 806）三个角色都 PASS，但视觉门禁有 10 个 blocking 问题，裁决改为 `REOPEN_REVISION_TEXT`，修复循环已用完。按操作规则应签发 `deliver_snapshot` 覆盖授权交付，结果发现这条路在 v2 里走不通；此前 rev 791 还因只能由人处理的 BLOCKING 行，被最终审核判 `CONTENT_NOT_READY`。
 
 - **F18 覆盖授权不可达**：v2 的 Step 13 以“仅分析”模式运行最终审核，而该模式不读覆盖授权；Step 16 要等 Step 13 拿到 PASS 才运行。另外每次审核都重新编译 PDF（未固定时间戳），同样的源文件两次得到不同的 PDF 字节和快照 ID，绑定快照的授权永远对不上。
-  - **修复**：`FinalAuditService.judged_for_override` 认定“这个快照有一次已完成、非 PASS 的评审（`AUDIT_REPAIR_REQUIRED` 或 `PERMANENT_FINAL_JUDGE`），且有绑定这个快照的有效 `deliver_snapshot`”；基础设施状态或未完成的评审不算。`overridable_judgment` 不编译、只重建评审包后检查这一点，只读不消耗。v2 的 `FinalJudgeStep` 先做这个检查，满足就把运行交给 Step 16（`delivery_override_pending`），不重跑评审；validate 同样接受。Step 16 的晋升路径对这种评审与 PASS 一视同仁：在已评审的 PDF 上重跑所有非评审检查、复核快照，然后按覆盖授权记为 `OVERRIDDEN` 并消耗授权。两条路径都不重新编译，所以快照稳定；没有授权时行为不变（重跑评审）。
+  - **修复**：`FinalAuditService.judged_for_override` 认定“这个快照有一次非 PASS 的评审结论，且有绑定这个快照的有效 `deliver_snapshot`”。评审结论指：已完成并给出内容结论（`AUDIT_REPAIR_REQUIRED` 或 `PERMANENT_FINAL_JUDGE`），或各角色都已作答、但硬角色认为证据不足（`PERMANENT_JUDGE_EVIDENCE_INDETERMINATE`，交付时 `judge_completed` 保持 false，只记为 OVERRIDDEN）。瞬时的评审、证据包、路由失败没有结论，只能重试，不能覆盖。快照还绑定了评审所用的工厂代码（`evaluator_contract`），工厂代码改动之后，旧的评审不能再覆盖交付，必须先重跑评审。`overridable_judgment` 不编译、只重建评审包后检查这一点，只读不消耗。v2 的 `FinalJudgeStep` 先做这个检查，满足就把运行交给 Step 16（`delivery_override_pending`），不重跑评审；validate 同样接受。Step 16 的晋升路径对这种评审与 PASS 一视同仁：在已评审的 PDF 上重跑所有非评审检查、复核快照，然后按覆盖授权记为 `OVERRIDDEN` 并消耗授权。两条路径都不重新编译，所以快照稳定；没有授权时行为不变（重跑评审）。
   - 操作流程：从 `.factory/audits/analysis_latest.json` 取 `snapshot_id`，签发 `deliver_snapshot`，再 `retry-step --step 13`。
 - **F17 只能由人处理的行没有通道**：F16 让 `Blocking Until` 为 `Human` 或只指向 Step 14/15 的行通过 Stage 8 出口、留给 Gate 2，但 Gate 2 的批准并不关闭它们，最终审核又因任何开放的 BLOCKING 行拒绝。
   - **修复**：内容冻结（Gate 2）的决定可以带 `acknowledged_human_issues`（台账行 ID 列表），随不可变决定一起保存。`engine._content_freeze_acknowledgements` 校验：只能列开放的、由人或 Step 14/15 负责的 BLOCKING 行；只有批准能带；v2 项目的批准必须列出所有这样的行，否则在 Gate 2 当场拒绝（决定还能改），而不是等 Step 13 失败。最终审核与 Step 16 校验器通过 `ledger.acknowledged_human_issues` 从已验证的当前决定读取，不再计入恰好这些行；其他 BLOCKING 行照旧阻断。`CONTENT_NOT_READY` 的证据里新增 `unacknowledged_human_rows`。CLI 用 `--resolution-json` 传；Web 的 `SelectionDecisionRequest` 新增同名可选字段（前端表单尚未加输入框）。
 - **F19c 视觉问题没进返工提示**：`judge_rework_block` 要求 `aggregate.json` 的结论等于退回原因；只因视觉门禁而退回时汇总结论是 PASS，返工提示里一条发现也没有。
   - **修复**：退回原因与 `decision_route.json` 的 `effective_decision` 一致时，也认作这次评审；此时列出论文角色的 blocking/major 问题，以及 `visual_gate.json` 中的 blocking 问题（代码、页码、证据，最多 20 条）。
 - 都不属于 dirty 分类器身份（09693f563ba2 不变），不会让进行中项目的检查点失效。
-- 测试：`tests/test_audit_service.py` 新增 7 例；`tests/test_stage_catalog_v2.py` 新增 11 例（含 4 个参数化用例）。
+- 测试：`tests/test_audit_service.py` 新增 11 例（含 3 个参数化用例）；`tests/test_stage_catalog_v2.py` 新增 11 例（含 4 个参数化用例）。
 
 ## 2026-11-08 — 只能由人处理或归属后续步骤的审稿行不再阻断 v2 Stage 8 出口（验收 A 发现 F16）
 

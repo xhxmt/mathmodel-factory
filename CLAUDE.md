@@ -371,13 +371,17 @@ Delivery override authority lives only in `web/auth.db`. The scopes are
 recorded. A project-local `gate2_delivery_override.json` never authorizes
 anything. In catalog v2 the operator issues `deliver_snapshot` for the
 `snapshot_id` of a completed non-PASS final judgment (`.factory/audits/analysis_latest.json`,
-`AUDIT_REPAIR_REQUIRED`/`PERMANENT_FINAL_JUDGE`), then `retry-step --step 13`:
+`AUDIT_REPAIR_REQUIRED`/`PERMANENT_FINAL_JUDGE`, or `PERMANENT_JUDGE_EVIDENCE_INDETERMINATE`
+when every role answered but a hard role found the evidence insufficient; never a
+transient Judge state), then `retry-step --step 13`:
 Step 13 (`FinalAuditService.overridable_judgment`) re-prepares the packets
 without compiling and, when the override names that judged snapshot, hands the
 run to Step 16 without rerunning the Judge; Step 16 promotes the judgment like a
 PASS (all non-Judge checks rerun on the judged PDF, snapshot recheck) and
 records `OVERRIDDEN`, consuming the override. A recompile would change the PDF
-bytes and therefore the snapshot, so neither path compiles. The override store is an operational boundary for the single-operator deployment,
+bytes and therefore the snapshot, so neither path compiles. The snapshot also
+binds the evaluator code (`evaluator_contract`), so a judgment made before a
+factory code change cannot be overridden after it; rerun the Judge first. The override store is an operational boundary for the single-operator deployment,
 not cryptographic isolation from another process running as the same Unix UID.
 The same control database owns identity and `project_acl`, but none of those
 records replaces project-local workflow decisions in `.factory/state.db` or

@@ -50,9 +50,24 @@ _ROUTED_INFRASTRUCTURE_DECISIONS = {
 
 
 # A final judgment the operator may deliver under a deliver_snapshot override:
-# the Judge completed and returned a content verdict (not an infrastructure
-# state), so there is a judgment to accept.  Anything else has no judgment.
-_OVERRIDABLE_ERROR_CLASSES = frozenset({"AUDIT_REPAIR_REQUIRED", "PERMANENT_FINAL_JUDGE"})
+# the Judge completed and returned a content verdict, or every role answered
+# and a hard role found the evidence insufficient (INDETERMINATE, which no
+# retry on the same evidence changes).  Transient Judge/packet/routing states
+# have no judgment and are retried, never overridden.
+_COMPLETED_JUDGMENT_ERROR_CLASSES = frozenset({"AUDIT_REPAIR_REQUIRED", "PERMANENT_FINAL_JUDGE"})
+_INDETERMINATE_JUDGMENT_ERROR_CLASSES = frozenset({"PERMANENT_JUDGE_EVIDENCE_INDETERMINATE"})
+_OVERRIDABLE_ERROR_CLASSES = (
+    _COMPLETED_JUDGMENT_ERROR_CLASSES | _INDETERMINATE_JUDGMENT_ERROR_CLASSES
+)
+
+
+def _overridable_record(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    error_class = value.get("error_class")
+    if error_class in _COMPLETED_JUDGMENT_ERROR_CLASSES:
+        return value.get("judge_completed") is True
+    return error_class in _INDETERMINATE_JUDGMENT_ERROR_CLASSES
 
 
 @dataclass(frozen=True)
@@ -65,6 +80,7 @@ class OverridableJudgment:
     created_at: str
     override_id: str
     source_verdict: str
+    judge_completed: bool = True
 
 
 class FinalAuditService:
@@ -379,7 +395,10 @@ class FinalAuditService:
                             )
                             if promotable
                             else ExecutionResult.succeeded(
-                                judge_completed=True,
+                                # An INDETERMINATE judgment stays incomplete
+                                # in the acceptance record; only the override
+                                # delivers it (OVERRIDDEN, never PASS).
+                                judge_completed=overridable.judge_completed,
                                 judge_verdict=overridable.decision,
                                 promoted_analysis_snapshot=candidate.snapshot_id,
                                 promoted_analysis_created_at=overridable.created_at,
@@ -1653,9 +1672,8 @@ class FinalAuditService:
         if (
             value.get("snapshot_id") != snapshot.snapshot_id
             or value.get("profile") != self.profile
-            or value.get("judge_completed") is not True
+            or not _overridable_record(value)
             or status not in {AuditStatus.FAIL, AuditStatus.INDETERMINATE}
-            or value.get("error_class") not in _OVERRIDABLE_ERROR_CLASSES
             or not decision
             or decision == "PASS"
             or decision in _ROUTED_INFRASTRUCTURE_DECISIONS
@@ -1671,6 +1689,7 @@ class FinalAuditService:
             created_at=str(value.get("created_at") or ""),
             override_id=override.override_id,
             source_verdict=override.source_verdict,
+            judge_completed=value.get("judge_completed") is True,
         )
 
     def overridable_judgment(self, context: StepContext) -> OverridableJudgment | None:
@@ -1695,8 +1714,7 @@ class FinalAuditService:
         latest_id = latest.get("snapshot_id") if isinstance(latest, dict) else None
         if (
             not isinstance(latest_id, str)
-            or latest.get("judge_completed") is not True
-            or latest.get("error_class") not in _OVERRIDABLE_ERROR_CLASSES
+            or not _overridable_record(latest)
             or self._delivery_override(project, latest_id) is None
         ):
             return None
