@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..domain import PendingAction, ValidationResult
-from ..audit.ledger import has_unresolved_blocking
+from ..audit.ledger import acknowledged_human_issues, has_unresolved_blocking
 from scripts.step8_5_gate import collect_step8_5_state, not_ready_reason
 from scripts.workflow_state import (
     gate2_continuation_override,
@@ -134,7 +134,10 @@ def _binding_fingerprint(project: Path, paths: list[Path]) -> str:
 
 
 def _unresolved_blocking(project: Path) -> bool:
-    return has_unresolved_blocking(project / "audit_issue_ledger.md")
+    ledger = project / "audit_issue_ledger.md"
+    return has_unresolved_blocking(ledger) and has_unresolved_blocking(
+        ledger, acknowledged_human_issues(project)
+    )
 
 
 def _incremental_gate(

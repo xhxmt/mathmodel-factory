@@ -1511,6 +1511,8 @@ def create_project_router(settings: Settings, ticket_store, manager) -> APIRoute
         resolution.update(
             {key: value for key, value in request_identity.items() if value is not None}
         )
+        if decision.acknowledged_human_issues is not None:
+            resolution["acknowledged_human_issues"] = list(decision.acknowledged_human_issues)
 
         try:
             FactoryService(settings.factory_root).resolve_and_start(

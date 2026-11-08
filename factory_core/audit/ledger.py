@@ -48,9 +48,9 @@ def _cells(line: str) -> list[str]:
     ]
 
 
-def has_unresolved_severity(path: Path, severities: set[str]) -> bool:
+def _unresolved_severity_rows(path: Path, severities: set[str]):
     if not path.is_file():
-        return False
+        return
     targets = {str(value).upper() for value in severities}
     header: dict[str, int] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -71,16 +71,31 @@ def has_unresolved_severity(path: Path, severities: set[str]) -> bool:
             except IndexError:
                 continue
             if severity in targets and status not in RESOLVED_STATUSES:
-                return True
+                yield cells
             continue
         normalized = {cell.upper() for cell in cells}
         if normalized & targets and not (normalized & RESOLVED_STATUSES):
-            return True
-    return False
+            yield cells
 
 
-def has_unresolved_blocking(path: Path) -> bool:
-    return has_unresolved_severity(path, {"BLOCKING"})
+def has_unresolved_severity(path: Path, severities: set[str]) -> bool:
+    return next(_unresolved_severity_rows(path, severities), None) is not None
+
+
+def has_unresolved_blocking(path: Path, acknowledged: frozenset[str] = frozenset()) -> bool:
+    """An unresolved BLOCKING row remains.
+
+    ``acknowledged`` are issue ids a verified content-freeze approval took on
+    (``acknowledged_human_issues``); only rows a human or Step 14/15 resolves
+    (``OpenIssue.deferred_past_review``) can be acknowledged, so every other
+    BLOCKING row still blocks.
+    """
+
+    total = sum(1 for _ in _unresolved_severity_rows(path, {"BLOCKING"}))
+    if not total or not acknowledged:
+        return bool(total)
+    taken = {issue.issue_id for issue in deferred_blocking_issues(path)} & set(acknowledged)
+    return total > len(taken)
 
 
 def has_unresolved_critical(path: Path) -> bool:
@@ -169,6 +184,45 @@ def open_review_issues(path: Path, severities: set[str]) -> list[OpenIssue]:
                  if "blocking until" in header and header["blocking until"] < len(cells) else "")
         issues.append(OpenIssue(issue_id, category, severity, notes, until))
     return issues
+
+
+def deferred_blocking_issues(path: Path) -> list[OpenIssue]:
+    """Open BLOCKING rows only a human or Step 14/15 resolves (F16/F17).
+
+    These are the rows a content-freeze approval must acknowledge in a
+    catalog v2 run; the final audit then does not count them.
+    """
+
+    return [
+        issue
+        for issue in open_review_issues(path, {"BLOCKING"})
+        if issue.deferred_past_review
+    ]
+
+
+def acknowledged_human_issues(project: Path) -> frozenset[str]:
+    """Issue ids the current, verified content-freeze approval acknowledged.
+
+    Read through the non-mutating approval reader; an unreadable, missing,
+    stale or rejected decision acknowledges nothing.
+    """
+
+    from ..storage import SQLiteStateStore
+
+    try:
+        store = SQLiteStateStore(project)
+        if not store.path.is_file():
+            return frozenset()
+        _required, approvals = store.read_finalization_approvals()
+    except (OSError, ValueError):
+        return frozenset()
+    decision = approvals.get("content_freeze") or {}
+    if decision.get("approved") is not True:
+        return frozenset()
+    raw = decision.get("acknowledged_human_issues")
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(str(value) for value in raw if isinstance(value, str) and value)
 
 
 def sync_incremental_findings(path: Path, findings: list[LedgerFinding]) -> None:

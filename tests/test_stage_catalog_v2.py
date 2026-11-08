@@ -7,6 +7,8 @@ test_stage_scheduler.py, which is unchanged).
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 import pytest
@@ -1085,6 +1087,52 @@ def test_v2_final_judge_block_falls_back_when_findings_do_not_match(tmp_path):
     assert "math-e1" not in step4
 
 
+def test_v2_final_judge_block_names_the_routed_visual_findings(tmp_path):
+    # Acceptance A F19: every role PASSed, but blocking visual-gate findings
+    # made the decision router reopen the text.
+    import json as _json
+
+    store = v2_store(tmp_path, last_completed_step=15)
+    _judge_reopen(store, tmp_path, verdict="REOPEN_REVISION_TEXT", target=11,
+                  aggregate_verdict="PASS")
+    outputs = tmp_path / "judge_outputs"
+    (outputs / "decision_route.json").write_text(_json.dumps(
+        {"new_decision": "REOPEN_REVISION_TEXT", "effective_decision": "REOPEN_REVISION_TEXT"}))
+    (outputs / "visual_gate.json").write_text(_json.dumps({"status": "FAIL", "findings": [
+        {"code": "UNREADABLY_SMALL_TEXT", "severity": "blocking", "page": 5,
+         "message": "text is rendered at 3pt", "evidence": {"font_size": 3, "text": "end"}},
+        {"code": "VERY_SMALL_TEXT", "severity": "warning", "page": 5,
+         "message": "text is rendered at 5pt", "evidence": {"font_size": 5, "text": "附录"}},
+        {"code": "BLANK_RENDERED_PAGE", "severity": "blocking", "page": 7,
+         "message": "rendered page is effectively blank", "evidence": {"nonwhite_fraction": 0.0001}},
+    ]}))
+
+    step12 = _render(tmp_path, "step12_revision.txt", "12")
+
+    assert "【最终评审返工" in step12 and "未能从" not in step12
+    assert ("- [visual UNREADABLY_SMALL_TEXT，blocking，PDF 第 5 页] text is rendered at 3pt"
+            "（text=end，font_size=3）") in step12
+    assert "- [visual BLANK_RENDERED_PAGE，blocking，PDF 第 7 页]" in step12
+    assert "VERY_SMALL_TEXT" not in step12
+    # The paper role's own major issues travel with the routed reopen.
+    assert "- [paper paper-issue-1，major] 表述有误" in step12
+    assert "math-e1" in step12  # the math role was not PASS in this fixture
+
+
+def test_v2_final_judge_block_ignores_a_route_for_another_decision(tmp_path):
+    import json as _json
+
+    store = v2_store(tmp_path, last_completed_step=15)
+    _judge_reopen(store, tmp_path, verdict="REOPEN_REVISION_TEXT", target=11,
+                  aggregate_verdict="PASS")
+    (tmp_path / "judge_outputs" / "decision_route.json").write_text(_json.dumps(
+        {"effective_decision": "PASS"}))
+
+    step12 = _render(tmp_path, "step12_revision.txt", "12")
+
+    assert "未能从" in step12 and "- [visual" not in step12
+
+
 def test_v2_review_budget_restarts_after_a_final_judge_reopen():
     from types import SimpleNamespace as E
 
@@ -1142,3 +1190,102 @@ def test_v2_review_exit_still_blocks_on_a_row_a_review_step_owns(tmp_path):
     assert failed.payload["deferred_review_issues"] == [
         "S11R-B1 (paper, BLOCKING; Blocking Until: Human (交付前))"]
     assert state.status is WorkflowStatus.FAILED
+
+
+# -- F17: a content-freeze approval takes on the human-owned ledger rows ------
+
+HUMAN_ROWS = (
+    ("S11R-B1", "paper", "BLOCKING", "OPEN", "Human (交付前)"),
+    ("S11R-B2", "paper", "BLOCKING", "OPEN", "Step 14"),
+    ("S11R-M3", "paper", "MAJOR", "OPEN", "Human"),
+)
+
+
+def _awaiting_content_freeze(tmp_path, rows=HUMAN_ROWS):
+    from factory_core.steps.specialized import ContentFreezeGuardStep
+
+    (tmp_path / f"{tmp_path.name}_paper.tex").write_text(
+        "\\begin{document}ready\\end{document}\n", encoding="utf-8"
+    )
+    write_ledger(tmp_path, rows)
+    registry, _ = v2_registry(content_guard=ContentFreezeGuardStep())
+    store = SQLiteStateStore(tmp_path)
+    policy = ContestPolicy.default(started_at=store.now_epoch())
+    store = v2_store(tmp_path, last_completed_step=15, contest_policy=policy.to_dict())
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+    awaiting = engine.run()
+    assert awaiting.pending_action["gate"] == "content_freeze"
+    return store, engine, awaiting
+
+
+APPROVE = {"selected_option_id": "approve_content_freeze", "approved": True}
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({}, "must acknowledge the open BLOCKING ledger rows that only a human or Step 14/15 "
+             "resolves: S11R-B1, S11R-B2"),
+        ({"acknowledged_human_issues": ["S11R-B1"]}, "resolves: S11R-B2"),
+        ({"acknowledged_human_issues": ["S11R-B1", "S11R-B2", "S11R-M3"]},
+         "not open BLOCKING rows owned by a human or Step 14/15: S11R-M3"),
+        ({"acknowledged_human_issues": "S11R-B1"}, "must be a list"),
+    ],
+)
+def test_v2_content_freeze_approval_must_take_on_the_human_rows(tmp_path, extra, message):
+    store, engine, awaiting = _awaiting_content_freeze(tmp_path)
+
+    with pytest.raises(InvalidTransition, match=re.escape(message)):
+        engine.resolve_action({**APPROVE, **extra}, expected_revision=awaiting.revision)
+    assert store.load().pending_action["gate"] == "content_freeze"
+
+
+def test_a_rejection_cannot_acknowledge_rows(tmp_path):
+    _store, engine, awaiting = _awaiting_content_freeze(tmp_path)
+
+    with pytest.raises(InvalidTransition, match="only a content-freeze approval"):
+        engine.resolve_action(
+            {"selected_option_id": "reject_content_freeze", "approved": False,
+             "acknowledged_human_issues": ["S11R-B1"]},
+            expected_revision=awaiting.revision,
+        )
+
+
+def test_acknowledged_human_rows_no_longer_block_the_final_audit(tmp_path):
+    from factory_core.audit.ledger import acknowledged_human_issues, has_unresolved_blocking
+
+    store, engine, awaiting = _awaiting_content_freeze(tmp_path)
+    ledger = tmp_path / "audit_issue_ledger.md"
+    assert has_unresolved_blocking(ledger)
+
+    engine.resolve_action(
+        {**APPROVE, "acknowledged_human_issues": [" S11R-B2", "S11R-B1"]},
+        expected_revision=awaiting.revision,
+    )
+
+    decision = store.decision("content_freeze")
+    assert decision["approved"] is True
+    assert decision["acknowledged_human_issues"] == ["S11R-B1", "S11R-B2"]
+    assert acknowledged_human_issues(tmp_path) == {"S11R-B1", "S11R-B2"}
+    assert not has_unresolved_blocking(ledger, acknowledged_human_issues(tmp_path))
+
+
+def test_an_acknowledgement_never_covers_a_row_a_model_step_owns(tmp_path):
+    from factory_core.audit.ledger import has_unresolved_blocking
+
+    ledger = tmp_path / "audit_issue_ledger.md"
+    write_ledger(tmp_path, HUMAN_ROWS + (("S11R-B4", "results", "BLOCKING", "OPEN", "Step 12"),))
+    assert has_unresolved_blocking(ledger, frozenset({"S11R-B1", "S11R-B2", "S11R-B4"}))
+    write_ledger(tmp_path, HUMAN_ROWS)
+    assert not has_unresolved_blocking(ledger, frozenset({"S11R-B1", "S11R-B2"}))
+    assert has_unresolved_blocking(ledger, frozenset({"S11R-B1"}))
+
+
+def test_a_v2_approval_without_human_rows_needs_no_acknowledgement(tmp_path):
+    store, engine, awaiting = _awaiting_content_freeze(
+        tmp_path, rows=(("S11R-M3", "paper", "MAJOR", "OPEN", "Human"),)
+    )
+
+    engine.resolve_action(dict(APPROVE), expected_revision=awaiting.revision)
+
+    assert store.decision("content_freeze")["approved"] is True

@@ -247,7 +247,11 @@ and so does a determinate audit finding (`AUDIT_REPAIR_REQUIRED`).
 The v2 Stage 8 exit (Step 12; v2 has no Judge before it) routes the
 ledger's open BLOCKING/MAJOR rows outside `## Incremental audit findings`
 (except rows whose `Blocking Until` starts with `Human` or names only Step 14/15,
-which stay OPEN for Gate 2 and are listed as `deferred_review_issues`)
+which stay OPEN for Gate 2 and are listed as `deferred_review_issues`; a v2
+content-freeze approval must name every such open BLOCKING row in
+`acknowledged_human_issues` (`engine._content_freeze_acknowledgements` refuses it
+otherwise), and the final audit and Step 16 validator then stop counting exactly
+those rows, read from the verified decision via `ledger.acknowledged_human_issues`)
 (`audit.ledger.open_review_issues`; the machine `AUDIT-*` rows never block it,
 since no Stage 8 subtask reruns a profile) by Category: `results`/`model` rows
 recompute Steps 5-8 and return to the revision (`STAGE_SEMANTIC_REOPENED`,
@@ -264,7 +268,10 @@ Steps it recomputes; the v2 overlay tells Step 12 to categorize them. v1 keeps
 its Step-13 exit unchanged. Likewise, after the v2 final Judge reopens with `REOPEN_REVISION_MODEL`/`_TEXT`,
 `catalog_prompts.judge_rework_block` prepends that Judge's fatal/blocking/major
 findings (from `judge_outputs/aggregate.json`, verdict-checked) to every re-run
-Step after the reopen target until the final Judge starts again.
+Step after the reopen target until the final Judge starts again. When the
+decision router overrode a PASS aggregate (`decision_route.json`), the block
+lists the paper role's blocking/major issues and the blocking findings of
+`judge_outputs/visual_gate.json` instead.
 
 A semantic reopen (a Stage changing content an earlier Stage owns) is
 budgeted per classifier identity: an initiating Stage may rewind at most
@@ -362,7 +369,15 @@ Delivery override authority lives only in `web/auth.db`. The scopes are
 `continue_after_gate2` and `deliver_snapshot`; the latter must bind the exact
 64-character final snapshot and is consumed when the final acceptance is
 recorded. A project-local `gate2_delivery_override.json` never authorizes
-anything. This is an operational boundary for the single-operator deployment,
+anything. In catalog v2 the operator issues `deliver_snapshot` for the
+`snapshot_id` of a completed non-PASS final judgment (`.factory/audits/analysis_latest.json`,
+`AUDIT_REPAIR_REQUIRED`/`PERMANENT_FINAL_JUDGE`), then `retry-step --step 13`:
+Step 13 (`FinalAuditService.overridable_judgment`) re-prepares the packets
+without compiling and, when the override names that judged snapshot, hands the
+run to Step 16 without rerunning the Judge; Step 16 promotes the judgment like a
+PASS (all non-Judge checks rerun on the judged PDF, snapshot recheck) and
+records `OVERRIDDEN`, consuming the override. A recompile would change the PDF
+bytes and therefore the snapshot, so neither path compiles. The override store is an operational boundary for the single-operator deployment,
 not cryptographic isolation from another process running as the same Unix UID.
 The same control database owns identity and `project_acl`, but none of those
 records replaces project-local workflow decisions in `.factory/state.db` or

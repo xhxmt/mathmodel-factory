@@ -119,20 +119,74 @@ JUDGE_REWORK_VERDICTS = frozenset({"REOPEN_REVISION_MODEL", "REOPEN_REVISION_TEX
 JUDGE_FINDING_CHARS = 1500
 
 
-def _judge_findings(project: Path, verdict: str) -> list[str] | None:
-    """The blocking findings of the Judge run that reopened, or None if unreadable."""
+JUDGE_VISUAL_FINDINGS_MAX = 20
 
+
+def _json_file(path: Path) -> dict | None:
     import json
 
     try:
-        aggregate = json.loads((project / "judge_outputs" / "aggregate.json").read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(aggregate, dict) or aggregate.get("verdict") != verdict:
+    return value if isinstance(value, dict) else None
+
+
+def _visual_findings(project: Path) -> list[str]:
+    """Blocking PDF visual-gate findings, one line per finding (page, code)."""
+
+    report = _json_file(project / "judge_outputs" / "visual_gate.json")
+    if report is None or report.get("status") != "FAIL":
+        return []
+    lines: list[str] = []
+    blocking = [item for item in report.get("findings") or []
+                if isinstance(item, dict) and item.get("severity") == "blocking"]
+    for item in blocking[:JUDGE_VISUAL_FINDINGS_MAX]:
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+        detail = "，".join(
+            f"{key}={evidence[key]}"
+            for key in ("text", "font_size", "content_bbox", "media_box", "nonwhite_fraction",
+                        "dark_edge_pixels")
+            if key in evidence
+        )
+        page = item.get("page")
+        lines.append(
+            f"- [visual {item.get('code')}，blocking"
+            + (f"，PDF 第 {page} 页" if page is not None else "")
+            + f"] {item.get('message', '')}"
+            + (f"（{detail}）" if detail else "")
+        )
+    if len(blocking) > JUDGE_VISUAL_FINDINGS_MAX:
+        lines.append(f"- ……另有 {len(blocking) - JUDGE_VISUAL_FINDINGS_MAX} 条，"
+                     "全文见 `judge_outputs/visual_gate.json`")
+    return lines
+
+
+def _judge_findings(project: Path, verdict: str) -> list[str] | None:
+    """The findings behind the final-Judge decision that reopened, or None if unreadable.
+
+    The decision is the aggregate verdict, or the decision router's when it
+    overrode a PASS aggregate (e.g. blocking visual-gate findings, acceptance A
+    F19): then the router's visual findings and the roles' remaining
+    blocking/major issues are what the repair cycle must fix.
+    """
+
+    import json
+
+    aggregate = _json_file(project / "judge_outputs" / "aggregate.json")
+    if aggregate is None:
         return None
+    routed = False
+    if aggregate.get("verdict") != verdict:
+        route = _json_file(project / "judge_outputs" / "decision_route.json")
+        if route is None or route.get("effective_decision") != verdict:
+            return None
+        routed = True
     lines: list[str] = []
     for role in aggregate.get("roles") or []:
-        if not isinstance(role, dict) or role.get("status") in {None, "PASS"}:
+        if not isinstance(role, dict) or role.get("status") is None:
+            continue
+        if role.get("status") == "PASS" and not (routed and role.get("role") == "paper"):
             continue
         try:
             body = json.loads(str(role.get("text") or "").split("\n", 1)[1])
@@ -155,6 +209,8 @@ def _judge_findings(project: Path, verdict: str) -> list[str] | None:
                 f"- [{name} {item.get('ref_id', '')}，{item.get('severity')}] {text}"
                 + (f"（论文引文：{quote}）" if quote else "")
             )
+    if routed:
+        lines.extend(_visual_findings(project))
     return lines
 
 
@@ -202,7 +258,7 @@ def judge_rework_block(project: Path, template: str) -> str:
     verdict = str(reopen.payload["final_decision"])
     findings = _judge_findings(project, verdict)
     if findings is None:
-        findings = ["- 未能从 `judge_outputs/aggregate.json` 读出与本次退回一致的评审发现；"
+        findings = ["- 未能从 `judge_outputs/aggregate.json` 或 `decision_route.json` 读出与本次退回一致的评审发现；"
                     "请直接阅读 `judge_evaluation.md` 中各角色的 FAIL/REVISE 依据。"]
     elif not findings:
         findings = ["- 评审未列出 fatal/blocking/major 级发现；请阅读 `judge_evaluation.md` 中各角色的结论。"]
@@ -214,7 +270,8 @@ def judge_rework_block(project: Path, template: str) -> str:
         "逐条判断根因是否在本步骤的产物中：在的，必须在本步骤从根源修复（模型推导、代码、结果、图、论文正文），"
         "改代码后重新运行并重新生成下游产物（求解作业照常经 `solver_submit.sh` 提交），"
         "并在本步骤的日志或报告中逐条写明改了什么、证据在哪；不在的，写明它属于哪一步、为什么本步骤不改。"
-        "完整依据见 `judge_evaluation.md`。研究员备注若与这些发现无关，以本段为准。\n"
+        "完整依据见 `judge_evaluation.md`；标为 visual 的是 PDF 版面与图的机器检查，原始记录在 `judge_outputs/visual_gate.json`。"
+        "研究员备注若与这些发现无关，以本段为准。\n"
         + "\n".join(findings)
         + "\n\n"
     )

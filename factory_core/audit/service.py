@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Protocol
@@ -22,7 +23,7 @@ from ..steps.catalog import contract_for
 from ..steps.prompting import PromptRenderer
 from ..steps.validators import NativeArtifactValidator, validator_for
 from .domain import AuditOutcome, AuditProfile, AuditRecord, AuditSnapshot, AuditStatus
-from .ledger import has_unresolved_blocking
+from .ledger import acknowledged_human_issues, has_unresolved_blocking
 from .acceptance import (
     RECEIPT_PATH as FINAL_ACCEPTANCE_RECEIPT_PATH,
     build_final_acceptance_receipt,
@@ -46,6 +47,24 @@ _ROUTED_INFRASTRUCTURE_DECISIONS = {
     "INFRA_RETRY": "TRANSIENT_JUDGE_INFRASTRUCTURE",
     "PACKET_REBUILD": "TRANSIENT_JUDGE_PACKET",
 }
+
+
+# A final judgment the operator may deliver under a deliver_snapshot override:
+# the Judge completed and returned a content verdict (not an infrastructure
+# state), so there is a judgment to accept.  Anything else has no judgment.
+_OVERRIDABLE_ERROR_CLASSES = frozenset({"AUDIT_REPAIR_REQUIRED", "PERMANENT_FINAL_JUDGE"})
+
+
+@dataclass(frozen=True)
+class OverridableJudgment:
+    """A completed non-PASS final judgment plus the override bound to it."""
+
+    snapshot_id: str
+    decision: str
+    error_class: str
+    created_at: str
+    override_id: str
+    source_verdict: str
 
 
 class FinalAuditService:
@@ -218,12 +237,27 @@ class FinalAuditService:
         if self._has_stub(project) or (
             self._unresolved_blocking(project) and not self.technical_flow_validation
         ):
+            from .ledger import deferred_blocking_issues
+
+            acknowledged = acknowledged_human_issues(project)
             return self._failure(
                 project,
                 decision="CONTENT_NOT_READY",
                 status=AuditStatus.FAIL,
                 error_class="PERMANENT_DELIVERY_ACCEPTANCE",
                 returncode=2,
+                evidence={
+                    "model_stub": self._has_stub(project),
+                    # Rows a content-freeze approval could have taken on
+                    # (acknowledged_human_issues) but did not.
+                    "unacknowledged_human_rows": sorted(
+                        issue.issue_id
+                        for issue in deferred_blocking_issues(
+                            project / "audit_issue_ledger.md"
+                        )
+                        if issue.issue_id not in acknowledged
+                    ),
+                },
             )
 
         pdf = project / f"{base}_paper.pdf"
@@ -303,13 +337,25 @@ class FinalAuditService:
                 # Probed before compilation, so the analysis PDF bytes are the
                 # ones the snapshot (and the judgment receipt) name.
                 judged = self._load_reusable(project, candidate, analysis_only=True)
-                if (
+                promotable = (
                     judged is not None
                     and judged.status is AuditStatus.PASS
                     and judged.decision == "PASS"
                     and judged.judge_completed
                     and not judged.override
-                ):
+                )
+                # A completed non-PASS judgment of exactly this snapshot with
+                # an active deliver_snapshot override bound to it is promoted
+                # the same way: the Judge is not rerun and the PDF is not
+                # recompiled (a fresh compile would change the PDF bytes and
+                # so the snapshot the override names).  The override itself is
+                # applied and consumed by _finish_judge_result.
+                overridable = (
+                    None
+                    if promotable
+                    else self.judged_for_override(project, candidate)
+                )
+                if promotable or overridable is not None:
                     # Only the Judge is reused.  Every other acceptance check
                     # runs again on the judged PDF; their reports feed the
                     # packets and the snapshot, so the judgment is promoted
@@ -323,16 +369,28 @@ class FinalAuditService:
                         return packet_failure
                     rechecked = self._snapshot(project)
                     if rechecked.snapshot_id == candidate.snapshot_id:
-                        return self._finish_judge_result(
-                            project,
-                            context,
+                        promoted = (
                             ExecutionResult.succeeded(
                                 judge_completed=True,
                                 judge_verdict="PASS",
                                 promoted_analysis_snapshot=candidate.snapshot_id,
                                 promoted_analysis_created_at=judged.created_at,
                                 promoted_after_rechecks=True,
-                            ),
+                            )
+                            if promotable
+                            else ExecutionResult.succeeded(
+                                judge_completed=True,
+                                judge_verdict=overridable.decision,
+                                promoted_analysis_snapshot=candidate.snapshot_id,
+                                promoted_analysis_created_at=overridable.created_at,
+                                promoted_after_rechecks=True,
+                                promoted_for_delivery_override=overridable.override_id,
+                            )
+                        )
+                        return self._finish_judge_result(
+                            project,
+                            context,
+                            promoted,
                             snapshot=rechecked,
                             analysis_only=False,
                             workflow_id=workflow_id,
@@ -1562,7 +1620,10 @@ class FinalAuditService:
 
     @staticmethod
     def _unresolved_blocking(project: Path) -> bool:
-        return has_unresolved_blocking(project / "audit_issue_ledger.md")
+        ledger = project / "audit_issue_ledger.md"
+        return has_unresolved_blocking(ledger) and has_unresolved_blocking(
+            ledger, acknowledged_human_issues(project)
+        )
 
     def _delivery_override(
         self, project: Path, snapshot_id: str
@@ -1572,6 +1633,93 @@ class FinalAuditService:
             DELIVER_SNAPSHOT,
             snapshot_id=snapshot_id,
         )
+
+    def judged_for_override(
+        self, project: Path, snapshot: AuditSnapshot
+    ) -> OverridableJudgment | None:
+        """The completed non-PASS judgment of exactly ``snapshot`` that an
+        active ``deliver_snapshot`` override names, else ``None``.
+
+        Read-only: the override is applied and consumed only at acceptance
+        (``_finish_judge_result`` with ``analysis_only=False``).
+        """
+        path = project / ".factory" / "audits" / snapshot.snapshot_id / "analysis_latest.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            status = AuditStatus(str(value["status"]))
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            return None
+        decision = str(value.get("decision") or "")
+        if (
+            value.get("snapshot_id") != snapshot.snapshot_id
+            or value.get("profile") != self.profile
+            or value.get("judge_completed") is not True
+            or status not in {AuditStatus.FAIL, AuditStatus.INDETERMINATE}
+            or value.get("error_class") not in _OVERRIDABLE_ERROR_CLASSES
+            or not decision
+            or decision == "PASS"
+            or decision in _ROUTED_INFRASTRUCTURE_DECISIONS
+        ):
+            return None
+        override = self._delivery_override(project, snapshot.snapshot_id)
+        if override is None:
+            return None
+        return OverridableJudgment(
+            snapshot_id=snapshot.snapshot_id,
+            decision=decision,
+            error_class=str(value.get("error_class")),
+            created_at=str(value.get("created_at") or ""),
+            override_id=override.override_id,
+            source_verdict=override.source_verdict,
+        )
+
+    def overridable_judgment(self, context: StepContext) -> OverridableJudgment | None:
+        """Probe for an overridable judgment of the current files (v2 Step 13).
+
+        Prepares the packets the snapshot fingerprints, without compiling, so
+        the snapshot is the one the earlier judgment and the override name.
+        Never applies or consumes the override and writes no audit record.
+        """
+        project = context.project_dir.resolve()
+        pdf = project / f"{project.name}_paper.pdf"
+        if not pdf.is_file() or pdf.stat().st_size == 0:
+            return None
+        # Cheap gate before rebuilding packets: the latest analysis must be a
+        # completed non-PASS judgment that an active override already names.
+        try:
+            latest = json.loads(
+                self._analysis_latest_path(project).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return None
+        latest_id = latest.get("snapshot_id") if isinstance(latest, dict) else None
+        if (
+            not isinstance(latest_id, str)
+            or latest.get("judge_completed") is not True
+            or latest.get("error_class") not in _OVERRIDABLE_ERROR_CLASSES
+            or self._delivery_override(project, latest_id) is None
+        ):
+            return None
+        if self._has_stub(project) or self._unresolved_blocking(project):
+            return None
+        lock_path = project / ".factory" / "audits" / ".lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="ascii") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return None
+            try:
+                prepare_packets = getattr(self.judge, "prepare_packets", None)
+                if callable(prepare_packets) and prepare_packets(context).returncode != 0:
+                    return None
+                try:
+                    snapshot = self._snapshot(project)
+                except (OSError, ValueError):
+                    return None
+                return self.judged_for_override(project, snapshot)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def _delivery_override_active(
         self, project: Path, snapshot_id: str | None = None

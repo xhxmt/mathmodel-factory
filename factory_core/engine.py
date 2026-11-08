@@ -2891,11 +2891,73 @@ class FactoryEngine:
         if state.pending_action is None:
             raise InvalidTransition("project has no pending action")
         resolution = validate_resolution(state.pending_action, resolution)
+        resolution = self._content_freeze_acknowledgements(state, resolution)
         return self._transitions.resolve_human_decision(
             expected_revision=expected_revision,
             resolution=resolution,
             decision_record=decision_record,
         )
+
+    def _content_freeze_acknowledgements(
+        self, state: WorkflowState, resolution: dict
+    ) -> dict:
+        """Bind the open human-owned ledger rows to a content-freeze approval.
+
+        A BLOCKING row whose resolver is a human or Step 14/15
+        (``ledger.deferred_blocking_issues``) passes the v2 Stage 8 exit for
+        Gate 2 (F16); the final audit refuses any open BLOCKING row (F17).
+        The approval therefore names the rows it takes on in
+        ``acknowledged_human_issues``; the immutable decision carries them and
+        the final audit stops counting exactly those rows.  In catalog v2 an
+        approval that leaves such a row unacknowledged is refused here, while
+        the decision can still be changed, instead of failing Step 13 later.
+        """
+
+        if resolution.get("gate") != "content_freeze":
+            return resolution
+        from .audit.ledger import deferred_blocking_issues
+
+        raw = resolution.get("acknowledged_human_issues")
+        if raw is not None and (
+            not isinstance(raw, list)
+            or not all(isinstance(value, str) and value.strip() for value in raw)
+        ):
+            raise InvalidTransition(
+                "acknowledged_human_issues must be a list of ledger issue ids"
+            )
+        acknowledged = sorted({value.strip() for value in raw or []})
+        if acknowledged and resolution.get("approved") is not True:
+            raise InvalidTransition(
+                "only a content-freeze approval can acknowledge ledger rows"
+            )
+        deferred = sorted(
+            issue.issue_id
+            for issue in deferred_blocking_issues(
+                self.project_dir / "audit_issue_ledger.md"
+            )
+        )
+        unknown = sorted(set(acknowledged) - set(deferred))
+        if unknown:
+            raise InvalidTransition(
+                "acknowledged_human_issues names rows that are not open BLOCKING rows "
+                f"owned by a human or Step 14/15: {', '.join(unknown)} "
+                f"(acknowledgeable: {', '.join(deferred) or 'none'})"
+            )
+        missing = sorted(set(deferred) - set(acknowledged))
+        if (
+            missing
+            and resolution.get("approved") is True
+            and state.stage_catalog_version == STAGE_CATALOG_VERSION_V2
+        ):
+            raise InvalidTransition(
+                "content-freeze approval must acknowledge the open BLOCKING ledger rows "
+                f"that only a human or Step 14/15 resolves: {', '.join(missing)}; "
+                "list them in acknowledged_human_issues, or close them in "
+                "audit_issue_ledger.md before approving"
+            )
+        if raw is None:
+            return resolution
+        return {**resolution, "acknowledged_human_issues": acknowledged}
 
     def _control_transition(
         self,

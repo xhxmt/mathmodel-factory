@@ -1299,3 +1299,156 @@ def test_a_routed_infrastructure_decision_is_retryable_not_a_final_verdict(
     assert outcome.record.delivery_allowed is False
     assert outcome.execution.error_class == error_class
     assert error_class in NON_CONTENT_ERROR_CLASSES  # the engine retries, no content attempt
+
+
+# -- F18: a deliver_snapshot override is reachable under Stage catalog v2 -----
+
+class _ReopeningRunner(RecordingRunner):
+    """The decision router turns the Judge's PASS into a text reopen (e.g. a
+    blocking visual-gate finding), as in acceptance A rev 806."""
+
+    def python(self, root, project, script, args, *, label, **kwargs):
+        result = super().python(root, project, script, args, label=label, **kwargs)
+        if script.endswith("judge_decision_router.py"):
+            (Path(project) / "judge_outputs/decision_route.json").write_text(
+                '{"new_decision":"REOPEN_REVISION_TEXT",'
+                '"effective_decision":"REOPEN_REVISION_TEXT"}\n',
+                encoding="utf-8",
+            )
+        return result
+
+
+def _judged_reopen(tmp_path: Path, *, override: bool):
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    project.mkdir(parents=True)
+    snapshot_id = "f" * 64
+    store = AuthStore(root / "web/auth.db")
+    store.initialize()
+    store.bootstrap_admin("correct horse battery staple test only")
+    provider = SQLiteOverrideProvider(root / "web/auth.db")
+    runner = _ReopeningRunner()
+    judge = PassingJudge()
+    service = FinalAuditService(
+        root, judge, FakeValidator(), runner,
+        fingerprinter=lambda _project, _base: snapshot_id,
+        override_provider=provider,
+    )
+    analysis = service.run(make_context(project), analysis_only=True)
+    assert analysis.record.status is AuditStatus.FAIL
+    assert analysis.record.decision == "REOPEN_REVISION_TEXT"
+    assert analysis.record.judge_completed is True
+    authorization = None
+    if override:
+        authorization = store.issue_delivery_override(
+            base_name="demo",
+            scope="deliver_snapshot",
+            bound_snapshot_id=snapshot_id,
+            source_verdict="REOPEN_REVISION_TEXT",
+            reason="flow-feasibility acceptance",
+            actor="admin",
+        )
+    return project, service, judge, runner, provider, authorization, snapshot_id
+
+
+def test_the_v2_probe_finds_an_overridden_judgment_without_consuming_it(tmp_path):
+    project, service, judge, runner, provider, authorization, snapshot_id = _judged_reopen(
+        tmp_path, override=True
+    )
+    runner.labels.clear()
+
+    pending = service.overridable_judgment(make_context(project))
+
+    assert pending is not None
+    assert pending.snapshot_id == snapshot_id
+    assert pending.decision == "REOPEN_REVISION_TEXT"
+    assert pending.override_id == authorization.override_id
+    assert "compile_paper" not in runner.labels  # the judged PDF bytes stay
+    assert judge.judge_calls == 1
+    assert provider.get_override(authorization.override_id).consumed_at is None
+    assert not (project / "judge_outputs/final_submission.sha256").exists()
+
+
+def test_the_v2_probe_needs_an_override_bound_to_the_judged_snapshot(tmp_path):
+    project, service, *_rest = _judged_reopen(tmp_path, override=False)
+
+    assert service.overridable_judgment(make_context(project)) is None
+
+
+def test_an_incomplete_judgment_is_not_overridable(tmp_path):
+    project, service, *_rest = _judged_reopen(tmp_path, override=True)
+    latest = project / ".factory/audits" / ("f" * 64) / "analysis_latest.json"
+    value = json.loads(latest.read_text(encoding="utf-8"))
+    value["judge_completed"] = False
+    latest.write_text(json.dumps(value), encoding="utf-8")
+
+    assert service.overridable_judgment(make_context(project)) is None
+
+
+def test_acceptance_delivers_an_overridden_judgment_without_rerunning_the_judge(tmp_path):
+    project, service, judge, runner, provider, authorization, snapshot_id = _judged_reopen(
+        tmp_path, override=True
+    )
+    runner.labels.clear()
+
+    accepted = service.run(
+        make_context(project), analysis_only=False, promote_analysis_pass=True
+    )
+
+    assert judge.judge_calls == 1
+    assert "compile_paper" not in runner.labels
+    assert accepted.record.status is AuditStatus.OVERRIDDEN
+    assert accepted.record.decision == "REOPEN_REVISION_TEXT"
+    assert accepted.record.delivery_allowed is True
+    assert accepted.record.override is True
+    assert accepted.record.evidence["judge"]["promoted_for_delivery_override"] == (
+        authorization.override_id
+    )
+    assert provider.get_override(authorization.override_id).consumed_at is not None
+    route = json.loads((project / "judge_outputs/decision_route.json").read_text())
+    assert route["effective_decision"] == "CONTINUE_TO_STEP16"
+    assert route["quality_pass_fabricated"] is False
+    assert (project / "judge_outputs/final_submission.sha256").read_text().strip() == snapshot_id
+
+
+def test_acceptance_without_an_override_still_reruns_the_judge(tmp_path):
+    project, service, judge, *_rest = _judged_reopen(tmp_path, override=False)
+
+    refused = service.run(
+        make_context(project), analysis_only=False, promote_analysis_pass=True
+    )
+
+    assert judge.judge_calls == 2
+    assert refused.record.delivery_allowed is False
+
+
+def test_v2_step_13_hands_an_overridden_judgment_to_step_16(tmp_path):
+    from factory_core.steps.specialized import FinalJudgeStep
+
+    project, service, judge, *_rest = _judged_reopen(tmp_path, override=True)
+    step = FinalJudgeStep(SimpleNamespace(final_audit_service=lambda: service))
+    context = StepContext(project, project.name, 13, 1, 3_600, 0)
+    make_context(project)
+
+    executed = step.execute(context)
+    validated = step.validate(context)
+
+    assert executed.returncode == 0
+    assert executed.metadata["final_decision"] == "REOPEN_REVISION_TEXT"
+    assert executed.metadata["delivery_allowed"] is False
+    assert validated.is_valid
+    assert validated.metadata["delivery_override_pending"] == executed.metadata[
+        "delivery_override_pending"
+    ]
+    assert judge.judge_calls == 1
+
+
+def test_v2_step_13_without_an_override_still_fails_the_judgment(tmp_path):
+    from factory_core.steps.specialized import FinalJudgeStep
+
+    project, service, *_rest = _judged_reopen(tmp_path, override=False)
+    step = FinalJudgeStep(SimpleNamespace(final_audit_service=lambda: service))
+    context = StepContext(project, project.name, 13, 1, 3_600, 0)
+    make_context(project)
+
+    assert not step.validate(context).is_valid
