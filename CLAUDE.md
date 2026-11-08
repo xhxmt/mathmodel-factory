@@ -185,7 +185,11 @@ snapshots, unfinished human decisions, and any current manifest drift from
 `stage_cursor_input`. Dirty state is keyed by `(flag, owner_stage)` so one
 domain cannot overwrite another Stage's active cause. Final/submission
 collection fails closed when a tracked authored file has neither registry
-ownership nor an explicit active-LaTeX or declared-deliverable route.
+ownership nor an explicit active-LaTeX or declared-deliverable route. Step 2
+stream auxiliary files at the root (`m<N>_*`) are described by the last-resort
+`artifact_policy.FALLBACK_POLICY` (exploratory, non-blocking, no Stage owner),
+and the Step 2 validator fails on any tracked file without an owner or policy so
+the gap surfaces before Gate 2.
 
 Native failure events preserve execution and validation metadata such as the
 failed check, role, backend, report, and missing artifact paths. A model process

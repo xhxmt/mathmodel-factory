@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-08 — Step 2 流的辅助输出登记为探索性产物；Step 2 当场检查归属覆盖（验收 A 发现 F10）
+
+验收 A 通过 Gate 2 后，v2 最终评审连续两次 `TRANSIENT_JUDGE_PACKET`（rev 465/467）：`authored artifact ownership coverage failed: m2_field_0_3h.csv`。
+
+- **根因**：Step 2 的 m2 演示求解把 `m2_field_0_3h.csv` 声明为 `solver_submit.sh --output`，写在项目根目录；`m2_spec.md` 引用它作对照，并写明不是 p4 的输入。归属表只登记了 `m*_spec.md`、`m*_critique.md`、`m*_demo_result.*`，策略层也没有描述它。最终快照的归属覆盖按设计失败即关闭，但这是第一个检查它的地方，已经在 Gate 2 之后。
+- **修复一**：`artifact_policy.FALLBACK_POLICY` 新增 `m[0-9]*_*`：EXPLORATORY、`EXPLICIT_ONLY`、不进最终审核也不进提交包（按策略不阻断），没有 Stage 归属。它排在所有归属规则之后，不遮蔽任何已登记路径（`m*_spec.md`、`m1_solver_evidence.json` 等照旧），影子白名单不变。下游 Step 若要用这些数字，必须写自己有归属的结果。
+- **修复二**：Step 2 校验在两个已验证流之外，再检查所有被跟踪的作者产物都有归属或策略；有缺口时当场失败并列出路径，不再拖到 Gate 2 之后。
+- 两处都改变 v10 分类器身份（`artifact_policy.py` 属于 `current_dirty.classifier_contract_sha256`）。验收 A 换到此提交时没有未结的 dirty 义务；Gate 2 的主体与选项指纹在新旧代码下相同。
+- 测试：`tests/test_stream_aux_ownership.py` 新增 11 例。
+
 ## 2026-11-07 — 审稿重算把问题写进提示词；retry-step 后重算预算重新计数（验收 A 发现 F9）
 
 验收 A 的第一次审稿重算（rev 310）中，Step 5 重跑只用了 112 秒，只核验了旧的 claim 绑定，`05_results.py` 没改，S11-B1/B4 原样留着。

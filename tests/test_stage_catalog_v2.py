@@ -381,10 +381,10 @@ def test_v2_evaluation_changing_main_results_recomputes_sensitivity_in_its_own_s
 
 
 def test_v2_unregistered_file_keeps_the_fail_closed_rewind(tmp_path):
-    # No ownership rule covers it, so its role is unknown: the rule does not
-    # guess "document" for it.
-    (tmp_path / "m2_peak_groups.csv").write_text("a\n", encoding="utf-8")
-    revision = Lifecycle(writes={"m2_peak_groups.csv": "b\n"})
+    # No ownership rule or policy covers it, so its role is unknown: the rule
+    # does not guess "document" for it.
+    (tmp_path / "peak_groups.csv").write_text("a\n", encoding="utf-8")
+    revision = Lifecycle(writes={"peak_groups.csv": "b\n"})
     registry, _ = v2_registry(overrides={12: revision})
     store = v2_store(tmp_path, last_completed_step=11)
 
@@ -393,6 +393,20 @@ def test_v2_unregistered_file_keeps_the_fail_closed_rewind(tmp_path):
     [reopen] = reopens(store)
     assert "rework_rule" not in reopen.payload
     assert reopen.payload["semantic_owner_stage"] == 4  # fail-closed RESULT@4
+
+
+def test_v2_stream_aux_file_is_exploratory_and_rewinds_nothing(tmp_path):
+    # A root m<N>_* file is a Step 2 stream's auxiliary output: the fallback
+    # policy declares it exploratory and non-blocking (F10), so a later write
+    # is neither a rewind nor a final input.
+    (tmp_path / "m2_peak_groups.csv").write_text("a\n", encoding="utf-8")
+    revision = Lifecycle(writes={"m2_peak_groups.csv": "b\n"})
+    registry, _ = v2_registry(overrides={12: revision})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    assert reopens(store) == []
 
 
 def test_v1_project_keeps_the_ownership_rewind_for_the_same_code_edit(tmp_path):
