@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-08 — 最终评审修复轮重新开始审稿返工预算（验收 A 发现 F15）
+
+验收 A 的修复轮在 Step 12 第 1 次尝试就以 `PERMANENT_REVIEW_LOOP_EXHAUSTED` 失败（rev 748），一次返工也没做。修复轮重跑 Step 11 后提出了新的 S11R-* 问题，但 Stage 8 出口的审稿重算和审稿循环次数，仍从第一轮最后一次 `retry-step`（rev 339）起计，第一轮的那次重算（rev 344）已经把预算用完。
+
+- **修复**：`engine._review_budget_baseline` 在 Step 12 的 `retry-step` 之外，也把最终评审的 `REOPEN_REVISION_*` 退回（`STEP_REOPENED`，`subtask=final_judge`）当作预算重新计数的起点。其他退回（审稿循环、非 REOPEN 的结论）不重新计数。语义回退预算照旧。
+- 不属于 dirty 分类器身份。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 1 例。
+
 ## 2026-11-08 — 最终评审退回时把评审发现写进返工步骤的提示词（验收 A 发现 F13）
 
 验收 A 的 v2 最终评审给出 `REOPEN_REVISION_MODEL`（rev 500，数学角色 1 个致命缺陷：问题四移动坐标方程的平流项违反干基守恒），引擎退回 Step 4。Step 4 只用约 1 分钟，把现有产物核对一遍就成功了：它的提示词只读 `audit_issue_ledger.md`，而评审发现不在台账里，也没有任何提示词读 `judge_evaluation.md`。机器审计全是 PASS，模型认为没有需要修的。

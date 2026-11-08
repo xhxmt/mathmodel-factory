@@ -254,7 +254,8 @@ recompute Steps 5-8 and return to the revision (`STAGE_SEMANTIC_REOPENED`,
 11-12 (`STEP_REOPENED`, `rework_rule=review_loop`, at most
 `V2_REVIEW_LOOP_LIMIT` = 1); after that the run fails with
 `PERMANENT_REVIEW_LOOP_EXHAUSTED` naming the rows. Both limits count from the
-latest `retry-step` of the revision. While such a recompute has not yet
+latest `retry-step` of the revision or the latest final-Judge `REOPEN_REVISION_*`
+reopen, whichever is later. While such a recompute has not yet
 returned to the revision, `catalog_prompts.review_rework_block` prepends the
 issues (ID, Category, Severity, current ledger Notes) to the prompts of the
 Steps it recomputes; the v2 overlay tells Step 12 to categorize them. v1 keeps

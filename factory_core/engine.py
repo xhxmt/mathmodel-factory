@@ -1549,19 +1549,30 @@ class FactoryEngine:
 
     @staticmethod
     def _review_budget_baseline(events: list[Any]) -> int:
-        """The latest operator ``retry-step`` of the v2 revision, or 0.
+        """The latest restart of the v2 review budgets, or 0.
 
-        The review recompute and review loop are counted after it: like the
-        attempt count, an explicit retry of the exit Step starts them afresh.
+        The review recompute and review loop are counted after it. Two events
+        restart them: an operator ``retry-step`` of the revision (like the
+        attempt count, an explicit retry of the exit Step starts them afresh),
+        and a final-Judge ``REOPEN_REVISION_*`` reopen, whose repair cycle runs
+        a new Step 11 review that must not inherit the first pass's spent
+        budget (acceptance A, F15).
         """
 
         return max(
             (
                 event.revision
                 for event in events
-                if event.type == STEP_RETRY_AUTHORIZED
-                and event.payload.get("stage") == 8
-                and event.payload.get("subtask") == "revision"
+                if (
+                    event.type == STEP_RETRY_AUTHORIZED
+                    and event.payload.get("stage") == 8
+                    and event.payload.get("subtask") == "revision"
+                )
+                or (
+                    event.type == "STEP_REOPENED"
+                    and event.payload.get("subtask") == "final_judge"
+                    and str(event.payload.get("final_decision", "")).startswith("REOPEN_REVISION")
+                )
             ),
             default=0,
         )

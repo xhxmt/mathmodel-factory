@@ -1083,3 +1083,22 @@ def test_v2_final_judge_block_falls_back_when_findings_do_not_match(tmp_path):
     step4 = _render(tmp_path, "step4_model_construction.txt", "4")
     assert "【最终评审返工" in step4 and "judge_evaluation.md" in step4
     assert "math-e1" not in step4
+
+
+def test_v2_review_budget_restarts_after_a_final_judge_reopen():
+    from types import SimpleNamespace as E
+
+    events = [
+        E(revision=10, type="STEP_RETRY_AUTHORIZED", payload={"stage": 8, "subtask": "revision"}),
+        E(revision=12, type="STAGE_SEMANTIC_REOPENED", payload={"rework_rule": "review_issue"}),
+    ]
+    assert FactoryEngine._review_budget_baseline(events) == 10
+    events.append(E(revision=20, type="STEP_REOPENED",
+                    payload={"subtask": "final_judge", "final_decision": "REOPEN_REVISION_MODEL"}))
+    assert FactoryEngine._review_budget_baseline(events) == 20
+    # Other reopens (a review loop, a Step 13 precheck) do not restart it.
+    events.append(E(revision=30, type="STEP_REOPENED",
+                    payload={"subtask": "revision", "rework_rule": "review_loop"}))
+    events.append(E(revision=31, type="STEP_REOPENED",
+                    payload={"subtask": "final_judge", "final_decision": "INDETERMINATE_REVIEW"}))
+    assert FactoryEngine._review_budget_baseline(events) == 20
