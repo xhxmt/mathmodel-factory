@@ -32,7 +32,9 @@ AGGREGATE_SCHEMA_VERSION = "judge-aggregate-v3"
 SCORE_SEMANTICS = "UNCALIBRATED_DIAGNOSTIC"
 AGGREGATE_JSON_BEGIN = "<!-- JUDGE_AGGREGATE_JSON_BEGIN -->"
 AGGREGATE_JSON_END = "<!-- JUDGE_AGGREGATE_JSON_END -->"
-PACKET_COMPLETENESS_VERSION = "judge-packet-completeness-v1"
+PACKET_COMPLETENESS_VERSION = "judge-packet-completeness-v2"
+# v1 manifests have no attested outputs and evaluate identically under v2 rules.
+PACKET_COMPLETENESS_VERSIONS = frozenset({"judge-packet-completeness-v1", PACKET_COMPLETENESS_VERSION})
 
 DIMENSION_SPECS: tuple[tuple[str, str, int], ...] = (
     ("model_presentation", "模型呈现", 20),
@@ -492,15 +494,15 @@ def _packet_completeness(
         completeness = payload.get("completeness")
         if not isinstance(completeness, dict):
             raise ValueError("manifest completeness is missing")
-        if completeness.get("contract_version") != PACKET_COMPLETENESS_VERSION:
+        if completeness.get("contract_version") not in PACKET_COMPLETENESS_VERSIONS:
             raise ValueError("unsupported packet completeness contract")
         files = payload.get("files")
         if not isinstance(files, list):
             raise ValueError("manifest files must be an array")
         try:
-            from scripts.packet_evidence import PacketEvidence
+            from scripts.packet_evidence import PacketEvidence, evaluate_requirement
         except ModuleNotFoundError:  # direct script execution
-            from packet_evidence import PacketEvidence
+            from packet_evidence import PacketEvidence, evaluate_requirement
         evidence = PacketEvidence(files)
         requirements = completeness.get("requirements")
         if not isinstance(requirements, list) or not requirements:
@@ -509,16 +511,20 @@ def _packet_completeness(
         for index, requirement in enumerate(requirements):
             if not isinstance(requirement, dict) or not isinstance(requirement.get("id"), str):
                 raise ValueError(f"invalid completeness requirement at index {index}")
-            paths = requirement.get("paths")
-            if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
-                raise ValueError(f"invalid completeness paths at index {index}")
-            actual_satisfied = [
-                path for path in paths if evidence.complete(path)
-            ]
-            actual_complete = (bool(paths) and len(actual_satisfied) == len(paths)
-                               and not requirement.get("binding_error"))
+            if ("attested_outputs" in requirement
+                    and completeness.get("contract_version") != PACKET_COMPLETENESS_VERSION):
+                raise ValueError(f"attested outputs need completeness v2 at index {index}")
+            try:
+                actual_satisfied, actual_attested, actual_complete = evaluate_requirement(
+                    evidence, requirement
+                )
+            except ValueError as exc:
+                raise ValueError(f"{exc} at index {index}") from exc
             if requirement.get("satisfied_paths") != actual_satisfied:
                 raise ValueError(f"completeness requirement {requirement['id']} paths conflict")
+            if ("attested_outputs" in requirement
+                    and requirement.get("satisfied_attested_paths") != actual_attested):
+                raise ValueError(f"completeness requirement {requirement['id']} attestation conflict")
             if requirement.get("satisfied") is not actual_complete:
                 raise ValueError(f"completeness requirement {requirement['id']} state conflicts")
             if not actual_complete:

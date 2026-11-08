@@ -485,7 +485,7 @@ Important project files include:
 - `logs/compilation/latex_inputs.json`: compiler-recorder proof that project-local TeX inputs equal the declared `LatexCompileContract` dependency graph.
 - `.factory/finalization/submission_bundle_manifest.json`: exact, path-safe ZIP member list with size and SHA-256; unreferenced `paper/` drafts are excluded.
 - `judge_evaluation.md`: Step-13 `PRECHECK_PASS` control file until the final audit replaces it with the full aggregate verdict.
-- `judge_packets/**`, `judge_outputs/**`: isolated evidence manifests, strict role outputs, aggregate JSON, and final-submission fingerprint. Each manifest carries `judge-packet-completeness-v1`; required evidence that is missing, truncated, or omitted forces the role to `INDETERMINATE`, while non-critical truncation must remain visible in `limitations`.
+- `judge_packets/**`, `judge_outputs/**`: isolated evidence manifests, strict role outputs, aggregate JSON, and final-submission fingerprint. Each manifest carries `judge-packet-completeness-v2` (aggregation and the pre-dispatch check still read v1, which has no attested outputs); required evidence that is missing, truncated, or omitted forces the role to `INDETERMINATE`, while non-critical truncation must remain visible in `limitations`. In a `solver_chain:*` requirement the adopted output, script, inputs, receipts and every declared output up to the 55,000-byte packet file limit must be included in full; a larger sibling output is an `attested_output`, satisfied when the manifest lists it with the completion receipt's SHA-256 (the chain itself already requires `receipt_ready`).
 
 Protected assumptions or issues must not be deleted or downgraded without a
 clear evidence-backed reason.

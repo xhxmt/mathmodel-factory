@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-08 — 求解链里的兄弟输出改为凭回执哈希证明（验收 A 发现 F12）
+
+验收 A 第二次批准 Gate 2 后，v2 最终评审在调用模型之前就判执行角色证据不全（rev 493，`TRANSIENT_JUDGE_INFRASTRUCTURE`），15 条 `solver_chain:*` 要求未满足。
+
+- **根因**：第二轮审稿重算中，Step 5 让主求解任务同时声明 `result1~4.xlsx` 与 `result1~4_grid.json` 为输出。求解链要求任务的每个声明输出都完整放进执行证据包，而这些文件有 0.3–4 MB，超过单文件 5.5 万字节与文本 36 万字节的上限，被省略。15 条链本身逐条重算都 `receipt_ready`。
+- **修复**：`solver_evidence_selection` 把被采用的输出、脚本、输入、回执，以及不超过单文件上限（55,000 字节，与 `judge_packet.MAX_FILE_BYTES` 相同，有测试锁定）的其他声明输出留在 `paths`（必须完整收录）；超过上限的兄弟输出放进 `attested_outputs`（路径 + 完成回执里的 SHA-256），收进证据包清单但不再要求正文。小的 PDF、npz 输出仍须完整收录。`packet_evidence.evaluate_requirement` 统一判定：`paths` 必须完整，`attested_outputs` 必须在清单中且摘要与回执一致。打包与 `aggregate_judges` 复核共用它；完整性契约升为 `judge-packet-completeness-v2`；聚合复核与派发前检查（`specialized._packet_preflight`）都接受 v1 与 v2，v1 清单不得含 attested 输出。兄弟输出被改动时，链的 `receipt_ready` 失败，要求照旧不满足。
+- 这些文件不在 dirty 分类器身份内，不触发 Stage 9 失效。
+- 本项目另有一处缺口：执行角色的输入 `data/intermediate/m1_ambient.npz` 只有 9 KB，展开成 numpy 证据视图后是 157,611 字节，必须完整收录的文件合计 398,439 字节，超过默认 360,000。这次由项目里的 `judge_evidence.json`（现有机制）把执行角色上限提到 450,000 解决，未改默认值。
+- 测试：`tests/test_normal_run_packet_chain.py` 新增 6 例；`tests/test_judge_packet.py` 的版本断言改为 v2。
+
 ## 2026-11-08 — Step 2 流的辅助输出登记为探索性产物；Step 2 当场检查归属覆盖（验收 A 发现 F10）
 
 验收 A 通过 Gate 2 后，v2 最终评审连续两次 `TRANSIENT_JUDGE_PACKET`（rev 465/467）：`authored artifact ownership coverage failed: m2_field_0_3h.csv`。

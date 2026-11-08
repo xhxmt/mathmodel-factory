@@ -103,3 +103,37 @@ class PacketEvidence:
         return (item is not None and item.get("status") == "included"
                 and (("binary_review" not in item and not path.lower().endswith(tuple(NUMPY_SUFFIXES)))
                      or complete_binding(item)))
+
+    def attested(self, path, sha256):
+        """A receipt-attested output: listed in the packet with the receipt's bytes.
+
+        Its content need not be in the context; the solver completion receipt
+        binds those bytes, and the manifest entry must carry the same digest.
+        """
+        item = self.by_path.get(path)
+        return (item is not None and isinstance(sha256, str) and bool(_SHA256.fullmatch(sha256))
+                and item.get("sha256") == sha256)
+
+
+def evaluate_requirement(evidence, requirement):
+    """Return ``(satisfied_paths, satisfied_attested_paths, satisfied)``.
+
+    ``paths`` must be fully included. ``attested_outputs`` (completeness v2) are
+    satisfied by an exact receipt digest instead of their content.
+    """
+    paths = requirement.get("paths")
+    attested = requirement.get("attested_outputs", [])
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        raise ValueError("invalid completeness paths")
+    if not isinstance(attested, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("path"), str)
+        or not isinstance(item.get("sha256"), str) for item in attested
+    ):
+        raise ValueError("invalid attested outputs")
+    satisfied_paths = [path for path in paths if evidence.complete(path)]
+    satisfied_attested = [item["path"] for item in attested
+                          if evidence.attested(item["path"], item["sha256"])]
+    satisfied = (bool(paths) and len(satisfied_paths) == len(paths)
+                 and len(satisfied_attested) == len(attested)
+                 and not requirement.get("binding_error"))
+    return satisfied_paths, satisfied_attested, satisfied

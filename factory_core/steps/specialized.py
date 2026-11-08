@@ -687,7 +687,7 @@ class JudgeStep:
 
     def _packet_preflight(self, context) -> ExecutionResult | None:
         """Require eligible packets for the whole review before model dispatch."""
-        from scripts.judge_packet import COMPLETENESS_CONTRACT_VERSION
+        from scripts.judge_packet import COMPLETENESS_CONTRACT_VERSIONS
 
         project = context.project_dir
         blocked_roles: dict[str, list[str]] = {}
@@ -707,7 +707,7 @@ class JudgeStep:
                 if not (
                     isinstance(requirements, list)
                     and requirements
-                    and completeness.get("contract_version") == COMPLETENESS_CONTRACT_VERSION
+                    and completeness.get("contract_version") in COMPLETENESS_CONTRACT_VERSIONS
                     and completeness.get("status") == "COMPLETE"
                     and completeness.get("eligible") is True
                     and all(isinstance(item, dict) and item.get("satisfied") is True for item in requirements)

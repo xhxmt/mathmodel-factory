@@ -14,6 +14,11 @@ from scripts.solver_job_receipt import (
 )
 
 
+#: Equal to judge_packet.MAX_FILE_BYTES: a sibling output larger than one packet
+#: file can hold is receipt-attested rather than required in full.
+ATTEST_OUTPUT_MIN_BYTES = 55_000
+
+
 def _path(project, relative):
     if (not isinstance(relative, str) or not relative or "\\" in relative
             or PurePosixPath(relative).is_absolute() or ".." in PurePosixPath(relative).parts):
@@ -99,6 +104,7 @@ def required_solver_evidence(project: Path, registry: dict) -> list[dict]:
 
     for selection in selections:
         paths = set()
+        attested = {}
         error = None
         try:
             for relative in [*selection["anchors"], selection["source"], selection["submission"], selection["completion"]]:
@@ -108,11 +114,28 @@ def required_solver_evidence(project: Path, registry: dict) -> list[dict]:
             completed_path = _path(project, selection["completion"])
             submitted = read_receipt(submitted_path, SUBMISSION_SCHEMA)
             for relative in [submitted["script"]["path"], *[r["path"] for r in submitted["inputs"]],
-                             *submitted["declared_outputs"],
                              *[r["snapshot"]["path"] for r in submitted.get("input_output_snapshots", [])]]:
                 _path(project, relative)
                 paths.add(relative)
             completed = read_receipt(completed_path, COMPLETION_SCHEMA)
+            # The adopted output and every declared output a packet file can hold
+            # are reviewed in full.  A larger sibling output (a deliverable
+            # workbook or full grid over the per-file limit) is bound by the
+            # completion receipt's digest instead: receipt_ready below proves the
+            # current bytes equal it, and the packet must list the same digest.
+            output_hashes = {item.get("path"): item.get("sha256")
+                             for item in completed.get("outputs", []) if isinstance(item, dict)}
+            for relative in submitted["declared_outputs"]:
+                output = _path(project, relative)
+                if relative in paths:
+                    continue
+                if not output.is_file() or output.stat().st_size <= ATTEST_OUTPUT_MIN_BYTES:
+                    paths.add(relative)
+                    continue
+                digest = output_hashes.get(relative)
+                if not isinstance(digest, str):
+                    raise ValueError(f"declared output has no completion digest: {relative}")
+                attested[relative] = digest
             for artifact in completed.get("result_artifacts", []):
                 if artifact.get("name") == "input_closure" and artifact.get("local"):
                     _path(project, artifact["path"])
@@ -132,6 +155,10 @@ def required_solver_evidence(project: Path, registry: dict) -> list[dict]:
             description="adopted solver inputs, receipts and declared outputs",
             job_id=selection["job_id"], adopted_output=selection["source"],
             required_status="included", paths=sorted(paths))
+        if attested:
+            requirement["attested_outputs"] = [
+                {"path": path, "sha256": attested[path]} for path in sorted(attested)
+            ]
         if error:
             requirement["binding_error"] = error
         requirements.append(requirement)
