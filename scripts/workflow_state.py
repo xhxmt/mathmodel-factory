@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sqlite3
 import sys
 import zipfile
 from pathlib import Path
@@ -219,7 +220,13 @@ def stage_catalog_v2(project: Path) -> bool:
     from factory_core.storage import SQLiteStateStore
 
     store = SQLiteStateStore(project)
-    return store.exists and store.load().stage_catalog_version == STAGE_CATALOG_VERSION_V2
+    try:
+        return store.exists and store.load().stage_catalog_version == STAGE_CATALOG_VERSION_V2
+    except (ValueError, OSError, sqlite3.Error):
+        # Not readable Native state (e.g. an experimental Authority/Phase
+        # database, which the Native boundary rejects): the stricter v1 rules
+        # apply, so the answer fails closed.
+        return False
 
 
 def reviewer_entry_gate_satisfied_for_delivery(project: Path) -> bool:
