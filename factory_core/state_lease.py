@@ -180,15 +180,24 @@ def _exclusive_inode_lease(
     inherited = _inherited_lease_descriptor(
         path, path_metadata, kind=kind, single_link=single_link
     )
-    if inherited is not None:
-        # We already hold this lock through a descriptor our spawner passed to
-        # us.  Never unlock it: LOCK_UN on a shared open file description would
-        # release the spawning process's lease as well.
-        yield
-        return
-
     leases = _leases_for_current_process()
     key = (path_metadata.st_dev, path_metadata.st_ino)
+    if inherited is not None and key not in leases:
+        # We already hold this lock through a descriptor our spawner passed to
+        # us.  Register it like an acquired lease, so code that requires the
+        # lease (isolated_state_snapshot_ro, nested acquisitions, a further
+        # child_lease_handoff) recognises it, but never unlock or close it:
+        # LOCK_UN on a shared open file description would release the
+        # spawning process's lease as well.
+        leases[key] = (inherited, 1)
+        _ACTIVE_LEASE_DESCRIPTORS[key] = inherited
+        try:
+            yield
+        finally:
+            del leases[key]
+            _ACTIVE_LEASE_DESCRIPTORS.pop(key, None)
+        return
+
     nested = leases.get(key)
     if nested is not None:
         current = path.lstat()

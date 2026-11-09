@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-09 — 子进程继承的状态锁能用来读工作流数据库（s16 验证发现 F21）
+
+f4015ad 下覆盖授权终于走通：rev 841 时 Step 13 不编译、不重跑评审，直接交给了 Step 16。Step 16 在已评审的 PDF 上重跑非评审检查，provenance 检查却失败了（rev 844，`CONTENT_NOT_READY`）：4 个求解器收据都报 `NATIVE_WORKFLOW_REQUIRED: workflow database cannot be inspected safely`。只有交付路径会这样，分析路径不持锁，所以同一项检查在评审时是 PASS。
+
+- **原因**：交付路径整个过程都持有项目提交锁，并通过 `child_lease_handoff` 把锁的描述符交给 `verify_provenance` 子进程（F01）。子进程在 `_exclusive_inode_lease` 里识别到继承来的锁就直接放行，既没加锁，也没登记到本线程的锁表。但 `SQLiteStateStore` → `require_native_project` → `isolated_state_snapshot_ro` 只认本线程锁表里的锁，于是报 `workflow state database snapshot requires its commit lease`。F01 的测试只验证了子进程能拿到锁，没验证拿到锁后能读数据库。
+  - **修复**：继承来的锁也登记到本线程的锁表和 `_ACTIVE_LEASE_DESCRIPTORS`，这样嵌套获取、只读快照和再往下一层的 handoff 都能认出它；退出时只注销，不解锁也不关闭描述符（仍是父进程持有的锁）。
+  - 在验收 A 的拷贝上复现：父进程持锁时，`verify_provenance.py` 在 f4015ad 下 4 项 HARD_FAIL，修复后 PASS。
+- `factory_core/state_lease.py` 属于评审所用的工厂代码（`evaluator_contract`），所以已有的评审要先在新代码下重跑，才能被覆盖交付。不属于 dirty 分类器身份。
+- 测试：`tests/test_state_lease_handoff.py` 新增 1 例（子进程经 handoff 读工作流事件，并能嵌套获取和再次 handoff；用旧代码会失败）。
+
 ## 2026-11-09 — 覆盖授权探测能复现已评审的快照；重新编译得到相同的 PDF；运行日志不再算作证据（s16 验证发现 F20）
 
 在验收 A 的副本上验证 c500e99：签发了绑定已评审快照 `fa80621d…` 的 `deliver_snapshot`，然后 `retry-step --step 13`（rev 820）。Step 13 的覆盖探测没有认出这个快照，于是走了常规路径：重新编译、得到新快照 `f1c1c643…`，接着重跑评审，math 角色撞上模型用量上限，在 rev 821 以 `PERMANENT_JUDGE_INFRASTRUCTURE` 失败。
