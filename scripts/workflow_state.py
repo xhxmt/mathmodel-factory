@@ -212,6 +212,32 @@ def step8_5_passed(project: Path) -> bool:
     return bool(state.get("ready"))
 
 
+def _stage_catalog_v2(project: Path) -> bool:
+    from factory_core.stages import STAGE_CATALOG_VERSION_V2
+    from factory_core.storage import SQLiteStateStore
+
+    store = SQLiteStateStore(project)
+    return store.exists and store.load().stage_catalog_version == STAGE_CATALOG_VERSION_V2
+
+
+def reviewer_entry_gate_satisfied_for_delivery(project: Path) -> bool:
+    """The Step 8.5 reviewer-entry gate as delivery requires it.
+
+    Catalog v1 requires the gate to be current.  Catalog v2 validates it once,
+    at Step 9 entry; later edits to the reports it reads are forward repairs
+    (``engine._invalidate_stale_stage_receipts``, ``stage_catalog_v2_policy``)
+    and a v2 review-issue recompute re-runs Steps 5-8 without it, so delivery
+    requires only that the gate passed: its artifacts are complete and
+    ``entry_gate.md`` says ``VERDICT: PASS``.  The final Judge, bound to the
+    current content, is the later check.
+    """
+
+    if not _stage_catalog_v2(project):
+        return step8_5_passed(project)
+    state = collect_step8_5_state(project)
+    return state.get("artifacts_complete") is True and state.get("verdict") == "PASS"
+
+
 def zip_file_ok(path: Path) -> bool:
     if not path.is_file():
         return False
@@ -256,7 +282,7 @@ def step16_ready(project: Path, root: Path, base: str | None = None) -> bool:
             root / "papers", resolved_base, project=project
         ) is not None
         and gate2_delivery_allowed(project, root)
-        and step8_5_passed(project)
+        and reviewer_entry_gate_satisfied_for_delivery(project)
         and final_audit_is_current(project, root)
         and final_judge_is_current(project, resolved_base)
     )

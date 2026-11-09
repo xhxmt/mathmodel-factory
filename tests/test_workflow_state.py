@@ -267,3 +267,65 @@ def test_no_judge_ablation_blocks_step16_even_with_delivery_override(tmp_path):
     )
     assert current is not None
     assert current.release_id == snapshot_id
+
+
+def _entry_gate_project(tmp_path, *, catalog: str | None, verdict: str = "PASS"):
+    import os
+
+    project = tmp_path / "ongoing" / "demo"
+    if catalog is not None:
+        from factory_core.stages import STAGE_SCHEDULER_GENERATION
+        from factory_core.storage import SQLiteStateStore
+
+        SQLiteStateStore(project, clock=lambda: 100).initialize(
+            project_id="demo",
+            project_type="modeling",
+            scheduler_generation=STAGE_SCHEDULER_GENERATION,
+            stage_catalog_version=catalog,
+        )
+    for name in ("reviewer_entry_map.md", "anchor_figure_plan.md"):
+        write_file(project / name, "# gate\n")
+    write_file(project / "entry_gate.md", f"VERDICT: {verdict}\n")
+    write_file(project / "solve_log.md", "solved\n")
+    # The reports the gate read changed after it (a review-issue recompute
+    # or a Step 12 forward repair).
+    later = (project / "entry_gate.md").stat().st_mtime + 60
+    os.utime(project / "solve_log.md", (later, later))
+    return project
+
+
+def test_v2_delivery_accepts_a_passed_entry_gate_whose_inputs_changed_later(tmp_path):
+    # s16 rev 856: a v2 review-issue recompute re-ran Steps 5-8 without the
+    # reviewer-entry gate, so Step 16 could never become ready.
+    from factory_core.stages import STAGE_CATALOG_VERSION_V2
+    from scripts.workflow_state import (
+        reviewer_entry_gate_satisfied_for_delivery,
+        step8_5_passed,
+    )
+
+    project = _entry_gate_project(tmp_path, catalog=STAGE_CATALOG_VERSION_V2)
+
+    assert step8_5_passed(project) is False  # stale by mtime
+    assert reviewer_entry_gate_satisfied_for_delivery(project) is True
+
+
+def test_v2_delivery_still_needs_a_passed_complete_entry_gate(tmp_path):
+    from factory_core.stages import STAGE_CATALOG_VERSION_V2
+    from scripts.workflow_state import reviewer_entry_gate_satisfied_for_delivery
+
+    revise = _entry_gate_project(tmp_path / "a", catalog=STAGE_CATALOG_VERSION_V2, verdict="REVISE")
+    assert reviewer_entry_gate_satisfied_for_delivery(revise) is False
+
+    missing = _entry_gate_project(tmp_path / "b", catalog=STAGE_CATALOG_VERSION_V2)
+    (missing / "anchor_figure_plan.md").unlink()
+    assert reviewer_entry_gate_satisfied_for_delivery(missing) is False
+
+
+def test_v1_delivery_still_needs_a_current_entry_gate(tmp_path):
+    from factory_core.stages import STAGE_CATALOG_VERSION
+    from scripts.workflow_state import reviewer_entry_gate_satisfied_for_delivery
+
+    v1 = _entry_gate_project(tmp_path / "a", catalog=STAGE_CATALOG_VERSION)
+    assert reviewer_entry_gate_satisfied_for_delivery(v1) is False
+    no_state = _entry_gate_project(tmp_path / "b", catalog=None)
+    assert reviewer_entry_gate_satisfied_for_delivery(no_state) is False

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-09 — v2 交付不再要求审稿入口门禁保持新鲜（s16 验证发现 F23）
+
+d3ba81f 下覆盖交付走到了最后：Step 16 在已评审快照 `ac377192…` 上晋升，记为 `OVERRIDDEN` 并消耗授权，release 已发布到 `papers/releases/…/ac377192…/`，`current.json` 已指向它。但随后的 Step 16 校验失败（rev 856，`TRANSIENT_ARTIFACT_MISSING`，提示缺 `delivery_manifest.json`；这只是固定的提示文字），项目没有移到 `complete/`。
+
+- **原因**：`workflow_state.step16_ready` 要求 Step 8.5 审稿入口门禁仍然新鲜（`step8_5_passed`，按文件修改时间判断）。验收 A 的门禁生成于 11-08 04:35；06:43 v2 的审稿问题重算重跑了 Steps 5–8，但没有重跑门禁；07:49 Step 12 又改了 `solve_log.md`。于是门禁被判为 STALE，`step16_ready` 永远为假。v2 的设计本来就只在 Step 9 入口校验一次这个门禁，之后对它所读报告的修改都算向前修复（`engine._invalidate_stale_stage_receipts`），只是 Step 16 的检查没有跟着改。
+  - **修复**：`step16_ready` 改用 `reviewer_entry_gate_satisfied_for_delivery`。v2 项目只要求门禁的三个文件齐全、`entry_gate.md` 的结论是 `VERDICT: PASS`，不再要求新鲜；v1 项目和没有工作流状态的项目仍然要求新鲜。与当前内容绑定的最终评审才是更晚的那道检查。
+  - 没有改的：v2 的审稿问题重算链仍然不重跑入口门禁。
+- `scripts/workflow_state.py` 不属于评审所用的工厂代码，所以已评审的快照和已做出的验收结果仍然有效；也不属于 dirty 分类器身份（09693f563ba2 不变）。
+- 测试：`tests/test_workflow_state.py` 新增 3 例。
+
 ## 2026-11-09 — 重跑非评审检查不再改变最终快照（s16 验证发现 F22）
 
 d29b803 下用 CLI `audit` 重新评审，得到快照 `f81ed43d…`（三个角色 PASS，论文 77；视觉门禁改判 `REOPEN_REVISION_TEXT`）。签发 `deliver_snapshot` 后 `retry-step --step 16`：Step 16 确认候选快照就是已评审的那个，进入晋升路径，在已评审的 PDF 上重跑所有非评审检查，然后复核快照，结果对不上，于是退回去重新编译、重跑评审。重跑的 math 角色又撞上账号用量上限，rev 850 以 `PERMANENT_JUDGE_INFRASTRUCTURE` 失败。
