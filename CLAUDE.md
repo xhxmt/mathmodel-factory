@@ -379,11 +379,13 @@ without compiling and, when the override names that judged snapshot, hands the
 run to Step 16 without rerunning the Judge; Step 16 promotes the judgment like a
 PASS (all non-Judge checks rerun on the judged PDF, snapshot recheck) and
 records `OVERRIDDEN`, consuming the override. Neither path compiles. The
-re-prepared packets reproduce the judged snapshot only because the objective
-evidence fingerprint skips the factory run traces directly under `logs/`
-(`worker_*`, `step_*` model logs and prompt files, `native_*`;
-`scripts/objective_evidence.is_runtime_log`), which every audit, Judge call and
-probe adds; solver, compiler and agent logs stay inputs. `compile_paper.sh`
+re-prepared packets reproduce the judged snapshot only because the factory run
+traces directly under `logs/` (`worker_*`, `step_*` model logs and prompt files,
+`native_*`; `scripts/objective_evidence.is_runtime_log`), which every audit,
+Judge call and probe adds, are never evidence: the objective-evidence
+fingerprint, the execution packet (`judge_packet._is_execution_evidence`) and
+`verify_numbers`' log number source all skip them; solver, compiler and agent
+logs stay inputs. `compile_paper.sh`
 also pins `SOURCE_DATE_EPOCH` (caller value, else the main source's mtime), so
 recompiling unchanged sources reproduces the PDF bytes. The snapshot also
 binds the evaluator code (`evaluator_contract`), so a judgment made before a

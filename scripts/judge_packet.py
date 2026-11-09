@@ -16,6 +16,7 @@ from factory_core.paper_sources import (
     require_safe_latex_dependencies,
     resolve_latex_dependency_graph,
 )
+from scripts.objective_evidence import is_runtime_log
 from scripts.json_evidence_view import SUFFIX as EVIDENCE_VIEW_SUFFIX, verify_view
 from scripts.packet_evidence import ALIAS_CONTRACT, PacketEvidence, evaluate_requirement
 from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, MAX_RAW_BYTES, render_file as render_numpy
@@ -230,8 +231,12 @@ def _is_execution_evidence(relative: str) -> bool:
     if relative.startswith(".factory/solver_receipts/") and name.endswith((".submitted.json", ".completed.json")):
         return True
     if relative.startswith("logs/"):
+        # Factory run traces (is_runtime_log) are not execution evidence, and
+        # every audit, Judge call and override probe adds new ones; packing
+        # them made a rebuilt packet differ from the judged one.
         return (
             Path(relative).suffix.lower() == ".log"
+            and not is_runtime_log(relative)
             and not name.startswith(
                 ("step_", "native_judge_", "native_receipt_")
             )
@@ -574,7 +579,9 @@ def _role_requirements(
         ),
     )
     execution_trace = execution_trace or _first_path(
-        project, paths, lambda relative: relative.startswith("logs/")
+        project,
+        paths,
+        lambda relative: relative.startswith("logs/") and not is_runtime_log(relative),
     )
     execution_trace = execution_trace or _first_path(
         project, paths, lambda relative: relative.startswith(".factory/solver_receipts/")

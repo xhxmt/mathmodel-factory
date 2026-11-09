@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-11-09 — 覆盖授权探测能复现已评审的快照；重新编译得到相同的 PDF（s16 验证发现 F20）
+## 2026-11-09 — 覆盖授权探测能复现已评审的快照；重新编译得到相同的 PDF；运行日志不再算作证据（s16 验证发现 F20）
 
 在验收 A 的副本上验证 c500e99：签发了绑定已评审快照 `fa80621d…` 的 `deliver_snapshot`，然后 `retry-step --step 13`（rev 820）。Step 13 的覆盖探测没有认出这个快照，于是走了常规路径：重新编译、得到新快照 `f1c1c643…`，接着重跑评审，math 角色撞上模型用量上限，在 rev 821 以 `PERMANENT_JUDGE_INFRASTRUCTURE` 失败。
 
@@ -8,8 +8,12 @@
   - **修复**：`scripts/objective_evidence.fingerprint_paths` 遍历目录时，跳过 `logs/` 下工厂自己写的运行日志（`worker_*.log`、`step_<id>_<label>_<日期>_<时间>_<pid>_<uuid>.log`、`step_*_*_*_*.prompt.txt`、`native_*.log`，见 `is_runtime_log`）。显式列出的路径照旧计算哈希；`logs/solver_jobs/`、`logs/compilation/` 和 agent 写的日志仍算输入。
 - **F20b 重新编译的 PDF 不能逐字节复现**：没有固定时间，xdvipdfmx 会把当前时间写进 `/CreationDate`、`/ModDate` 和 trailer `/ID`，同样的源文件编译两次，PDF 和快照 ID 都不同（这次 821594 → 821595 字节）。
   - **修复**：`compile_paper.sh` 设置 `SOURCE_DATE_EPOCH`：调用方提供了就用调用方的值，否则用主源文件的修改时间。不设置 `FORCE_SOURCE_DATE`，正文里 `\today` 的行为不变。在验收 A 的副本拷贝上实测，两次编译的 PDF 逐字节一致。
-- 两处都改变了评审所用的工厂代码（`evaluator_contract`），所以已有的评审要先在新代码下重跑，才能被覆盖交付。不属于 dirty 分类器身份（09693f563ba2 不变）。
-- 测试：`tests/test_objective_evidence.py` 新增 1 例；`tests/test_paper_sources.py` 新增 1 例（`latex` 标记；用旧的 `compile_paper.sh` 会失败）。
+- **F20c 运行日志还进了评审包和数字核对**（副本切到 6bbbf1d 后发现：rev 826 评审得到快照 `3eff0249…`；签发授权、`retry-step` 后，rev 831 的探测仍然对不上，又编译、又重跑了一次评审）。objective evidence 的输入指纹已经稳定，但文件内容仍会变化：`verify_numbers.collect_number_metrics` 把 `logs/*.log` 里的数字全部当作参考数字，`reference_numbers` 随新日志增长（15061 → 15640）。同时，execution 评审包把 `worker_*`、`native_objective_evidence_*`、`native_compile_paper_*`、`native_pdf_visual_gate_*` 等工厂日志当作执行证据（共 75 个文件）。
+  - **修复**：`verify_numbers.extract_log_numbers` 和 `judge_packet._is_execution_evidence`（以及 `execution_trace` 的日志兜底）都用 `is_runtime_log` 排除工厂运行日志。`tests/test_delivery_packaging_log_identity.py` 原来用虚构的 `CommandRunner(label="solver")` 日志代表求解器证据，现在改用真实位置 `logs/solver_jobs/`。
+  - **行为变化**：数字核对这项启发式检查以前能通过，部分靠的是评审模型日志里抄来的论文数字，属于循环论证。验收 A 排除这些日志后，641 个数字里有 35 个找不到来源（参考数字从 15640 个降到 379 个）。objective evidence 的 `numbers.traceability` 因此从 PASS 变为 WARN（`soft_alert`、`heuristic`，只作诊断）。Step 10 硬门禁用的 `verify_numbers.py --verify` 走 manifest，不受影响。
+  - 在验收 A 的拷贝上重放探测（重建评审包 → 写入新的 worker/native/step 日志 → 再重建）：新代码两次快照相同；6bbbf1d 会漂移。
+- 这些改动都改变了评审所用的工厂代码（`evaluator_contract`），所以已有的评审要先在新代码下重跑，才能被覆盖交付。不属于 dirty 分类器身份（09693f563ba2 不变）。
+- 测试：`tests/test_objective_evidence.py` 新增 1 例；`tests/test_paper_sources.py` 新增 1 例（`latex` 标记；用旧的 `compile_paper.sh` 会失败）；`tests/test_verify_numbers_refactor.py` 新增 1 例；`tests/test_delivery_packaging_log_identity.py` 改 1 例（这两例用旧代码都会失败）。
 
 ## 2026-11-08 — v2 覆盖授权可以真正交付；Gate 2 确认由人负责的台账行；视觉问题写进返工提示（验收 A 发现 F18、F17、F19c）
 

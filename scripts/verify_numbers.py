@@ -33,6 +33,7 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from factory_core.paper_sources import expand_latex_document, primary_paper_source
+from scripts.objective_evidence import is_runtime_log
 try:
     from .number_manifest_stream import verify_sources
     from .verify_derived_artifacts import (
@@ -166,6 +167,12 @@ def extract_tex_numbers_from_project(
 def extract_log_numbers(log_dir: str | Path) -> set[float]:
     numbers: set[float] = set()
     for lf in glob.glob(os.path.join(str(log_dir), "*.log")):
+        # Factory run traces (worker, model-call and native-command logs) are
+        # not project evidence: a Judge or model log quotes the paper itself,
+        # so its numbers would "trace" every paper value to the paper, and a
+        # new trace appears with every audit run.
+        if is_runtime_log(f"logs/{os.path.basename(lf)}"):
+            continue
         try:
             with open(lf, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
