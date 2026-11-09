@@ -57,6 +57,41 @@ def test_fingerprint_is_content_deterministic_and_mtime_independent(tmp_path):
     assert fingerprint_paths(tmp_path) != first
 
 
+def test_factory_run_logs_do_not_change_a_directory_fingerprint(tmp_path):
+    # A judged snapshot is re-prepared without compiling (v2 Step 13 override
+    # probe).  Every audit, Judge call and packet rebuild writes run traces
+    # under logs/, so they must not make the logs input drift; solver and
+    # agent logs remain inputs.
+    logs = tmp_path / "logs"
+    (logs / "solver_jobs").mkdir(parents=True)
+    (logs / "solver_jobs" / "job.stderr.log").write_text("solver\n", encoding="utf-8")
+    (logs / "m1_demo.log").write_text("demo\n", encoding="utf-8")
+    first = fingerprint_paths(tmp_path, ["logs"])
+
+    for name in (
+        "worker_20261108_135244.log",
+        "step_16_claude_20261108_140037_2300269_ef425bc2c57948b2.log",
+        "step_16_api_2300269_ef425bc2c57948b2.prompt.txt",
+        "native_judge_packet_20261108_135251_2300269.log",
+        "native_paper_quality_contract.log",
+    ):
+        (logs / name).write_text("run trace\n", encoding="utf-8")
+    assert fingerprint_paths(tmp_path, ["logs"]) == first
+    assert fingerprint_paths(tmp_path) == fingerprint_paths(tmp_path)
+
+    (logs / "step_5_solve.log").write_text("agent log\n", encoding="utf-8")
+    second = fingerprint_paths(tmp_path, ["logs"])
+    assert second != first
+    (logs / "solver_jobs" / "job.stderr.log").write_text("changed\n", encoding="utf-8")
+    assert fingerprint_paths(tmp_path, ["logs"]) != second
+
+    # A run trace named explicitly is still hashed.
+    trace = "logs/native_judge_packet_20261108_135251_2300269.log"
+    named = fingerprint_paths(tmp_path, [trace])
+    (tmp_path / trace).write_text("other\n", encoding="utf-8")
+    assert fingerprint_paths(tmp_path, [trace]) != named
+
+
 def test_evidence_ref_contains_relative_path_hash_and_locator(tmp_path):
     source = tmp_path / "results" / "numbers.json"
     source.parent.mkdir()

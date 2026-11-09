@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-09 — 覆盖授权探测能复现已评审的快照；重新编译得到相同的 PDF（s16 验证发现 F20）
+
+在验收 A 的副本上验证 c500e99：签发了绑定已评审快照 `fa80621d…` 的 `deliver_snapshot`，然后 `retry-step --step 13`（rev 820）。Step 13 的覆盖探测没有认出这个快照，于是走了常规路径：重新编译、得到新快照 `f1c1c643…`，接着重跑评审，math 角色撞上模型用量上限，在 rev 821 以 `PERMANENT_JUDGE_INFRASTRUCTURE` 失败。
+
+- **F20a 探测重建的评审包对不上已评审快照**：objective evidence 的输入指纹包括整个 `logs/` 目录。每次审核、评审调用、证据包重建，都会往 `logs/` 写新的运行日志，所以评审结束后再重建证据包，指纹必然变化（rev 820 的探测得到 `0b0f08c8…`，已评审快照里是 `842f32b6…`；同一次重试里第二次重建又变成 `c1ae8529…`）。F18 的覆盖路径因此从来不可达。
+  - **修复**：`scripts/objective_evidence.fingerprint_paths` 遍历目录时，跳过 `logs/` 下工厂自己写的运行日志（`worker_*.log`、`step_<id>_<label>_<日期>_<时间>_<pid>_<uuid>.log`、`step_*_*_*_*.prompt.txt`、`native_*.log`，见 `is_runtime_log`）。显式列出的路径照旧计算哈希；`logs/solver_jobs/`、`logs/compilation/` 和 agent 写的日志仍算输入。
+- **F20b 重新编译的 PDF 不能逐字节复现**：没有固定时间，xdvipdfmx 会把当前时间写进 `/CreationDate`、`/ModDate` 和 trailer `/ID`，同样的源文件编译两次，PDF 和快照 ID 都不同（这次 821594 → 821595 字节）。
+  - **修复**：`compile_paper.sh` 设置 `SOURCE_DATE_EPOCH`：调用方提供了就用调用方的值，否则用主源文件的修改时间。不设置 `FORCE_SOURCE_DATE`，正文里 `\today` 的行为不变。在验收 A 的副本拷贝上实测，两次编译的 PDF 逐字节一致。
+- 两处都改变了评审所用的工厂代码（`evaluator_contract`），所以已有的评审要先在新代码下重跑，才能被覆盖交付。不属于 dirty 分类器身份（09693f563ba2 不变）。
+- 测试：`tests/test_objective_evidence.py` 新增 1 例；`tests/test_paper_sources.py` 新增 1 例（`latex` 标记；用旧的 `compile_paper.sh` 会失败）。
+
 ## 2026-11-08 — v2 覆盖授权可以真正交付；Gate 2 确认由人负责的台账行；视觉问题写进返工提示（验收 A 发现 F18、F17、F19c）
 
 验收 A 的最后一次最终评审（rev 806）三个角色都 PASS，但视觉门禁有 10 个 blocking 问题，裁决改为 `REOPEN_REVISION_TEXT`，修复循环已用完。按操作规则应签发 `deliver_snapshot` 覆盖授权交付，结果发现这条路在 v2 里走不通；此前 rev 791 还因只能由人处理的 BLOCKING 行，被最终审核判 `CONTENT_NOT_READY`。

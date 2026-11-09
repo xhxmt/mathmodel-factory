@@ -378,8 +378,14 @@ Step 13 (`FinalAuditService.overridable_judgment`) re-prepares the packets
 without compiling and, when the override names that judged snapshot, hands the
 run to Step 16 without rerunning the Judge; Step 16 promotes the judgment like a
 PASS (all non-Judge checks rerun on the judged PDF, snapshot recheck) and
-records `OVERRIDDEN`, consuming the override. A recompile would change the PDF
-bytes and therefore the snapshot, so neither path compiles. The snapshot also
+records `OVERRIDDEN`, consuming the override. Neither path compiles. The
+re-prepared packets reproduce the judged snapshot only because the objective
+evidence fingerprint skips the factory run traces directly under `logs/`
+(`worker_*`, `step_*` model logs and prompt files, `native_*`;
+`scripts/objective_evidence.is_runtime_log`), which every audit, Judge call and
+probe adds; solver, compiler and agent logs stay inputs. `compile_paper.sh`
+also pins `SOURCE_DATE_EPOCH` (caller value, else the main source's mtime), so
+recompiling unchanged sources reproduces the PDF bytes. The snapshot also
 binds the evaluator code (`evaluator_contract`), so a judgment made before a
 factory code change cannot be overridden after it; rerun the Judge first. The override store is an operational boundary for the single-operator deployment,
 not cryptographic isolation from another process running as the same Unix UID.
@@ -544,7 +550,7 @@ Follow `modeling_guide.md`:
 - Tables: `booktabs`, right-aligned numeric columns, compact labels.
 - Symbols: every variable and parameter used in the model must appear in `symbol_table.md` and the paper's symbol table.
 - LaTeX: CUMCM/MCM-style sections, with abstract filled only at Step 14.
-- Compilation: use `compile_paper.sh`; it selects `xelatex` for `ctex`, `cumcmthesis`, `mcmthesis`, or `xeCJK`, sanitizes TeX search paths, runs without shell escape, verifies all three recorder files, and emits `bibliography-build-receipt-v1`. BibTeX/Biber failures, stale `.bbl` reuse, unresolved citations, project symlinks, and non-runtime external reads are fatal.
+- Compilation: use `compile_paper.sh`; it selects `xelatex` for `ctex`, `cumcmthesis`, `mcmthesis`, or `xeCJK`, sanitizes TeX search paths, runs without shell escape, pins `SOURCE_DATE_EPOCH` for byte-reproducible PDFs, verifies all three recorder files, and emits `bibliography-build-receipt-v1`. BibTeX/Biber failures, stale `.bbl` reuse, unresolved citations, project symlinks, and non-runtime external reads are fatal.
 
 ## Web Control Plane Contract
 

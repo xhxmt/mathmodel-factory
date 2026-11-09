@@ -60,6 +60,32 @@ _AMBIGUOUS_REASONS = frozenset({"ambiguous", "multiple_matches", "unclear"})
 _DEFAULT_IGNORED_NAMES = frozenset(
     {".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache"}
 )
+# Factory run traces written directly under a project's ``logs/`` on every
+# worker start, model call and native command (``service.py`` worker logs,
+# ``adapters/models/backends.py`` step logs and prompt files,
+# ``adapters/infrastructure/commands.py`` native command logs).  They record how
+# the factory ran, not what the project computed, and a new one appears with
+# every audit, Judge call or packet rebuild.  Fingerprinting them made a
+# directory input such as ``logs`` change on every probe, so a judged snapshot
+# could never be reproduced without recompiling.  They are skipped only while
+# enumerating a directory; a path named explicitly is still hashed.  Solver
+# logs (``logs/solver_jobs/``), compiler records (``logs/compilation/``) and
+# agent-authored logs stay inputs.
+_RUNTIME_LOG_GLOBS = (
+    "logs/worker_*.log",
+    # step_{id}_{label}_{date}_{time}_{pid}_{uuid}.log
+    "logs/step_*_*_*_*_*_*.log",
+    # step_{id}_{backend}_{pid}_{uuid}.prompt.txt
+    "logs/step_*_*_*_*.prompt.txt",
+    "logs/native_*.log",
+)
+
+
+def is_runtime_log(relative: str) -> bool:
+    """Whether ``relative`` (POSIX, project-relative) is a factory run trace."""
+
+    path = PurePosixPath(relative)
+    return len(path.parts) == 2 and any(path.match(glob) for glob in _RUNTIME_LOG_GLOBS)
 
 
 class ObjectiveEvidenceError(ValueError):
@@ -241,6 +267,8 @@ def _tree_records(
         if child.name in ignored_names:
             continue
         child_rel = child.relative_to(root).as_posix()
+        if is_runtime_log(child_rel):
+            continue
         records.extend(
             _tree_records(
                 root,
@@ -265,7 +293,8 @@ def fingerprint_paths(
     cannot accidentally reuse a PASS fingerprint after an input disappears.
     Files are hashed by bytes; mtimes, permissions, and directory ordering are
     excluded.  By default common cache/VCS directories are omitted when the
-    whole root is fingerprinted.
+    whole root is fingerprinted, and factory run traces directly under
+    ``logs/`` (``is_runtime_log``) are omitted while enumerating a directory.
     """
 
     base = _root_path(root)
