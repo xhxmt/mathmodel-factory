@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-09 — v2 交付合同评估与 Step 16 采用同样的入口门禁规则，代码审查标记以台账为准（s16 验证发现 F23 补充、F24）
+
+6876743 下 Step 16 成功（rev 862 复用 `OVERRIDDEN` 验收和已发布的 release，rev 863 `PROJECT_COMPLETED`）。但 worker 随后写出的 `delivery_manifest.json` 状态是 `LEGACY_DELIVERED`，不是 `GATE2_OVERRIDE_DELIVERED`，于是报“completed project failed final delivery evaluation”，没有归档到 `complete/`。交付合同评估（`evaluate_modeling_project.evaluate`）有两项失败：
+
+- **F23 补充 `entry_gate_verdict`**：评估里另有一份入口门禁新鲜度检查（`collect_step8_5_state(...)["ready"]`）。现在和 `step16_ready` 一样改用 `reviewer_entry_gate_satisfied_for_delivery`：v2 只要求门禁已经通过，v1 仍然要求新鲜。
+- **F24 `gate1_numeric_trace`**：只要 `code_review.md` 里出现 `BLOCKING` 或 `UNRESOLVED`（不区分大小写）就判失败。验收 A 命中的是封面报名号、学校、队员“待填”那一条（D-J5，对应台账 S11R-B1）：只有参赛队能填，台账里早已不再算作未解决的 blocking。
+  - **修复**：v2 项目里，`code_review.md` 有这类标记时以台账为准：扣除内容冻结批准确认过的由人负责的行（`acknowledged_human_issues`）后，台账仍有未解决的 blocking 行才判失败。v1 保持原来的文本扫描。
+- `workflow_state` 新增公开的 `stage_catalog_v2`（原来是 F23 里的私有函数 `_stage_catalog_v2`）。两个文件都不属于评审所用的工厂代码，已有的快照、验收和 release 都仍然有效；也不属于 dirty 分类器身份。
+- 测试：`tests/test_evaluate_modeling_project_step8_5.py` 新增 3 例（其中 2 例用旧代码会失败）。
+
 ## 2026-11-09 — v2 交付不再要求审稿入口门禁保持新鲜（s16 验证发现 F23）
 
 d3ba81f 下覆盖交付走到了最后：Step 16 在已评审快照 `ac377192…` 上晋升，记为 `OVERRIDDEN` 并消耗授权，release 已发布到 `papers/releases/…/ac377192…/`，`current.json` 已指向它。但随后的 Step 16 校验失败（rev 856，`TRANSIENT_ARTIFACT_MISSING`，提示缺 `delivery_manifest.json`；这只是固定的提示文字），项目没有移到 `complete/`。

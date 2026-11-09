@@ -212,7 +212,9 @@ def step8_5_passed(project: Path) -> bool:
     return bool(state.get("ready"))
 
 
-def _stage_catalog_v2(project: Path) -> bool:
+def stage_catalog_v2(project: Path) -> bool:
+    """Whether the project's workflow state records Stage catalog v2."""
+
     from factory_core.stages import STAGE_CATALOG_VERSION_V2
     from factory_core.storage import SQLiteStateStore
 
@@ -232,7 +234,7 @@ def reviewer_entry_gate_satisfied_for_delivery(project: Path) -> bool:
     current content, is the later check.
     """
 
-    if not _stage_catalog_v2(project):
+    if not stage_catalog_v2(project):
         return step8_5_passed(project)
     state = collect_step8_5_state(project)
     return state.get("artifacts_complete") is True and state.get("verdict") == "PASS"

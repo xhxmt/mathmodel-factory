@@ -89,3 +89,80 @@ def test_evaluate_accepts_step_8_5_pass_artifacts(tmp_path, monkeypatch):
     assert checks["artifact:anchor_figure_plan.md"].ok is True
     assert checks["artifact:entry_gate.md"].ok is True
     assert checks["entry_gate_verdict"].ok is True
+
+
+def _v2_state(project: Path) -> None:
+    from factory_core.stages import STAGE_CATALOG_VERSION_V2, STAGE_SCHEDULER_GENERATION
+    from factory_core.storage import SQLiteStateStore
+
+    SQLiteStateStore(project, clock=lambda: 100).initialize(
+        project_id=project.name,
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+        stage_catalog_version=STAGE_CATALOG_VERSION_V2,
+    )
+
+
+def _evaluate(tmp_path, monkeypatch, project):
+    from scripts import evaluate_modeling_project as mod
+
+    monkeypatch.setattr(mod, "infer_step", lambda root, project: (16, "16"))
+    monkeypatch.setattr(mod, "zip_ok", lambda path: (True, "ok"))
+    return {check.name: check for check in mod.evaluate(project, tmp_path).checks}
+
+
+def _stale_gate_project(tmp_path, *, v2: bool) -> Path:
+    import os
+
+    project = tmp_path / "ongoing" / "demo"
+    make_complete_project(project)
+    if v2:
+        _v2_state(project)
+    write_file(project / "reviewer_entry_map.md", "# map\n")
+    write_file(project / "anchor_figure_plan.md", "# anchors\n")
+    write_file(project / "entry_gate.md", "# gate\n\nVERDICT: PASS\n")
+    later = (project / "entry_gate.md").stat().st_mtime + 60
+    os.utime(project / "solve_log.md", (later, later))
+    return project
+
+
+def test_v2_delivery_evaluation_accepts_a_passed_entry_gate_with_later_inputs(tmp_path, monkeypatch):
+    # s16 rev 863: the same v2 rule as step16_ready (F23).
+    v2 = _stale_gate_project(tmp_path / "v2", v2=True)
+    assert _evaluate(tmp_path / "v2", monkeypatch, v2)["entry_gate_verdict"].ok is True
+
+    v1 = _stale_gate_project(tmp_path / "v1", v2=False)
+    assert _evaluate(tmp_path / "v1", monkeypatch, v1)["entry_gate_verdict"].ok is False
+
+
+def _ledger(project: Path, status: str) -> None:
+    write_file(
+        project / "audit_issue_ledger.md",
+        "| ID | Category | Severity | Status | Blocking Until | Notes |\n"
+        "|---|---|---|---|---|---|\n"
+        f"| S11R-B1 | paper | BLOCKING | {status} | Human (交付前) | cover fields |\n",
+    )
+
+
+def test_v2_code_review_markers_defer_to_the_ledger(tmp_path, monkeypatch):
+    # s16 rev 863: code_review.md still names a human-owned blocking row that
+    # the ledger no longer counts; delivery evaluation failed on the word alone.
+    project = tmp_path / "ongoing" / "demo"
+    make_complete_project(project)
+    _v2_state(project)
+    write_file(project / "code_review.md", "D-J5 [paper-issue-1, blocking] cover fields need the team\n")
+
+    _ledger(project, "RESOLVED")
+    assert _evaluate(tmp_path, monkeypatch, project)["gate1_numeric_trace"].ok is True
+
+    _ledger(project, "OPEN")
+    assert _evaluate(tmp_path, monkeypatch, project)["gate1_numeric_trace"].ok is False
+
+
+def test_v1_code_review_markers_still_fail(tmp_path, monkeypatch):
+    project = tmp_path / "ongoing" / "demo"
+    make_complete_project(project)
+    write_file(project / "code_review.md", "UNRESOLVED: numeric trace for table 3\n")
+    _ledger(project, "RESOLVED")
+
+    assert _evaluate(tmp_path, monkeypatch, project)["gate1_numeric_trace"].ok is False
