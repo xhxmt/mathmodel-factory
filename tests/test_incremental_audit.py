@@ -480,3 +480,64 @@ def test_a_check_without_a_verdict_leaves_its_ledger_row_alone(tmp_path: Path) -
     assert row == next(line for line in before.splitlines() if "AUDIT-RESULTS-PROVENANCE" in line)
     assert "OPEN" not in row
     assert not has_unresolved_blocking(ledger)
+
+
+class DerivedReportRunner(FakeRunner):
+    """The derived-artifact checker writes a volatile stdout trace (it names a
+    random temporary output directory) and, when asked, a stable report."""
+
+    def __init__(self, *, write_report: bool) -> None:
+        super().__init__()
+        self.write_report = write_report
+        self.runs = 0
+
+    def python(self, _root, _project, _script, args, *, label, log_path, **kwargs):
+        result = super().python(_root, _project, _script, args, label=label, log_path=log_path, **kwargs)
+        if label == "audit_paper_derived_artifacts":
+            self.runs += 1
+            write(Path(log_path), f"DERIVED_RUNTIME_REPORT: /tmp/paper-factory-derived-{self.runs}\nVERDICT: PASS\n")
+            if self.write_report:
+                target = Path(args[args.index("--json-out") + 1])
+                write(target, '{"passed": true}\n')
+        return result
+
+
+def test_derived_artifact_check_records_its_stable_report_not_the_trace(tmp_path: Path) -> None:
+    # s16: the final paper checks hashed the stdout trace, whose random temp
+    # directory changed the final snapshot on every recheck.
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_model(project)
+    write(project / "demo_paper.tex", lines(30))
+    write(project / "code_review.md", lines(20))
+    service = IncrementalAuditService(root, runner=DerivedReportRunner(write_report=True))
+
+    checks = service.paper_checks(project)
+    first = (project / "derived_artifacts_verification.latest.json").read_bytes()
+    second_checks = service.paper_checks(project)
+
+    recorded = next(check for check in checks if check.name == "derived_artifacts")
+    assert recorded.report == "derived_artifacts_verification.latest.json"
+    assert (project / "derived_artifacts_verification.latest.json").read_bytes() == first
+    assert next(c for c in second_checks if c.name == "derived_artifacts").report == recorded.report
+    # The runtime trace is still kept in full.
+    assert "paper-factory-derived-2" in (
+        project / "logs/native_paper_derived_artifacts.log"
+    ).read_text(encoding="utf-8")
+
+
+def test_a_checker_that_writes_no_report_records_its_log(tmp_path: Path) -> None:
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_model(project)
+    write(project / "demo_paper.tex", lines(30))
+    write(project / "code_review.md", lines(20))
+    # A report left by an earlier run must not be credited to this one.
+    write(project / "derived_artifacts_verification.latest.json", '{"passed": true}\n')
+    service = IncrementalAuditService(root, runner=DerivedReportRunner(write_report=False))
+
+    checks = service.paper_checks(project)
+
+    recorded = next(check for check in checks if check.name == "derived_artifacts")
+    assert recorded.report == "logs/native_paper_derived_artifacts.log"
+    assert not (project / "derived_artifacts_verification.latest.json").exists()

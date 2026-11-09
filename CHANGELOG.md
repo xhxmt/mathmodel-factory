@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-09 — 重跑非评审检查不再改变最终快照（s16 验证发现 F22）
+
+d29b803 下用 CLI `audit` 重新评审，得到快照 `f81ed43d…`（三个角色 PASS，论文 77；视觉门禁改判 `REOPEN_REVISION_TEXT`）。签发 `deliver_snapshot` 后 `retry-step --step 16`：Step 16 确认候选快照就是已评审的那个，进入晋升路径，在已评审的 PDF 上重跑所有非评审检查，然后复核快照，结果对不上，于是退回去重新编译、重跑评审。重跑的 math 角色又撞上账号用量上限，rev 850 以 `PERMANENT_JUDGE_INFRASTRUCTURE` 失败。
+
+- **原因**：`judge_outputs/final_paper_checks.json` 给每项检查记录报告文件的哈希。派生产物检查记录的是 stdout 运行轨迹 `logs/native_paper_derived_artifacts.log`，里面的 `generator_command` 带着随机的临时输出目录（`paper-factory-derived-XXXX`），所以每跑一次哈希都变，最终快照的 `final_acceptance_checks` 随之变化。`verify_derived_artifacts.py` 本来就另写了一份去掉随机内容的稳定报告（`--json-out derived_artifacts_verification.latest.json`），但检查没有引用它。
+  - **修复**：`IncrementalAuditService._command_checks` 的检查定义可以带第六项“证据报告”：检查记录这份报告，stdout 照旧保存为运行轨迹。运行前先删掉旧报告，避免把上一次的结果算到这次头上；检查没写出报告时（比如跳过），仍然记录日志。派生产物检查改为记录稳定报告。
+  - 在验收 A 的拷贝上重放“重跑检查 → 复核快照”：d29b803 每次都漂移；修复后，第一次因报告路径切换变化一次，之后保持不变。
+- `factory_core/audit/incremental.py` 属于评审所用的工厂代码（`evaluator_contract`），所以已有的评审要先在新代码下重跑，才能被覆盖交付。不属于 dirty 分类器身份（09693f563ba2 不变）。
+- 测试：`tests/test_incremental_audit.py` 新增 2 例（用旧代码都会失败）。
+
 ## 2026-11-09 — 子进程继承的状态锁能用来读工作流数据库（s16 验证发现 F21）
 
 f4015ad 下覆盖授权终于走通：rev 841 时 Step 13 不编译、不重跑评审，直接交给了 Step 16。Step 16 在已评审的 PDF 上重跑非评审检查，provenance 检查却失败了（rev 844，`CONTENT_NOT_READY`）：4 个求解器收据都报 `NATIVE_WORKFLOW_REQUIRED: workflow database cannot be inspected safely`。只有交付路径会这样，分析路径不持锁，所以同一项检查在评审时是 PASS。
