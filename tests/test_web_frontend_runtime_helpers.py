@@ -508,9 +508,11 @@ assert.deepEqual(filterProblemArchives(archives, { query: 'a_old' }).map((item) 
 assert.deepEqual(filterProblemArchives(archives, { statusFilter: 'running' }).map((item) => item.key), ['sha256:a'])
 
 // One running predicate: retrying and archiving runs count as running everywhere.
-const retrying = buildProblemArchives([{ base_name: 'c', problem_key: 'sha256:c', status: 'retrying', execution_state: 'retrying' }])
-assert.equal(retrying[0].running_count, 1)
-assert.equal(filterProblemArchives(retrying, { statusFilter: 'running' }).length, 1)
+for (const state of ['retrying', 'archiving']) {
+  const active = buildProblemArchives([{ base_name: 'c', problem_key: 'sha256:c', status: state, execution_state: state }])
+  assert.equal(active[0].running_count, 1, state)
+  assert.equal(filterProblemArchives(active, { statusFilter: 'running' }).length, 1, state)
+}
 
 const store = createProjectStore({ projectsApi: { list: async () => runs } })
 await store.fetchProjects()

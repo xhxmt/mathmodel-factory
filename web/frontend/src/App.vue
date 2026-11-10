@@ -82,11 +82,11 @@
               <ProjectRow v-else :project="archive.latest" @open="openProject" @action="onAction" />
             </template>
           </div>
-          <p v-else-if="projects.length && !query && statusFilter === 'all'" class="rest-note">其余运行都列在上面。</p>
+          <p v-else-if="projects.length && !query.trim() && statusFilter === 'all'" class="rest-note">其余运行都列在上面。</p>
           <div v-else class="empty panel">
             <Icon name="inbox" :size="26" />
-            <p>{{ query || statusFilter !== 'all' ? '没有匹配的项目' : '还没有项目' }}</p>
-            <button v-if="!query && statusFilter === 'all'" class="btn btn-sm" @click="openNew">{{ isAdmin ? '新建项目' : '申请项目' }}</button>
+            <p>{{ query.trim() || statusFilter !== 'all' ? '没有匹配的项目' : '还没有项目' }}</p>
+            <button v-if="!query.trim() && statusFilter === 'all'" class="btn btn-sm" @click="openNew">{{ isAdmin ? '新建项目' : '申请项目' }}</button>
           </div>
         </section>
 
