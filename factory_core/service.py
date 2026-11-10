@@ -934,34 +934,35 @@ class FactoryService:
         self,
         project: str | Path,
         *,
-        mode: str,
-        threshold_seconds: int = 300,
         allowed_runtimes: list[str] | None = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
+        """Set which runtimes the local solver accepts for this project.
+
+        Solver jobs always run locally; the policy is the per-project runtime
+        allowlist (python by default).  Stored in SQLite ``project_config``.
+        """
+
         resolved = self.resolve_project(project)
-        if mode in {"cloud", "auto"} and self._cloud_quarantined():
-            raise InvalidTransition("cloud solver execution is quarantined")
         store = SQLiteStateStore(resolved)
         state = store.load()
         revision = state.revision if expected_revision is None else expected_revision
+        current = store.solver_policy()
         updated = _workflow_coordinator(store).configure_solver_policy(
             expected_revision=revision,
-            mode=mode,
-            threshold_seconds=threshold_seconds,
+            mode="local",
+            threshold_seconds=int(current["threshold_seconds"]),
             allowed_runtimes=allowed_runtimes or ["python"],
         )
         write_compatibility_projections(resolved, updated)
-        self._write_solver_policy_projection(resolved, store.solver_policy())
-        return {"revision": updated.revision, **store.solver_policy()}
+        return {"revision": updated.revision, **self.solver_policy(resolved)}
 
     def solver_policy(self, project: str | Path) -> dict[str, Any]:
         resolved = self.resolve_project(project)
         policy = SQLiteStateStore(resolved).solver_policy()
         return {
-            **policy,
-            "quarantined": self._cloud_quarantined(),
-            "enabled": policy["mode"] in {"cloud", "auto"} and not self._cloud_quarantined(),
+            "allowed_runtimes": policy["allowed_runtimes"],
+            "updated_revision": policy["updated_revision"],
         }
 
     def submit_solver(
@@ -997,7 +998,7 @@ class FactoryService:
         policy = store.solver_policy()
         if runtime not in policy["allowed_runtimes"]:
             raise InvalidTransition(f"solver runtime is not allowed: {runtime}")
-        backend_name = self._solver_backend_for(policy, runtime, max_time_seconds)
+        backend_name = "local"
         backend = self.solver_backends.get(backend_name)
         state = store.load()
         if dry_run:
@@ -1342,23 +1343,6 @@ class FactoryService:
         if manifest.get("status") not in {"CURRENT_PASS", "GATE2_OVERRIDE_DELIVERED"}:
             raise InvalidTransition("completed project failed final delivery evaluation")
 
-    def _solver_backend_for(
-        self, policy: dict[str, Any], runtime: str, max_time_seconds: int
-    ) -> str:
-        mode = policy["mode"]
-        if mode == "local":
-            return "local"
-        cloud_eligible = (
-            not self._cloud_quarantined()
-            and runtime in policy["allowed_runtimes"]
-            and max_time_seconds >= int(policy["threshold_seconds"])
-        )
-        if mode == "cloud":
-            if not cloud_eligible:
-                raise InvalidTransition("cloud solver policy cannot run this job")
-            return "cloud_run"
-        return "cloud_run" if cloud_eligible else "local"
-
     @staticmethod
     def _record_solver_submission(
         store: SQLiteStateStore,
@@ -1418,21 +1402,8 @@ class FactoryService:
         store: SQLiteStateStore,
         job: dict[str, Any],
     ) -> dict[str, Any]:
-        """Recover the crash window after provider acceptance but before local ack."""
+        """Recover the crash window after the local launch but before its ack."""
 
-        if job["backend"] == "cloud_run":
-            backend = self.solver_backends.get(job["backend"])
-            try:
-                observed = backend.status({**job, "external_id": job["job_id"]})
-            except Exception:
-                return {**job, "reconciliation_status": "provider_lookup_pending"}
-            _workflow_coordinator(store).update_solver_job(
-                job["job_id"],
-                expected_job_revision=int(job["job_revision"]),
-                status=observed,
-                external_id=job["job_id"],
-            )
-            return store.solver_job(job["job_id"])
         exit_path = project / ".factory" / "solver_jobs" / f"{job['job_id']}.json"
         if exit_path.is_file():
             try:
@@ -1480,24 +1451,6 @@ class FactoryService:
             # Job state remains queryable. Public evidence will fail closed and
             # expose the missing/invalid receipt instead of promoting metadata.
             return
-
-    @staticmethod
-    def _cloud_quarantined() -> bool:
-        return os.getenv("CLOUD_SOLVER_QUARANTINED", "true").strip().lower() == "true"
-
-    @staticmethod
-    def _write_solver_policy_projection(project: Path, policy: dict[str, Any]) -> None:
-        path = project / ".env.cloud"
-        if policy["mode"] == "local":
-            path.unlink(missing_ok=True)
-            return
-        path.write_text(
-            "# Compatibility projection; SQLite project_config is authoritative.\n"
-            "USE_CLOUD_SOLVER=true\n"
-            f"CLOUD_THRESHOLD_TIME={policy['threshold_seconds']}\n"
-            f"CLOUD_SOLVER_TYPES={','.join(policy['allowed_runtimes'])}\n",
-            encoding="utf-8",
-        )
 
     @staticmethod
     def _assert_expected_revision(

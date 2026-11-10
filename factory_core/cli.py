@@ -323,11 +323,13 @@ def build_parser() -> argparse.ArgumentParser:
     solver_cancel = solver_sub.add_parser("cancel")
     solver_cancel.add_argument("project_dir")
     solver_cancel.add_argument("job_id")
-    solver_policy = solver_sub.add_parser("policy")
+    solver_policy = solver_sub.add_parser(
+        "policy", help="show or set the runtimes the local solver accepts"
+    )
     solver_policy.add_argument("project_dir")
-    solver_policy.add_argument("--mode", choices=["local", "cloud", "auto"])
-    solver_policy.add_argument("--threshold", type=int, default=300)
-    solver_policy.add_argument("--runtimes", default="python")
+    solver_policy.add_argument(
+        "--runtimes", help="comma-separated runtimes to allow, e.g. python,julia"
+    )
     solver_policy.add_argument("--expected-revision", type=int)
 
     action = sub.add_parser("action")
@@ -709,13 +711,11 @@ def main(argv: list[str] | None = None) -> int:
                 job = service.cancel_solver(project, args.job_id)
                 print(job["status"].upper())
                 return 0
-            if args.mode is None:
+            if args.runtimes is None:
                 print(json.dumps(service.solver_policy(project), sort_keys=True))
                 return 0
             policy = service.configure_solver_policy(
                 project,
-                mode=args.mode,
-                threshold_seconds=args.threshold,
                 allowed_runtimes=[value for value in args.runtimes.split(",") if value],
                 expected_revision=args.expected_revision,
             )

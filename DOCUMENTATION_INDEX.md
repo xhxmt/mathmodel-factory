@@ -75,10 +75,9 @@
 - [web/USAGE_GUIDE.md](web/USAGE_GUIDE.md)：上传、题目归档与权限使用说明。
 - [web/docs/deployment/DEPLOYMENT.md](web/docs/deployment/DEPLOYMENT.md)：唯一现役生产部署与回滚 runbook。
 - [SOLVER_JOBS_FEATURE.md](SOLVER_JOBS_FEATURE.md)：Solver Jobs API、前端面板、receipt 语义和维护边界。
-- [docs/GCP_SERVICES_INTEGRATION.md](docs/GCP_SERVICES_INTEGRATION.md)：历史 GCP 服务集成设计；当前状态以 Cloud Solver 隔离合同为准。
+- [docs/GCP_SERVICES_INTEGRATION.md](docs/GCP_SERVICES_INTEGRATION.md)：历史 GCP 服务集成设计；其中的 Cloud Solver 部分已于 2026-11-10 移除，求解只在本地运行。
 - [docs/SECRET_MANAGER_GUIDE.md](docs/SECRET_MANAGER_GUIDE.md)：Secret Manager 配置。
-- [CLOUD_SOLVER_ENABLED.md](CLOUD_SOLVER_ENABLED.md)：Cloud Solver 当前 P0 代码合同、线上隔离状态、硬限制与解除隔离阻断项。
-- [docs/deployment/](docs/deployment/)：历史 Cloud Solver 部署指南与验证记录；不得用于解除当前隔离。
+- [docs/deployment/](docs/deployment/)：历史 Web 部署验证记录。
 
 ## 专题报告与修复记录
 

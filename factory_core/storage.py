@@ -3934,7 +3934,9 @@ class SQLiteStateStore:
         threshold_seconds: int,
         allowed_runtimes: list[str],
     ) -> WorkflowState:
-        if mode not in {"local", "cloud", "auto"}:
+        # Solver jobs run locally only (cloud execution was removed); the
+        # column stays for schema and domain-hash compatibility.
+        if mode != "local":
             raise ValueError(f"unsupported solver mode: {mode}")
         if threshold_seconds < 1 or threshold_seconds > 86_400:
             raise ValueError("solver threshold must be between 1 and 86400 seconds")

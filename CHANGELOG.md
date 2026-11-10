@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-11-10 — 移除 Cloud Run 求解器，求解只在本地运行
+
+Cloud Solver 自 2026-07-29 起一直处于隔离状态（`CLOUD_SOLVER_QUARANTINED` 默认为真），任何项目都没有配置过云端策略，也没有产生过 `cloud_run` 求解任务。后续不再使用，整条链路删除。
+
+- **删除**：
+  - `cloud/`：Cloud Run 服务、Dockerfile、cloudbuild、哈希锁导出。
+  - `factory_core/adapters/solvers/cloud_run.py`、`web/backend/cloud_api.py`（`/api/cloud/*` 与 `/api/projects/{base}/cloud/*`）。
+  - 脚本：`scripts/cloud_solver_auth.py`、`cloud_solver_monitor.py`、`validate_cloudbuild.py`、`rollback_cloud_solver.sh`、`gcp_solver_client.sh`。
+  - 对应测试（`tests/test_cloud_solver*.py`、`test_cumcm2025a_cloudrun.py`）。
+  - 文档：`CLOUD_SOLVER_ENABLED.md` 与三份 Cloud Run 部署指南。
+  - 前端的云端界面已在改版中删除。
+- **求解策略只剩运行时白名单**：
+  - 提交的任务一律走本地后端，不再有 `local/cloud/auto` 模式和云端阈值，也不再写 `.env.cloud` 投影。
+  - `factory solver policy <project> [--runtimes python,julia]`：不带参数时显示当前白名单，带参数时设置。白名单默认只有 python，是本地运行非 python 求解器的唯一开关。
+  - `FactoryService.configure_solver_policy` 只接受 `allowed_runtimes`。
+  - 存储层 `project_config` 表结构和领域哈希不变，旧项目无需迁移；写入时只接受 `local` 模式。
+- **依赖与 CI**：
+  - 删除 `cloud` 附加项，`uv.lock` 只减少了它独有的包，没有升级其他包；Web 的哈希锁导出不变。
+  - CI 的 `cloud` 任务改为 `domain-oracles`，只装 dev 组，运行两个 cumcm2025a 领域预言机测试。
+  - `web/deploy.sh` 不再检查 `cloud/requirements.lock`。
+- **密钥扫描**：`payload_secret_scan` 原来为 `gcp_solver_client.sh` 留有一个按哈希锁定的 Bearer 例外。脚本删除后，这个例外不可能再命中，一并移除，扫描只会更严。
+- **保留**：
+  - Secret Manager 相关的 gcloud 用法（`load_secrets.sh`、运维状态里的 `gcloud_path`）。
+  - 旧版任务列表里按 `cloud_` 前缀标注历史任务后端的逻辑。
+  - 已标注为历史快照的文档。
+
 ## 2026-11-09 — v2 交付合同评估与 Step 16 采用同样的入口门禁规则，代码审查标记以台账为准（s16 验证发现 F23 补充、F24）
 
 6876743 下 Step 16 成功（rev 862 复用 `OVERRIDDEN` 验收和已发布的 release，rev 863 `PROJECT_COMPLETED`）。但 worker 随后写出的 `delivery_manifest.json` 状态是 `LEGACY_DELIVERED`，不是 `GATE2_OVERRIDE_DELIVERED`，于是报“completed project failed final delivery evaluation”，没有归档到 `complete/`。交付合同评估（`evaluate_modeling_project.evaluate`）有两项失败：

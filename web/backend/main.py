@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import WsTicketStore, create_access_token, get_current_user
 from .auth_store import AuthStore, InvalidUsername, UserExists, UserNotFound
-from .cloud_api import create_cloud_router
 from .config import load_settings, validate_settings
 from .ops_status import build_secret_ops_status
 from .project_api import (
@@ -420,12 +419,10 @@ async def revoke_admin_delivery_override(
 
 
 project_router = create_project_router(settings, ticket_store, manager)
-cloud_router = create_cloud_router(settings)
 ws_router = create_ws_router(settings, ticket_store, manager)
 showcase_router = create_showcase_router(settings, auth_store)
 
 app.include_router(project_router)
-app.include_router(cloud_router)
 app.include_router(ws_router)
 app.include_router(showcase_router)
 
@@ -499,11 +496,6 @@ reject_project_request = _router_endpoint(project_router, "/api/admin/project-re
 project_action = _router_endpoint(project_router, "/api/projects/{base_name}/action")
 put_model_registry = _router_endpoint(project_router, "/api/models/registry")
 put_model_config = _router_endpoint(project_router, "/api/models/config")
-cloud_status = _router_endpoint(cloud_router, "/api/cloud/status")
-cloud_config = _router_endpoint(cloud_router, "/api/cloud/config")
-project_cloud_config = _router_endpoint(cloud_router, "/api/projects/{base_name}/cloud/config")
-enable_cloud_solver = _router_endpoint(cloud_router, "/api/projects/{base_name}/cloud/enable")
-disable_cloud_solver = _router_endpoint(cloud_router, "/api/projects/{base_name}/cloud/disable")
 get_solver_jobs = _router_endpoint(project_router, "/api/projects/{base_name}/solver-jobs")
 get_solver_job_detail = _router_endpoint(project_router, "/api/projects/{base_name}/solver-jobs/{job_id}")
 websocket_endpoint = _router_endpoint(ws_router, "/ws")

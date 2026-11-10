@@ -16,7 +16,6 @@ def load_main_module(factory_root=None, auth_db_file=None):
     for module_name in [
         "web.backend.main",
         "web.backend.project_api",
-        "web.backend.cloud_api",
         "web.backend.ws",
         "web.backend.auth",
         "web.backend.access_control",
@@ -202,11 +201,6 @@ def test_main_module_exposes_runtime_api_surface():
         "get_models",
         "put_model_registry",
         "put_model_config",
-        "cloud_status",
-        "cloud_config",
-        "project_cloud_config",
-        "enable_cloud_solver",
-        "disable_cloud_solver",
         "get_solver_jobs",
         "get_solver_job_detail",
         "websocket_endpoint",
@@ -386,75 +380,6 @@ def test_project_listing_avoids_ambiguous_duplicate_base_names(tmp_path, monkeyp
     assert len(payload) == 1
     assert payload[0].base_name == "demo"
     assert payload[0].storage_scope == "ongoing"
-
-
-def test_project_cloud_config_reports_quarantine_and_rejects_enable(tmp_path, monkeypatch):
-    mod = load_main_module()
-    from web.backend import cloud_api
-
-    settings = mod.settings.__class__(
-        jwt_secret="0123456789abcdef0123456789abcdef",
-        admin_password="strong-password",
-        factory_root=tmp_path,
-        jwt_hours=24,
-        gcp_project_id="level-night-476302-k0",
-        gcp_region="europe-west4",
-        gcp_solver_service="solver-api",
-    )
-    project = settings.ongoing_dir / "demo"
-    project.mkdir(parents=True)
-
-    initial = cloud_api.project_cloud_config(settings, "demo")
-    assert initial["enabled"] is False
-    assert initial["quarantined"] is True
-    assert initial["env_file"] == str(project / ".env.cloud")
-
-    try:
-        cloud_api.set_project_cloud_enabled(settings, "demo", True)
-    except cloud_api.HTTPException as exc:
-        assert exc.status_code == 503
-    else:
-        raise AssertionError("quarantined cloud solver must reject enable requests")
-
-    monkeypatch.setenv("CLOUD_SOLVER_QUARANTINED", "false")
-    cloud_api.set_project_cloud_enabled(settings, "demo", True)
-    enabled = cloud_api.project_cloud_config(settings, "demo")
-    assert enabled["enabled"] is True
-    assert enabled["quarantined"] is False
-    assert "USE_CLOUD_SOLVER=true" in (project / ".env.cloud").read_text(encoding="utf-8")
-    assert enabled["solver_types"] == ["python"]
-    assert enabled["invoker_service_account"].startswith("solver-invoker@")
-    assert "GCP_PROJECT_ID=" not in (project / ".env.cloud").read_text(encoding="utf-8")
-    assert "CLOUD_SOLVER_IMPERSONATE_SERVICE_ACCOUNT=" not in (
-        project / ".env.cloud"
-    ).read_text(encoding="utf-8")
-
-    cloud_api.set_project_cloud_enabled(settings, "demo", False)
-    disabled = cloud_api.project_cloud_config(settings, "demo")
-    assert disabled["enabled"] is False
-    assert not (project / ".env.cloud").exists()
-
-
-def test_project_cloud_config_rejects_unknown_project(tmp_path):
-    mod = load_main_module()
-    from web.backend import cloud_api
-
-    settings = mod.settings.__class__(
-        jwt_secret="0123456789abcdef0123456789abcdef",
-        admin_password="strong-password",
-        factory_root=tmp_path,
-        jwt_hours=24,
-    )
-
-    try:
-        cloud_api.set_project_cloud_enabled(settings, "missing", True)
-    except Exception as exc:
-        assert getattr(exc, "status_code", None) == 404
-        assert "Project not found" in str(getattr(exc, "detail", ""))
-    else:
-        raise AssertionError("expected HTTPException")
-
-    assert not (settings.ongoing_dir / "missing").exists()
 
 
 def test_recent_logs_prefers_newer_runner_log_over_stale_step_log(tmp_path):
@@ -1112,53 +1037,6 @@ def test_web_project_creation_calls_factory_service_directly(tmp_path, monkeypat
         "call": ("demo", str(problem.resolve()), True, False),
     }
     assert json.loads(result.stdout)["revision"] == 1
-
-
-def test_web_cloud_policy_rejects_stale_engine_revision(tmp_path):
-    from factory_core.service import FactoryService
-
-    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web/auth.db")
-    cloud_api = importlib.import_module("web.backend.cloud_api")
-    service = FactoryService(tmp_path)
-    service.create_project("demo", "question", start=False)
-    before = service.inspect("demo")
-    current = service.configure_solver_policy(
-        "demo",
-        mode="local",
-        expected_revision=before.revision,
-    )
-
-    with pytest.raises(mod.HTTPException) as excinfo:
-        cloud_api.set_project_cloud_enabled(
-            mod.settings,
-            "demo",
-            False,
-            expected_revision=before.revision,
-        )
-
-    assert excinfo.value.status_code == 409
-    assert "expected revision" in excinfo.value.detail
-    assert service.inspect("demo").revision == current["revision"]
-
-
-def test_cloud_global_config_is_admin_only_and_project_config_requires_owner(tmp_path):
-    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
-    _install_auth_store(mod)
-    _make_project(tmp_path, "owned")
-    mod.auth_store.grant_project_owner("owned", "alice", actor="admin")
-    alice = mod.UserInfo(username="alice", role="user", status="active")
-    bob = mod.UserInfo(username="bob", role="user", status="active")
-
-    with pytest.raises(mod.HTTPException) as global_error:
-        asyncio.run(mod.cloud_config(current_user=alice))
-    assert global_error.value.status_code == 403
-
-    owned = asyncio.run(mod.project_cloud_config("owned", current_user=alice))
-    assert owned["enabled"] is False
-
-    with pytest.raises(mod.HTTPException) as owner_error:
-        asyncio.run(mod.project_cloud_config("owned", current_user=bob))
-    assert owner_error.value.status_code == 404
 
 
 class RecordingWebSocket:

@@ -525,7 +525,10 @@ clear evidence-backed reason.
 
 ## Solver Execution Model
 
-Use `solver_submit.sh`, not ad hoc background jobs, for nontrivial runs:
+Use `solver_submit.sh`, not ad hoc background jobs, for nontrivial runs.
+Solver jobs always run locally (the Cloud Run solver was removed on
+2026-11-10). The per-project runtime allowlist is python by default; widen it
+with `factory solver policy <project> --runtimes python,julia`:
 
 ```bash
 ../../solver_submit.sh --type python --max-time 1800 \
@@ -569,8 +572,8 @@ administrator can manage all projects. Read-only paper visibility is a separate
 public set plus their personal grants. `SHOWCASE_PROJECTS` seeds the guest
 audience only when an existing database is first upgraded to this contract.
 
-Engine project creation, lifecycle controls, and solver policy call
-`FactoryService` directly. FastAPI owns authentication, ACL checks, and HTTP
+Engine project creation and lifecycle controls call `FactoryService`
+directly. FastAPI owns authentication, ACL checks, and HTTP
 error mapping; it does not route these commands through shell subprocesses.
 
 The Web project list exposes `problem_key`, `problem_title`, `storage_scope`,
@@ -614,6 +617,6 @@ prefix. `web/README.md` owns current usage and
   recovery value have been reported and the user has explicitly approved the
   destructive action.
 - `run_paper.sh` must remain a thin compatibility launcher. Existing Step shell changes belong in the frozen adapter; new scheduling behavior belongs in `factory_core/`.
-- Root `pyproject.toml`/`uv.lock`, hash-locked Web/Cloud exports, and frontend `package-lock.json` own dependency resolution. Runtime start scripts must not install packages.
+- Root `pyproject.toml`/`uv.lock`, the hash-locked Web export, and frontend `package-lock.json` own dependency resolution. Runtime start scripts must not install packages.
 - Do not change `STEPS.md`, `modeling_guide.md`, or active prompts casually; they are agent contracts.
 - Keep historical prompt/data files unless deletion is explicitly approved. They are not an executable compatibility promise.

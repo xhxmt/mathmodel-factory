@@ -115,17 +115,9 @@ cat > .env.safe <<EOF
 # DEEPSEEK_API_KEY=<从 Secret Manager 加载>
 
 # ==========================================
-# Cloud Solver 配置
+# GCP（Secret Manager 所在项目）
 # ==========================================
-USE_CLOUD_SOLVER=false
-CLOUD_THRESHOLD_TIME=300
-CLOUD_SOLVER_TYPES=python
-CLOUD_SOLVER_IMPERSONATE_SERVICE_ACCOUNT=solver-invoker@${PROJECT_ID}.iam.gserviceaccount.com
-
 GCP_PROJECT_ID=$PROJECT_ID
-GCP_REGION=europe-west4
-GCP_SOLVER_SERVICE=solver-api
-GCP_SOLVER_BUCKET=${PROJECT_ID}-solver-jobs
 
 # ==========================================
 # Cloud Logging
