@@ -11,7 +11,6 @@ import argparse
 import base64
 import ast
 from dataclasses import dataclass
-import hashlib
 import io
 import json
 from pathlib import Path
@@ -81,23 +80,13 @@ def _contains_validated_compact_jwt(value: bytes) -> bool:
     return False
 
 
-def _contains_hardcoded_bearer(
-    value: bytes,
-    *,
-    allow_printf_placeholder: bool = False,
-) -> bool:
+def _contains_hardcoded_bearer(value: bytes) -> bool:
     for candidate in _BEARER_VALUE.finditer(value):
         supplied = candidate.group(1)
         tail = value[candidate.start(1) :]
         command = _shell_command_substitution(tail)
         if command is not None:
             return True
-        if allow_printf_placeholder and re.fullmatch(rb"%s(?:\\[nrt])?", supplied):
-            remainder = value[candidate.end(1) :]
-            if remainder[:1] in {b'"', b"'"}:
-                remainder = remainder[1:]
-            if not remainder or remainder[:1] in b" \t\r\n;)|":
-                continue
         if any(pattern.fullmatch(supplied) for pattern in _DYNAMIC_BEARER_VALUES):
             remainder = value[candidate.end(1) :]
             if remainder[:1] in {b'"', b"'"}:
@@ -1191,10 +1180,7 @@ def scan_bytes(path: str, value: bytes) -> tuple[SecretFinding, ...]:
         ),
         lambda: (
             ("hardcoded_authorization_bearer",)
-            if _contains_hardcoded_bearer(
-                value,
-                allow_printf_placeholder=False,
-            )
+            if _contains_hardcoded_bearer(value)
             else ()
         ),
         lambda: _python_static_literal_rules(path, value),

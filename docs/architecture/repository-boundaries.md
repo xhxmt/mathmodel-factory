@@ -10,7 +10,7 @@
 | Human CLI entry | `apps/cli/` | `launch_agents.sh`, `scripts/project_ctl.py` |
 | Web ASGI entry | `apps/web/backend/main.py` | `web/backend/main.py` contains the transitional implementation |
 | Web frontend implementation | `web/frontend/` | `apps/web/frontend/` documents the future move boundary |
-| Service deployment | `deploy/systemd/`, `deploy/nginx/` | no runtime state is stored here |
+| Service deployment | `deploy/systemd/` | no runtime state is stored here |
 | Evaluator and ablations | `evaluation/`, `experiments/` | grouped by `benchmarks/README.md` |
 | Frozen shell control | `legacy/shell/` | root shell launchers select it explicitly |
 | Retired domain assets | `legacy/social_science/` | read-only historical ownership |

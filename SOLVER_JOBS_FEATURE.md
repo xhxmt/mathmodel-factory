@@ -75,6 +75,8 @@ GET /api/projects/{base_name}/solver-jobs/{job_id}
 }
 ```
 
+新任务的 `backend` 一律是 `local`。列表和详情端点按 job ID 前缀推断这个字段，所以历史上以 `cloud_` 开头的遗留 job 仍会报告 `cloud`（仅遗留值）。
+
 **核心特性：**
 - 支持 legacy jobs（只有状态文件，没有 two-stage receipt）
 - 支持新 jobs（完整 submission + completion receipts）
