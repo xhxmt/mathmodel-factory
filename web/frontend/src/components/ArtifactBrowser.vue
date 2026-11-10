@@ -3,7 +3,7 @@
     <!-- file tree -->
     <aside class="ab-tree">
       <div class="ab-tree-head">
-        <span class="label">产物 · ARTIFACTS</span>
+        <span class="label">项目文件</span>
         <span class="count mono">{{ files.length }}</span>
       </div>
       <div class="ab-tree-body">
@@ -330,32 +330,31 @@ export default {
 .paper-btn {
   width: 100%; display: flex; align-items: center; gap: 9px;
   padding: 10px 12px; margin-bottom: 8px;
-  background: var(--amber-dim); border: 1px solid var(--amber-line); border-radius: var(--r);
-  color: var(--amber); font: 600 12.5px/1 var(--sans); cursor: pointer;
+  background: var(--accent-dim); border: 1px solid var(--accent-line); border-radius: var(--r);
+  color: var(--accent); font: 600 12.5px/1 var(--sans); cursor: pointer;
   transition: all 0.15s var(--ease);
 }
-.paper-btn:hover { background: var(--amber); color: var(--amber-ink); }
-.paper-btn.active { background: var(--amber); color: var(--amber-ink); }
+.paper-btn:hover { background: var(--accent); color: var(--accent-ink); }
+.paper-btn.active { background: var(--accent); color: var(--accent-ink); }
 
 .tree-empty { padding: 24px 12px; text-align: center; color: var(--ink-3); font-size: 12px; }
 
 .pinned {
   margin: 0 0 10px;
   padding: 7px;
-  border: 1px solid var(--amber-line);
+  border: 1px solid var(--line);
   border-radius: var(--r);
-  background: var(--amber-dim);
+  background: var(--panel-2);
 }
 .pinned-h {
   display: flex; align-items: center; gap: 6px;
   margin: 0 0 6px;
-  color: var(--amber);
-  font: 700 10.5px/1 var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  color: var(--ink-2);
+  font: 600 12px/1 var(--sans);
+  letter-spacing: 0;
 }
 .pinitem {
-  border-left-color: var(--amber-line);
+  border-left-color: var(--line-2);
   background: color-mix(in srgb, var(--panel) 74%, transparent);
 }
 
@@ -364,7 +363,7 @@ export default {
 .grp-head:hover { background: var(--panel-2); }
 .grp-ic { color: var(--ink-3); }
 .grp-name { flex: 1; text-align: left; }
-.grp-n { font-size: 10px; color: var(--ink-3); }
+.grp-n { font-size: 11.5px; color: var(--ink-3); }
 .grp-files { padding-left: 8px; }
 
 .fitem { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; background: none; border: none; border-left: 1.5px solid var(--line); color: var(--ink-2); cursor: pointer; font: 500 12px/1.3 var(--mono); transition: all 0.12s var(--ease); }
@@ -378,7 +377,7 @@ export default {
 .view-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
 .vh-left { display: flex; align-items: center; gap: 9px; min-width: 0; color: var(--ink-2); }
 .vh-name { font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vh-size { font-size: 10.5px; color: var(--ink-3); flex-shrink: 0; }
+.vh-size { font-size: 11.5px; color: var(--ink-3); flex-shrink: 0; }
 .vh-right { display: flex; gap: 6px; flex-shrink: 0; }
 
 .view-body { flex: 1; min-height: 0; overflow: auto; background: var(--bg); }
@@ -402,7 +401,7 @@ export default {
 
 .view-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 260px; color: var(--ink-3); gap: 10px; }
 .view-empty p { font-size: 14px; color: var(--ink-2); }
-.view-empty .hint { font: 500 11px/1 var(--mono); letter-spacing: 0.08em; }
+.view-empty .hint { font: 500 11px/1 var(--mono); letter-spacing: 0; }
 
 /* markdown (rendered via v-html) */
 .md { font-size: 13.5px; line-height: 1.75; color: var(--ink); max-width: 880px; }
@@ -417,7 +416,7 @@ export default {
 .md :deep(.md-code) { font-family: var(--mono); font-size: 0.88em; background: var(--panel-2); border: 1px solid var(--line); padding: 0.1em 0.4em; border-radius: var(--r-xs); color: var(--live); }
 .md :deep(.md-pre) { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; overflow-x: auto; margin: 1em 0; }
 .md :deep(.md-pre code) { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
-.md :deep(.md-quote) { border-left: 3px solid var(--amber); padding: 0.3em 1em; margin: 1em 0; color: var(--ink-2); background: var(--amber-dim); border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+.md :deep(.md-quote) { border-left: 3px solid var(--line-2); padding: 0.3em 1em; margin: 1em 0; color: var(--ink-2); background: var(--panel-2); border-radius: 0 var(--r-sm) var(--r-sm) 0; }
 .md :deep(.md-hr) { border: none; border-top: 1px solid var(--line); margin: 1.5em 0; }
 .md :deep(.md-table) { border-collapse: collapse; margin: 1em 0; font-size: 0.92em; width: 100%; }
 .md :deep(.md-table th), .md :deep(.md-table td) { border: 1px solid var(--line); padding: 7px 11px; text-align: left; }

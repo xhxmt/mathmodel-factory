@@ -2,7 +2,7 @@
   <section class="delivery panel">
     <header class="delivery-head">
       <div>
-        <div class="eyebrow">DELIVERY READINESS</div>
+        <div class="eyebrow">交付就绪检查</div>
         <h2>交付就绪中心</h2>
         <p>只认 Final Audit 与原子 current release，不把普通文件存在当成交付成功。</p>
       </div>
@@ -85,13 +85,13 @@ export default {
 <style scoped>
 .delivery { padding: 18px; }
 .delivery-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
-.eyebrow { color: var(--amber); font: 800 9px var(--mono); letter-spacing: .16em; }
+.eyebrow { color: var(--amber); font: 600 12px var(--sans); letter-spacing: 0; }
 h2 { margin: 4px 0 6px; font-size: 20px; }
 p { margin: 0; max-width: 650px; color: var(--ink-2); font-size: 12px; }
 .readiness { min-width: 155px; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); }
 .readiness svg { grid-row: 1 / 3; }
 .readiness strong { font-size: 13px; }
-.readiness span { color: var(--ink-3); font-size: 10px; }
+.readiness span { color: var(--ink-3); font-size: 11.5px; }
 .st-ready { color: var(--ok); background: var(--ok-dim); border-color: var(--ok) !important; }
 .st-blocked { color: var(--bad); background: var(--bad-dim); border-color: var(--bad) !important; }
 .check-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px; }
@@ -101,14 +101,14 @@ p { margin: 0; max-width: 650px; color: var(--ink-2); font-size: 12px; }
 .check > span { min-width: 0; }
 .check strong, .check small { display: block; }
 .check strong { font-size: 12px; }
-.check small { margin-top: 3px; color: var(--ink-3); font-size: 10px; overflow-wrap: anywhere; }
+.check small { margin-top: 3px; color: var(--ink-3); font-size: 11.5px; overflow-wrap: anywhere; }
 .check-pass > svg, .check-pass .status { color: var(--ok); }
 .check-fail > svg, .check-fail .status { color: var(--bad); }
 .check-pending > svg, .check-pending .status { color: var(--amber); }
-.status { font-size: 9.5px; }
+.status { font-size: 11.5px; }
 .release-box { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding: 12px; border-top: 1px solid var(--line); background: var(--panel-2); }
 .release-box > div:first-child { display: flex; flex-direction: column; gap: 4px; }
-.release-box span { color: var(--ink-3); font-size: 10px; }
+.release-box span { color: var(--ink-3); font-size: 11.5px; }
 .release-box strong { font-size: 11px; }
 .download-actions { display: flex; gap: 8px; }
 @media (max-width: 720px) {

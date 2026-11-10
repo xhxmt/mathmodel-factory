@@ -7,14 +7,11 @@
       <div class="bc-brand">
         <div class="mono-mark"><Icon name="layers" :size="22" /></div>
         <div>
-          <div class="bc-name mono">PAPER_FACTORY</div>
-          <div class="bc-sub mono">建模工坊 · 控制台</div>
+          <div class="bc-name">建模工坊</div>
+          <div class="bc-sub">登录后管理建模项目</div>
         </div>
       </div>
 
-      <div class="bc-boot mono">
-        <span class="bp">$</span> authenticate operator<span class="caret">_</span>
-      </div>
 
       <form @submit.prevent="submit" class="bc-form">
         <div class="seg">
@@ -147,7 +144,7 @@ export default {
 .bc-brand { display: flex; align-items: center; gap: 13px; margin-bottom: 22px; }
 .mono-mark { width: 46px; height: 46px; border-radius: var(--r); background: var(--grad); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 24px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.28); }
 .bc-name { font-size: 18px; font-weight: 700; letter-spacing: 0.04em; }
-.bc-sub { font-size: 11px; color: var(--ink-3); letter-spacing: 0.1em; margin-top: 2px; }
+.bc-sub { font-size: 11px; color: var(--ink-3); letter-spacing: 0; margin-top: 2px; }
 
 .bc-boot { font-size: 12px; color: var(--ink-3); padding: 10px 12px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-sm); margin-bottom: 22px; }
 .bp { color: var(--ok); margin-right: 6px; }

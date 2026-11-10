@@ -64,7 +64,7 @@ article { padding: 0 22px; border-left: 1px solid var(--line); }
 article:first-child { padding-left: 0; border-left: 0; }
 article:last-child { padding-right: 0; }
 .metric-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); }
-strong { display: block; margin-top: 14px; font-size: 20px; font-weight: 600; line-height: 1.4; }
+strong { display: block; margin-top: 8px; font-size: 15px; font-weight: 600; line-height: 1.4; }
 p { color: var(--ink-3); margin-top: 9px; line-height: 1.8; font-size: 12px; max-width: 28em; }
 .live { color: var(--live); }.ok { color: var(--ok); }.bad { color: var(--bad); }.amber { color: var(--amber); }.muted,.paused { color: var(--ink-2); }
 .audit-warning { display: flex; align-items: center; gap: 10px; margin-top: 20px; padding: 12px 14px; background: var(--bad-dim); border-radius: 6px; color: var(--bad); font-size: 13px; }

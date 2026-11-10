@@ -4,15 +4,15 @@
     <div class="pl-head">
       <div class="pl-title">
         <Icon name="layers" :size="15" />
-        <span class="label">比赛流程 · CONTEST CORE</span>
+        <span class="label">比赛流程</span>
       </div>
       <div class="pl-meta">
         <div class="view-toggle" aria-label="流程显示模式">
           <button :class="{ on: viewMode === 'phase' }" @click="viewMode = 'phase'">8 阶段</button>
-          <button :class="{ on: viewMode === 'step' }" @click="viewMode = 'step'">17 Step · 高级</button>
+          <button :class="{ on: viewMode === 'step' }" @click="viewMode = 'step'">全部 17 步</button>
         </div>
         <span class="mono tnum step-counter">
-          STEP {{ String(Math.max(0, displayStep)).padStart(2, '0') }} / 16
+          Step {{ Math.max(0, displayStep) }} / 16
         </span>
         <span v-if="verdict" class="tag" :class="verdictClass">
           <Icon name="scale" :size="12" /> {{ verdictLabel }}
@@ -54,7 +54,7 @@
         <article v-for="(item, index) in openIssueItems" :key="item.id || index" class="issue-row">
           <div class="issue-row-top">
             <span class="issue-id mono">{{ item.id || `ISSUE-${index + 1}` }}</span>
-            <span v-if="item.step" class="issue-step mono">STEP {{ item.step }}</span>
+            <span v-if="item.step" class="issue-step mono">Step {{ item.step }}</span>
             <span v-if="item.severity" class="issue-severity mono">{{ item.severity }}</span>
             <span class="issue-status mono">{{ item.status || 'OPEN' }}</span>
           </div>
@@ -83,7 +83,7 @@
           @click="selectPhase(phase)"
         >
           <span class="phase-id mono">{{ phase.id }}</span>
-          <span class="phase-copy"><strong>{{ phase.label }}</strong><small>STEP {{ phase.range }}</small></span>
+          <span class="phase-copy"><strong>{{ phase.label }}</strong><small>Step {{ phase.range }}</small></span>
           <Icon v-if="phase.humanGate" name="user" :size="11" />
         </button>
       </div>
@@ -379,20 +379,20 @@ export default {
 .view-toggle { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); }
 .view-toggle button { padding: 5px 8px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--ink-3); font: 600 10px var(--sans); cursor: pointer; }
 .view-toggle button.on { background: var(--live-dim); color: var(--live); }
-.step-counter { font-size: 12px; color: var(--ink-2); letter-spacing: 0.08em; }
+.step-counter { font-size: 12px; color: var(--ink-2); letter-spacing: 0; }
 .issue-toggle { cursor: pointer; }
 .issue-toggle:hover { border-color: var(--amber); }
 
 .issue-panel { margin: -4px 0 18px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
 .issue-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .issue-title { font-size: 14px; font-weight: 700; color: var(--ink); }
-.issue-summary { margin-top: 3px; font-size: 10.5px; color: var(--ink-3); }
+.issue-summary { margin-top: 3px; font-size: 11.5px; color: var(--ink-3); }
 .issue-list { max-height: 360px; overflow-y: auto; border-top: 1px solid var(--line); }
 .issue-row { padding: 12px 2px; border-bottom: 1px solid var(--line); }
 .issue-row:last-child { border-bottom: 0; }
 .issue-row-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .issue-id { font-size: 11px; font-weight: 700; color: var(--ink); }
-.issue-step, .issue-severity, .issue-status { font-size: 9.5px; padding: 3px 6px; border-radius: var(--r-xs); background: var(--panel-2); color: var(--ink-3); }
+.issue-step, .issue-severity, .issue-status { font-size: 11.5px; padding: 3px 6px; border-radius: var(--r-xs); background: var(--panel-2); color: var(--ink-3); }
 .issue-severity, .issue-status { color: var(--amber); background: var(--amber-dim); }
 .issue-text { margin-top: 7px; font-size: 13px; line-height: 1.55; color: var(--ink); overflow-wrap: anywhere; }
 .issue-meta, .issue-action { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; margin-top: 7px; font-size: 11.5px; line-height: 1.5; color: var(--ink-2); overflow-wrap: anywhere; }
@@ -409,16 +409,16 @@ export default {
 .phase-track { display: grid; grid-template-columns: repeat(8, minmax(105px, 1fr)); gap: 7px; overflow-x: auto; padding: 3px 1px 8px; }
 .phase-node { min-height: 66px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 9px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); color: var(--ink-2); text-align: left; cursor: pointer; }
 .phase-node:hover, .phase-node.selected { border-color: var(--live); color: var(--ink); }
-.phase-id { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; }
+.phase-id { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 11.5px; }
 .phase-copy { min-width: 0; }
 .phase-copy strong, .phase-copy small { display: block; }
-.phase-copy strong { font-size: 10.5px; line-height: 1.25; }
+.phase-copy strong { font-size: 11.5px; line-height: 1.25; }
 .phase-copy small { margin-top: 3px; color: var(--ink-3); font: 8.5px var(--mono); }
 .phase-done { color: var(--ok); background: var(--ok-dim); }
 .phase-live { color: var(--live); background: var(--live-dim); }
 .phase-attention { color: var(--amber); background: var(--amber-dim); border-color: var(--amber); }
 .phase-drill { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
-.drill-label { color: var(--ink-2); font-size: 9.5px; font-weight: 600; }
+.drill-label { color: var(--ink-2); font-size: 11.5px; font-weight: 600; }
 .drill-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .drill-step { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); color: var(--ink-2); font: 10px var(--sans); cursor: pointer; }
 .drill-step.selected { outline: 1px solid var(--ink); }
@@ -478,8 +478,8 @@ export default {
 
 .cap {
   margin-top: 9px; height: 12px;
-  font: 500 9px/1 var(--mono); letter-spacing: 0.1em;
-  color: var(--ink-3); text-transform: uppercase;
+  font: 500 12px/1 var(--sans); letter-spacing: 0;
+  color: var(--ink-3);
   white-space: nowrap; opacity: 0;
 }
 .cap.show { opacity: 1; }
@@ -506,9 +506,9 @@ export default {
 .d-badge.kind-human { border-color: var(--live); color: var(--live); }
 .d-titles { min-width: 0; }
 .d-name { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.d-en { font-size: 11px; color: var(--ink-3); letter-spacing: 0.08em; margin-top: 2px; }
+.d-en { font-size: 11px; color: var(--ink-3); letter-spacing: 0; margin-top: 2px; }
 
-.kind-pill { font: 600 9.5px/1 var(--mono); letter-spacing: 0.08em; padding: 3px 6px; border-radius: var(--r-xs); }
+.kind-pill { font: 600 12px/1 var(--sans); letter-spacing: 0; padding: 3px 6px; border-radius: var(--r-xs); }
 .kind-pill.gate { background: var(--amber-dim); color: var(--amber); }
 .kind-pill.human { background: var(--live-dim); color: var(--live); }
 
@@ -531,25 +531,25 @@ export default {
 .d-models { flex-basis: 100%; margin-top: 4px; padding-top: 14px; border-top: 1px dashed var(--line); }
 .d-models.locked { display: flex; align-items: center; gap: 7px; font: 500 11.5px/1.4 var(--mono); color: var(--ink-3); }
 .dm-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
-.dm-def { font-size: 10.5px; color: var(--ink-3); }
+.dm-def { font-size: 11.5px; color: var(--ink-3); }
 .dm-manage { margin-left: auto; background: none; border: none; color: var(--live); font: 600 11px/1 var(--sans); cursor: pointer; padding: 0; }
 .dm-manage:hover { text-decoration: underline; }
 .dm-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
 .dm-field { display: flex; flex-direction: column; gap: 4px; }
-.dm-l { font: 500 9.5px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+.dm-l { font: 500 12px/1 var(--sans); letter-spacing: 0; color: var(--ink-3); }
 .dm-sel { width: 210px; padding: 8px 26px 8px 10px; font-size: 12.5px; cursor: pointer;
   appearance: none;
   background-image: linear-gradient(45deg, transparent 50%, var(--ink-3) 50%), linear-gradient(135deg, var(--ink-3) 50%, transparent 50%);
   background-position: calc(100% - 14px) center, calc(100% - 9px) center;
   background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
 .dm-sel:disabled { opacity: 0.45; cursor: not-allowed; }
-.dm-note { font: 500 10.5px/1.4 var(--mono); color: var(--ink-3); padding-bottom: 9px; }
+.dm-note { font: 500 12px/1.4 var(--sans); color: var(--ink-3); padding-bottom: 9px; }
 .dm-note.api { color: var(--amber); }
 
 /* ---- tags ---- */
 .tag {
   display: inline-flex; align-items: center; gap: 6px;
-  font: 600 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+  font: 600 11px/1 var(--mono); letter-spacing: 0;
   padding: 6px 9px; border-radius: var(--r-sm);
   border: 1px solid var(--line); background: var(--panel-2); color: var(--ink-2);
 }
