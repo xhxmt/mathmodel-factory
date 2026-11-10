@@ -51,6 +51,20 @@ export TEXMFVAR="$TEX_RUNTIME/var"
 export openin_any=p
 export openout_any=p
 
+# Reproducible PDF bytes.  Without a fixed epoch xdvipdfmx stamps the wall
+# clock into /CreationDate, /ModDate and the trailer /ID, so recompiling
+# unchanged sources yields a different PDF and therefore a different final
+# audit snapshot (which judgments and deliver_snapshot overrides are bound
+# to).  A caller-supplied SOURCE_DATE_EPOCH wins; otherwise the main source's
+# modification time is the document date.  FORCE_SOURCE_DATE is unset (an
+# inherited value would freeze \today too) so \today in the document body
+# still follows the engine's normal behaviour.
+if [[ ! "${SOURCE_DATE_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+    SOURCE_DATE_EPOCH="$(stat -c %Y -- "$PROJECT/$TEX_SOURCE")"
+fi
+export SOURCE_DATE_EPOCH
+unset FORCE_SOURCE_DATE
+
 cd "$PROJECT"
 
 # 创建编译日志目录

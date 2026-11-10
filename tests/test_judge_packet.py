@@ -90,7 +90,7 @@ def test_packet_manifest_has_stable_hashes_and_context(tmp_path):
         "truncated": 0,
         "omitted": 0,
     }
-    assert first_manifest["completeness"]["contract_version"] == "judge-packet-completeness-v1"
+    assert first_manifest["completeness"]["contract_version"] == "judge-packet-completeness-v2"
     assert first_manifest["completeness"]["status"] == "INCOMPLETE"
     assert first_manifest["completeness"]["requirements"][1]["id"] == "problem_statement"
 

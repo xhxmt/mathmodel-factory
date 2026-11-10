@@ -16,6 +16,22 @@ except ModuleNotFoundError:  # direct script execution
     from numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, complete_binding
 
 ALIAS_CONTRACT = "judge-packet-alias-v1"
+# v2: a requirement may also carry ``attested_outputs`` (path + receipt digest),
+# satisfied by the manifest digest rather than by included content.
+COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v2"
+#: v1 manifests carry no attested outputs and evaluate identically under v2.
+#: The one definition the packet builder, the pre-dispatch check and the
+#: aggregator share, so the gates cannot disagree.
+COMPLETENESS_CONTRACT_VERSIONS = frozenset({"judge-packet-completeness-v1", COMPLETENESS_CONTRACT_VERSION})
+
+
+def supported_completeness_version(value) -> bool:
+    """Whether ``value`` names a supported completeness contract.
+
+    A malformed value (a list, a dict) is unsupported, never a ``TypeError``.
+    """
+
+    return isinstance(value, str) and value in COMPLETENESS_CONTRACT_VERSIONS
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -103,3 +119,37 @@ class PacketEvidence:
         return (item is not None and item.get("status") == "included"
                 and (("binary_review" not in item and not path.lower().endswith(tuple(NUMPY_SUFFIXES)))
                      or complete_binding(item)))
+
+    def attested(self, path, sha256):
+        """A receipt-attested output: listed in the packet with the receipt's bytes.
+
+        Its content need not be in the context; the solver completion receipt
+        binds those bytes, and the manifest entry must carry the same digest.
+        """
+        item = self.by_path.get(path)
+        return (item is not None and isinstance(sha256, str) and bool(_SHA256.fullmatch(sha256))
+                and item.get("sha256") == sha256)
+
+
+def evaluate_requirement(evidence, requirement):
+    """Return ``(satisfied_paths, satisfied_attested_paths, satisfied)``.
+
+    ``paths`` must be fully included. ``attested_outputs`` (completeness v2) are
+    satisfied by an exact receipt digest instead of their content.
+    """
+    paths = requirement.get("paths")
+    attested = requirement.get("attested_outputs", [])
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        raise ValueError("invalid completeness paths")
+    if not isinstance(attested, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("path"), str)
+        or not isinstance(item.get("sha256"), str) for item in attested
+    ):
+        raise ValueError("invalid attested outputs")
+    satisfied_paths = [path for path in paths if evidence.complete(path)]
+    satisfied_attested = [item["path"] for item in attested
+                          if evidence.attested(item["path"], item["sha256"])]
+    satisfied = (bool(paths) and len(satisfied_paths) == len(paths)
+                 and len(satisfied_attested) == len(attested)
+                 and not requirement.get("binding_error"))
+    return satisfied_paths, satisfied_attested, satisfied

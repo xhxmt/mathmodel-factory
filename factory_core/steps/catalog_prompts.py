@@ -19,7 +19,285 @@ from __future__ import annotations
 
 from pathlib import Path
 
+V2_REVIEW_REWORK_LINE = (
+    "- 审稿返工：如果本提示词开头有「审稿返工」段，本次运行就是为那些审稿问题而重算，按该段逐条处理；"
+    "没有该段，本步骤不是因审稿问题而重跑。"
+)
+
+# The computation Step each template renders, for the review rework block.
+REVIEW_REWORK_TEMPLATES = {
+    "step5_full_solve.txt": 5,
+    "step6_sensitivity.txt": 6,
+    "step7_model_eval.txt": 7,
+    "step8_visualization.txt": 8,
+}
+
+
+def review_rework_block(project: Path, template: str) -> str:
+    """The open review issues a v2 review recompute is re-running this Step for.
+
+    Present only while the latest ``rework_rule=review_issue`` reopen has not
+    yet returned to its revision and this Step is one it recomputes. It names
+    each issue with the ledger's current Category, Severity and Notes, so the
+    re-run Step does not have to infer why it runs from events it cannot see.
+    """
+
+    step = REVIEW_REWORK_TEMPLATES.get(Path(template).name)
+    if step is None:
+        return ""
+    from ..audit.ledger import open_review_issues
+    from ..stages import STAGE_CATALOG_VERSION_V2
+    from ..storage import SQLiteStateStore
+
+    store = SQLiteStateStore(project)
+    if not store.exists or store.load().stage_catalog_version != STAGE_CATALOG_VERSION_V2:
+        return ""
+    events = store.events()
+    reopen = next(
+        (
+            event
+            for event in reversed(events)
+            if event.type == "STAGE_SEMANTIC_REOPENED"
+            and event.payload.get("rework_rule") == "review_issue"
+        ),
+        None,
+    )
+    if reopen is None or step not in (reopen.payload.get("recompute_steps") or []):
+        return ""
+    return_subtask = reopen.payload.get("return_subtask")
+    if any(
+        event.revision > reopen.revision
+        and event.type == "STEP_SUCCEEDED"
+        and event.payload.get("stage") == 8
+        and event.payload.get("subtask") == return_subtask
+        for event in events
+    ):
+        return ""
+    ids = [str(item).split(" ", 1)[0] for item in reopen.payload.get("review_issues") or []]
+    if not ids:
+        return ""
+    current = {
+        issue.issue_id: issue
+        for issue in open_review_issues(project / "audit_issue_ledger.md", {"BLOCKING", "MAJOR"})
+    }
+    lines = []
+    for issue_id in ids:
+        issue = current.get(issue_id)
+        if issue is None:
+            lines.append(f"- {issue_id}：台账中已不是 OPEN 的 BLOCKING/MAJOR 行，以台账为准。")
+        else:
+            lines.append(f"- {issue_id}（{issue.category}，{issue.severity}）：{issue.notes}")
+    steps = "、".join(str(item) for item in reopen.payload.get("recompute_steps") or [])
+    return (
+        "【审稿返工 — 本次运行的原因】\n"
+        f"引擎因下列 Step 11 审稿问题重算 Step {steps}（事件 rev {reopen.revision}，"
+        "`rework_rule=review_issue`），本步骤是这次重算的一部分；这些问题就是本次运行要解决的事。"
+        "逐条判断根因是否在本步骤的产物（代码、结果、图、报告）中：在的，必须在本步骤修复"
+        "（改代码后重新运行、重新生成产物；求解作业照常经 `solver_submit.sh` 提交），"
+        "并在本步骤的日志或报告中逐条写明改了什么、证据在哪；不在的，写明它属于哪一步、为什么本步骤不改。"
+        "不要修改这些行的 Status，Step 12 会复核后更新。研究员备注若与这些问题无关，以本段为准。\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+# The Step every rendered template belongs to, for the final-Judge rework block.
+JUDGE_REWORK_TEMPLATES = {
+    "step4_model_construction.txt": 4,
+    "step5_full_solve.txt": 5,
+    "step6_sensitivity.txt": 6,
+    "step7_model_eval.txt": 7,
+    "step8_visualization.txt": 8,
+    "step8_5_reviewer_entry.txt": 8,
+    "step9_paper_draft.txt": 9,
+    "step10_gate1_numerical.txt": 10,
+    "step11_constructive_review.txt": 11,
+    "step12_revision.txt": 12,
+    "step14_abstract.txt": 14,
+    "step15_polish.txt": 15,
+}
+JUDGE_REWORK_VERDICTS = frozenset({"REOPEN_REVISION_MODEL", "REOPEN_REVISION_TEXT"})
+JUDGE_FINDING_CHARS = 1500
+
+
+JUDGE_VISUAL_FINDINGS_MAX = 20
+
+
+def _json_file(path: Path) -> dict | None:
+    import json
+
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _visual_findings(project: Path) -> list[str]:
+    """Blocking PDF visual-gate findings, one line per finding (page, code)."""
+
+    report = _json_file(project / "judge_outputs" / "visual_gate.json")
+    if report is None or report.get("status") != "FAIL":
+        return []
+    lines: list[str] = []
+    blocking = [item for item in report.get("findings") or []
+                if isinstance(item, dict) and item.get("severity") == "blocking"]
+    for item in blocking[:JUDGE_VISUAL_FINDINGS_MAX]:
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+        detail = "，".join(
+            f"{key}={evidence[key]}"
+            for key in ("text", "font_size", "content_bbox", "media_box", "nonwhite_fraction",
+                        "dark_edge_pixels")
+            if key in evidence
+        )
+        page = item.get("page")
+        lines.append(
+            f"- [visual {item.get('code')}，blocking"
+            + (f"，PDF 第 {page} 页" if page is not None else "")
+            + f"] {item.get('message', '')}"
+            + (f"（{detail}）" if detail else "")
+        )
+    if len(blocking) > JUDGE_VISUAL_FINDINGS_MAX:
+        lines.append(f"- ……另有 {len(blocking) - JUDGE_VISUAL_FINDINGS_MAX} 条，"
+                     "全文见 `judge_outputs/visual_gate.json`")
+    return lines
+
+
+def _judge_findings(project: Path, verdict: str) -> list[str] | None:
+    """The findings behind the final-Judge decision that reopened, or None if unreadable.
+
+    The decision is the aggregate verdict, or the decision router's when it
+    overrode a PASS aggregate (e.g. blocking visual-gate findings, acceptance A
+    F19): then the router's visual findings and the roles' remaining
+    blocking/major issues are what the repair cycle must fix.
+    """
+
+    import json
+
+    aggregate = _json_file(project / "judge_outputs" / "aggregate.json")
+    if aggregate is None:
+        return None
+    routed = False
+    if aggregate.get("verdict") != verdict:
+        route = _json_file(project / "judge_outputs" / "decision_route.json")
+        if route is None or route.get("effective_decision") != verdict:
+            return None
+        routed = True
+    lines: list[str] = []
+    for role in aggregate.get("roles") or []:
+        if not isinstance(role, dict) or role.get("status") is None:
+            continue
+        if role.get("status") == "PASS" and not (routed and role.get("role") == "paper"):
+            continue
+        try:
+            body = json.loads(str(role.get("text") or "").split("\n", 1)[1])
+        except (IndexError, ValueError):
+            return None
+        name = str(role.get("role"))
+        if name == "paper":
+            picked = [item for item in body.get("issues") or []
+                      if isinstance(item, dict) and item.get("severity") in {"blocking", "major"}]
+        else:
+            evidence = [item for item in body.get("evidence") or [] if isinstance(item, dict)]
+            picked = [item for item in evidence if item.get("severity") == "fatal"] or [
+                item for item in evidence if item.get("severity") == "risk"]
+        for item in picked:
+            text = "；".join(str(item[key]) for key in ("claim", "finding", "recommendation") if item.get(key))
+            if len(text) > JUDGE_FINDING_CHARS:
+                text = text[:JUDGE_FINDING_CHARS] + "……（全文见 judge_evaluation.md）"
+            quote = str(item.get("quote") or "")
+            lines.append(
+                f"- [{name} {item.get('ref_id', '')}，{item.get('severity')}] {text}"
+                + (f"（论文引文：{quote}）" if quote else "")
+            )
+    if routed:
+        lines.extend(_visual_findings(project))
+    return lines
+
+
+def judge_rework_block(project: Path, template: str) -> str:
+    """The final-Judge findings a v2 repair cycle is re-running this Step for.
+
+    Present from the final Judge's ``REOPEN_REVISION_*`` reopen until the
+    final Judge starts again, for each Step after the reopen target.  Without
+    it a re-run Step sees only machine audits that already PASS and has no way
+    to learn why it runs (acceptance A, F13).
+    """
+
+    step = JUDGE_REWORK_TEMPLATES.get(Path(template).name)
+    if step is None:
+        return ""
+    from ..stages import STAGE_CATALOG_VERSION_V2
+    from ..storage import SQLiteStateStore
+
+    store = SQLiteStateStore(project)
+    if not store.exists or store.load().stage_catalog_version != STAGE_CATALOG_VERSION_V2:
+        return ""
+    events = store.events()
+    reopen = next(
+        (
+            event
+            for event in reversed(events)
+            if event.type == "STEP_REOPENED"
+            and event.payload.get("subtask") == "final_judge"
+            and event.payload.get("final_decision") in JUDGE_REWORK_VERDICTS
+        ),
+        None,
+    )
+    if reopen is None:
+        return ""
+    if any(
+        event.revision > reopen.revision
+        and event.type == "STEP_STARTED"
+        and event.payload.get("subtask") == "final_judge"
+        for event in events
+    ):
+        return ""
+    target = reopen.payload.get("resume_after_step")
+    if type(target) is int and step <= target:
+        return ""
+    verdict = str(reopen.payload["final_decision"])
+    findings = _judge_findings(project, verdict)
+    if findings is None:
+        findings = ["- 未能从 `judge_outputs/aggregate.json` 或 `decision_route.json` 读出与本次退回一致的评审发现；"
+                    "请直接阅读 `judge_evaluation.md` 中各角色的 FAIL/REVISE 依据。"]
+    elif not findings:
+        findings = ["- 评审未列出 fatal/blocking/major 级发现；请阅读 `judge_evaluation.md` 中各角色的结论。"]
+    return (
+        "【最终评审返工 — 本次运行的原因】\n"
+        f"Step 13 最终评审给出 `{verdict}`（事件 rev {reopen.revision}），引擎因此退回到 Step {target} 之后，"
+        "本步骤是这一轮修复的一部分。这是唯一的一次修复：若下一次最终评审仍不通过，就不能正常交付。"
+        "下列评审发现就是本次运行要解决的事；只复核现有产物、因机器审计已 PASS 而不改，等于放弃这次修复。"
+        "逐条判断根因是否在本步骤的产物中：在的，必须在本步骤从根源修复（模型推导、代码、结果、图、论文正文），"
+        "改代码后重新运行并重新生成下游产物（求解作业照常经 `solver_submit.sh` 提交），"
+        "并在本步骤的日志或报告中逐条写明改了什么、证据在哪；不在的，写明它属于哪一步、为什么本步骤不改。"
+        "完整依据见 `judge_evaluation.md`；标为 visual 的是 PDF 版面与图的机器检查，原始记录在 `judge_outputs/visual_gate.json`。"
+        "研究员备注若与这些发现无关，以本段为准。\n"
+        + "\n".join(findings)
+        + "\n\n"
+    )
+
+
 V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
+    # The v2 Stage 8 exit routes open results/model review issues back to
+    # Steps 5-8 (engine.REVIEW_ISSUE_REWORK_RULE); the re-run Steps read them.
+    "step5_full_solve.txt": (
+        (
+            "修复真相源和执行证据后让 runner 重跑 Step-5 `results` profile 自动更新。",
+            "修复真相源和执行证据后让 runner 重跑 Step-5 `results` profile 自动更新。\n" + V2_REVIEW_REWORK_LINE,
+        ),
+    ),
+    "step6_sensitivity.txt": (
+        (
+            "修复对应产物后由 runner 重跑 Step-6 `results` profile 自动关闭，不要手工改状态。",
+            "修复对应产物后由 runner 重跑 Step-6 `results` profile 自动关闭，不要手工改状态。\n" + V2_REVIEW_REWORK_LINE,
+        ),
+    ),
+    "step7_model_eval.txt": (
+        ("本步骤只产新文档。", "本步骤只产新文档。\n" + V2_REVIEW_REWORK_LINE),
+    ),
+    "step8_visualization.txt": (
+        ("[重要 — 风格规范]", V2_REVIEW_REWORK_LINE + "\n\n[重要 — 风格规范]"),
+    ),
     "step10_gate1_numerical.txt": (
         (
             "Step 13 只做隔离的数学预审，完整的数学、执行和论文质量 Gate 2 由 Step 15 后的 `final` 审计执行。",
@@ -65,8 +343,12 @@ V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
             "让 Step 13 最终审计知道哪些 issue 已经被处理",
         ),
         (
-            "供 Step 13 数学预审或最终审计判定",
-            "供 Step 13 最终审计判定",
+            "供 Step 13 数学预审或最终审计判定（可能触发 `REOPEN_REVISION_MODEL`）。",
+            "并在 `audit_issue_ledger.md` 的对应行把 Category 写成 `results`（求解、结果、灵敏度或图生成代码）"
+            "或 `model`，Notes 写清要改的文件与具体改法。本项目在本步骤结束时由引擎读取台账中"
+            "`## Incremental audit findings` 以外的 OPEN BLOCKING/MAJOR 行：`results`/`model` 类触发一次"
+            " Step 5–8 重算（重跑的步骤会读这些行并修复）后回到本步骤复核，其余类别重跑一次 Step 11–12；"
+            "之后仍未解决则运行失败。已真正修复的行改为 RESOLVED 并写明证据。",
         ),
         (
             "后续预审或最终审计返修需要 diff",

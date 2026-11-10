@@ -114,3 +114,51 @@ def test_handoff_does_not_grant_a_lease_the_parent_lacks(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert "ACQUIRED" in completed.stdout
+
+
+def test_child_with_the_handoff_can_read_the_workflow_database(tmp_path):
+    """s16 rev 844: the handed-off child acquired the lease but could not use it.
+
+    ``verify_provenance`` reads the workflow events through ``SQLiteStateStore``,
+    whose ``require_native_project`` takes a private snapshot that requires the
+    calling thread to hold the commit lease.  The inherited lease was never
+    registered, so the snapshot refused it and every final-acceptance provenance
+    check failed with ``NATIVE_WORKFLOW_REQUIRED``.
+    """
+
+    from factory_core.storage import SQLiteStateStore
+
+    project = tmp_path / "demo"
+    SQLiteStateStore(project, clock=lambda: 100).initialize(
+        project_id="demo", project_type="modeling"
+    )
+    source = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+        from factory_core.state_lease import child_lease_handoff, state_commit_lease
+        from factory_core.storage import SQLiteStateStore
+
+        project = Path(sys.argv[1])
+        print("EVENTS", len(SQLiteStateStore(project).events()))
+        with state_commit_lease(project):
+            # Nested acquisition and a further handoff see the inherited lease.
+            print("HANDOFF", len(child_lease_handoff(project)[1]))
+        """
+    )
+
+    with state_commit_lease(project):
+        env, fds = child_lease_handoff(project)
+        completed = subprocess.run(
+            [sys.executable, "-c", source, str(project)],
+            env={**os.environ, **env},
+            pass_fds=fds,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            cwd=str(REPO_ROOT),
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "EVENTS" in completed.stdout
+    assert "HANDOFF 2" in completed.stdout

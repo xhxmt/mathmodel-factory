@@ -1,5 +1,158 @@
 # Changelog
 
+## 2026-11-09 — v2 交付合同评估与 Step 16 采用同样的入口门禁规则，代码审查标记以台账为准（s16 验证发现 F23 补充、F24）
+
+6876743 下 Step 16 成功（rev 862 复用 `OVERRIDDEN` 验收和已发布的 release，rev 863 `PROJECT_COMPLETED`）。但 worker 随后写出的 `delivery_manifest.json` 状态是 `LEGACY_DELIVERED`，不是 `GATE2_OVERRIDE_DELIVERED`，于是报“completed project failed final delivery evaluation”，没有归档到 `complete/`。交付合同评估（`evaluate_modeling_project.evaluate`）有两项失败：
+
+- **F23 补充 `entry_gate_verdict`**：评估里另有一份入口门禁新鲜度检查（`collect_step8_5_state(...)["ready"]`）。现在和 `step16_ready` 一样改用 `reviewer_entry_gate_satisfied_for_delivery`：v2 只要求门禁已经通过，v1 仍然要求新鲜。
+- **F24 `gate1_numeric_trace`**：只要 `code_review.md` 里出现 `BLOCKING` 或 `UNRESOLVED`（不区分大小写）就判失败。验收 A 命中的是封面报名号、学校、队员“待填”那一条（D-J5，对应台账 S11R-B1）：只有参赛队能填，台账里早已不再算作未解决的 blocking。
+  - **修复**：v2 项目里，`code_review.md` 有这类标记时以台账为准：扣除内容冻结批准确认过的由人负责的行（`acknowledged_human_issues`）后，台账仍有未解决的 blocking 行才判失败。v1 保持原来的文本扫描。
+- `workflow_state` 新增公开的 `stage_catalog_v2`（原来是 F23 里的私有函数 `_stage_catalog_v2`）。读不了原生工作流状态时（例如实验性的 Authority/Phase 数据库，原生边界会拒绝它），它返回 false，按更严的 v1 规则处理，不让评估崩溃（4c4a96c 漏掉了这种情况，`tests/test_delivery_contract.py::test_current_phase9_generation_cannot_reuse_legacy_delivery_projection` 因此失败）。两个文件都不属于评审所用的工厂代码，已有的快照、验收和 release 都仍然有效；也不属于 dirty 分类器身份。
+- 测试：`tests/test_evaluate_modeling_project_step8_5.py` 新增 3 例（其中 2 例用旧代码会失败）。
+
+## 2026-11-09 — v2 交付不再要求审稿入口门禁保持新鲜（s16 验证发现 F23）
+
+d3ba81f 下覆盖交付走到了最后：Step 16 在已评审快照 `ac377192…` 上晋升，记为 `OVERRIDDEN` 并消耗授权，release 已发布到 `papers/releases/…/ac377192…/`，`current.json` 已指向它。但随后的 Step 16 校验失败（rev 856，`TRANSIENT_ARTIFACT_MISSING`，提示缺 `delivery_manifest.json`；这只是固定的提示文字），项目没有移到 `complete/`。
+
+- **原因**：`workflow_state.step16_ready` 要求 Step 8.5 审稿入口门禁仍然新鲜（`step8_5_passed`，按文件修改时间判断）。验收 A 的门禁生成于 11-08 04:35；06:43 v2 的审稿问题重算重跑了 Steps 5–8，但没有重跑门禁；07:49 Step 12 又改了 `solve_log.md`。于是门禁被判为 STALE，`step16_ready` 永远为假。v2 的设计本来就只在 Step 9 入口校验一次这个门禁，之后对它所读报告的修改都算向前修复（`engine._invalidate_stale_stage_receipts`），只是 Step 16 的检查没有跟着改。
+  - **修复**：`step16_ready` 改用 `reviewer_entry_gate_satisfied_for_delivery`。v2 项目只要求门禁的三个文件齐全、`entry_gate.md` 的结论是 `VERDICT: PASS`，不再要求新鲜；v1 项目和没有工作流状态的项目仍然要求新鲜。与当前内容绑定的最终评审才是更晚的那道检查。
+  - 没有改的：v2 的审稿问题重算链仍然不重跑入口门禁。
+- `scripts/workflow_state.py` 不属于评审所用的工厂代码，所以已评审的快照和已做出的验收结果仍然有效；也不属于 dirty 分类器身份（09693f563ba2 不变）。
+- 测试：`tests/test_workflow_state.py` 新增 3 例。
+
+## 2026-11-09 — 重跑非评审检查不再改变最终快照（s16 验证发现 F22）
+
+d29b803 下用 CLI `audit` 重新评审，得到快照 `f81ed43d…`（三个角色 PASS，论文 77；视觉门禁改判 `REOPEN_REVISION_TEXT`）。签发 `deliver_snapshot` 后 `retry-step --step 16`：Step 16 确认候选快照就是已评审的那个，进入晋升路径，在已评审的 PDF 上重跑所有非评审检查，然后复核快照，结果对不上，于是退回去重新编译、重跑评审。重跑的 math 角色又撞上账号用量上限，rev 850 以 `PERMANENT_JUDGE_INFRASTRUCTURE` 失败。
+
+- **原因**：`judge_outputs/final_paper_checks.json` 给每项检查记录报告文件的哈希。派生产物检查记录的是 stdout 运行轨迹 `logs/native_paper_derived_artifacts.log`，里面的 `generator_command` 带着随机的临时输出目录（`paper-factory-derived-XXXX`），所以每跑一次哈希都变，最终快照的 `final_acceptance_checks` 随之变化。`verify_derived_artifacts.py` 本来就另写了一份去掉随机内容的稳定报告（`--json-out derived_artifacts_verification.latest.json`），但检查没有引用它。
+  - **修复**：`IncrementalAuditService._command_checks` 的检查定义可以带第六项“证据报告”：检查记录这份报告，stdout 照旧保存为运行轨迹。运行前先删掉旧报告，避免把上一次的结果算到这次头上；检查没写出报告时（比如跳过），仍然记录日志。派生产物检查改为记录稳定报告。
+  - 在验收 A 的拷贝上重放“重跑检查 → 复核快照”：d29b803 每次都漂移；修复后，第一次因报告路径切换变化一次，之后保持不变。
+- `factory_core/audit/incremental.py` 属于评审所用的工厂代码（`evaluator_contract`），所以已有的评审要先在新代码下重跑，才能被覆盖交付。不属于 dirty 分类器身份（09693f563ba2 不变）。
+- 测试：`tests/test_incremental_audit.py` 新增 2 例（用旧代码都会失败）。
+
+## 2026-11-09 — 子进程继承的状态锁能用来读工作流数据库（s16 验证发现 F21）
+
+f4015ad 下覆盖授权终于走通：rev 841 时 Step 13 不编译、不重跑评审，直接交给了 Step 16。Step 16 在已评审的 PDF 上重跑非评审检查，provenance 检查却失败了（rev 844，`CONTENT_NOT_READY`）：4 个求解器收据都报 `NATIVE_WORKFLOW_REQUIRED: workflow database cannot be inspected safely`。只有交付路径会这样，分析路径不持锁，所以同一项检查在评审时是 PASS。
+
+- **原因**：交付路径整个过程都持有项目提交锁，并通过 `child_lease_handoff` 把锁的描述符交给 `verify_provenance` 子进程（F01）。子进程在 `_exclusive_inode_lease` 里识别到继承来的锁就直接放行，既没加锁，也没登记到本线程的锁表。但 `SQLiteStateStore` → `require_native_project` → `isolated_state_snapshot_ro` 只认本线程锁表里的锁，于是报 `workflow state database snapshot requires its commit lease`。F01 的测试只验证了子进程能拿到锁，没验证拿到锁后能读数据库。
+  - **修复**：继承来的锁也登记到本线程的锁表和 `_ACTIVE_LEASE_DESCRIPTORS`，这样嵌套获取、只读快照和再往下一层的 handoff 都能认出它；退出时只注销，不解锁也不关闭描述符（仍是父进程持有的锁）。
+  - 在验收 A 的拷贝上复现：父进程持锁时，`verify_provenance.py` 在 f4015ad 下 4 项 HARD_FAIL，修复后 PASS。
+- `factory_core/state_lease.py` 属于评审所用的工厂代码（`evaluator_contract`），所以已有的评审要先在新代码下重跑，才能被覆盖交付。不属于 dirty 分类器身份。
+- 测试：`tests/test_state_lease_handoff.py` 新增 1 例（子进程经 handoff 读工作流事件，并能嵌套获取和再次 handoff；用旧代码会失败）。
+
+## 2026-11-09 — 覆盖授权探测能复现已评审的快照；重新编译得到相同的 PDF；运行日志不再算作证据（s16 验证发现 F20）
+
+在验收 A 的副本上验证 c500e99：签发了绑定已评审快照 `fa80621d…` 的 `deliver_snapshot`，然后 `retry-step --step 13`（rev 820）。Step 13 的覆盖探测没有认出这个快照，于是走了常规路径：重新编译、得到新快照 `f1c1c643…`，接着重跑评审，math 角色撞上模型用量上限，在 rev 821 以 `PERMANENT_JUDGE_INFRASTRUCTURE` 失败。
+
+- **F20a 探测重建的评审包对不上已评审快照**：objective evidence 的输入指纹包括整个 `logs/` 目录。每次审核、评审调用、证据包重建，都会往 `logs/` 写新的运行日志，所以评审结束后再重建证据包，指纹必然变化（rev 820 的探测得到 `0b0f08c8…`，已评审快照里是 `842f32b6…`；同一次重试里第二次重建又变成 `c1ae8529…`）。F18 的覆盖路径因此从来不可达。
+  - **修复**：`scripts/objective_evidence.fingerprint_paths` 遍历目录时，跳过 `logs/` 下工厂自己写的运行日志（`worker_*.log`、`step_<id>_<label>_<日期>_<时间>_<pid>_<uuid>.log`、`step_*_*_*_*.prompt.txt`、`native_*.log`，见 `is_runtime_log`）。显式列出的路径照旧计算哈希；`logs/solver_jobs/`、`logs/compilation/` 和 agent 写的日志仍算输入。
+- **F20b 重新编译的 PDF 不能逐字节复现**：没有固定时间，xdvipdfmx 会把当前时间写进 `/CreationDate`、`/ModDate` 和 trailer `/ID`，同样的源文件编译两次，PDF 和快照 ID 都不同（这次 821594 → 821595 字节）。
+  - **修复**：`compile_paper.sh` 设置 `SOURCE_DATE_EPOCH`：调用方提供了就用调用方的值，否则用主源文件的修改时间。不设置 `FORCE_SOURCE_DATE`，正文里 `\today` 的行为不变。在验收 A 的副本拷贝上实测，两次编译的 PDF 逐字节一致。
+- **F20c 运行日志还进了评审包和数字核对**（副本切到 6bbbf1d 后发现：rev 826 评审得到快照 `3eff0249…`；签发授权、`retry-step` 后，rev 831 的探测仍然对不上，又编译、又重跑了一次评审）。objective evidence 的输入指纹已经稳定，但文件内容仍会变化：`verify_numbers.collect_number_metrics` 把 `logs/*.log` 里的数字全部当作参考数字，`reference_numbers` 随新日志增长（15061 → 15640）。同时，execution 评审包把 `worker_*`、`native_objective_evidence_*`、`native_compile_paper_*`、`native_pdf_visual_gate_*` 等工厂日志当作执行证据（共 75 个文件）。
+  - **修复**：`verify_numbers.extract_log_numbers` 和 `judge_packet._is_execution_evidence`（以及 `execution_trace` 的日志兜底）都用 `is_runtime_log` 排除工厂运行日志。`tests/test_delivery_packaging_log_identity.py` 原来用虚构的 `CommandRunner(label="solver")` 日志代表求解器证据，现在改用真实位置 `logs/solver_jobs/`。
+  - **行为变化**：数字核对这项启发式检查以前能通过，部分靠的是评审模型日志里抄来的论文数字，属于循环论证。验收 A 排除这些日志后，641 个数字里有 35 个找不到来源（参考数字从 15640 个降到 379 个）。objective evidence 的 `numbers.traceability` 因此从 PASS 变为 WARN（`soft_alert`、`heuristic`，只作诊断）。Step 10 硬门禁用的 `verify_numbers.py --verify` 走 manifest，不受影响。
+  - 在验收 A 的拷贝上重放探测（重建评审包 → 写入新的 worker/native/step 日志 → 再重建）：新代码两次快照相同；6bbbf1d 会漂移。
+- 这些改动都改变了评审所用的工厂代码（`evaluator_contract`），所以已有的评审要先在新代码下重跑，才能被覆盖交付。不属于 dirty 分类器身份（09693f563ba2 不变）。
+- 测试：`tests/test_objective_evidence.py` 新增 1 例；`tests/test_paper_sources.py` 新增 1 例（`latex` 标记；用旧的 `compile_paper.sh` 会失败）；`tests/test_verify_numbers_refactor.py` 新增 1 例；`tests/test_delivery_packaging_log_identity.py` 改 1 例（这两例用旧代码都会失败）。
+
+## 2026-11-08 — v2 覆盖授权可以真正交付；Gate 2 确认由人负责的台账行；视觉问题写进返工提示（验收 A 发现 F18、F17、F19c）
+
+验收 A 的最后一次最终评审（rev 806）三个角色都 PASS，但视觉门禁有 10 个 blocking 问题，裁决改为 `REOPEN_REVISION_TEXT`，修复循环已用完。按操作规则应签发 `deliver_snapshot` 覆盖授权交付，结果发现这条路在 v2 里走不通；此前 rev 791 还因只能由人处理的 BLOCKING 行，被最终审核判 `CONTENT_NOT_READY`。
+
+- **F18 覆盖授权不可达**：v2 的 Step 13 以“仅分析”模式运行最终审核，而该模式不读覆盖授权；Step 16 要等 Step 13 拿到 PASS 才运行。另外每次审核都重新编译 PDF（未固定时间戳），同样的源文件两次得到不同的 PDF 字节和快照 ID，绑定快照的授权永远对不上。
+  - **修复**：`FinalAuditService.judged_for_override` 认定“这个快照有一次非 PASS 的评审结论，且有绑定这个快照的有效 `deliver_snapshot`”。评审结论指：已完成并给出内容结论（`AUDIT_REPAIR_REQUIRED` 或 `PERMANENT_FINAL_JUDGE`），或各角色都已作答、但硬角色认为证据不足（`PERMANENT_JUDGE_EVIDENCE_INDETERMINATE`，交付时 `judge_completed` 保持 false，只记为 OVERRIDDEN）。瞬时的评审、证据包、路由失败没有结论，只能重试，不能覆盖。快照还绑定了评审所用的工厂代码（`evaluator_contract`），工厂代码改动之后，旧的评审不能再覆盖交付，必须先重跑评审。`overridable_judgment` 不编译、只重建评审包后检查这一点，只读不消耗。v2 的 `FinalJudgeStep` 先做这个检查，满足就把运行交给 Step 16（`delivery_override_pending`），不重跑评审；validate 同样接受。Step 16 的晋升路径对这种评审与 PASS 一视同仁：在已评审的 PDF 上重跑所有非评审检查、复核快照，然后按覆盖授权记为 `OVERRIDDEN` 并消耗授权。两条路径都不重新编译，所以快照稳定；没有授权时行为不变（重跑评审）。
+  - 操作流程：从 `.factory/audits/analysis_latest.json` 取 `snapshot_id`，签发 `deliver_snapshot`，再 `retry-step --step 13`。
+- **F17 只能由人处理的行没有通道**：F16 让 `Blocking Until` 为 `Human` 或只指向 Step 14/15 的行通过 Stage 8 出口、留给 Gate 2，但 Gate 2 的批准并不关闭它们，最终审核又因任何开放的 BLOCKING 行拒绝。
+  - **修复**：内容冻结（Gate 2）的决定可以带 `acknowledged_human_issues`（台账行 ID 列表），随不可变决定一起保存。`engine._content_freeze_acknowledgements` 校验：只能列开放的、由人或 Step 14/15 负责的 BLOCKING 行；只有批准能带；v2 项目的批准必须列出所有这样的行，否则在 Gate 2 当场拒绝（决定还能改），而不是等 Step 13 失败。最终审核与 Step 16 校验器通过 `ledger.acknowledged_human_issues` 从已验证的当前决定读取，不再计入恰好这些行；其他 BLOCKING 行照旧阻断。`CONTENT_NOT_READY` 的证据里新增 `unacknowledged_human_rows`。CLI 用 `--resolution-json` 传；Web 的 `SelectionDecisionRequest` 新增同名可选字段（前端表单尚未加输入框）。
+- **F19c 视觉问题没进返工提示**：`judge_rework_block` 要求 `aggregate.json` 的结论等于退回原因；只因视觉门禁而退回时汇总结论是 PASS，返工提示里一条发现也没有。
+  - **修复**：退回原因与 `decision_route.json` 的 `effective_decision` 一致时，也认作这次评审；此时列出论文角色的 blocking/major 问题，以及 `visual_gate.json` 中的 blocking 问题（代码、页码、证据，最多 20 条）。
+- 都不属于 dirty 分类器身份（09693f563ba2 不变），不会让进行中项目的检查点失效。
+- 测试：`tests/test_audit_service.py` 新增 11 例（含 3 个参数化用例）；`tests/test_stage_catalog_v2.py` 新增 11 例（含 4 个参数化用例）。
+
+## 2026-11-08 — 只能由人处理或归属后续步骤的审稿行不再阻断 v2 Stage 8 出口（验收 A 发现 F16）
+
+验收 A 修复轮的 Stage 8 出口第二次失败（rev 770）。剩下的开放行里，S11R-B1（封面报名号、学校、队员“待填”，`Blocking Until: Human (交付前)`）只能由参赛队填写，模型不得编造；S11R-B2（`abstract_draft.md` 仍是修正前的数字，`Blocking Until: Step 14`）由 Stage 8 之后的 Step 14 重新生成。出口把所有开放的 BLOCKING/MAJOR 行都算作阻断，所以无论重试多少次都出不去。
+
+- **修复**：`OpenIssue` 读取 `Blocking Until` 列；`deferred_past_review` 对以 `Human` 开头、或只指向 Step 14/15 的行为真。v2 Stage 8 出口与审稿重算计划跳过这些行，它们保持 OPEN，交给 Gate 2、对应步骤和最终审计。其他写法（包括 Step 16、Step 12、空值）照旧阻断。失败与审稿循环事件新增 `deferred_review_issues`，列出被跳过的行。
+- 另记录：v1 Step 13 的 `continue_after_gate2` 覆盖没有接到 v2 的 Stage 8 出口，v2 在这里没有人工覆盖通道（本次未改）。
+- 不属于 dirty 分类器身份。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 12 例（含 10 个参数化用例）。
+
+## 2026-11-08 — 最终评审修复轮重新开始审稿返工预算（验收 A 发现 F15）
+
+验收 A 的修复轮在 Step 12 第 1 次尝试就以 `PERMANENT_REVIEW_LOOP_EXHAUSTED` 失败（rev 748），一次返工也没做。修复轮重跑 Step 11 后提出了新的 S11R-* 问题，但 Stage 8 出口的审稿重算和审稿循环次数，仍从第一轮最后一次 `retry-step`（rev 339）起计，第一轮的那次重算（rev 344）已经把预算用完。
+
+- **修复**：`engine._review_budget_baseline` 在 Step 12 的 `retry-step` 之外，也把最终评审的 `REOPEN_REVISION_*` 退回（`STEP_REOPENED`，`subtask=final_judge`）当作预算重新计数的起点。其他退回（审稿循环、非 REOPEN 的结论）不重新计数。语义回退预算照旧。
+- 不属于 dirty 分类器身份。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 1 例。
+
+## 2026-11-08 — 最终评审退回时把评审发现写进返工步骤的提示词（验收 A 发现 F13）
+
+验收 A 的 v2 最终评审给出 `REOPEN_REVISION_MODEL`（rev 500，数学角色 1 个致命缺陷：问题四移动坐标方程的平流项违反干基守恒），引擎退回 Step 4。Step 4 只用约 1 分钟，把现有产物核对一遍就成功了：它的提示词只读 `audit_issue_ledger.md`，而评审发现不在台账里，也没有任何提示词读 `judge_evaluation.md`。机器审计全是 PASS，模型认为没有需要修的。
+
+- **修复**：`catalog_prompts.judge_rework_block`。从最终评审的 `REOPEN_REVISION_*` 退回起，到最终评审再次开始之前，在退回目标之后的每个返工 Step（4–12、14、15）的提示词开头，列出这次评审的阻断发现：硬角色的 fatal 证据（没有 fatal 时列 risk），论文角色的 blocking/major 问题，每条带角色、编号、结论、意见和论文引文。同时写明这是唯一一次修复，以及不能只复核不改。发现取自 `judge_outputs/aggregate.json`，且必须与退回事件的结论一致；不一致时改为提示去读 `judge_evaluation.md`。
+- 对所有 v2 模板生效（不限于 overlay 列表）。v1 项目与无状态库的项目不受影响，提示词保持逐字节不变。不属于 dirty 分类器身份。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 3 例。
+
+## 2026-11-08 — 求解链里的兄弟输出改为凭回执哈希证明（验收 A 发现 F12）
+
+验收 A 第二次批准 Gate 2 后，v2 最终评审在调用模型之前就判执行角色证据不全（rev 493，`TRANSIENT_JUDGE_INFRASTRUCTURE`），15 条 `solver_chain:*` 要求未满足。
+
+- **根因**：第二轮审稿重算中，Step 5 让主求解任务同时声明 `result1~4.xlsx` 与 `result1~4_grid.json` 为输出。求解链要求任务的每个声明输出都完整放进执行证据包，而这些文件有 0.3–4 MB，超过单文件 5.5 万字节与文本 36 万字节的上限，被省略。15 条链本身逐条重算都 `receipt_ready`。
+- **修复**：`solver_evidence_selection` 把被采用的输出、脚本、输入、回执，以及不超过单文件上限（55,000 字节，与 `judge_packet.MAX_FILE_BYTES` 相同，有测试锁定）的其他声明输出留在 `paths`（必须完整收录）；超过上限的兄弟输出放进 `attested_outputs`（路径 + 完成回执里的 SHA-256），收进证据包清单但不再要求正文。小的 PDF、npz 输出仍须完整收录。`packet_evidence.evaluate_requirement` 统一判定：`paths` 必须完整，`attested_outputs` 必须在清单中且摘要与回执一致。打包与 `aggregate_judges` 复核共用它；完整性契约升为 `judge-packet-completeness-v2`；聚合复核与派发前检查（`specialized._packet_preflight`）都接受 v1 与 v2，v1 清单不得含 attested 输出。兄弟输出被改动时，链的 `receipt_ready` 失败，要求照旧不满足。
+- 这些文件不在 dirty 分类器身份内，不触发 Stage 9 失效。
+- 本项目另有一处缺口：执行角色的输入 `data/intermediate/m1_ambient.npz` 只有 9 KB，展开成 numpy 证据视图后是 157,611 字节，必须完整收录的文件合计 398,439 字节，超过默认 360,000。这次由项目里的 `judge_evidence.json`（现有机制）把执行角色上限提到 450,000 解决，未改默认值。
+- 测试：`tests/test_normal_run_packet_chain.py` 新增 6 例；`tests/test_judge_packet.py` 的版本断言改为 v2。
+
+## 2026-11-08 — Step 2 流的辅助输出登记为探索性产物；Step 2 当场检查归属覆盖（验收 A 发现 F10）
+
+验收 A 通过 Gate 2 后，v2 最终评审连续两次 `TRANSIENT_JUDGE_PACKET`（rev 465/467）：`authored artifact ownership coverage failed: m2_field_0_3h.csv`。
+
+- **根因**：Step 2 的 m2 演示求解把 `m2_field_0_3h.csv` 声明为 `solver_submit.sh --output`，写在项目根目录；`m2_spec.md` 引用它作对照，并写明不是 p4 的输入。归属表只登记了 `m*_spec.md`、`m*_critique.md`、`m*_demo_result.*`，策略层也没有描述它。最终快照的归属覆盖按设计失败即关闭，但这是第一个检查它的地方，已经在 Gate 2 之后。
+- **修复一**：`artifact_policy.FALLBACK_POLICY` 新增 `m[0-9]*_*`：EXPLORATORY、`EXPLICIT_ONLY`、不进最终审核也不进提交包（按策略不阻断），没有 Stage 归属。它排在所有归属规则之后，不遮蔽任何已登记路径（`m*_spec.md`、`m1_solver_evidence.json` 等照旧），影子白名单不变。下游 Step 若要用这些数字，必须写自己有归属的结果。
+- **修复二**：Step 2 校验在两个已验证流之外，再检查所有被跟踪的作者产物都有归属或策略；有缺口时当场失败并列出路径，不再拖到 Gate 2 之后。
+- 两处都改变 v10 分类器身份（`artifact_policy.py` 属于 `current_dirty.classifier_contract_sha256`）。验收 A 换到此提交时没有未结的 dirty 义务；Gate 2 的主体与选项指纹在新旧代码下相同。
+- 测试：`tests/test_stream_aux_ownership.py` 新增 11 例。
+
+## 2026-11-07 — 审稿重算把问题写进提示词；retry-step 后重算预算重新计数（验收 A 发现 F9）
+
+验收 A 的第一次审稿重算（rev 310）中，Step 5 重跑只用了 112 秒，只核验了旧的 claim 绑定，`05_results.py` 没改，S11-B1/B4 原样留着。
+
+- **根因**：v2 overlay 里的返工说明是条件句"若因引擎事件 `rework_rule=review_issue` 重算……"，模型看不到引擎事件；同时操作员当初为 F1 写的 step_5 研究员备注还在 `web/notes.json` 里，主导了这次提示词。
+- **修复一**：`catalog_prompts.review_rework_block`。最近一次 `review_issue` 重算尚未回到 revision、且当前 Step 在 `recompute_steps` 之内时，在 Step 5–8 提示词开头列出触发重算的问题，包括 ID、台账当前的 Category、Severity 和 Notes，并写明逐条处理的要求、研究员备注与之无关时以该段为准。overlay 那一行改为指向这一段。
+- **修复二**：审稿重算与审稿循环的次数都从该 revision 最近一次 `retry-step` 之后开始计，和尝试次数一样，由操作员显式重试重新开始；语义回退预算照常计数。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 3 例（retry-step 后再次重算；问题写进被重算 Step 的提示词，回到 revision 后消失；不在重算范围的 Step 不注入，已关闭的行如实标注）。
+
+## 2026-11-07 — v2 Stage 8 出口按审稿问题类别返工（验收 A 发现 F6/F7/F8）
+
+验收 A 的 Step 12 第 1 次尝试就以 `PERMANENT_REVIEW_LOOP_EXHAUSTED` 失败，一轮返修都没跑（rev 304）。
+
+- **F6 根因**：v2 把 Stage 8 出口移到 Step 12，而 Step 12 的 `max_reopens=0`，台账里只要还有 OPEN 的 BLOCKING/MAJOR 就立刻失败。v2 的 Step 12 提示词又让模型把结果层问题记作"需回 Step 5/6 重跑"，交给 Step 13 最终审计判 `REOPEN_REVISION_MODEL`，但 v2 的 Step 13 在 Step 14/15 和内容冻结之后才运行，这条路走不到。
+- **F7 根因**：警告级增量检查（`verify_symbols`）写入的台账行是 MAJOR，Stage 8 出口把 MAJOR 当成阻断，而 Stage 8 内没有任何步骤会重跑 `paper` 审计，`AUDIT-PAPER-SYMBOLS` 在那里永远关不掉。即使 Step 12 修得完美也会失败。
+- **修复（仅 v2）**：Stage 8 出口改读 `audit.ledger.open_review_issues`，即 `## Incremental audit findings` 以外的 OPEN BLOCKING/MAJOR 行，机器行不再阻断，按 Category 分流。`results`/`model` 类重算 Step 5–8 后回到 Step 12（`STAGE_SEMANTIC_REOPENED`，`rework_rule=review_issue`，最多 1 次，同时计入语义回退预算）；其余类别重跑一次 Step 11–12（`STEP_REOPENED`，`rework_rule=review_loop`）；之后仍未解决，按原错误类失败，并在事件里列出这些行。v1 不变。
+- **提示词**：v2 overlay 让 Step 5–8 读取这些审稿行，修复根因在本步骤产物中的问题；Step 12 的 v2 措辞改为说明这条分流，并要求把根因在求解、结果、灵敏度或图代码的行标为 `results` 或 `model`。
+- **F8**：Step 12 改了生成器却没有重新 pin `results/derived_artifacts.json`。Step 12 提示词补上重新 pin 与 `verify_derived_artifacts.py` 必须 PASS 的要求；Step 9 提示词注明生成器可以另读 `results/sensitivity/*.json`（由重生成比对保证一致），与 Step 10 的派生值修法一致。
+- 测试：`tests/test_stage_catalog_v2.py` 新增 5 例（机器警告行不阻断；results 类先重算再回到返修并通过；重算后仍未解决则失败；paper 类只循环一次；循环中修复后通过）。
+
+## 2026-11-07 — 数字追溯门禁的误报与合约缺口（验收 A 发现 F4/F5）
+
+验收 A 的 Step 10 连续两次 `AUDIT_REPAIR_REQUIRED`（`failed_check=numbers`），两次报出同样 31 个"未追溯数字"。其中一部分是校验器误报，另一部分在 Step 10 内没有合法的修法，重试无法收敛。
+
+- **F4 误报**：`_strip_non_content_latex` 去掉 `\cmidrule[..](..){a-b}` 与 `\cline{a-b}`，列范围 `2-6` 不再读成结果数字 −6；`modeling_guide.md` 要求 booktabs，这类表格规则必然出现。减号前是操作数（字母、数字、`)`、`]`、`}`）时按二元减号处理，`(C_0-0.15)` 读成 0.15；`e^{-0.45}`、`$-0.35$` 等一元负号保持不变。
+- **F5 追溯来源**：除 `results/**/*.json` 外，再认可两类来源。一是 `results/derived_artifacts.json` 中 canonical、生成器、输出三者哈希当前都匹配的 `.tex` 输出（headline 宏、表格），它们由固定生成器从固定 canonical 生成，`verify_derived_artifacts.py` 另行逐字节重生成核对；任一哈希不符即不信任。二是 `problem/source.md` 给出的题面数值（按绝对值比较，题面写 `e^{-\frac{0.45}{C}}`、论文写 `e^{-0.45/C}`）。百分数（含 `\%`）也可对应结果中的小数。报告分别列出经这两类来源追溯的数字。
+- **Step 10 提示词**：写明三种追溯来源；派生值和分析设定不在 `results/` 时，由 `models/generate_derived.py` 计算并输出为宏，重生成后更新 manifest，属于本步骤"改数字"的授权范围，不得手写 `results/*.json` 凑数。生成器、manifest 与 `tables/**` 归 Step 9 所有，与 Step 10 同在 Stage 7。
+- 效果：验收 A 当前论文的未追溯数字由 31 个降到 15 个，剩下的都是真正需要修内容的派生值、估算值与扰动幅度。
+- 测试：`tests/test_quality_gates_regression.py` 新增 6 例（表格规则与二元减号、一元负号仍按符号核对、`\%` 对应小数、题面数值、哈希仍匹配才信任派生输出、正文手写派生值仍被拒）。
+
+## 2026-11-07 — retry-step 后的提示词输入键冲突（验收 A 发现）
+
+验收 A 的 Step 5 因 `PERMANENT_CLAIM_BINDING` 失败后，操作员加了一条研究员备注再 `retry-step`，worker 一启动就退出：`immutable prompt attempt input already exists with different content`，项目停在 `running`，PID 已不存在，也没有失败事件。
+
+- **根因**：`retry_step` 只把 attempt 归零、保留 Stage 游标，而提示词输入键是 `stage:<id>:<subtask>:selected-revision:<游标选定 revision>:attempt:<n>`，重试后的第 1 次尝试与失败的第 1 次尝试同键。为重试而修正的任何输入（研究员备注、`human_review.md`、模型配置）都会与旧的不可变回执冲突。
+- **修复一**：`PromptStep._attempt_selected_revision` 在游标基线之后若有同 Stage / 子任务 / Step 的 `STEP_RETRY_AUTHORIZED`，改用该事件的 revision，重试尝试因此有独立的键；不改输入的重试行为不变，恢复路径用同一函数，键保持一致。
+- **修复二**：绑定提示词输入时的 `InvalidTransition` 不再逃出 worker，而是让该 Step 以 `PERMANENT_PROMPT_INPUT_CONFLICT` 失败并记录尝试键与错误；`RevisionConflict` 仍照常抛出。
+- 测试：`tests/test_retry_step.py` 新增 2 例（重试后带修正备注绑定到新键；无重试时的冲突让 Step 失败而不是让 worker 崩溃），两例在修复前均失败。
+
 ## 2026-11-07 — 单模型运行：模型白名单与 Claude 图片传递（验收 A 准备）
 
 验收 A 要求所有 Step 与所有 Judge 角色只用 Claude Haiku 5.5（决策 5，11 月 7 日）。原有机制做不到：调度器在指定模型之后总会追加各 Step 的默认模型，Claude CLI 后端也拒绝带图片的 Judge 请求。

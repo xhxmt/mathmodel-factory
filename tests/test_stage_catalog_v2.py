@@ -7,6 +7,8 @@ test_stage_scheduler.py, which is unchanged).
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 import pytest
@@ -381,10 +383,10 @@ def test_v2_evaluation_changing_main_results_recomputes_sensitivity_in_its_own_s
 
 
 def test_v2_unregistered_file_keeps_the_fail_closed_rewind(tmp_path):
-    # No ownership rule covers it, so its role is unknown: the rule does not
-    # guess "document" for it.
-    (tmp_path / "m2_peak_groups.csv").write_text("a\n", encoding="utf-8")
-    revision = Lifecycle(writes={"m2_peak_groups.csv": "b\n"})
+    # No ownership rule or policy covers it, so its role is unknown: the rule
+    # does not guess "document" for it.
+    (tmp_path / "peak_groups.csv").write_text("a\n", encoding="utf-8")
+    revision = Lifecycle(writes={"peak_groups.csv": "b\n"})
     registry, _ = v2_registry(overrides={12: revision})
     store = v2_store(tmp_path, last_completed_step=11)
 
@@ -393,6 +395,20 @@ def test_v2_unregistered_file_keeps_the_fail_closed_rewind(tmp_path):
     [reopen] = reopens(store)
     assert "rework_rule" not in reopen.payload
     assert reopen.payload["semantic_owner_stage"] == 4  # fail-closed RESULT@4
+
+
+def test_v2_stream_aux_file_is_exploratory_and_rewinds_nothing(tmp_path):
+    # A root m<N>_* file is a Step 2 stream's auxiliary output: the fallback
+    # policy declares it exploratory and non-blocking (F10), so a later write
+    # is neither a rewind nor a final input.
+    (tmp_path / "m2_peak_groups.csv").write_text("a\n", encoding="utf-8")
+    revision = Lifecycle(writes={"m2_peak_groups.csv": "b\n"})
+    registry, _ = v2_registry(overrides={12: revision})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    assert reopens(store) == []
 
 
 def test_v1_project_keeps_the_ownership_rewind_for_the_same_code_edit(tmp_path):
@@ -455,6 +471,214 @@ def test_v2_v1_project_keeps_v1_reopen_for_the_same_edit(tmp_path):
     FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
     [reopen] = reopens(store)
     assert reopen.payload["semantic_owner_stage"] == 8
+
+
+LEDGER_HEADER = (
+    "| Issue ID | First Raised In | Category | Severity | Blocking Until | Status | Notes |\n"
+    "|---|---|---|---|---|---|---|\n"
+)
+
+
+def write_ledger(project, review_rows, machine_rows=()):
+    """An issue ledger shaped like the one acceptance A's Step 11 left."""
+
+    def row(issue_id, category, severity, status, until="Step 12"):
+        return f"| {issue_id} | review:step11 | {category} | {severity} | {until} | {status} | n |\n"
+
+    (project / "audit_issue_ledger.md").write_text(
+        "# Audit Issue Ledger\n\n## Incremental audit findings\n\n" + LEDGER_HEADER
+        + "".join(row(*item) for item in machine_rows)
+        + "\n## Step 11 constructive review issues\n\n" + LEDGER_HEADER
+        + "".join(row(*item) for item in review_rows),
+        encoding="utf-8",
+    )
+
+
+class ResolvingRevision(Lifecycle):
+    """Step 12 that resolves every review row from its second run on."""
+
+    def __init__(self, rows):
+        super().__init__()
+        self.rows = rows
+
+    def execute(self, context):
+        self.calls.append(context.attempt)
+        if len(self.calls) >= 2:
+            write_ledger(context.project_dir, [(i, c, s, "RESOLVED") for i, c, s, _ in self.rows])
+        return ExecutionResult.succeeded()
+
+
+def failures(store):
+    return [event for event in store.events() if event.type == "STEP_FAILED"]
+
+
+def test_v2_review_exit_ignores_machine_warning_rows(tmp_path):
+    """F7: a MAJOR AUDIT-* row (the symbols warning) does not block the v2 exit."""
+
+    write_ledger(tmp_path, [("S11-m1", "paper", "MINOR", "OPEN")],
+                 machine_rows=[("AUDIT-PAPER-SYMBOLS", "paper", "MAJOR", "OPEN")])
+    registry, _ = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
+
+    assert failures(store) == [] and reopens(store) == []
+    assert state.last_completed_step == 12
+    assert state.active_subtask == "abstract"
+
+
+def test_v2_review_exit_recomputes_for_results_issue_then_returns_to_revision(tmp_path):
+    rows = [("S11-B4", "results", "BLOCKING", "OPEN"), ("S11-M9", "paper", "MAJOR", "OPEN")]
+    write_ledger(tmp_path, rows)
+    revision = ResolvingRevision(rows)
+    registry, lifecycles = v2_registry(overrides={12: revision})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    [reopen] = reopens(store)
+    assert reopen.payload["rework_rule"] == "review_issue"
+    assert reopen.payload["recompute_steps"] == [5, 6, 7, 8]
+    assert reopen.payload["return_subtask"] == "revision"
+    assert reopen.payload["semantic_owner_stage"] == 4
+    assert reopen.payload["review_issues"] == ["S11-B4 (results, BLOCKING)"]
+    assert reopen.payload["recompute_reasons"] == [
+        "audit_issue_ledger.md#S11-B4: open results BLOCKING review issue"
+    ]
+    assert "open results/model review issues" in reopen.payload["reason"]
+    assert "changed an input" not in reopen.payload["reason"]
+    for step in (5, 6, 7, 8):
+        assert lifecycles[step].calls == [1], step
+    assert lifecycles[11].calls == []  # the review is not re-run
+    assert len(revision.calls) == 2
+    assert failures(store) == []
+    assert state.status is WorkflowStatus.COMPLETED
+
+
+def test_v2_review_exit_fails_when_results_issue_survives_the_recompute(tmp_path):
+    write_ledger(tmp_path, [("S11-B3", "model", "BLOCKING", "OPEN")])
+    registry, lifecycles = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert len(reopens(store)) == 1
+    assert lifecycles[12].calls == [1, 1]
+    [failed] = failures(store)
+    assert failed.payload["error_class"] == "PERMANENT_REVIEW_LOOP_EXHAUSTED"
+    assert failed.payload["review_issues"] == ["S11-B3 (model, BLOCKING)"]
+    assert "review recompute" in failed.payload["reason"]
+    assert state.status is WorkflowStatus.FAILED
+
+
+def test_v2_review_recompute_budget_restarts_after_retry_step(tmp_path):
+    write_ledger(tmp_path, [("S11-B4", "results", "BLOCKING", "OPEN")])
+    registry, lifecycles = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+    failed = engine.run()
+    assert failed.status is WorkflowStatus.FAILED and len(reopens(store)) == 1
+
+    engine.retry_step(expected_revision=failed.revision, step_id=12, note="fixed the rework prompt")
+    state = engine.run()
+
+    assert len(reopens(store)) == 2  # a second review recompute, from Step 5
+    assert lifecycles[5].calls == [1, 1]
+    assert state.status is WorkflowStatus.FAILED
+    assert len(failures(store)) == 2
+
+
+def _review_reopen(store, *, steps=(5, 6, 7, 8), issues=("S11-B4 (results, BLOCKING)",)):
+    state = store.load()
+    return store.transition(
+        expected_revision=state.revision,
+        event_type="STAGE_SEMANTIC_REOPENED",
+        changes={},
+        payload={
+            "stage": 8, "subtask": "revision", "rework_rule": "review_issue",
+            "recompute_steps": list(steps), "return_subtask": "revision",
+            "review_issues": list(issues),
+        },
+    )
+
+
+def test_v2_review_recompute_names_the_issues_in_the_recomputed_prompts(tmp_path):
+    from pathlib import Path as _Path
+
+    from factory_core.steps.prompting import PromptRenderer
+
+    store = v2_store(tmp_path, last_completed_step=11)
+    write_ledger(tmp_path, [("S11-B4", "results", "BLOCKING", "OPEN")])
+    renderer = PromptRenderer(_Path(__file__).resolve().parents[1])
+    render = lambda template, step: renderer.render(  # noqa: E731
+        template, tmp_path, step_key=step, include_preamble=False, researcher_note=""
+    )
+    assert "【审稿返工" not in render("step6_sensitivity.txt", "6")
+
+    _review_reopen(store)
+
+    step6 = render("step6_sensitivity.txt", "6")
+    assert step6.startswith("AGENT_KEY: step6\n\n【审稿返工 — 本次运行的原因】")
+    assert "- S11-B4（results，BLOCKING）：n" in step6
+    assert "【审稿返工" in render("step5_full_solve.txt", "5")
+    assert "【审稿返工" not in render("step9_paper_draft.txt", "9")
+
+    # Once the revision it returns to has run, the block is gone.
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision, event_type="STEP_SUCCEEDED", changes={},
+        payload={"stage": 8, "subtask": "revision"},
+    )
+    assert "【审稿返工" not in render("step6_sensitivity.txt", "6")
+
+
+def test_v2_review_recompute_block_skips_steps_it_does_not_recompute(tmp_path):
+    from pathlib import Path as _Path
+
+    from factory_core.steps.prompting import PromptRenderer
+
+    store = v2_store(tmp_path, last_completed_step=11)
+    write_ledger(tmp_path, [("S11-B4", "results", "BLOCKING", "RESOLVED")])
+    _review_reopen(store, steps=(6, 7, 8))
+    renderer = PromptRenderer(_Path(__file__).resolve().parents[1])
+
+    assert "【审稿返工" not in renderer.render(
+        "step5_full_solve.txt", tmp_path, step_key="5", include_preamble=False, researcher_note=""
+    )
+    step6 = renderer.render(
+        "step6_sensitivity.txt", tmp_path, step_key="6", include_preamble=False, researcher_note=""
+    )
+    assert "- S11-B4：台账中已不是 OPEN 的 BLOCKING/MAJOR 行" in step6
+
+
+def test_v2_review_exit_loops_the_review_once_for_paper_issues(tmp_path):
+    write_ledger(tmp_path, [("S11-B5", "paper", "BLOCKING", "OPEN")])
+    registry, lifecycles = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert reopens(store) == []
+    [loop] = [e for e in store.events() if e.type == "STEP_REOPENED"]
+    assert loop.payload["rework_rule"] == "review_loop"
+    assert loop.payload["resume_after_step"] == 10
+    assert loop.payload["review_issues"] == ["S11-B5 (paper, BLOCKING)"]
+    assert lifecycles[11].calls == [1] and lifecycles[12].calls == [1, 1]
+    [failed] = failures(store)
+    assert "after the review loop" in failed.payload["reason"]
+    assert state.status is WorkflowStatus.FAILED
+
+
+def test_v2_review_exit_passes_once_a_paper_loop_resolves_the_issue(tmp_path):
+    rows = [("S11-B5", "paper", "BLOCKING", "OPEN")]
+    write_ledger(tmp_path, rows)
+    registry, _ = v2_registry(overrides={12: ResolvingRevision(rows)})
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert failures(store) == []
+    assert state.status is WorkflowStatus.COMPLETED
 
 
 def test_v2_judge_reopen_returns_to_revision(tmp_path):
@@ -792,3 +1016,306 @@ def test_contest_phases_reject_an_unknown_catalog_version():
         phase_for_step(13, catalog_version="factory-stage-catalog-v7")
     with pytest.raises(ValueError, match="unsupported Stage catalog"):
         contest_phases_for("factory-stage-catalog-v7")
+
+
+def _judge_reopen(store, project, *, verdict="REOPEN_REVISION_MODEL", target=3, aggregate_verdict=None):
+    import json as _json
+
+    math = {"schema_version": "judge-hard-role-v2", "role": "math", "verdict": "FAIL", "fatal_flaws": 1,
+            "evidence": [{"ref_id": "math-e1", "claim": "移动坐标方程多出平流项", "finding": "违反干基守恒",
+                          "quote": "+\\xi R'/R", "severity": "fatal"},
+                         {"ref_id": "math-e2", "claim": "链式法则正确", "severity": "support"}]}
+    paper = {"role": "paper", "verdict": "REVISE",
+             "issues": [{"ref_id": "paper-issue-1", "severity": "major", "finding": "表述有误",
+                         "recommendation": "改写", "quote": "原句"},
+                        {"ref_id": "paper-issue-9", "severity": "minor", "finding": "小问题"}]}
+    aggregate = {"verdict": aggregate_verdict or verdict, "roles": [
+        {"role": "math", "status": "FAIL", "text": "VERDICT: FAIL\n" + _json.dumps(math, ensure_ascii=False)},
+        {"role": "execution", "status": "PASS", "text": "VERDICT: PASS\n{}"},
+        {"role": "paper", "status": "REVISE", "text": "VERDICT: REVISE\n" + _json.dumps(paper, ensure_ascii=False)}]}
+    (project / "judge_outputs").mkdir(exist_ok=True)
+    (project / "judge_outputs" / "aggregate.json").write_text(_json.dumps(aggregate, ensure_ascii=False))
+    state = store.load()
+    return store.transition(
+        expected_revision=state.revision, event_type="STEP_REOPENED", changes={},
+        payload={"stage": 10, "subtask": "final_judge", "source_step": 13,
+                 "final_decision": verdict, "resume_after_step": target},
+    )
+
+
+def _render(project, template, step):
+    from pathlib import Path as _Path
+
+    from factory_core.steps.prompting import PromptRenderer
+
+    return PromptRenderer(_Path(__file__).resolve().parents[1]).render(
+        template, project, step_key=step, include_preamble=False, researcher_note=""
+    )
+
+
+def test_v2_final_judge_reopen_names_its_findings_until_the_judge_runs_again(tmp_path):
+    store = v2_store(tmp_path, last_completed_step=15)
+    assert "【最终评审返工" not in _render(tmp_path, "step4_model_construction.txt", "4")
+
+    _judge_reopen(store, tmp_path)
+
+    step4 = _render(tmp_path, "step4_model_construction.txt", "4")
+    assert "【最终评审返工 — 本次运行的原因】" in step4
+    assert "- [math math-e1，fatal] 移动坐标方程多出平流项；违反干基守恒（论文引文：+\\xi R'/R）" in step4
+    assert "- [paper paper-issue-1，major] 表述有误；改写（论文引文：原句）" in step4
+    assert "math-e2" not in step4 and "paper-issue-9" not in step4
+    for template, step in (("step5_full_solve.txt", "5"), ("step9_paper_draft.txt", "9"),
+                           ("step12_revision.txt", "12"), ("step15_polish.txt", "15")):
+        assert "【最终评审返工" in _render(tmp_path, template, step), template
+
+    state = store.load()
+    store.transition(expected_revision=state.revision, event_type="STEP_STARTED", changes={},
+                     payload={"stage": 10, "subtask": "final_judge"})
+    assert "【最终评审返工" not in _render(tmp_path, "step4_model_construction.txt", "4")
+
+
+def test_v2_final_judge_text_reopen_skips_steps_before_its_target(tmp_path):
+    store = v2_store(tmp_path, last_completed_step=15)
+    _judge_reopen(store, tmp_path, verdict="REOPEN_REVISION_TEXT", target=8)
+    assert "【最终评审返工" not in _render(tmp_path, "step5_full_solve.txt", "5")
+    assert "【最终评审返工" in _render(tmp_path, "step9_paper_draft.txt", "9")
+
+
+def test_v2_final_judge_block_falls_back_when_findings_do_not_match(tmp_path):
+    store = v2_store(tmp_path, last_completed_step=15)
+    _judge_reopen(store, tmp_path, aggregate_verdict="PASS")
+    step4 = _render(tmp_path, "step4_model_construction.txt", "4")
+    assert "【最终评审返工" in step4 and "judge_evaluation.md" in step4
+    assert "math-e1" not in step4
+
+
+def test_v2_final_judge_block_names_the_routed_visual_findings(tmp_path):
+    # Acceptance A F19: every role PASSed, but blocking visual-gate findings
+    # made the decision router reopen the text.
+    import json as _json
+
+    store = v2_store(tmp_path, last_completed_step=15)
+    _judge_reopen(store, tmp_path, verdict="REOPEN_REVISION_TEXT", target=11,
+                  aggregate_verdict="PASS")
+    outputs = tmp_path / "judge_outputs"
+    (outputs / "decision_route.json").write_text(_json.dumps(
+        {"new_decision": "REOPEN_REVISION_TEXT", "effective_decision": "REOPEN_REVISION_TEXT"}))
+    (outputs / "visual_gate.json").write_text(_json.dumps({"status": "FAIL", "findings": [
+        {"code": "UNREADABLY_SMALL_TEXT", "severity": "blocking", "page": 5,
+         "message": "text is rendered at 3pt", "evidence": {"font_size": 3, "text": "end"}},
+        {"code": "VERY_SMALL_TEXT", "severity": "warning", "page": 5,
+         "message": "text is rendered at 5pt", "evidence": {"font_size": 5, "text": "附录"}},
+        {"code": "BLANK_RENDERED_PAGE", "severity": "blocking", "page": 7,
+         "message": "rendered page is effectively blank", "evidence": {"nonwhite_fraction": 0.0001}},
+    ]}))
+
+    step12 = _render(tmp_path, "step12_revision.txt", "12")
+
+    assert "【最终评审返工" in step12 and "未能从" not in step12
+    assert ("- [visual UNREADABLY_SMALL_TEXT，blocking，PDF 第 5 页] text is rendered at 3pt"
+            "（text=end，font_size=3）") in step12
+    assert "- [visual BLANK_RENDERED_PAGE，blocking，PDF 第 7 页]" in step12
+    assert "VERY_SMALL_TEXT" not in step12
+    # The paper role's own major issues travel with the routed reopen.
+    assert "- [paper paper-issue-1，major] 表述有误" in step12
+    assert "math-e1" in step12  # the math role was not PASS in this fixture
+
+
+def test_v2_final_judge_block_ignores_a_route_for_another_decision(tmp_path):
+    import json as _json
+
+    store = v2_store(tmp_path, last_completed_step=15)
+    _judge_reopen(store, tmp_path, verdict="REOPEN_REVISION_TEXT", target=11,
+                  aggregate_verdict="PASS")
+    (tmp_path / "judge_outputs" / "decision_route.json").write_text(_json.dumps(
+        {"effective_decision": "PASS"}))
+
+    step12 = _render(tmp_path, "step12_revision.txt", "12")
+
+    assert "未能从" in step12 and "- [visual" not in step12
+
+
+def test_v2_review_budget_restarts_after_a_final_judge_reopen():
+    from types import SimpleNamespace as E
+
+    events = [
+        E(revision=10, type="STEP_RETRY_AUTHORIZED", payload={"stage": 8, "subtask": "revision"}),
+        E(revision=12, type="STAGE_SEMANTIC_REOPENED", payload={"rework_rule": "review_issue"}),
+    ]
+    assert FactoryEngine._review_budget_baseline(events) == 10
+    events.append(E(revision=20, type="STEP_REOPENED",
+                    payload={"subtask": "final_judge", "final_decision": "REOPEN_REVISION_MODEL"}))
+    assert FactoryEngine._review_budget_baseline(events) == 20
+    # Other reopens (a review loop, a Step 13 precheck) do not restart it.
+    events.append(E(revision=30, type="STEP_REOPENED",
+                    payload={"subtask": "revision", "rework_rule": "review_loop"}))
+    events.append(E(revision=31, type="STEP_REOPENED",
+                    payload={"subtask": "final_judge", "final_decision": "INDETERMINATE_REVIEW"}))
+    assert FactoryEngine._review_budget_baseline(events) == 20
+
+
+@pytest.mark.parametrize("until, deferred", [
+    ("Human (交付前)", True), ("human: team fills the cover", True),
+    ("Step 14", True), ("Step 14; Step 15", True),
+    ("Steps 14/15", True), ("steps 14, 15", True), ("Step 14 和 15", True),
+    ("Steps 14/16", False), ("Steps 12/14", False),
+    ("Step 16", False), ("Step 12", False), ("Step 4 (决策); Step 12 (文字)", False),
+    ("Step 5 日志维护", False), ("", False), ("交付前", False),
+])
+def test_review_row_deferral_reads_blocking_until(until, deferred):
+    from factory_core.audit.ledger import OpenIssue
+
+    assert OpenIssue("X", "paper", "BLOCKING", "", until).deferred_past_review is deferred
+
+
+def test_v2_review_exit_leaves_human_and_later_step_rows_to_their_owners(tmp_path):
+    write_ledger(tmp_path, [("S11R-B1", "paper", "BLOCKING", "OPEN", "Human (交付前)"),
+                            ("S11R-B2", "paper", "BLOCKING", "OPEN", "Step 14")])
+    registry, lifecycles = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    assert reopens(store) == [] and failures(store) == []
+    assert lifecycles[12].calls == [1]
+    assert state.status is WorkflowStatus.COMPLETED
+
+
+def test_v2_review_exit_still_blocks_on_a_row_a_review_step_owns(tmp_path):
+    write_ledger(tmp_path, [("S11R-B1", "paper", "BLOCKING", "OPEN", "Human (交付前)"),
+                            ("S11R-M2", "results", "MAJOR", "OPEN", "Step 5 日志维护")])
+    registry, _ = v2_registry()
+    store = v2_store(tmp_path, last_completed_step=11)
+
+    state = FactoryEngine(tmp_path, store=store, registry=registry).run()
+
+    [failed] = failures(store)
+    assert failed.payload["review_issues"] == ["S11R-M2 (results, MAJOR)"]
+    assert failed.payload["deferred_review_issues"] == [
+        "S11R-B1 (paper, BLOCKING; Blocking Until: Human (交付前))"]
+    assert state.status is WorkflowStatus.FAILED
+
+
+# -- F17: a content-freeze approval takes on the human-owned ledger rows ------
+
+HUMAN_ROWS = (
+    ("S11R-B1", "paper", "BLOCKING", "OPEN", "Human (交付前)"),
+    ("S11R-B2", "paper", "BLOCKING", "OPEN", "Step 14"),
+    ("S11R-M3", "paper", "MAJOR", "OPEN", "Human"),
+)
+
+
+def _awaiting_content_freeze(tmp_path, rows=HUMAN_ROWS):
+    from factory_core.steps.specialized import ContentFreezeGuardStep
+
+    (tmp_path / f"{tmp_path.name}_paper.tex").write_text(
+        "\\begin{document}ready\\end{document}\n", encoding="utf-8"
+    )
+    write_ledger(tmp_path, rows)
+    registry, _ = v2_registry(content_guard=ContentFreezeGuardStep())
+    store = SQLiteStateStore(tmp_path)
+    policy = ContestPolicy.default(started_at=store.now_epoch())
+    store = v2_store(tmp_path, last_completed_step=15, contest_policy=policy.to_dict())
+    engine = FactoryEngine(tmp_path, store=store, registry=registry)
+    awaiting = engine.run()
+    assert awaiting.pending_action["gate"] == "content_freeze"
+    return store, engine, awaiting
+
+
+APPROVE = {"selected_option_id": "approve_content_freeze", "approved": True}
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({}, "must acknowledge the open BLOCKING ledger rows that only a human or Step 14/15 "
+             "resolves: S11R-B1, S11R-B2"),
+        ({"acknowledged_human_issues": ["S11R-B1"]}, "resolves: S11R-B2"),
+        ({"acknowledged_human_issues": ["S11R-B1", "S11R-B2", "S11R-M3"]},
+         "not open BLOCKING rows owned by a human or Step 14/15: S11R-M3"),
+        ({"acknowledged_human_issues": "S11R-B1"}, "must be a list"),
+    ],
+)
+def test_v2_content_freeze_approval_must_take_on_the_human_rows(tmp_path, extra, message):
+    store, engine, awaiting = _awaiting_content_freeze(tmp_path)
+
+    with pytest.raises(InvalidTransition, match=re.escape(message)):
+        engine.resolve_action({**APPROVE, **extra}, expected_revision=awaiting.revision)
+    assert store.load().pending_action["gate"] == "content_freeze"
+
+
+def test_a_v1_content_freeze_cannot_acknowledge_rows(tmp_path):
+    from dataclasses import replace
+
+    from factory_core.stages import STAGE_CATALOG_VERSION
+
+    store, engine, _awaiting = _awaiting_content_freeze(tmp_path)
+    v1 = replace(store.load(), stage_catalog_version=STAGE_CATALOG_VERSION)
+
+    with pytest.raises(InvalidTransition, match="Stage catalog v2 field"):
+        engine._content_freeze_acknowledgements(
+            v1, {"gate": "content_freeze", **APPROVE, "acknowledged_human_issues": ["S11R-B1"]}
+        )
+    plain = {"gate": "content_freeze", **APPROVE}
+    assert engine._content_freeze_acknowledgements(v1, plain) == plain
+
+
+def test_only_the_content_freeze_gate_takes_acknowledgements(tmp_path):
+    store, engine, _awaiting = _awaiting_content_freeze(tmp_path)
+
+    with pytest.raises(InvalidTransition, match="content-freeze field"):
+        engine._content_freeze_acknowledgements(
+            store.load(),
+            {"gate": "step3", "selected_option_id": "m1", "acknowledged_human_issues": []},
+        )
+
+
+def test_a_rejection_cannot_acknowledge_rows(tmp_path):
+    _store, engine, awaiting = _awaiting_content_freeze(tmp_path)
+
+    with pytest.raises(InvalidTransition, match="only a content-freeze approval"):
+        engine.resolve_action(
+            {"selected_option_id": "reject_content_freeze", "approved": False,
+             "acknowledged_human_issues": ["S11R-B1"]},
+            expected_revision=awaiting.revision,
+        )
+
+
+def test_acknowledged_human_rows_no_longer_block_the_final_audit(tmp_path):
+    from factory_core.audit.ledger import acknowledged_human_issues, has_unresolved_blocking
+
+    store, engine, awaiting = _awaiting_content_freeze(tmp_path)
+    ledger = tmp_path / "audit_issue_ledger.md"
+    assert has_unresolved_blocking(ledger)
+
+    engine.resolve_action(
+        {**APPROVE, "acknowledged_human_issues": [" S11R-B2", "S11R-B1"]},
+        expected_revision=awaiting.revision,
+    )
+
+    decision = store.decision("content_freeze")
+    assert decision["approved"] is True
+    assert decision["acknowledged_human_issues"] == ["S11R-B1", "S11R-B2"]
+    assert acknowledged_human_issues(tmp_path) == {"S11R-B1", "S11R-B2"}
+    assert not has_unresolved_blocking(ledger, acknowledged_human_issues(tmp_path))
+
+
+def test_an_acknowledgement_never_covers_a_row_a_model_step_owns(tmp_path):
+    from factory_core.audit.ledger import has_unresolved_blocking
+
+    ledger = tmp_path / "audit_issue_ledger.md"
+    write_ledger(tmp_path, HUMAN_ROWS + (("S11R-B4", "results", "BLOCKING", "OPEN", "Step 12"),))
+    assert has_unresolved_blocking(ledger, frozenset({"S11R-B1", "S11R-B2", "S11R-B4"}))
+    write_ledger(tmp_path, HUMAN_ROWS)
+    assert not has_unresolved_blocking(ledger, frozenset({"S11R-B1", "S11R-B2"}))
+    assert has_unresolved_blocking(ledger, frozenset({"S11R-B1"}))
+
+
+def test_a_v2_approval_without_human_rows_needs_no_acknowledgement(tmp_path):
+    store, engine, awaiting = _awaiting_content_freeze(
+        tmp_path, rows=(("S11R-M3", "paper", "MAJOR", "OPEN", "Human"),)
+    )
+
+    engine.resolve_action(dict(APPROVE), expected_revision=awaiting.revision)
+
+    assert store.decision("content_freeze")["approved"] is True

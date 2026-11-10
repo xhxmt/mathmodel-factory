@@ -305,6 +305,169 @@ def test_verify_numbers_ignores_tikz_layout_coordinates_but_checks_caption(tmp_p
     assert verify_paper(project, base) is True
 
 
+def test_verify_numbers_ignores_table_rule_column_ranges_and_binary_minus(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(project / "results" / "p1" / "values.json", json.dumps({"threshold": 0.15, "t": 59.19}))
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n"
+        "\\begin{tabular}{lrrrrr}\n"
+        "\\toprule\n"
+        "& a & b & c & d & e \\\\\n"
+        "\\cmidrule(lr){2-6} \\cmidrule[0.4pt](l){7-9} \\cline{2-4}\n"
+        "\\end{tabular}\n"
+        "Water to remove $(C_{\\rm init}-0.15)\\,\\rho_d$; $t=59.19$ h.\n"
+        "\\end{document}\n",
+    )
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is True
+
+
+def test_verify_numbers_keeps_unary_minus_and_rejects_its_wrong_sign(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(project / "results" / "p1" / "values.json", json.dumps({"delta": 0.35}))
+    write_file(project / f"{base}_paper.tex", "\\begin{document}\nChange: $-0.35$.\n\\end{document}\n")
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is False
+    assert "-0.35" in (project / "number_verification.md").read_text(encoding="utf-8")
+
+
+def test_verify_numbers_matches_escaped_percent_to_fraction(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(project / "results" / "s" / "tornado.json", json.dumps({"perturbation": -0.2, "share": 0.113}))
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\nLow side $-20\\%$; share 11.3\\%; unrelated 0.2.\n\\end{document}\n",
+    )
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    # 0.2 written without a percent sign is not the -0.2 fraction.
+    assert verify_paper(project, base) is False
+    report = (project / "number_verification.md").read_text(encoding="utf-8")
+    assert "Untraced Numbers (1)" in report
+    assert "`0.2` in" in report
+
+
+def test_verify_numbers_traces_values_given_by_the_problem_statement(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    write_file(project / "results" / "p1" / "values.json", json.dumps({"t": 59.19}))
+    write_file(
+        project / "problem" / "source.md",
+        "$$D=2.4\\times10^{-3}e^{-\\frac{0.45}{C}}e^{-\\frac{3850}{T}}$$\n",
+    )
+    paper = (
+        "\\begin{document}\n"
+        "$D=2.4\\times10^{-3}\\,e^{-0.45/C}\\,e^{-3850/T_{\\rm K}}$ gives $t=59.19$ h.\n"
+        "\\end{document}\n"
+    )
+    write_file(project / f"{base}_paper.tex", paper)
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is True
+    report = (project / "number_verification.md").read_text(encoding="utf-8")
+    assert "Traced to the problem statement (3)" in report
+
+    write_file(project / f"{base}_paper.tex", paper.replace("3850", "3950"))
+    assert verify_paper(project, base) is False
+
+
+def _write_derived_project(project: Path, headline: str) -> None:
+    import hashlib
+
+    write_file(project / "results" / "canonical_results.json", json.dumps({"p3": 59.19, "p4": 54.73}))
+    write_file(project / "models" / "generate_derived.py", "# fixture generator\n")
+    write_file(project / "tables" / "headline_values.tex", headline)
+
+    def sha(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    write_file(
+        project / "results" / "derived_artifacts.json",
+        json.dumps(
+            {
+                "schema": "canonical-derived-artifacts-v1",
+                "canonical_results": "results/canonical_results.json",
+                "canonical_results_sha256": sha(project / "results" / "canonical_results.json"),
+                "generator": {
+                    "path": "models/generate_derived.py",
+                    "sha256": sha(project / "models" / "generate_derived.py"),
+                    "argv": ["__PYTHON__", "models/generate_derived.py"],
+                },
+                "outputs": [
+                    {
+                        "path": "tables/headline_values.tex",
+                        "comparison": "bytes",
+                        "sha256": sha(project / "tables" / "headline_values.tex"),
+                    }
+                ],
+            }
+        ),
+    )
+
+
+def test_verify_numbers_trusts_only_a_still_pinned_derived_output(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    _write_derived_project(project, "\\newcommand{\\ShrinkSaving}{4.4583}\n")
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n\\input{tables/headline_values}\nSaving: \\ShrinkSaving{} h.\n\\end{document}\n",
+    )
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is True
+    assert "Traced through pinned derived artifacts (1)" in (
+        project / "number_verification.md"
+    ).read_text(encoding="utf-8")
+
+    # A hand edit after the manifest was written breaks the pin.
+    write_file(project / "tables" / "headline_values.tex", "\\newcommand{\\ShrinkSaving}{4.9583}\n")
+    assert verify_paper(project, base) is False
+
+    # So does a canonical result that changed under an unchanged output.
+    _write_derived_project(project, "\\newcommand{\\ShrinkSaving}{4.4583}\n")
+    write_file(project / "results" / "canonical_results.json", json.dumps({"p3": 60.0, "p4": 54.73}))
+    generate_manifest(project)
+    assert verify_paper(project, base) is False
+
+
+def test_verify_numbers_does_not_trust_a_derived_number_written_in_prose(tmp_path):
+    project = tmp_path / "proj"
+    base = "proj"
+    _write_derived_project(project, "\\newcommand{\\ShrinkSaving}{4.4583}\n")
+    write_file(
+        project / f"{base}_paper.tex",
+        "\\begin{document}\n\\input{tables/headline_values}\nSaving: 4.4583 h.\n\\end{document}\n",
+    )
+
+    from verify_numbers import generate_manifest, verify_paper
+
+    generate_manifest(project)
+
+    assert verify_paper(project, base) is False
+
+
 def test_verify_numbers_rejects_key_result_that_disagrees_with_canonical_source(tmp_path):
     project = tmp_path / "proj"
     base = "proj"

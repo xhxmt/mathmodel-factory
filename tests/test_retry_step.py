@@ -225,3 +225,86 @@ def test_diagnostics_suggest_the_retry_for_a_failed_step(tmp_path):
     status = project_runtime_diagnostics(store.events(), failed)["status"]
     assert status["suggested_actions"][0] == "retry_failed_step"
     assert status["current_step"] == 14
+
+
+# --- A retried attempt gets its own immutable prompt-input key -------------
+
+
+def _prompt_project_at_stage_cursor(tmp_path):
+    """A real PromptStep on Step 4 whose Stage cursor baseline is recorded."""
+
+    import json
+
+    from tests.test_consultation_projection import (
+        RecordingDispatcher,
+        _prompt_step,
+        _resolve_cli_consultation,
+    )
+
+    root, project, store = _resolve_cli_consultation(tmp_path)
+    step = _prompt_step(root, RecordingDispatcher())
+    state = store.load()
+    store.transition(
+        expected_revision=state.revision,
+        event_type="STAGE_SUBTASK_SELECTED",
+        changes={"active_stage": 3, "active_subtask": "model_construction"},
+        subtask_baseline={
+            "stage_id": 3,
+            "subtask": "model_construction",
+            "source_step_id": 4,
+            "input_fingerprint": "f" * 64,
+            "manifest": {},
+        },
+    )
+    notes = root / "web" / "notes.json"
+    notes.parent.mkdir(parents=True, exist_ok=True)
+
+    def set_note(text):
+        notes.write_text(json.dumps({"demo": {"step_4": text}}), encoding="utf-8")
+
+    return project, store, step, set_note
+
+
+def _context(project, store):
+    from factory_core.domain import StepContext
+
+    return StepContext(project, "demo", 4, 1, 30, store.load().revision)
+
+
+def test_retried_attempt_binds_corrected_inputs_under_a_new_key(tmp_path):
+    project, store, step, set_note = _prompt_project_at_stage_cursor(tmp_path)
+    set_note("first attempt")
+    first = step.execute(_context(project, store))
+    assert first.returncode == 0
+
+    state = store.load()
+    retry = store.transition(
+        expected_revision=state.revision,
+        event_type=STEP_RETRY_AUTHORIZED,
+        changes={"attempt": 0},
+        payload={"stage": 3, "subtask": "model_construction", "source_step": 4},
+    )
+    set_note("write the paths claim_registry.json declares")
+    second = step.execute(_context(project, store))
+
+    assert second.returncode == 0, second.error_class
+    keys = [item["attempt_key"] for item in store.prompt_attempt_inputs()]
+    assert first.metadata["prompt_input_attempt_key"] in keys
+    assert second.metadata["prompt_input_attempt_key"] == (
+        f"stage:3:model_construction:selected-revision:{retry.revision}:attempt:1"
+    )
+    assert len(set(keys)) == 2
+
+
+def test_conflicting_prompt_input_fails_the_step_instead_of_killing_the_worker(tmp_path):
+    project, store, step, set_note = _prompt_project_at_stage_cursor(tmp_path)
+    set_note("first attempt")
+    assert step.execute(_context(project, store)).returncode == 0
+
+    set_note("changed without a retry")
+    result = step.execute(_context(project, store))
+
+    assert result.returncode == 2
+    assert result.error_class == "PERMANENT_PROMPT_INPUT_CONFLICT"
+    assert "different content" in result.metadata["prompt_input_errors"][0]
+    assert result.metadata["prompt_input_attempt_key"].endswith(":attempt:1")

@@ -345,6 +345,9 @@ class SelectionDecisionRequest(BaseModel):
     generation: int | None = None
     subject_fingerprint: str | None = None
     options_fingerprint: str | None = None
+    # Content freeze only: the open human-owned BLOCKING ledger rows this
+    # approval takes on (engine._content_freeze_acknowledgements).
+    acknowledged_human_issues: list[str] | None = None
 
 
 class SelectionRefreshRequest(BaseModel):

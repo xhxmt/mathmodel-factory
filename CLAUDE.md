@@ -185,7 +185,11 @@ snapshots, unfinished human decisions, and any current manifest drift from
 `stage_cursor_input`. Dirty state is keyed by `(flag, owner_stage)` so one
 domain cannot overwrite another Stage's active cause. Final/submission
 collection fails closed when a tracked authored file has neither registry
-ownership nor an explicit active-LaTeX or declared-deliverable route.
+ownership nor an explicit active-LaTeX or declared-deliverable route. Step 2
+stream auxiliary files at the root (`m<N>_*`) are described by the last-resort
+`artifact_policy.FALLBACK_POLICY` (exploratory, non-blocking, no Stage owner),
+and the Step 2 validator fails on any tracked file without an owner or policy so
+the gap surfaces before Gate 2.
 
 Native failure events preserve execution and validation metadata such as the
 failed check, role, backend, report, and missing artifact paths. A model process
@@ -240,6 +244,35 @@ returns `INFRA_RETRY` (e.g. an `INDETERMINATE` visual gate) or
 `PERMANENT_FINAL_JUDGE`. A timeout still consumes a content attempt,
 and so does a determinate audit finding (`AUDIT_REPAIR_REQUIRED`).
 
+The v2 Stage 8 exit (Step 12; v2 has no Judge before it) routes the
+ledger's open BLOCKING/MAJOR rows outside `## Incremental audit findings`
+(except rows whose `Blocking Until` starts with `Human` or names only Step 14/15,
+which stay OPEN for Gate 2 and are listed as `deferred_review_issues`; a v2
+content-freeze approval must name every such open BLOCKING row in
+`acknowledged_human_issues` (`engine._content_freeze_acknowledgements` refuses it
+otherwise), and the final audit and Step 16 validator then stop counting exactly
+those rows, read from the verified decision via `ledger.acknowledged_human_issues`)
+(`audit.ledger.open_review_issues`; the machine `AUDIT-*` rows never block it,
+since no Stage 8 subtask reruns a profile) by Category: `results`/`model` rows
+recompute Steps 5-8 and return to the revision (`STAGE_SEMANTIC_REOPENED`,
+`rework_rule=review_issue`, `review_issues`, at most `V2_REVIEW_RECOMPUTE_LIMIT`
+= 1, also counted against the semantic-reopen budget), the rest re-run Steps
+11-12 (`STEP_REOPENED`, `rework_rule=review_loop`, at most
+`V2_REVIEW_LOOP_LIMIT` = 1); after that the run fails with
+`PERMANENT_REVIEW_LOOP_EXHAUSTED` naming the rows. Both limits count from the
+latest `retry-step` of the revision or the latest final-Judge `REOPEN_REVISION_*`
+reopen, whichever is later. While such a recompute has not yet
+returned to the revision, `catalog_prompts.review_rework_block` prepends the
+issues (ID, Category, Severity, current ledger Notes) to the prompts of the
+Steps it recomputes; the v2 overlay tells Step 12 to categorize them. v1 keeps
+its Step-13 exit unchanged. Likewise, after the v2 final Judge reopens with `REOPEN_REVISION_MODEL`/`_TEXT`,
+`catalog_prompts.judge_rework_block` prepends that Judge's fatal/blocking/major
+findings (from `judge_outputs/aggregate.json`, verdict-checked) to every re-run
+Step after the reopen target until the final Judge starts again. When the
+decision router overrode a PASS aggregate (`decision_route.json`), the block
+lists the paper role's blocking/major issues and the blocking findings of
+`judge_outputs/visual_gate.json` instead.
+
 A semantic reopen (a Stage changing content an earlier Stage owns) is
 budgeted per classifier identity: an initiating Stage may rewind at most
 `STAGE_SEMANTIC_REOPEN_LIMIT` (2) times and a run at most
@@ -261,7 +294,12 @@ A `FAILED` project whose cursor is on a Step is retried only through
 `STEP_RETRY_AUTHORIZED` (previous attempt, the failure's revision and error
 class, the operator's reason), resets the attempt count with the Stage cursor
 kept, and starts a fresh attempt 1; dirty state, checkpoints, the contest
-deadline and other budgets still apply. A plain resume of such a project
+deadline and other budgets still apply. The retried attempt binds its prompt
+inputs under a key derived from the `STEP_RETRY_AUTHORIZED` revision, so an
+input corrected for the retry (a researcher note, `human_review.md`) does not
+collide with the failed attempt's immutable receipt. Any prompt-input binding
+conflict fails the Step as `PERMANENT_PROMPT_INPUT_CONFLICT` instead of killing
+the worker and leaving the project `running` with a dead runner. A plain resume of such a project
 recovers the failed attempt and stops at `PERMANENT_ATTEMPT_BUDGET_EXHAUSTED`.
 Do not edit the state database or write one-off authorization events instead.
 
@@ -331,7 +369,27 @@ Delivery override authority lives only in `web/auth.db`. The scopes are
 `continue_after_gate2` and `deliver_snapshot`; the latter must bind the exact
 64-character final snapshot and is consumed when the final acceptance is
 recorded. A project-local `gate2_delivery_override.json` never authorizes
-anything. This is an operational boundary for the single-operator deployment,
+anything. In catalog v2 the operator issues `deliver_snapshot` for the
+`snapshot_id` of a completed non-PASS final judgment (`.factory/audits/analysis_latest.json`,
+`AUDIT_REPAIR_REQUIRED`/`PERMANENT_FINAL_JUDGE`, or `PERMANENT_JUDGE_EVIDENCE_INDETERMINATE`
+when every role answered but a hard role found the evidence insufficient; never a
+transient Judge state), then `retry-step --step 13`:
+Step 13 (`FinalAuditService.overridable_judgment`) re-prepares the packets
+without compiling and, when the override names that judged snapshot, hands the
+run to Step 16 without rerunning the Judge; Step 16 promotes the judgment like a
+PASS (all non-Judge checks rerun on the judged PDF, snapshot recheck) and
+records `OVERRIDDEN`, consuming the override. Neither path compiles. The
+re-prepared packets reproduce the judged snapshot only because the factory run
+traces directly under `logs/` (`worker_*`, `step_*` model logs and prompt files,
+`native_*`; `scripts/objective_evidence.is_runtime_log`), which every audit,
+Judge call and probe adds, are never evidence: the objective-evidence
+fingerprint, the execution packet (`judge_packet._is_execution_evidence`) and
+`verify_numbers`' log number source all skip them; solver, compiler and agent
+logs stay inputs. `compile_paper.sh`
+also pins `SOURCE_DATE_EPOCH` (caller value, else the main source's mtime), so
+recompiling unchanged sources reproduces the PDF bytes. The snapshot also
+binds the evaluator code (`evaluator_contract`), so a judgment made before a
+factory code change cannot be overridden after it; rerun the Judge first. The override store is an operational boundary for the single-operator deployment,
 not cryptographic isolation from another process running as the same Unix UID.
 The same control database owns identity and `project_acl`, but none of those
 records replaces project-local workflow decisions in `.factory/state.db` or
@@ -460,7 +518,7 @@ Important project files include:
 - `logs/compilation/latex_inputs.json`: compiler-recorder proof that project-local TeX inputs equal the declared `LatexCompileContract` dependency graph.
 - `.factory/finalization/submission_bundle_manifest.json`: exact, path-safe ZIP member list with size and SHA-256; unreferenced `paper/` drafts are excluded.
 - `judge_evaluation.md`: Step-13 `PRECHECK_PASS` control file until the final audit replaces it with the full aggregate verdict.
-- `judge_packets/**`, `judge_outputs/**`: isolated evidence manifests, strict role outputs, aggregate JSON, and final-submission fingerprint. Each manifest carries `judge-packet-completeness-v1`; required evidence that is missing, truncated, or omitted forces the role to `INDETERMINATE`, while non-critical truncation must remain visible in `limitations`.
+- `judge_packets/**`, `judge_outputs/**`: isolated evidence manifests, strict role outputs, aggregate JSON, and final-submission fingerprint. Each manifest carries `judge-packet-completeness-v2`; aggregation and the pre-dispatch check accept v1 and v2 (`packet_evidence.supported_completeness_version`), and only v2 manifests carry attested outputs; required evidence that is missing, truncated, or omitted forces the role to `INDETERMINATE`, while non-critical truncation must remain visible in `limitations`. In a `solver_chain:*` requirement the adopted output, script, inputs, receipts and every declared output up to the 55,000-byte packet file limit must be included in full; a larger sibling output is an `attested_output`, satisfied when the manifest lists it with the completion receipt's SHA-256 (the chain itself already requires `receipt_ready`).
 
 Protected assumptions or issues must not be deleted or downgraded without a
 clear evidence-backed reason.
@@ -494,7 +552,7 @@ Follow `modeling_guide.md`:
 - Tables: `booktabs`, right-aligned numeric columns, compact labels.
 - Symbols: every variable and parameter used in the model must appear in `symbol_table.md` and the paper's symbol table.
 - LaTeX: CUMCM/MCM-style sections, with abstract filled only at Step 14.
-- Compilation: use `compile_paper.sh`; it selects `xelatex` for `ctex`, `cumcmthesis`, `mcmthesis`, or `xeCJK`, sanitizes TeX search paths, runs without shell escape, verifies all three recorder files, and emits `bibliography-build-receipt-v1`. BibTeX/Biber failures, stale `.bbl` reuse, unresolved citations, project symlinks, and non-runtime external reads are fatal.
+- Compilation: use `compile_paper.sh`; it selects `xelatex` for `ctex`, `cumcmthesis`, `mcmthesis`, or `xeCJK`, sanitizes TeX search paths, runs without shell escape, pins `SOURCE_DATE_EPOCH` for byte-reproducible PDFs, verifies all three recorder files, and emits `bibliography-build-receipt-v1`. BibTeX/Biber failures, stale `.bbl` reuse, unresolved citations, project symlinks, and non-runtime external reads are fatal.
 
 ## Web Control Plane Contract
 

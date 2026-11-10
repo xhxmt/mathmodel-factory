@@ -134,6 +134,17 @@ SEMANTIC_REOPEN_GRANTED = "SEMANTIC_REOPEN_GRANTED"
 # Phase 3b: the one formal way to retry a failed Step with a fresh attempt
 # budget, replacing direct database edits and one-off authorization events.
 STEP_RETRY_AUTHORIZED = "STEP_RETRY_AUTHORIZED"
+# Stage catalog v2 review exit (acceptance A, F6/F7).  v2 leaves Stage 8 at
+# Step 12 with no Judge in between, so the open review issues (rows outside
+# the machine-maintained audit section) are routed here by their Category:
+# results/model issues recompute the computation Steps 5-8 and return to the
+# revision, at most V2_REVIEW_RECOMPUTE_LIMIT times; the rest re-run Steps
+# 11-12 at most V2_REVIEW_LOOP_LIMIT times.  Then the run fails as before.
+# Both counts restart after an operator ``retry-step`` of the revision.
+REVIEW_UPSTREAM_CATEGORIES = frozenset({"results", "model"})
+V2_REVIEW_RECOMPUTE_LIMIT = 1
+V2_REVIEW_LOOP_LIMIT = 1
+REVIEW_ISSUE_REWORK_RULE = "review_issue"
 
 
 @dataclass(frozen=True)
@@ -1410,12 +1421,29 @@ class FactoryEngine:
         returns to the first unfinished subtask, the initiating one.
         """
 
-        from .input_dependency_policy import recompute_steps
-
         causes = [item for item in dirty_changes if item.get("input_consumer_step") is not None]
         if not causes:
             return None
         start = min(int(item["input_consumer_step"]) for item in causes)
+        return self._computation_recompute(
+            state,
+            start,
+            causes,
+            sorted(
+                f"{item.get('cause_artifact')}: consumed by Step {item['input_consumer_step']}"
+                for item in causes
+            ),
+        )
+
+    def _computation_recompute(
+        self,
+        state: WorkflowState,
+        start: int,
+        causes: list[dict[str, Any]],
+        reasons: list[str],
+    ) -> dict[str, Any]:
+        from .input_dependency_policy import recompute_steps
+
         completed = self._completed_computation_steps(state)
         steps = [step for step in recompute_steps(start) if step in completed]
         catalog = self._catalog(state)
@@ -1441,11 +1469,217 @@ class FactoryEngine:
             "owner_stage": catalog.stage_for_step(start).id,
             "resume_after_step": previous[-1] if previous else -1,
             "causes": causes,
-            "reasons": sorted(
-                f"{item.get('cause_artifact')}: consumed by Step {item['input_consumer_step']}"
-                for item in causes
-            ),
+            "reasons": reasons,
         }
+
+    def _is_v2_review_exit(self, state: WorkflowState, task: ScheduledStageTask) -> bool:
+        return (
+            state.stage_catalog_version == STAGE_CATALOG_VERSION_V2
+            and task.stage_id == 8
+            and task.checkpoint_step_id == 12
+        )
+
+    def _open_review_issues(self, validation: ValidationResult) -> list[Any]:
+        """Open BLOCKING/MAJOR review rows, unless continuation is authorized."""
+
+        from .audit.ledger import open_review_issues
+
+        if validation.metadata.get("gate2_continuation_override") is True:
+            return []
+        return [
+            issue
+            for issue in open_review_issues(
+                self.project_dir / "audit_issue_ledger.md", {"BLOCKING", "MAJOR"}
+            )
+            if not issue.deferred_past_review
+        ]
+
+    def _deferred_review_issues(self) -> list[str]:
+        """Open rows the v2 review exit leaves to a human or to Step 14/15 (F16)."""
+
+        from .audit.ledger import open_review_issues
+
+        return [
+            f"{issue.issue_id} ({issue.category or 'uncategorized'}, {issue.severity}; "
+            f"Blocking Until: {issue.blocking_until})"
+            for issue in open_review_issues(
+                self.project_dir / "audit_issue_ledger.md", {"BLOCKING", "MAJOR"}
+            )
+            if issue.deferred_past_review
+        ]
+
+    @staticmethod
+    def _review_issue_summary(issues: list[Any]) -> list[str]:
+        return [
+            f"{issue.issue_id} ({issue.category or 'uncategorized'}, {issue.severity})"
+            for issue in issues
+        ]
+
+    def _review_recompute_plan(
+        self, state: WorkflowState, validation: ValidationResult
+    ) -> dict[str, Any] | None:
+        """Recompute Steps 5-8 for open results/model review issues (v2 exit)."""
+
+        from .input_dependency_policy import COMPUTATION_STEPS
+
+        upstream = [
+            issue
+            for issue in self._open_review_issues(validation)
+            if issue.category in REVIEW_UPSTREAM_CATEGORIES
+        ]
+        if not upstream:
+            return None
+        events = self.store.events()
+        since = self._review_budget_baseline(events)
+        used = sum(
+            1
+            for event in events
+            if event.revision > since
+            and event.type == "STAGE_SEMANTIC_REOPENED"
+            and event.payload.get("rework_rule") == REVIEW_ISSUE_REWORK_RULE
+        )
+        if used >= V2_REVIEW_RECOMPUTE_LIMIT:
+            return None
+        start = COMPUTATION_STEPS[0]
+        if start not in self._completed_computation_steps(state):
+            return None
+        owner_stage = self._catalog(state).stage_for_step(start).id
+        plan = self._computation_recompute(
+            state,
+            start,
+            [
+                {
+                    "flag": "RESULT_DIRTY",
+                    "owner_stage": owner_stage,
+                    "cause_artifact": f"audit_issue_ledger.md#{issue.issue_id}",
+                }
+                for issue in upstream
+            ],
+            [
+                f"audit_issue_ledger.md#{issue.issue_id}: open {issue.category} "
+                f"{issue.severity} review issue"
+                for issue in upstream
+            ],
+        )
+        plan["rule"] = REVIEW_ISSUE_REWORK_RULE
+        plan["review_issues"] = self._review_issue_summary(upstream)
+        return plan
+
+    @staticmethod
+    def _review_budget_baseline(events: list[Any]) -> int:
+        """The latest restart of the v2 review budgets, or 0.
+
+        The review recompute and review loop are counted after it. Two events
+        restart them: an operator ``retry-step`` of the revision (like the
+        attempt count, an explicit retry of the exit Step starts them afresh),
+        and a final-Judge ``REOPEN_REVISION_*`` reopen, whose repair cycle runs
+        a new Step 11 review that must not inherit the first pass's spent
+        budget (acceptance A, F15).
+        """
+
+        return max(
+            (
+                event.revision
+                for event in events
+                if (
+                    event.type == STEP_RETRY_AUTHORIZED
+                    and event.payload.get("stage") == 8
+                    and event.payload.get("subtask") == "revision"
+                )
+                or (
+                    event.type == "STEP_REOPENED"
+                    and event.payload.get("subtask") == "final_judge"
+                    and str(event.payload.get("final_decision", "")).startswith("REOPEN_REVISION")
+                )
+            ),
+            default=0,
+        )
+
+    def _v2_review_exit(
+        self,
+        state: WorkflowState,
+        lease: str | None,
+        task: ScheduledStageTask,
+        validation: ValidationResult,
+        dirty_changes: list[dict[str, Any]],
+    ) -> WorkflowState | None:
+        """Leave Stage 8 in catalog v2, or loop the review once, or fail.
+
+        Runs after the recompute route, so open results/model issues here mean
+        that route is spent. The audit section's machine rows never block.
+        """
+
+        issues = self._open_review_issues(validation)
+        if not issues:
+            return None
+        summary = self._review_issue_summary(issues)
+        upstream = [issue for issue in issues if issue.category in REVIEW_UPSTREAM_CATEGORIES]
+        events = self.store.events()
+        since = self._review_budget_baseline(events)
+        loops_used = sum(
+            1
+            for event in events
+            if event.revision > since
+            and event.type == "STEP_REOPENED"
+            and event.payload.get("stage") == 8
+            and event.payload.get("subtask") == task.subtask
+        )
+        if not upstream and loops_used < V2_REVIEW_LOOP_LIMIT:
+            return self._stage_transition(
+                state,
+                lease,
+                event_type="STEP_REOPENED",
+                changes={
+                    "status": WorkflowStatus.RUNNING,
+                    "last_completed_step": 10,
+                    "last_completed_stage": 7,
+                    "active_step": None,
+                    "active_stage": None,
+                    "active_subtask": None,
+                    "source_step_id": None,
+                    "attempt": 0,
+                },
+                payload={
+                    "source_step": task.source_step_id,
+                    "stage": 8,
+                    "subtask": task.subtask,
+                    "resume_after_step": 10,
+                    "rework_rule": "review_loop",
+                    "review_issues": summary,
+                    "deferred_review_issues": self._deferred_review_issues(),
+                    "reason": "unresolved BLOCKING or MAJOR review issue remains",
+                },
+                dirty_changes=dirty_changes,
+                invalidate_checkpoints_after_step=10,
+                subtask_baseline=None,
+                event_step=task.source_step_id,
+            )
+        return self._stage_transition(
+            state,
+            lease,
+            event_type="STEP_FAILED",
+            changes={
+                "status": WorkflowStatus.FAILED,
+                "runner_pid": None,
+                "runner_lease_id": None,
+                "heartbeat_at": None,
+            },
+            payload={
+                "error_class": "PERMANENT_REVIEW_LOOP_EXHAUSTED",
+                "stage": 8,
+                "subtask": task.subtask,
+                "review_issues": summary,
+                "deferred_review_issues": self._deferred_review_issues(),
+                "reason": (
+                    "unresolved results/model review issue remains after the "
+                    "review recompute"
+                    if upstream
+                    else "unresolved BLOCKING or MAJOR review issue remains after the review loop"
+                ),
+            },
+            dirty_changes=dirty_changes,
+            event_step=task.source_step_id,
+        )
 
     def _completed_computation_steps(self, state: WorkflowState) -> set[int]:
         """The computation Steps (5-8) whose Stage checkpoint is present."""
@@ -1710,15 +1944,23 @@ class FactoryEngine:
             )
         elif state.stage_catalog_version == STAGE_CATALOG_VERSION_V2:
             recompute = self._input_recompute_plan(state, dirty_changes)
+            if recompute is None and self._is_v2_review_exit(state, task):
+                recompute = self._review_recompute_plan(state, validation)
             if recompute is not None:
                 semantic_owner_stage = recompute["owner_stage"]
                 semantic_reopen_target = recompute["resume_after_step"]
                 reopen_causes = recompute["causes"]
-                semantic_reason = (
-                    f"Stage {task.stage_id} changed an input of completed "
-                    f"Step {recompute['start_step']}; recompute Steps "
-                    + ", ".join(str(step) for step in recompute["steps"])
-                )
+                steps = ", ".join(str(step) for step in recompute["steps"])
+                if recompute.get("rule") == REVIEW_ISSUE_REWORK_RULE:
+                    semantic_reason = (
+                        f"Stage {task.stage_id} has open results/model review "
+                        f"issues; recompute Steps {steps}"
+                    )
+                else:
+                    semantic_reason = (
+                        f"Stage {task.stage_id} changed an input of completed "
+                        f"Step {recompute['start_step']}; recompute Steps {steps}"
+                    )
 
         if semantic_reopen_target is not None:
             budget = self._semantic_reopen_budget(task.stage_id, state)
@@ -1806,10 +2048,15 @@ class FactoryEngine:
                     "classifier_contract_sha256": self._classifier_sha(state),
                     **(
                         {
-                            "rework_rule": "input_dependency",
+                            "rework_rule": recompute.get("rule", "input_dependency"),
                             "recompute_steps": recompute["steps"],
                             "return_subtask": task.subtask,
                             "recompute_reasons": recompute["reasons"],
+                            **(
+                                {"review_issues": recompute["review_issues"]}
+                                if "review_issues" in recompute
+                                else {}
+                            ),
                         }
                         if recompute is not None
                         else {}
@@ -1828,7 +2075,11 @@ class FactoryEngine:
         stage8_exit_step = (
             12 if state.stage_catalog_version == STAGE_CATALOG_VERSION_V2 else 13
         )
-        if task.stage_id == 8 and task.checkpoint_step_id == stage8_exit_step:
+        if self._is_v2_review_exit(state, task):
+            exit_transition = self._v2_review_exit(state, lease, task, validation, dirty_changes)
+            if exit_transition is not None:
+                return exit_transition
+        elif task.stage_id == 8 and task.checkpoint_step_id == stage8_exit_step:
             from .audit.ledger import has_unresolved_critical
 
             # Step 13 continuation is explicitly authorized by the control-plane
@@ -2646,11 +2897,83 @@ class FactoryEngine:
         if state.pending_action is None:
             raise InvalidTransition("project has no pending action")
         resolution = validate_resolution(state.pending_action, resolution)
+        resolution = self._content_freeze_acknowledgements(state, resolution)
         return self._transitions.resolve_human_decision(
             expected_revision=expected_revision,
             resolution=resolution,
             decision_record=decision_record,
         )
+
+    def _content_freeze_acknowledgements(
+        self, state: WorkflowState, resolution: dict
+    ) -> dict:
+        """Bind the open human-owned ledger rows to a content-freeze approval.
+
+        A BLOCKING row whose resolver is a human or Step 14/15
+        (``ledger.deferred_blocking_issues``) passes the v2 Stage 8 exit for
+        Gate 2 (F16); the final audit refuses any open BLOCKING row (F17).
+        The approval therefore names the rows it takes on in
+        ``acknowledged_human_issues``; the immutable decision carries them and
+        the final audit stops counting exactly those rows.  In catalog v2 an
+        approval that leaves such a row unacknowledged is refused here, while
+        the decision can still be changed, instead of failing Step 13 later.
+        """
+
+        raw = resolution.get("acknowledged_human_issues")
+        if resolution.get("gate") != "content_freeze":
+            if raw is not None:
+                raise InvalidTransition(
+                    "acknowledged_human_issues is a content-freeze field"
+                )
+            return resolution
+        from .audit.ledger import deferred_blocking_issues
+
+        if raw is not None and (
+            not isinstance(raw, list)
+            or not all(isinstance(value, str) and value.strip() for value in raw)
+        ):
+            raise InvalidTransition(
+                "acknowledged_human_issues must be a list of ledger issue ids"
+            )
+        acknowledged = sorted({value.strip() for value in raw or []})
+        if acknowledged and state.stage_catalog_version != STAGE_CATALOG_VERSION_V2:
+            # Only the v2 Stage 8 exit lets a human-owned BLOCKING row reach
+            # Gate 2; v1 keeps its delivery rules unchanged.
+            raise InvalidTransition(
+                "acknowledged_human_issues is a Stage catalog v2 field"
+            )
+        if acknowledged and resolution.get("approved") is not True:
+            raise InvalidTransition(
+                "only a content-freeze approval can acknowledge ledger rows"
+            )
+        deferred = sorted(
+            issue.issue_id
+            for issue in deferred_blocking_issues(
+                self.project_dir / "audit_issue_ledger.md"
+            )
+        )
+        unknown = sorted(set(acknowledged) - set(deferred))
+        if unknown:
+            raise InvalidTransition(
+                "acknowledged_human_issues names rows that are not open BLOCKING rows "
+                f"owned by a human or Step 14/15: {', '.join(unknown)} "
+                f"(acknowledgeable: {', '.join(deferred) or 'none'})"
+            )
+        missing = sorted(set(deferred) - set(acknowledged))
+        if (
+            missing
+            and resolution.get("approved") is True
+            and state.stage_catalog_version == STAGE_CATALOG_VERSION_V2
+        ):
+            raise InvalidTransition(
+                "content-freeze approval must acknowledge the open BLOCKING ledger rows "
+                f"that only a human or Step 14/15 resolves: {', '.join(missing)}; "
+                "list them in acknowledged_human_issues, or close them in "
+                "audit_issue_ledger.md before approving"
+            )
+        if raw is None:
+            return resolution
+        return {**resolution, "acknowledged_human_issues": acknowledged}
 
     def _control_transition(
         self,

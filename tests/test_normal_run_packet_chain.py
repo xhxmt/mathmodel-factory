@@ -183,3 +183,104 @@ def test_automatic_job_selection_reports_missing_or_oversized_evidence(tmp_path,
     assert chain and not all(item["satisfied"] for item in chain)
     if condition != "budget":
         assert aggregate(project, role_outputs(project, manifests)).status == "INDETERMINATE"
+
+
+def adopted_computation_with_sibling(tmp_path, sibling_bytes=200_000):
+    """The adopted job also declares a large deliverable grid (acceptance A, F12)."""
+    from tests.support.normal_run import controlled_service
+    from scripts.canonical_claims import accept
+    from scripts.solver_job_receipt import receipt_paths, build_evidence
+
+    service, project, backend = controlled_service(tmp_path)
+    packet_project(project)
+    write(project, "data/input.json", '{"first":1,"second":1}')
+    script = write(project, "models/03_solve.py", "import json, os\nfrom pathlib import Path\n"
+        "from factory_core.json_values import dumps\n"
+        "data = json.loads(Path('../data/input.json').read_text())\n"
+        "Path('../results/values.json').write_text(dumps({'estimate': data['first'] + data['second'], "
+        "'provenance': {'job_id': os.environ['FACTORY_SOLVER_JOB_ID']}}))\n"
+        f"Path('../results/full_grid.json').write_text(json.dumps({{'grid': 'x' * {sibling_bytes}}}))\n")
+    job = service.submit_solver(project, runtime="python", script=script, max_time_seconds=10,
+        input_paths=("data/input.json",),
+        output_paths=("results/values.json", "results/full_grid.json"))
+    job = service.solver_status(project, job["job_id"])
+    assert job["status"] == "completed", backend.result.stderr
+    submitted, completed = receipt_paths(project / ".factory/solver_receipts", job["job_id"])
+    assert build_evidence(project, submitted, completed)["receipt_ready"]
+    accept(project, "Q1_ESTIMATE", "results/values.json::estimate",
+           completed.relative_to(project).as_posix(), [], "Use the controlled result.")
+    return project, job
+
+
+def _chain(manifest):
+    return [item for item in manifest["completeness"]["requirements"]
+            if item["id"].startswith("solver_chain:")]
+
+
+def test_large_sibling_output_is_receipt_attested_not_required_in_full(tmp_path):
+    project, _ = adopted_computation_with_sibling(tmp_path)
+    manifests = build_packets(project)
+    manifest = manifests["execution"]
+    assert manifest["completeness"]["contract_version"] == "judge-packet-completeness-v2"
+    for item in _chain(manifest):
+        assert "results/values.json" in item["paths"]
+        assert "results/full_grid.json" not in item["paths"]
+        assert [a["path"] for a in item["attested_outputs"]] == ["results/full_grid.json"]
+        assert item["satisfied_attested_paths"] == ["results/full_grid.json"]
+        assert item["satisfied"]
+    listed = {f["path"]: f for f in manifest["files"]}
+    assert listed["results/full_grid.json"]["status"] != "included"  # over the per-file limit
+    assert manifest["completeness"]["eligible"]
+    assert aggregate(project, role_outputs(project, manifests)).status == "PASS"
+
+
+def test_changed_sibling_output_still_breaks_the_chain(tmp_path):
+    project, _ = adopted_computation_with_sibling(tmp_path)
+    (project / "results/full_grid.json").write_text('{"grid": "edited"}')
+    manifest = build_packets(project)["execution"]
+    assert not manifest["completeness"]["eligible"]
+    assert all(not item["satisfied"] and item.get("binding_error") for item in _chain(manifest))
+
+
+def test_attestation_needs_the_receipt_digest_in_the_manifest():
+    digest = "a" * 64
+    requirement = dict(id="solver_chain:x", required_status="included", paths=["v.json"],
+                       attested_outputs=[dict(path="grid.json", sha256=digest)])
+    included = dict(path="v.json", sha256="b" * 64, size=2, status="included",
+                    included_bytes=2, included_sha256="b" * 64)
+    for listed, expected in ((dict(path="grid.json", sha256=digest, status="omitted"), True),
+                             (dict(path="grid.json", sha256="c" * 64, status="omitted"), False)):
+        result = _completeness([included, listed], [requirement])
+        [item] = result["requirements"]
+        assert item["satisfied"] is expected
+        assert result["eligible"] is expected
+    result = _completeness([included], [requirement])  # not listed at all
+    assert result["requirements"][0]["satisfied"] is False
+
+
+def test_aggregate_rejects_attestation_under_the_v1_contract(tmp_path):
+    project, _ = adopted_computation_with_sibling(tmp_path)
+    manifests = build_packets(project)
+    paths = role_outputs(project, manifests)
+    manifest_path = project / "judge_packets" / "execution" / "manifest.json"
+    payload = json.loads(manifest_path.read_text())
+    payload["completeness"]["contract_version"] = "judge-packet-completeness-v1"
+    manifest_path.write_text(json.dumps(payload))
+    result = aggregate(project, paths)
+    assert result.status == "INDETERMINATE"
+    assert "attested outputs need completeness v2" in result.packet_completeness["execution"]["error"]
+
+
+def test_attestation_threshold_matches_the_packet_file_limit():
+    from scripts.judge_packet import MAX_FILE_BYTES
+    from scripts.solver_evidence_selection import ATTEST_OUTPUT_MIN_BYTES
+    assert ATTEST_OUTPUT_MIN_BYTES == MAX_FILE_BYTES
+
+
+def test_small_sibling_output_stays_required_in_full(tmp_path):
+    project, _ = adopted_computation_with_sibling(tmp_path, sibling_bytes=1_000)
+    manifest = build_packets(project)["execution"]
+    for item in _chain(manifest):
+        assert "results/full_grid.json" in item["paths"]
+        assert "attested_outputs" not in item
+    assert manifest["completeness"]["eligible"]

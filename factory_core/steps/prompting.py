@@ -46,10 +46,14 @@ class PromptRenderer:
             V2_PROMPT_OVERLAY,
             apply_v2_overlay,
             project_uses_catalog_v2,
+            judge_rework_block,
+            review_rework_block,
         )
 
         if Path(template).name in V2_PROMPT_OVERLAY and project_uses_catalog_v2(project):
             text = apply_v2_overlay(template, text)
+            text = review_rework_block(project, template) + text
+        text = judge_rework_block(project, template) + text
         text = self._apply_ablations(template, text)
         note = (
             self.user_note(project.name, step_key)

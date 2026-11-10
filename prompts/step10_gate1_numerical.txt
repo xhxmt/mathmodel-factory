@@ -168,6 +168,8 @@ Gate 1 与后续审计的边界：Step 10 只查**算术 / 复现 / 数字一致
    - **第一步：生成数字清单** `../../scripts/verify_numbers.py --generate "$(pwd)"` 从 `results/*/values.json` 生成 `numbers_manifest.json`（数字清单 + checksum）
    - **第二步：验证论文数字** `../../scripts/verify_numbers.py --verify "$(pwd)" __BASE_NAME__` 检查论文里的每个数字是否能追溯到 manifest，并验证 checksum
    - Runner 会把 `--verify` 失败作为 Step 10/16 硬失败；不要把失败报告改写成 PASS，必须补 canonical result、修论文数字或重跑对应求解。
+   - `--verify` 认可的可追溯来源只有三种（`solve_log.md` 和 `logs/*.log` 只用于上文的人工互验，不能让一个数字通过 `--verify`）：`results/**/*.json` 的数值叶子（百分数也可对应小数，如 `20\%` ↔ `0.2`）、`results/derived_artifacts.json` 中哈希仍匹配的生成器 `.tex` 输出（headline 宏、表格），以及 `problem/source.md` 给出的题面数值。
+   - 论文里的派生值（差值、比值、区间端点、取整后的上界）和分析设定（扰动幅度、量级估算）不在 `results/` 中时，在 `models/generate_derived.py` 里由 canonical/灵敏度结果计算并输出为 headline 宏（分析设定写成具名常量，来源注释必须指向一个可核对的出处：文件路径、`problem/source.md` 的行号，或 `method_decision.md`/`model.md` 中记录的设定；**不得**把计算结果手写成常量，并在 code_review.md §1 数字审计 段逐个列出这些常量及其出处），整体重生成后更新 manifest：按现有 `results/derived_artifacts.json` 的 `outputs` 逐项重复 `--output`，并带上它的 `canonical_results` 和 `generator.path`，即 `python3 ../../scripts/create_derived_manifest.py "$(pwd)" --canonical <canonical_results> --generator <generator.path> --output <path>=<comparison> ...`；再把论文中的数字换成宏。这属于本步骤"改数字"的授权范围；不要手写 `results/*.json` 来凑数。
    - 把验证报告 `number_verification.md` 的内容拷贝到 code_review.md §1 数字审计 段
    - **重要**：如果 Step 6 重新运行（灵敏度分析更新），必须先 `--update` 更新 manifest，否则会出现 checksum 不匹配
 

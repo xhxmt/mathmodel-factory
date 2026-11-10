@@ -16,8 +16,15 @@ from factory_core.paper_sources import (
     require_safe_latex_dependencies,
     resolve_latex_dependency_graph,
 )
+from scripts.objective_evidence import is_runtime_log
 from scripts.json_evidence_view import SUFFIX as EVIDENCE_VIEW_SUFFIX, verify_view
-from scripts.packet_evidence import ALIAS_CONTRACT, PacketEvidence
+from scripts.packet_evidence import (
+    ALIAS_CONTRACT,
+    COMPLETENESS_CONTRACT_VERSION,
+    COMPLETENESS_CONTRACT_VERSIONS,
+    PacketEvidence,
+    evaluate_requirement,
+)
 from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, MAX_RAW_BYTES, render_file as render_numpy
 from scripts.document_evidence_view import SUFFIXES as DOCUMENT_SUFFIXES, render_file as render_document, MAX_ASSET_BYTES, MAX_IMAGES
 
@@ -72,7 +79,6 @@ EXECUTION_CONTEXT_BYTES = 360_000
 MAX_FILE_BYTES = 55_000
 PACKET_VERSION = 6
 DOCUMENT_CONTEXT_BYTES = 2_000_000
-COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v1"
 SUPPLEMENT_CONFIG = "judge_evidence.json"
 
 
@@ -226,8 +232,12 @@ def _is_execution_evidence(relative: str) -> bool:
     if relative.startswith(".factory/solver_receipts/") and name.endswith((".submitted.json", ".completed.json")):
         return True
     if relative.startswith("logs/"):
+        # Factory run traces (is_runtime_log) are not execution evidence, and
+        # every audit, Judge call and override probe adds new ones; packing
+        # them made a rebuilt packet differ from the judged one.
         return (
             Path(relative).suffix.lower() == ".log"
+            and not is_runtime_log(relative)
             and not name.startswith(
                 ("step_", "native_judge_", "native_receipt_")
             )
@@ -570,7 +580,9 @@ def _role_requirements(
         ),
     )
     execution_trace = execution_trace or _first_path(
-        project, paths, lambda relative: relative.startswith("logs/")
+        project,
+        paths,
+        lambda relative: relative.startswith("logs/") and not is_runtime_log(relative),
     )
     execution_trace = execution_trace or _first_path(
         project, paths, lambda relative: relative.startswith(".factory/solver_receipts/")
@@ -798,13 +810,12 @@ def _completeness(files: list[dict], requirements: list[dict[str, object]]) -> d
     evaluated: list[dict[str, object]] = []
     for declared in requirements:
         item = dict(declared)
-        paths = [str(path) for path in item["paths"]]
-        satisfied_paths = [
-            path for path in paths
-            if evidence.complete(path)
-        ]
+        item["paths"] = paths = [str(path) for path in item["paths"]]
+        satisfied_paths, satisfied_attested, satisfied = evaluate_requirement(evidence, item)
         item["satisfied_paths"] = satisfied_paths
-        item["satisfied"] = bool(paths) and len(satisfied_paths) == len(paths) and not item.get("binding_error")
+        if "attested_outputs" in item:
+            item["satisfied_attested_paths"] = satisfied_attested
+        item["satisfied"] = satisfied
         if not paths:
             item["failure_reason"] = "required_artifact_missing"
         elif not item["satisfied"]:
@@ -961,7 +972,8 @@ def packet_payloads(
     solver_requirements = required_solver_evidence(project, registry)
     known = {_relative(project, path) for path in selected["execution"]}
     for requirement in solver_requirements:
-        for relative in requirement["paths"]:
+        attested = [item["path"] for item in requirement.get("attested_outputs", [])]
+        for relative in [*requirement["paths"], *attested]:
             if relative not in known and (project / relative).is_file():
                 selected["execution"].append(project / relative)
                 known.add(relative)

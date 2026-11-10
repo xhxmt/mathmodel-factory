@@ -24,7 +24,9 @@ from scripts.verify_numbers import collect_number_metrics
 from scripts.verify_symbols import collect_symbol_metrics
 
 import pytest
+import os
 import shutil
+import time
 import subprocess
 from pathlib import Path
 
@@ -312,6 +314,39 @@ def test_content_freeze_fingerprints_missing_solver_input_without_path_crash(tmp
     changed_subject, unchanged_options = decision_fingerprints(project, "content_freeze")
     assert changed_subject != subject
     assert unchanged_options == options
+
+
+@pytest.mark.latex
+@pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex unavailable")
+def test_recompiling_unchanged_sources_reproduces_the_pdf_bytes(tmp_path):
+    # The final audit snapshot binds the PDF bytes; a recompile of unchanged
+    # sources must not move it (judgments and deliver_snapshot overrides name
+    # that snapshot).
+    project = tmp_path / "demo"
+    root = project / "paper/paper.tex"
+    root.parent.mkdir(parents=True)
+    root.write_text(
+        "\\documentclass{article}\n\\begin{document}reproducible\\end{document}\n",
+        encoding="utf-8",
+    )
+    repository = Path(__file__).resolve().parents[1]
+    env = {key: value for key, value in os.environ.items() if key != "SOURCE_DATE_EPOCH"}
+
+    digests = []
+    for _ in range(2):
+        result = subprocess.run(
+            [str(repository / "compile_paper.sh"), str(project), "demo"],
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        digests.append(
+            __import__("hashlib").sha256((project / "demo_paper.pdf").read_bytes()).hexdigest()
+        )
+        time.sleep(1.1)
+    assert digests[0] == digests[1]
 
 
 @pytest.mark.latex

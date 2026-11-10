@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..domain import PendingAction, ValidationResult
-from ..audit.ledger import has_unresolved_blocking
+from ..audit.ledger import acknowledged_human_issues, has_unresolved_blocking
 from scripts.step8_5_gate import collect_step8_5_state, not_ready_reason
 from scripts.workflow_state import (
     gate2_continuation_override,
@@ -134,7 +134,10 @@ def _binding_fingerprint(project: Path, paths: list[Path]) -> str:
 
 
 def _unresolved_blocking(project: Path) -> bool:
-    return has_unresolved_blocking(project / "audit_issue_ledger.md")
+    ledger = project / "audit_issue_ledger.md"
+    return has_unresolved_blocking(ledger) and has_unresolved_blocking(
+        ledger, acknowledged_human_issues(project)
+    )
 
 
 def _incremental_gate(
@@ -282,7 +285,26 @@ class NativeArtifactValidator:
 
     def _step_2(self, project: Path):
         validated = [stream for stream in _stream_ids(project) if _stream_ready(project, stream) and _stream_verdict(project, stream) == "VALIDATED"]
-        return len(validated) >= 2, "fewer than two validated modeling streams", tuple(f"m{stream}_critique.md" for stream in validated), {}
+        if len(validated) < 2:
+            return False, "fewer than two validated modeling streams", tuple(f"m{stream}_critique.md" for stream in validated), {}
+        # Every tracked authored file must have an owner or a policy: the final
+        # snapshot's ownership coverage fails closed on the first one that has
+        # neither, and that check runs only after Gate 2.  Report it while the
+        # Step that wrote it can still rename or remove it.
+        from ..artifact_policy import artifact_policy
+        from ..dirty import tracked_artifact_paths
+
+        unowned = [path for path in tracked_artifact_paths(project) if artifact_policy(path) is None]
+        if unowned:
+            return (
+                False,
+                "unregistered authored artifacts (final ownership coverage would fail): "
+                + ", ".join(unowned[:8])
+                + "; name a stream's demo outputs m<N>_* or write them under models/ or data/intermediate/",
+                tuple(unowned[:8]),
+                {"unowned_artifacts": unowned},
+            )
+        return True, "fewer than two validated modeling streams", tuple(f"m{stream}_critique.md" for stream in validated), {}
 
     def _step_3(self, project: Path):
         from ..selection_projection import (

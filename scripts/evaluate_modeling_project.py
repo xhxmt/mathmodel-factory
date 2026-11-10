@@ -287,10 +287,32 @@ def evaluate(project: Path, root: Path) -> Evaluation:
         ev.add(f"artifact:{name}", file_exists(project / name), "present" if (project / name).is_file() else "missing")
 
     gate1_text = read_text(project / "code_review.md") if (project / "code_review.md").is_file() else ""
+    marked = bool(re.search(r"\b(BLOCKING|UNRESOLVED)\b", gate1_text, re.I))
+    if gate1_text.strip() and marked and workflow_state.stage_catalog_v2(project):
+        # v2: the issue ledger, with the rows a content-freeze approval
+        # acknowledged as human-owned, is the authority on what still blocks.
+        # code_review.md keeps naming such a row (e.g. cover fields only the
+        # team can fill) after Gate 2 has taken it on.
+        from factory_core.audit.ledger import acknowledged_human_issues, has_unresolved_blocking
+
+        marked = has_unresolved_blocking(
+            project / "audit_issue_ledger.md", acknowledged_human_issues(project)
+        )
+        gate1_detail = (
+            "code_review names blocking issues and the ledger still has unresolved blocking rows"
+            if marked
+            else "code_review names blocking issues; the ledger has none left unresolved after Gate 2"
+        )
+    elif not gate1_text.strip():
+        gate1_detail = "code_review missing/empty"
+    elif marked:
+        gate1_detail = "code_review has an unresolved marker"
+    else:
+        gate1_detail = "code_review exists and has no obvious unresolved marker"
     ev.add(
         "gate1_numeric_trace",
-        bool(gate1_text.strip()) and not re.search(r"\b(BLOCKING|UNRESOLVED)\b", gate1_text, re.I),
-        "code_review exists and has no obvious unresolved marker" if gate1_text.strip() else "code_review missing/empty",
+        bool(gate1_text.strip()) and not marked,
+        gate1_detail,
     )
     manifest = project / "numbers_manifest.json"
     if manifest.is_file():
@@ -303,10 +325,16 @@ def evaluate(project: Path, root: Path) -> Evaluation:
     ev.add("gate1_symbol_audit", symbols_ok, symbols_detail)
 
     step8_5_state = workflow_state.collect_step8_5_state(project)
+    # Same rule as step16_ready: v2 needs a passed gate, v1 a current one.
+    entry_gate_ok = workflow_state.reviewer_entry_gate_satisfied_for_delivery(project)
     ev.add(
         "entry_gate_verdict",
-        bool(step8_5_state.get("ready")),
-        "entry_gate PASS" if step8_5_state.get("ready") else f"step8_5 status={step8_5_state.get('status')}",
+        entry_gate_ok,
+        (
+            ("entry_gate PASS" if step8_5_state.get("ready") else "entry_gate PASS (v2: validated at Step 9 entry)")
+            if entry_gate_ok
+            else f"step8_5 status={step8_5_state.get('status')}"
+        ),
     )
 
     verdict = workflow_state.gate2_verdict(project)

@@ -516,6 +516,11 @@ class IncrementalAuditService:
                         ],
                         project / "logs" / "native_paper_derived_artifacts.log",
                         "hard",
+                        # The stdout log is the runtime trace: it names a random
+                        # temporary output directory, so its bytes change on
+                        # every run.  The check's evidence is the stable
+                        # report, which the final snapshot hashes.
+                        project / "derived_artifacts_verification.latest.json",
                     ),
                     (
                         "invariants",
@@ -559,11 +564,23 @@ class IncrementalAuditService:
         profile: AuditProfile,
         definitions: Iterable[
             tuple[str, str, list[str | Path], Path, str]
+            | tuple[str, str, list[str | Path], Path, str, Path]
         ],
     ) -> list[StageCheck]:
+        """Run each checker with stdout captured at ``log``.
+
+        A definition may name a separate ``report`` (sixth element): the
+        stable evidence file the checker writes itself, which the check then
+        records instead of its stdout log.  It is removed before the run so a
+        report left by an earlier run is never mistaken for this one's; when
+        the checker does not write it, the log is recorded as before.
+        """
         checks: list[StageCheck] = []
-        for name, script, args, report, severity in definitions:
+        for name, script, args, log, severity, *evidence in definitions:
+            report = evidence[0] if evidence else log
             try:
+                if report != log:
+                    report.unlink(missing_ok=True)
                 result = self.runner.python(
                     self.factory_root,
                     project,
@@ -572,8 +589,12 @@ class IncrementalAuditService:
                     label=f"audit_{profile.value}_{name}",
                     timeout_seconds=600,
                     accepted=(0,),
-                    log_path=report,
+                    log_path=log,
                 )
+                if not report.is_file():
+                    # A checker that skipped (or failed before writing its
+                    # report) leaves only its stdout log as evidence.
+                    report = log
                 no_verdict = (
                     ""
                     if result.accepted or result.timed_out

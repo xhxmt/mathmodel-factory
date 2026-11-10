@@ -57,6 +57,42 @@ def test_fingerprint_is_content_deterministic_and_mtime_independent(tmp_path):
     assert fingerprint_paths(tmp_path) != first
 
 
+def test_factory_run_logs_do_not_change_a_directory_fingerprint(tmp_path):
+    # A judged snapshot is re-prepared without compiling (v2 Step 13 override
+    # probe).  Every audit, Judge call and packet rebuild writes run traces
+    # under logs/, so they must not make the logs input drift; solver and
+    # agent logs remain inputs.
+    logs = tmp_path / "logs"
+    (logs / "solver_jobs").mkdir(parents=True)
+    (logs / "solver_jobs" / "job.stderr.log").write_text("solver\n", encoding="utf-8")
+    (logs / "m1_demo.log").write_text("demo\n", encoding="utf-8")
+    first = fingerprint_paths(tmp_path, ["logs"])
+    whole = fingerprint_paths(tmp_path)
+
+    for name in (
+        "worker_20261108_135244.log",
+        "step_16_claude_20261108_140037_2300269_ef425bc2c57948b2.log",
+        "step_16_api_2300269_ef425bc2c57948b2.prompt.txt",
+        "native_judge_packet_20261108_135251_2300269.log",
+        "native_paper_quality_contract.log",
+    ):
+        (logs / name).write_text("run trace\n", encoding="utf-8")
+    assert fingerprint_paths(tmp_path, ["logs"]) == first
+    assert fingerprint_paths(tmp_path) == whole
+
+    (logs / "step_5_solve.log").write_text("agent log\n", encoding="utf-8")
+    second = fingerprint_paths(tmp_path, ["logs"])
+    assert second != first
+    (logs / "solver_jobs" / "job.stderr.log").write_text("changed\n", encoding="utf-8")
+    assert fingerprint_paths(tmp_path, ["logs"]) != second
+
+    # A run trace named explicitly is still hashed.
+    trace = "logs/native_judge_packet_20261108_135251_2300269.log"
+    named = fingerprint_paths(tmp_path, [trace])
+    (tmp_path / trace).write_text("other\n", encoding="utf-8")
+    assert fingerprint_paths(tmp_path, [trace]) != named
+
+
 def test_evidence_ref_contains_relative_path_hash_and_locator(tmp_path):
     source = tmp_path / "results" / "numbers.json"
     source.parent.mkdir()
@@ -307,3 +343,27 @@ def test_bundle_round_trip_is_json_serializable(tmp_path):
     bundle = build_bundle(tmp_path, [finding], metadata={"source": "test"})
     restored = EvidenceBundle.from_dict(bundle.to_dict())
     assert restored.to_dict() == bundle.to_dict()
+
+
+@pytest.mark.parametrize(
+    "name, runtime",
+    [
+        ("worker_20261108_135244.log", True),
+        ("step_16_claude_20261108_140037_2300269_ef425bc2c57948b2b3c4d5e6f7a8b9c0.log", True),
+        ("step_5_dsh_2300269_ef425bc2c57948b2b3c4d5e6f7a8b9c0.prompt.txt", True),
+        ("native_judge_packet_20261108_135251_2300269.log", True),
+        ("native_results_quality_contract.log", True),
+        # Agent-named logs that only share a prefix stay inputs.
+        ("worker_pool_sim.log", False),
+        ("native_solver.log", False),
+        ("native_judge_packet_rerun.log", False),
+        ("step_5_solve.log", False),
+        ("step_5_solve_notes.prompt.txt", False),
+    ],
+)
+def test_runtime_logs_are_matched_by_their_exact_factory_names(name, runtime):
+    from scripts.objective_evidence import is_runtime_log
+
+    assert is_runtime_log(f"logs/{name}") is runtime
+    assert is_runtime_log(f"logs/solver_jobs/{name}") is False
+    assert is_runtime_log(name) is False

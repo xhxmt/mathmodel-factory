@@ -687,7 +687,7 @@ class JudgeStep:
 
     def _packet_preflight(self, context) -> ExecutionResult | None:
         """Require eligible packets for the whole review before model dispatch."""
-        from scripts.judge_packet import COMPLETENESS_CONTRACT_VERSION
+        from scripts.packet_evidence import supported_completeness_version
 
         project = context.project_dir
         blocked_roles: dict[str, list[str]] = {}
@@ -707,7 +707,7 @@ class JudgeStep:
                 if not (
                     isinstance(requirements, list)
                     and requirements
-                    and completeness.get("contract_version") == COMPLETENESS_CONTRACT_VERSION
+                    and supported_completeness_version(completeness.get("contract_version"))
                     and completeness.get("status") == "COMPLETE"
                     and completeness.get("eligible") is True
                     and all(isinstance(item, dict) and item.get("satisfied") is True for item in requirements)
@@ -1461,22 +1461,51 @@ class FinalJudgeStep:
         return replace(context, step_id=16)
 
     def execute(self, context) -> ExecutionResult:
-        return self.delivery.final_audit_service().run(
-            self.final_audit_context(context), analysis_only=True, reuse_pass=True
-        ).execution
+        service = self.delivery.final_audit_service()
+        audit_context = self.final_audit_context(context)
+        # An operator-issued deliver_snapshot override bound to the snapshot a
+        # completed non-PASS judgment named lets the run go on to Step 16
+        # without rerunning the Judge or recompiling (which would change the
+        # snapshot).  Step 16 applies and consumes the override at acceptance.
+        overridable = getattr(service, "overridable_judgment", None)
+        pending = overridable(audit_context) if callable(overridable) else None
+        if pending is not None:
+            return ExecutionResult.succeeded(
+                audit_snapshot=pending.snapshot_id,
+                audit_result=".factory/audits/analysis_latest.json",
+                final_decision=pending.decision,
+                judged_error_class=pending.error_class,
+                delivery_override_pending=pending.override_id,
+                analysis_only=True,
+                delivery_allowed=False,
+            )
+        return service.run(audit_context, analysis_only=True, reuse_pass=True).execution
 
     def validate(self, context):
         service = self.delivery.final_audit_service()
+        project = context.project_dir.resolve()
         try:
-            snapshot = service._snapshot(context.project_dir.resolve())
-            judged = service._load_reusable(
-                context.project_dir.resolve(), snapshot, analysis_only=True
+            snapshot = service._snapshot(project)
+            judged = service._load_reusable(project, snapshot, analysis_only=True)
+            pending = (
+                service.judged_for_override(project, snapshot)
+                if (judged is None or judged.status.value != "PASS")
+                and callable(getattr(service, "judged_for_override", None))
+                else None
             )
         except (OSError, ValueError) as exc:
             return ValidationResult.invalid(
                 f"final Judge snapshot cannot be verified: {exc}",
                 ".factory/audits/analysis_latest.json",
                 metadata={"error_class": "TRANSIENT_FINAL_JUDGE_EVIDENCE"},
+            )
+        if pending is not None:
+            return ValidationResult.valid(
+                metadata={
+                    "final_judge_snapshot": snapshot.snapshot_id,
+                    "final_judge_decision": pending.decision,
+                    "delivery_override_pending": pending.override_id,
+                }
             )
         if judged is None or judged.status.value != "PASS" or not judged.judge_completed:
             return ValidationResult.invalid(

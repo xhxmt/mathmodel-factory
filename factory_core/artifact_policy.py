@@ -296,11 +296,31 @@ POLICY_ONLY_SHADOW_ALLOWLIST: frozenset[str] = frozenset(
     {"scripts/submit_*.sh", "result*.xlsx"}
 )
 
+#: Fallback entries are consulted only after every ownership rule, so they can
+#: never shadow an owned path (or a NATIVE_POLICY entry): they describe what
+#: would otherwise fall into the fail-closed default.
+#:
+#: Step 2 streams are named by their ``m<N>_`` prefix, and a stream's demo solve
+#: may declare auxiliary outputs beside the three contract files
+#: (``m*_spec.md``, ``m*_critique.md``, ``m*_demo_result.*``).  Observed in
+#: acceptance A: the m2 demo declared ``m2_field_0_3h.csv`` as a solver
+#: ``--output``; its spec cites it as a cross-check that is "not an input of p4".
+#: Unregistered, it failed the final Judge's snapshot ownership coverage after
+#: Gate 2 - the first check that looks at it.  Such files are candidate-stage
+#: exploration: EXPLICIT_ONLY with both delivery flags false (non-blocking by
+#: policy), so they neither ship nor enter the final audit nor rewind anything.
+#: A downstream Step that wants the numbers must write its own owned result.
+FALLBACK_POLICY: tuple[ArtifactPolicy, ...] = (
+    ArtifactPolicy("m[0-9]*_*", ArtifactRole.EXPLORATORY.value,
+                   InvalidationMode.EXPLICIT_ONLY.value, False, False),
+)
+
 #: Native entries win over the ownership order, mirroring
-#: ``_OWNERSHIP_ORDER = ADDITIONAL_OWNERSHIP + FROZEN_REGISTRY``.
+#: ``_OWNERSHIP_ORDER = ADDITIONAL_OWNERSHIP + FROZEN_REGISTRY``; fallback
+#: entries come last.
 POLICY_ORDER: tuple[ArtifactPolicy, ...] = NATIVE_POLICY + tuple(
     compatibility_policy(rule) for rule in _OWNERSHIP_ORDER
-)
+) + FALLBACK_POLICY
 
 
 @lru_cache(maxsize=65536)
@@ -445,6 +465,7 @@ __all__ = [
     "POLICY_ONLY_SHADOW_ALLOWLIST",
     "POLICY_ORDER",
     "ADDITIONAL_OWNERSHIP",
+    "FALLBACK_POLICY",
     "artifact_policy",
     "artifact_policy_owner_stage",
     "compatibility_policy",

@@ -15,8 +15,18 @@ def test_packaging_receipt_does_not_change_review_inputs(tmp_path):
     assert "complete package receipt" in result.log_path.read_text()
     assert not _is_execution_evidence(result.log_path.relative_to(tmp_path).as_posix())
     assert packet_fingerprints(tmp_path)==before
-    solver=CommandRunner().run(tmp_path,[sys.executable,"-c","print('real solver evidence')"],label="solver")
-    assert solver.accepted and _is_execution_evidence(solver.log_path.relative_to(tmp_path).as_posix())
+    # Any other native command log is a factory run trace too (every audit,
+    # Judge call and override probe writes new ones), so it must not move the
+    # packet a judged snapshot is bound to.
+    trace=CommandRunner().run(tmp_path,[sys.executable,"-c","print('audit trace')"],label="compile_paper")
+    assert trace.accepted and not _is_execution_evidence(trace.log_path.relative_to(tmp_path).as_posix())
+    assert packet_fingerprints(tmp_path)==before
+    # Solver logs (logs/solver_jobs/, written by the local solver adapter) are
+    # execution evidence.
+    solver=tmp_path/"logs/solver_jobs/local_python_20261107063141_d78186e3.stdout.log"
+    solver.parent.mkdir(parents=True)
+    solver.write_text("real solver evidence\n")
+    assert _is_execution_evidence(solver.relative_to(tmp_path).as_posix())
     assert packet_fingerprints(tmp_path)["execution"]!=before["execution"]
 
 def test_explicit_packaging_log_path_is_preserved(tmp_path):
