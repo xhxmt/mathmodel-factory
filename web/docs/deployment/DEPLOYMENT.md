@@ -26,7 +26,7 @@ paper-factory-api.service
 - `web/.env` 只含非敏感运行配置，例如 `GCP_PROJECT_ID`、`CORS_ORIGINS` 和首次升级时用于初始化访客展示集合的 `SHOWCASE_PROJECTS`。初始化后展示权限由管理员页面和 `web/auth.db` 持久化；敏感键会使部署预检失败。
 - 前端构建由服务用户执行，避免 root-owned `dist/` 阻塞下一次构建。
 - 根 `.venv` 已由 `uv sync --extra web --extra models --locked` 准备；部署时不会安装 Python 依赖。
-- `pyproject.toml`、`uv.lock`、两个 requirements lock export 和前端 `package-lock.json` 完整且已审查。
+- `pyproject.toml`、`uv.lock`、Web 的 requirements lock export 和前端 `package-lock.json` 完整且已审查。
 
 ## 标准部署
 
@@ -45,7 +45,7 @@ sudo ./web/deploy.sh
 `deploy.sh` 会依次：
 
 1. 对 shell 脚本执行 `bash -n`；
-2. 检查 Python/Web/Cloud/frontend 锁文件和原生 Step 0-16 registry；
+2. 检查 Python/Web/frontend 锁文件和原生 Step 0-16 registry；
 3. 检查 `.env` 没有敏感键且权限不过宽；
 4. 以服务用户预检 Secret Manager loader；
 5. 检查 live systemd unit 使用仓库根目录、根 `.venv` 和稳定 ASGI 入口；

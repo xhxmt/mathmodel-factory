@@ -8,8 +8,6 @@ import hashlib
 import pytest
 
 from factory_core.adapters.solvers import (
-    CloudRunHttpTransport,
-    CloudRunSolverBackend,
     SolverRequest,
     SolverSubmission,
     build_solver_backends,
@@ -21,21 +19,24 @@ from factory_core.storage import SQLiteStateStore
 from factory_core.workflow_events import replay_events, replay_state
 
 
-class FakeCloudTransport:
+class CountingBackend:
+    """A solver backend that records every submission it receives."""
+
+    name = "local"
+
     def __init__(self):
         self.requests = []
         self.cancelled = []
 
     def submit(self, request):
         self.requests.append(request)
-        return SolverSubmission("cloud-123", result_refs={"result": "results/cloud.json"})
+        return SolverSubmission("external-123", result_refs={"result": "results/answer.json"})
 
-    def status(self, external_id):
-        assert external_id == "cloud-123"
+    def status(self, _job):
         return "completed"
 
-    def cancel(self, external_id):
-        self.cancelled.append(external_id)
+    def cancel(self, job):
+        self.cancelled.append(job.get("external_id"))
 
 
 def make_project(tmp_path):
@@ -54,8 +55,6 @@ def test_solver_policy_is_revision_checked_and_evented(tmp_path):
 
     policy = service.configure_solver_policy(
         project,
-        mode="local",
-        threshold_seconds=120,
         allowed_runtimes=["python", "julia"],
         expected_revision=before.revision,
     )
@@ -66,7 +65,6 @@ def test_solver_policy_is_revision_checked_and_evented(tmp_path):
     with pytest.raises(Exception, match="expected revision"):
         service.configure_solver_policy(
             project,
-            mode="local",
             expected_revision=before.revision,
         )
 
@@ -134,53 +132,12 @@ def test_local_solver_logs_are_isolated_by_job_id(tmp_path):
     assert second_stdout.read_text(encoding="utf-8") == "second\n"
 
 
-def test_fake_cloud_and_local_share_solver_job_contract(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLOUD_SOLVER_QUARANTINED", "false")
+def test_duplicate_solver_request_returns_existing_job_without_resubmission(tmp_path):
     _service, project, script = make_project(tmp_path)
-    transport = FakeCloudTransport()
+    backend = CountingBackend()
     backends = SolverBackendRegistry()
-    from factory_core.adapters.solvers import LocalSolverBackend
-
-    backends.register("local", LocalSolverBackend(os.getcwd()))
-    backends.register("cloud_run", CloudRunSolverBackend(transport, quarantined=False))
+    backends.register("local", backend)
     service = FactoryService(tmp_path, solver_backends=backends)
-    service.configure_solver_policy(
-        project,
-        mode="auto",
-        threshold_seconds=5,
-        allowed_runtimes=["python"],
-    )
-
-    submitted = service.submit_solver(
-        project, runtime="python", script=script, max_time_seconds=10
-    )
-    completed = service.solver_status(project, submitted["job_id"])
-
-    assert submitted["backend"] == "cloud_run"
-    assert completed["status"] == "completed"
-    assert completed["external_id"] == "cloud-123"
-    assert transport.requests[0].runtime == "python"
-    assert transport.requests[0].env["FACTORY_SOLVER_JOB_ID"] == submitted["job_id"]
-    assert len(transport.requests[0].idempotency_key) == 64
-
-
-def test_duplicate_solver_request_returns_existing_job_without_resubmission(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("CLOUD_SOLVER_QUARANTINED", "false")
-    _service, project, script = make_project(tmp_path)
-    transport = FakeCloudTransport()
-    backends = SolverBackendRegistry()
-    backends.register(
-        "cloud_run", CloudRunSolverBackend(transport, quarantined=False)
-    )
-    service = FactoryService(tmp_path, solver_backends=backends)
-    service.configure_solver_policy(
-        project,
-        mode="cloud",
-        threshold_seconds=1,
-        allowed_runtimes=["python"],
-    )
 
     first = service.submit_solver(
         project, runtime="python", script=script, max_time_seconds=10
@@ -192,19 +149,28 @@ def test_duplicate_solver_request_returns_existing_job_without_resubmission(
     assert second["job_id"] == first["job_id"]
     assert second["idempotency_key"] == first["idempotency_key"]
     assert len(first["request_sha256"]) == 64
-    assert len(transport.requests) == 1
+    assert len(backend.requests) == 1
+    assert backend.requests[0].env["FACTORY_SOLVER_JOB_ID"] == first["job_id"]
 
 
-def test_cloud_policy_cannot_bypass_global_quarantine(tmp_path, monkeypatch):
-    service, project, _script = make_project(tmp_path)
-    monkeypatch.setenv("CLOUD_SOLVER_QUARANTINED", "true")
+def test_solver_jobs_always_run_locally_and_the_policy_has_no_cloud_mode(tmp_path):
+    service, project, script = make_project(tmp_path)
 
-    with pytest.raises(InvalidTransition, match="quarantined"):
-        service.configure_solver_policy(
-            project,
-            mode="auto",
-            allowed_runtimes=["python"],
-        )
+    dry = service.submit_solver(
+        project, runtime="python", script=script, max_time_seconds=7_200, dry_run=True
+    )
+    assert dry["backend"] == "local"
+    assert set(service.solver_policy(project)) == {"allowed_runtimes", "updated_revision"}
+    store = SQLiteStateStore(project)
+    for mode in ("cloud", "auto"):
+        with pytest.raises(ValueError, match="unsupported solver mode"):
+            store.configure_solver_policy(
+                expected_revision=store.load().revision,
+                mode=mode,
+                threshold_seconds=300,
+                allowed_runtimes=["python"],
+            )
+    assert not (project / ".env.cloud").exists()
 
 
 def test_v1_upgrade_keeps_legacy_runtime_while_adding_solver_tables(tmp_path):
@@ -295,14 +261,12 @@ def test_solver_job_revision_rejects_only_stale_job_writers(tmp_path):
     assert paused.status is WorkflowStatus.PAUSED
 
 
-def test_default_solver_builder_registers_both_backends(tmp_path):
-    transport = FakeCloudTransport()
-    backends = build_solver_backends(
-        tmp_path, cloud_transport=transport, quarantined=False
-    )
+def test_default_solver_builder_registers_only_the_local_backend(tmp_path):
+    backends = build_solver_backends(tmp_path)
 
     assert backends.get("local").name == "local"
-    assert backends.get("cloud_run").name == "cloud_run"
+    with pytest.raises(KeyError):
+        backends.get("cloud_run")
 
 
 class CancelDuringSubmissionBackend:
@@ -341,77 +305,3 @@ def test_cancel_during_submission_still_records_and_stops_external_job(tmp_path)
     assert backend.cancelled == ["external-after-cancel"]
 
 
-def test_cloud_transport_rejects_missing_https_url_before_auth(tmp_path):
-    script = tmp_path / "solve.py"
-    script.write_text("print('done')\n", encoding="utf-8")
-    token_calls = []
-    transport = CloudRunHttpTransport(
-        "http://solver.example",
-        token_provider=lambda audience: token_calls.append(audience) or "unused",
-    )
-
-    with pytest.raises(RuntimeError, match="must be an https URL"):
-        transport.submit(
-            SolverRequest(
-                job_id="cloud-job",
-                project_dir=tmp_path,
-                runtime="python",
-                script=script,
-            )
-        )
-
-    assert token_calls == []
-
-
-def test_cloud_transport_forwards_provider_idempotency_key(tmp_path):
-    script = tmp_path / "solve.py"
-    script.write_text("print('done')\n", encoding="utf-8")
-    text_input = tmp_path / "data.txt"
-    text_input.write_text("alpha\n", encoding="utf-8")
-    binary_input = tmp_path / "matrix.bin"
-    binary_input.write_bytes(b"\x00\xff\x10")
-    captured = {}
-
-    class Response(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            self.close()
-
-    def opener(request, **_kwargs):
-        captured["payload"] = json.loads(request.data)
-        return Response(b'{"job_id":"cloud-job","status":"queued"}')
-
-    transport = CloudRunHttpTransport(
-        "https://solver.example",
-        token_provider=lambda _audience: "identity-token",
-        opener=opener,
-    )
-    submission = transport.submit(
-        SolverRequest(
-            job_id="cloud-job",
-            idempotency_key="a" * 64,
-            project_dir=tmp_path,
-            runtime="python",
-            script=script,
-            input_paths=(text_input, binary_input),
-            output_paths=("results/answer.json",),
-            seeds=("17", "23"),
-        )
-    )
-
-    payload = captured["payload"]
-    assert payload["idempotency_key"] == "a" * 64
-    assert payload["working_files"] == {"data.txt": "alpha\n"}
-    assert payload["working_files_base64"] == {
-        "matrix.bin": base64.b64encode(binary_input.read_bytes()).decode("ascii")
-    }
-    assert payload["requested_input_sha256"] == {
-        "data.txt": hashlib.sha256(text_input.read_bytes()).hexdigest(),
-        "matrix.bin": hashlib.sha256(binary_input.read_bytes()).hexdigest(),
-    }
-    assert payload["declared_outputs"] == ["results/answer.json"]
-    assert payload["seeds"] == ["17", "23"]
-    assert submission.external_id == "cloud-job"
-    assert submission.status == "queued"

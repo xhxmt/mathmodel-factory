@@ -86,7 +86,6 @@ preflight() {
         "$PROJECT_ROOT/pyproject.toml" \
         "$PROJECT_ROOT/uv.lock" \
         "$PROJECT_ROOT/web/backend/requirements.lock" \
-        "$PROJECT_ROOT/cloud/requirements.lock" \
         "$PROJECT_ROOT/web/frontend/package-lock.json"; do
         [[ -s "$lock" ]] || { echo -e "${RED}✗ missing reproducible-build input: $lock${NC}"; exit 1; }
     done

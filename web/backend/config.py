@@ -41,8 +41,6 @@ class Settings:
         "test_cumcm2024a_polished",
     )
     gcp_project_id: str = ""
-    gcp_region: str = "europe-west4"
-    gcp_solver_service: str = "solver-api"
 
     @property
     def ongoing_dir(self) -> Path:
@@ -102,8 +100,6 @@ def load_settings() -> Settings:
         max_upload_size=int(os.getenv("MAX_UPLOAD_SIZE") or 100 * 1024 * 1024),
         showcase_projects=showcase_projects,
         gcp_project_id=(os.getenv("GCP_PROJECT_ID") or "").strip(),
-        gcp_region=(os.getenv("GCP_REGION") or "europe-west4").strip(),
-        gcp_solver_service=(os.getenv("GCP_SOLVER_SERVICE") or "solver-api").strip(),
 
     )
 

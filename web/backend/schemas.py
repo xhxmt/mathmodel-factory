@@ -146,10 +146,6 @@ class ProjectAction(BaseModel):
     step: int | None = None
 
 
-class SolverPolicyAction(BaseModel):
-    expected_revision: int | None = None
-
-
 class WsTicketResponse(BaseModel):
     ticket: str
 

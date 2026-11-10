@@ -50,7 +50,7 @@ GET /api/projects/{base_name}/solver-jobs/{job_id}
 {
   "schema": "solver-job-evidence-v2",
   "job_id": "...",
-  "backend": "local|cloud",
+  "backend": "local",
   "runtime": "python|julia|matlab|R|gurobi",
   "script": "/abs/path/to/script.py",
   "workdir": "/abs/path/to/workdir",
@@ -74,6 +74,8 @@ GET /api/projects/{base_name}/solver-jobs/{job_id}
   "claim_limit": "FULL_TWO_STAGE_RECEIPT|LEGACY_JOB_METADATA_ONLY"
 }
 ```
+
+新任务的 `backend` 一律是 `local`。列表和详情端点按 job ID 前缀推断这个字段，所以历史上以 `cloud_` 开头的遗留 job 仍会报告 `cloud`（仅遗留值）。
 
 **核心特性：**
 - 支持 legacy jobs（只有状态文件，没有 two-stage receipt）
@@ -220,8 +222,7 @@ GET /api/projects/cumcm_2020_a_codex_luna/solver-jobs/local_python_2026080103561
 
 1. **Receipt 系统演进**：如果 `solver-job-evidence-v2` schema 升级，需同步更新 API 返回格式
 2. **Legacy 迁移**：随着旧项目逐步迁移到新 receipt 系统，`legacy=false` 比例会上升
-3. **云求解器集成**：当 `USE_CLOUD_SOLVER=true` 广泛使用时，需验证云端 receipt 的回传
-4. **性能考虑**：大型项目可能有数百个 solver jobs，考虑分页或虚拟滚动
+3. **性能考虑**：大型项目可能有数百个 solver jobs，考虑分页或虚拟滚动
 
 ---
 

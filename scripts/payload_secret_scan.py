@@ -11,7 +11,6 @@ import argparse
 import base64
 import ast
 from dataclasses import dataclass
-import hashlib
 import io
 import json
 from pathlib import Path
@@ -81,23 +80,13 @@ def _contains_validated_compact_jwt(value: bytes) -> bool:
     return False
 
 
-def _contains_hardcoded_bearer(
-    value: bytes,
-    *,
-    allow_printf_placeholder: bool = False,
-) -> bool:
+def _contains_hardcoded_bearer(value: bytes) -> bool:
     for candidate in _BEARER_VALUE.finditer(value):
         supplied = candidate.group(1)
         tail = value[candidate.start(1) :]
         command = _shell_command_substitution(tail)
         if command is not None:
             return True
-        if allow_printf_placeholder and re.fullmatch(rb"%s(?:\\[nrt])?", supplied):
-            remainder = value[candidate.end(1) :]
-            if remainder[:1] in {b'"', b"'"}:
-                remainder = remainder[1:]
-            if not remainder or remainder[:1] in b" \t\r\n;)|":
-                continue
         if any(pattern.fullmatch(supplied) for pattern in _DYNAMIC_BEARER_VALUES):
             remainder = value[candidate.end(1) :]
             if remainder[:1] in {b'"', b"'"}:
@@ -207,53 +196,6 @@ def _is_shell_source(path: str, value: bytes) -> bool:
             first_line,
         )
     )
-
-
-_AUTHORIZATION_WORD = b"Author" + b"ization"
-_BEARER_WORD = b"Bear" + b"er"
-_RUNTIME_FD_BEARER_LITERAL = _AUTHORIZATION_WORD + b": " + _BEARER_WORD + b" %s"
-_APPROVED_RUNTIME_FD_PATHS = frozenset(
-    {
-        "scripts/gcp_solver_client.sh",
-        "paper_factory/scripts/gcp_solver_client.sh",
-    }
-)
-_APPROVED_RUNTIME_FD_SHA256 = (
-    "20593f23782ee9c053a2e7c40f4fad2f36fe868a37e20a0410751b12e679cf82"
-)
-_SAFE_RUNTIME_FD_BEARER = re.compile(
-    rb"3<[ \t]*<\([ \t]*printf[ \t]+(['\"])"
-    + _RUNTIME_FD_BEARER_LITERAL
-    + rb"\\n\1[ \t]+"
-    rb"\"\$([A-Za-z_][A-Za-z0-9_]*)\"[ \t]*\)"
-)
-
-
-def _shell_has_only_safe_runtime_fd_bearer(path: str, value: bytes) -> bool:
-    if (
-        path not in _APPROVED_RUNTIME_FD_PATHS
-        or hashlib.sha256(value).hexdigest() != _APPROVED_RUNTIME_FD_SHA256
-        or not _is_shell_source(path, value)
-    ):
-        return False
-    literal_count = value.count(_RUNTIME_FD_BEARER_LITERAL)
-    if literal_count == 0:
-        return False
-    matches = tuple(_SAFE_RUNTIME_FD_BEARER.finditer(value))
-    if len(matches) != literal_count:
-        return False
-    if value.count(b"-H @/dev/fd/3") < literal_count:
-        return False
-    for match in matches:
-        variable = re.escape(match.group(2))
-        assignment = re.compile(
-            rb"(?m)^[ \t]*"
-            + variable
-            + rb"=\"\$\(get_identity_token\)\"[ \t]*$"
-        )
-        if assignment.search(value) is None:
-            return False
-    return True
 
 
 def _shell_safe_unexported_aliases(value: bytes) -> frozenset[bytes]:
@@ -431,7 +373,6 @@ def _shell_word_rules(path: str, value: bytes) -> tuple[str, ...]:
             return ("hardcoded_authorization_bearer",)
         return ()
 
-    safe_runtime_fd_bearer = _shell_has_only_safe_runtime_fd_bearer(path, value)
     safe_unexported_aliases = _shell_safe_unexported_aliases(value)
     states: dict[bytes, object] = {}
     for word_index, word in enumerate(words):
@@ -538,12 +479,6 @@ def _shell_word_rules(path: str, value: bytes) -> tuple[str, ...]:
                 if state is _SHELL_DYNAMIC:
                     continue
                 return ("hardcoded_authorization_bearer",)
-            normalized_placeholder = supplied[:-1] if supplied[-1:] in {b'"', b"'"} else supplied
-            if safe_runtime_fd_bearer and re.fullmatch(
-                rb"%s(?:\\n|n)?",
-                normalized_placeholder,
-            ):
-                continue
             if any(pattern.fullmatch(supplied) for pattern in _DYNAMIC_BEARER_VALUES[3:]):
                 continue
             return ("hardcoded_authorization_bearer",)
@@ -1245,13 +1180,7 @@ def scan_bytes(path: str, value: bytes) -> tuple[SecretFinding, ...]:
         ),
         lambda: (
             ("hardcoded_authorization_bearer",)
-            if _contains_hardcoded_bearer(
-                value,
-                allow_printf_placeholder=_shell_has_only_safe_runtime_fd_bearer(
-                    path,
-                    value,
-                ),
-            )
+            if _contains_hardcoded_bearer(value)
             else ()
         ),
         lambda: _python_static_literal_rules(path, value),
