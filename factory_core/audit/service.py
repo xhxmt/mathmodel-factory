@@ -1660,8 +1660,13 @@ class FinalAuditService:
         active ``deliver_snapshot`` override names, else ``None``.
 
         Read-only: the override is applied and consumed only at acceptance
-        (``_finish_judge_result`` with ``analysis_only=False``).
+        (``_finish_judge_result`` with ``analysis_only=False``).  A model stub
+        or an unacknowledged open BLOCKING row is never overridable, so every
+        caller (the Step 13 probe and validator, Step 16 promotion) applies
+        the same content gate.
         """
+        if self._has_stub(project) or self._unresolved_blocking(project):
+            return None
         path = project / ".factory" / "audits" / snapshot.snapshot_id / "analysis_latest.json"
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
@@ -1718,6 +1723,7 @@ class FinalAuditService:
             or self._delivery_override(project, latest_id) is None
         ):
             return None
+        # Checked again by judged_for_override; here it spares the rebuild.
         if self._has_stub(project) or self._unresolved_blocking(project):
             return None
         lock_path = project / ".factory" / "audits" / ".lock"

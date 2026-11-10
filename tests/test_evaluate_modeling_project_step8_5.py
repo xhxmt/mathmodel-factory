@@ -166,3 +166,21 @@ def test_v1_code_review_markers_still_fail(tmp_path, monkeypatch):
     _ledger(project, "RESOLVED")
 
     assert _evaluate(tmp_path, monkeypatch, project)["gate1_numeric_trace"].ok is False
+
+
+def test_v2_code_review_markers_honour_a_gate2_acknowledgement(tmp_path, monkeypatch):
+    # The row stays OPEN; only the content-freeze approval's acknowledgement
+    # (read through ledger.acknowledged_human_issues) stops it counting.
+    import factory_core.audit.ledger as ledger
+
+    project = tmp_path / "ongoing" / "demo"
+    make_complete_project(project)
+    _v2_state(project)
+    write_file(project / "code_review.md", "D-J5 [paper-issue-1, blocking] cover fields need the team\n")
+    _ledger(project, "OPEN")
+
+    monkeypatch.setattr(ledger, "acknowledged_human_issues", lambda _project: frozenset({"S11R-B1"}))
+    assert _evaluate(tmp_path, monkeypatch, project)["gate1_numeric_trace"].ok is True
+
+    monkeypatch.setattr(ledger, "acknowledged_human_issues", lambda _project: frozenset({"S11R-B9"}))
+    assert _evaluate(tmp_path, monkeypatch, project)["gate1_numeric_trace"].ok is False

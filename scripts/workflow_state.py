@@ -222,10 +222,11 @@ def stage_catalog_v2(project: Path) -> bool:
     store = SQLiteStateStore(project)
     try:
         return store.exists and store.load().stage_catalog_version == STAGE_CATALOG_VERSION_V2
-    except (ValueError, OSError, sqlite3.Error):
-        # Not readable Native state (e.g. an experimental Authority/Phase
-        # database, which the Native boundary rejects): the stricter v1 rules
-        # apply, so the answer fails closed.
+    except (ValueError, OSError, RuntimeError, sqlite3.Error):
+        # Not readable Native state (an uninitialized schema raises
+        # StateNotInitialized, an unsupported one RuntimeError; an experimental
+        # Authority/Phase database is rejected by the Native boundary): the
+        # stricter v1 rules apply, so the answer fails closed.
         return False
 
 

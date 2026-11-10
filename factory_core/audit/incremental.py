@@ -578,9 +578,9 @@ class IncrementalAuditService:
         checks: list[StageCheck] = []
         for name, script, args, log, severity, *evidence in definitions:
             report = evidence[0] if evidence else log
-            if report != log:
-                report.unlink(missing_ok=True)
             try:
+                if report != log:
+                    report.unlink(missing_ok=True)
                 result = self.runner.python(
                     self.factory_root,
                     project,

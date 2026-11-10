@@ -329,3 +329,17 @@ def test_v1_delivery_still_needs_a_current_entry_gate(tmp_path):
     assert reviewer_entry_gate_satisfied_for_delivery(v1) is False
     no_state = _entry_gate_project(tmp_path / "b", catalog=None)
     assert reviewer_entry_gate_satisfied_for_delivery(no_state) is False
+
+
+def test_an_uninitialized_state_database_falls_back_to_the_v1_rules(tmp_path):
+    import sqlite3
+
+    from scripts.workflow_state import stage_catalog_v2
+
+    (tmp_path / ".factory").mkdir()
+    connection = sqlite3.connect(tmp_path / ".factory" / "state.db")
+    connection.execute("CREATE TABLE unrelated (value TEXT)")
+    connection.commit()
+    connection.close()
+
+    assert stage_catalog_v2(tmp_path) is False

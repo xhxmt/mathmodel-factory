@@ -2,6 +2,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.aggregate_judges import (
     _artifact_payload,
     _validate_hard_evidence,
@@ -591,3 +593,26 @@ def test_whitespace_only_exact_quote_remains_indeterminate(tmp_path):
     assert result.status == "INDETERMINATE"
     assert result.roles[0].status == "INDETERMINATE"
     assert "quote must be a non-empty string" in (result.roles[0].error or "")
+
+
+@pytest.mark.parametrize("version", [["judge-packet-completeness-v2"], {"v": 2}, 2, None])
+def test_a_malformed_completeness_version_is_indeterminate_not_a_crash(tmp_path, version):
+    manifest = _manifest(tmp_path / "math.manifest.json", "math")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["completeness"]["contract_version"] = version
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = aggregate_outputs(
+        math_path=_hard(tmp_path / "math.md", "math"),
+        execution_path=_hard(tmp_path / "execution.md", "execution"),
+        paper_path=_paper(tmp_path / "paper.md"),
+        math_manifest=manifest,
+        execution_manifest=_manifest(tmp_path / "execution.manifest.json", "execution"),
+        paper_manifest=_manifest(tmp_path / "paper.manifest.json", "paper"),
+    )
+
+    assert result.roles[0].status == "INDETERMINATE"
+    assert result.packet_completeness["math"]["eligible"] is False
+    assert "unsupported packet completeness contract" in (
+        result.packet_completeness["math"]["error"] or ""
+    )

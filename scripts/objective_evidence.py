@@ -27,6 +27,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,13 +72,25 @@ _DEFAULT_IGNORED_NAMES = frozenset(
 # enumerating a directory; a path named explicitly is still hashed.  Solver
 # logs (``logs/solver_jobs/``), compiler records (``logs/compilation/``) and
 # agent-authored logs stay inputs.
-_RUNTIME_LOG_GLOBS = (
-    "logs/worker_*.log",
-    # step_{id}_{label}_{date}_{time}_{pid}_{uuid}.log
-    "logs/step_*_*_*_*_*_*.log",
-    # step_{id}_{backend}_{pid}_{uuid}.prompt.txt
-    "logs/step_*_*_*_*.prompt.txt",
-    "logs/native_*.log",
+#
+# The names are matched exactly (timestamp, pid and uuid shapes), so an agent
+# log that merely starts with ``worker_`` or ``native_`` stays an input.
+_STAMP = r"\d{8}_\d{6}"
+_RUNTIME_LOG_NAMES = re.compile(
+    "|".join(
+        (
+            # service.py: worker_{date}_{time}.log
+            rf"worker_{_STAMP}\.log",
+            # backends.py: step_{id}_{label}_{date}_{time}_{pid}_{uuid}.log
+            rf"step_\d+_[A-Za-z0-9.-]+(?:_[A-Za-z0-9.-]+)*_{_STAMP}_\d+_[0-9a-f]+\.log",
+            # backends.py: step_{id}_{backend}_{pid}_{uuid}.prompt.txt
+            r"step_\d+_[A-Za-z0-9.-]+_\d+_[0-9a-f]+\.prompt\.txt",
+            # commands.py: native_{label}_{date}_{time}_{pid}.log
+            rf"native_\w+_{_STAMP}_\d+\.log",
+            # audit/incremental.py: fixed native check logs, rewritten per run
+            r"native_(?:results_quality_contract|paper_derived_artifacts|paper_quality_contract)\.log",
+        )
+    )
 )
 
 
@@ -85,7 +98,11 @@ def is_runtime_log(relative: str) -> bool:
     """Whether ``relative`` (POSIX, project-relative) is a factory run trace."""
 
     path = PurePosixPath(relative)
-    return len(path.parts) == 2 and any(path.match(glob) for glob in _RUNTIME_LOG_GLOBS)
+    return (
+        len(path.parts) == 2
+        and path.parts[0] == "logs"
+        and _RUNTIME_LOG_NAMES.fullmatch(path.name) is not None
+    )
 
 
 class ObjectiveEvidenceError(ValueError):

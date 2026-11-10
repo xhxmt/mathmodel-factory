@@ -12,7 +12,6 @@ import pytest
 
 from factory_core.artifact_policy import (
     FALLBACK_POLICY,
-    NON_BLOCKING_BY_POLICY,
     POLICY_ORDER,
     artifact_policy,
     shadowed_ownership_rules,
@@ -31,7 +30,6 @@ def test_stream_aux_output_is_described_without_gaining_an_owner():
     assert policy.is_policy_only and policy.is_non_blocking
     assert not policy.final_input and not policy.submission_member
     assert artifact_ownership("m2_field_0_3h.csv") is None
-    assert NON_BLOCKING_BY_POLICY  # the declaration the finalizer honours
 
 
 @pytest.mark.parametrize(

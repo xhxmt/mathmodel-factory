@@ -1462,6 +1462,35 @@ def test_v2_step_13_hands_an_overridden_judgment_to_step_16(tmp_path):
     assert judge.judge_calls == 1
 
 
+@pytest.mark.parametrize("change", ["stub", "blocking"])
+def test_the_step_13_validator_applies_the_override_content_gate(tmp_path, change):
+    # A stub or an unacknowledged open BLOCKING row that appears after the
+    # probe is refused by validate exactly as by the probe and acceptance.
+    from factory_core.steps.specialized import FinalJudgeStep
+
+    project, service, *_rest = _judged_reopen(tmp_path, override=True)
+    step = FinalJudgeStep(SimpleNamespace(final_audit_service=lambda: service))
+    context = StepContext(project, project.name, 13, 1, 3_600, 0)
+    make_context(project)
+    assert step.execute(context).returncode == 0
+    if change == "stub":
+        (project / "models").mkdir(exist_ok=True)
+        (project / "models" / "solve.py.stub").write_text("stub\n", encoding="utf-8")
+    else:
+        (project / "audit_issue_ledger.md").write_text(
+            "| ID | Category | Severity | Status | Blocking Until | Notes |\n"
+            "|---|---|---|---|---|---|\n"
+            "| S11R-B1 | paper | BLOCKING | OPEN | Human | cover fields |\n",
+            encoding="utf-8",
+        )
+
+    validated = step.validate(context)
+
+    assert not validated.is_valid
+    assert "delivery_override_pending" not in (validated.metadata or {})
+    assert service.judged_for_override(project, service._snapshot(project)) is None
+
+
 def test_v2_step_13_without_an_override_still_fails_the_judgment(tmp_path):
     from factory_core.steps.specialized import FinalJudgeStep
 

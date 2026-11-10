@@ -16,6 +16,22 @@ except ModuleNotFoundError:  # direct script execution
     from numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, complete_binding
 
 ALIAS_CONTRACT = "judge-packet-alias-v1"
+# v2: a requirement may also carry ``attested_outputs`` (path + receipt digest),
+# satisfied by the manifest digest rather than by included content.
+COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v2"
+#: v1 manifests carry no attested outputs and evaluate identically under v2.
+#: The one definition the packet builder, the pre-dispatch check and the
+#: aggregator share, so the gates cannot disagree.
+COMPLETENESS_CONTRACT_VERSIONS = frozenset({"judge-packet-completeness-v1", COMPLETENESS_CONTRACT_VERSION})
+
+
+def supported_completeness_version(value) -> bool:
+    """Whether ``value`` names a supported completeness contract.
+
+    A malformed value (a list, a dict) is unsupported, never a ``TypeError``.
+    """
+
+    return isinstance(value, str) and value in COMPLETENESS_CONTRACT_VERSIONS
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 

@@ -541,3 +541,21 @@ def test_a_checker_that_writes_no_report_records_its_log(tmp_path: Path) -> None
     recorded = next(check for check in checks if check.name == "derived_artifacts")
     assert recorded.report == "logs/native_paper_derived_artifacts.log"
     assert not (project / "derived_artifacts_verification.latest.json").exists()
+
+
+def test_an_unremovable_stale_report_fails_the_check_not_the_audit(tmp_path: Path) -> None:
+    # A directory where the report should be makes unlink raise; the check
+    # records a command error instead of crashing the whole audit.
+    root = tmp_path / "factory"
+    project = root / "ongoing" / "demo"
+    valid_model(project)
+    write(project / "demo_paper.tex", lines(30))
+    write(project / "code_review.md", lines(20))
+    (project / "derived_artifacts_verification.latest.json").mkdir()
+    service = IncrementalAuditService(root, runner=DerivedReportRunner(write_report=False))
+
+    checks = service.paper_checks(project)
+
+    recorded = next(check for check in checks if check.name == "derived_artifacts")
+    assert recorded.passed is False
+    assert recorded.detail.startswith("command error:")

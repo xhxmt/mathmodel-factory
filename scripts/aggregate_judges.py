@@ -22,6 +22,16 @@ try:
     from scripts.evidence_grounding import atomic_write_report, validate_grounding
 except ModuleNotFoundError:  # Direct execution from scripts/.
     from evidence_grounding import atomic_write_report, validate_grounding  # type: ignore
+try:
+    from scripts.packet_evidence import (
+        COMPLETENESS_CONTRACT_VERSION as PACKET_COMPLETENESS_VERSION,
+        supported_completeness_version,
+    )
+except ModuleNotFoundError:  # Direct execution from scripts/.
+    from packet_evidence import (  # type: ignore
+        COMPLETENESS_CONTRACT_VERSION as PACKET_COMPLETENESS_VERSION,
+        supported_completeness_version,
+    )
 
 
 LEGACY_ROLE_SCHEMA_VERSION = "judge-role-v1"
@@ -32,9 +42,6 @@ AGGREGATE_SCHEMA_VERSION = "judge-aggregate-v3"
 SCORE_SEMANTICS = "UNCALIBRATED_DIAGNOSTIC"
 AGGREGATE_JSON_BEGIN = "<!-- JUDGE_AGGREGATE_JSON_BEGIN -->"
 AGGREGATE_JSON_END = "<!-- JUDGE_AGGREGATE_JSON_END -->"
-PACKET_COMPLETENESS_VERSION = "judge-packet-completeness-v2"
-# v1 manifests have no attested outputs and evaluate identically under v2 rules.
-PACKET_COMPLETENESS_VERSIONS = frozenset({"judge-packet-completeness-v1", PACKET_COMPLETENESS_VERSION})
 
 DIMENSION_SPECS: tuple[tuple[str, str, int], ...] = (
     ("model_presentation", "模型呈现", 20),
@@ -494,7 +501,7 @@ def _packet_completeness(
         completeness = payload.get("completeness")
         if not isinstance(completeness, dict):
             raise ValueError("manifest completeness is missing")
-        if completeness.get("contract_version") not in PACKET_COMPLETENESS_VERSIONS:
+        if not supported_completeness_version(completeness.get("contract_version")):
             raise ValueError("unsupported packet completeness contract")
         files = payload.get("files")
         if not isinstance(files, list):

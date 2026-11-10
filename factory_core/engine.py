@@ -1950,11 +1950,17 @@ class FactoryEngine:
                 semantic_owner_stage = recompute["owner_stage"]
                 semantic_reopen_target = recompute["resume_after_step"]
                 reopen_causes = recompute["causes"]
-                semantic_reason = (
-                    f"Stage {task.stage_id} changed an input of completed "
-                    f"Step {recompute['start_step']}; recompute Steps "
-                    + ", ".join(str(step) for step in recompute["steps"])
-                )
+                steps = ", ".join(str(step) for step in recompute["steps"])
+                if recompute.get("rule") == REVIEW_ISSUE_REWORK_RULE:
+                    semantic_reason = (
+                        f"Stage {task.stage_id} has open results/model review "
+                        f"issues; recompute Steps {steps}"
+                    )
+                else:
+                    semantic_reason = (
+                        f"Stage {task.stage_id} changed an input of completed "
+                        f"Step {recompute['start_step']}; recompute Steps {steps}"
+                    )
 
         if semantic_reopen_target is not None:
             budget = self._semantic_reopen_budget(task.stage_id, state)
@@ -2913,11 +2919,15 @@ class FactoryEngine:
         the decision can still be changed, instead of failing Step 13 later.
         """
 
+        raw = resolution.get("acknowledged_human_issues")
         if resolution.get("gate") != "content_freeze":
+            if raw is not None:
+                raise InvalidTransition(
+                    "acknowledged_human_issues is a content-freeze field"
+                )
             return resolution
         from .audit.ledger import deferred_blocking_issues
 
-        raw = resolution.get("acknowledged_human_issues")
         if raw is not None and (
             not isinstance(raw, list)
             or not all(isinstance(value, str) and value.strip() for value in raw)
@@ -2926,6 +2936,12 @@ class FactoryEngine:
                 "acknowledged_human_issues must be a list of ledger issue ids"
             )
         acknowledged = sorted({value.strip() for value in raw or []})
+        if acknowledged and state.stage_catalog_version != STAGE_CATALOG_VERSION_V2:
+            # Only the v2 Stage 8 exit lets a human-owned BLOCKING row reach
+            # Gate 2; v1 keeps its delivery rules unchanged.
+            raise InvalidTransition(
+                "acknowledged_human_issues is a Stage catalog v2 field"
+            )
         if acknowledged and resolution.get("approved") is not True:
             raise InvalidTransition(
                 "only a content-freeze approval can acknowledge ledger rows"

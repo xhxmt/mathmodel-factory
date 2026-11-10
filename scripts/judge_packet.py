@@ -18,7 +18,13 @@ from factory_core.paper_sources import (
 )
 from scripts.objective_evidence import is_runtime_log
 from scripts.json_evidence_view import SUFFIX as EVIDENCE_VIEW_SUFFIX, verify_view
-from scripts.packet_evidence import ALIAS_CONTRACT, PacketEvidence, evaluate_requirement
+from scripts.packet_evidence import (
+    ALIAS_CONTRACT,
+    COMPLETENESS_CONTRACT_VERSION,
+    COMPLETENESS_CONTRACT_VERSIONS,
+    PacketEvidence,
+    evaluate_requirement,
+)
 from scripts.numpy_evidence_view import SUFFIXES as NUMPY_SUFFIXES, MAX_RAW_BYTES, render_file as render_numpy
 from scripts.document_evidence_view import SUFFIXES as DOCUMENT_SUFFIXES, render_file as render_document, MAX_ASSET_BYTES, MAX_IMAGES
 
@@ -73,11 +79,6 @@ EXECUTION_CONTEXT_BYTES = 360_000
 MAX_FILE_BYTES = 55_000
 PACKET_VERSION = 6
 DOCUMENT_CONTEXT_BYTES = 2_000_000
-# v2: a requirement may also carry ``attested_outputs`` (path + receipt digest),
-# satisfied by the manifest digest rather than by included content.
-COMPLETENESS_CONTRACT_VERSION = "judge-packet-completeness-v2"
-#: v1 manifests carry no attested outputs and evaluate identically under v2.
-COMPLETENESS_CONTRACT_VERSIONS = frozenset({"judge-packet-completeness-v1", COMPLETENESS_CONTRACT_VERSION})
 SUPPLEMENT_CONFIG = "judge_evidence.json"
 
 

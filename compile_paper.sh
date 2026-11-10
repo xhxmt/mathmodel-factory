@@ -56,12 +56,14 @@ export openout_any=p
 # unchanged sources yields a different PDF and therefore a different final
 # audit snapshot (which judgments and deliver_snapshot overrides are bound
 # to).  A caller-supplied SOURCE_DATE_EPOCH wins; otherwise the main source's
-# modification time is the document date.  FORCE_SOURCE_DATE is left unset so
-# \today in the document body still follows the engine's normal behaviour.
+# modification time is the document date.  FORCE_SOURCE_DATE is unset (an
+# inherited value would freeze \today too) so \today in the document body
+# still follows the engine's normal behaviour.
 if [[ ! "${SOURCE_DATE_EPOCH:-}" =~ ^[0-9]+$ ]]; then
     SOURCE_DATE_EPOCH="$(stat -c %Y -- "$PROJECT/$TEX_SOURCE")"
 fi
 export SOURCE_DATE_EPOCH
+unset FORCE_SOURCE_DATE
 
 cd "$PROJECT"
 

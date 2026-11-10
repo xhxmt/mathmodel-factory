@@ -129,7 +129,15 @@ class OpenIssue:
         text = self.blocking_until.strip()
         if text.lower().startswith("human"):
             return True
-        steps = {int(value) for value in re.findall(r"step\s*(\d+)", text, re.IGNORECASE)}
+        # "Step 14", "Steps 14/15", "Step 14 and 15": every number of a list
+        # that follows "step" or "steps".
+        steps = {
+            int(number)
+            for listed in re.findall(
+                r"steps?\s*(\d+(?:\s*(?:/|,|、|&|and|和|or|或)\s*\d+)*)", text, re.IGNORECASE
+            )
+            for number in re.findall(r"\d+", listed)
+        }
         return bool(steps) and steps <= DEFERRED_REVIEW_STEPS
 
 

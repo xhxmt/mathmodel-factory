@@ -545,6 +545,8 @@ def test_v2_review_exit_recomputes_for_results_issue_then_returns_to_revision(tm
     assert reopen.payload["recompute_reasons"] == [
         "audit_issue_ledger.md#S11-B4: open results BLOCKING review issue"
     ]
+    assert "open results/model review issues" in reopen.payload["reason"]
+    assert "changed an input" not in reopen.payload["reason"]
     for step in (5, 6, 7, 8):
         assert lifecycles[step].calls == [1], step
     assert lifecycles[11].calls == []  # the review is not re-run
@@ -636,7 +638,7 @@ def test_v2_review_recompute_block_skips_steps_it_does_not_recompute(tmp_path):
     from factory_core.steps.prompting import PromptRenderer
 
     store = v2_store(tmp_path, last_completed_step=11)
-    write_ledger(tmp_path, [("S11-B4", "results", "RESOLVED", "OPEN")])
+    write_ledger(tmp_path, [("S11-B4", "results", "BLOCKING", "RESOLVED")])
     _review_reopen(store, steps=(6, 7, 8))
     renderer = PromptRenderer(_Path(__file__).resolve().parents[1])
 
@@ -1155,6 +1157,8 @@ def test_v2_review_budget_restarts_after_a_final_judge_reopen():
 @pytest.mark.parametrize("until, deferred", [
     ("Human (交付前)", True), ("human: team fills the cover", True),
     ("Step 14", True), ("Step 14; Step 15", True),
+    ("Steps 14/15", True), ("steps 14, 15", True), ("Step 14 和 15", True),
+    ("Steps 14/16", False), ("Steps 12/14", False),
     ("Step 16", False), ("Step 12", False), ("Step 4 (决策); Step 12 (文字)", False),
     ("Step 5 日志维护", False), ("", False), ("交付前", False),
 ])
@@ -1238,6 +1242,32 @@ def test_v2_content_freeze_approval_must_take_on_the_human_rows(tmp_path, extra,
     with pytest.raises(InvalidTransition, match=re.escape(message)):
         engine.resolve_action({**APPROVE, **extra}, expected_revision=awaiting.revision)
     assert store.load().pending_action["gate"] == "content_freeze"
+
+
+def test_a_v1_content_freeze_cannot_acknowledge_rows(tmp_path):
+    from dataclasses import replace
+
+    from factory_core.stages import STAGE_CATALOG_VERSION
+
+    store, engine, _awaiting = _awaiting_content_freeze(tmp_path)
+    v1 = replace(store.load(), stage_catalog_version=STAGE_CATALOG_VERSION)
+
+    with pytest.raises(InvalidTransition, match="Stage catalog v2 field"):
+        engine._content_freeze_acknowledgements(
+            v1, {"gate": "content_freeze", **APPROVE, "acknowledged_human_issues": ["S11R-B1"]}
+        )
+    plain = {"gate": "content_freeze", **APPROVE}
+    assert engine._content_freeze_acknowledgements(v1, plain) == plain
+
+
+def test_only_the_content_freeze_gate_takes_acknowledgements(tmp_path):
+    store, engine, _awaiting = _awaiting_content_freeze(tmp_path)
+
+    with pytest.raises(InvalidTransition, match="content-freeze field"):
+        engine._content_freeze_acknowledgements(
+            store.load(),
+            {"gate": "step3", "selected_option_id": "m1", "acknowledged_human_issues": []},
+        )
 
 
 def test_a_rejection_cannot_acknowledge_rows(tmp_path):
