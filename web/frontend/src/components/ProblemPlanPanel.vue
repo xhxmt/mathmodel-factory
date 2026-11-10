@@ -51,7 +51,7 @@ export default {
 .pp-panel { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
 .pp-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pp-head > div { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.pp-head span { color: var(--ink-3); font-size: 9px; }
+.pp-head span { color: var(--ink-3); font-size: 11.5px; }
 .pp-loading, .pp-error { display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--ink-3); }
 .pp-error { border: 1px solid var(--bad); border-radius: var(--r); color: var(--bad); background: var(--bad-dim); }
 .spin { animation: spin .7s linear infinite; }

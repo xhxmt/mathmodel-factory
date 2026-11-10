@@ -45,18 +45,6 @@
  * @property {string|null} mtime
  */
 
-/**
- * @typedef {Object} CloudConfig
- * @property {boolean} enabled
- * @property {number|null} revision
- * @property {string} env_file
- * @property {number} threshold_time
- * @property {string[]} solver_types
- * @property {string} project_id
- * @property {string} region
- * @property {string} service_name
- */
-
 function numberOr(value, fallback) {
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
@@ -71,12 +59,6 @@ function fileName(path) {
   const clean = String(path || '')
   const parts = clean.split('/').filter(Boolean)
   return parts[parts.length - 1] || clean
-}
-
-function normalizeSolverTypes(value) {
-  if (Array.isArray(value)) return value.map(String).filter(Boolean)
-  if (typeof value === 'string') return value.split(',').map((s) => s.trim()).filter(Boolean)
-  return []
 }
 
 /** @returns {ProjectStatus} */
@@ -237,20 +219,6 @@ export function normalizeContestDashboard(raw = {}) {
       attachments: Array.isArray(delivery.attachments) ? delivery.attachments : [],
     },
     actions: Array.isArray(raw.actions) ? raw.actions : [],
-  }
-}
-
-/** @returns {CloudConfig} */
-export function normalizeCloudConfig(raw = {}) {
-  return {
-    enabled: Boolean(raw.enabled),
-    revision: raw.revision == null ? null : numberOr(raw.revision, null),
-    env_file: String(raw.env_file || ''),
-    threshold_time: numberOr(raw.threshold_time, 300),
-    solver_types: normalizeSolverTypes(raw.solver_types),
-    project_id: String(raw.project_id || ''),
-    region: String(raw.region || ''),
-    service_name: String(raw.service_name || ''),
   }
 }
 

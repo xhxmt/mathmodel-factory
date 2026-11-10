@@ -2,7 +2,7 @@
   <section class="diag panel" :class="severityClass">
     <div class="diag-top">
       <div>
-        <div class="diag-kicker mono">DIAGNOSTICS</div>
+        <div class="diag-kicker">诊断</div>
         <div class="diag-title">{{ title }}</div>
         <div class="diag-summary">{{ summary }}</div>
       </div>
@@ -19,7 +19,7 @@
     </div>
 
     <div v-if="events.length" class="diag-events">
-      <div class="diag-section-title mono">AUDIT TIMELINE · {{ coordinate }}</div>
+      <div class="diag-section-title">审计时间线 · {{ coordinate }}</div>
       <div v-for="event in events" :key="event.event_id || event.revision" class="diag-event mono">
         r{{ event.revision }} · {{ event.type }} · {{ event.message }}
         <template v-if="event.subject_stage || event.result_stage">
@@ -28,17 +28,17 @@
       </div>
     </div>
     <div v-if="evidence.length" class="diag-events">
-      <div class="diag-section-title mono">EVIDENCE</div>
+      <div class="diag-section-title">相关文件</div>
       <div v-for="item in evidence" :key="item.path || JSON.stringify(item)" class="diag-event mono">
         {{ item.path || item }}<template v-if="item.revision !== undefined"> · r{{ item.revision }}</template>
       </div>
     </div>
     <div v-if="budgetLines.length" class="diag-events">
-      <div class="diag-section-title mono">REOPEN BUDGET</div>
+      <div class="diag-section-title">回退预算</div>
       <div v-for="line in budgetLines" :key="line" class="diag-event mono">{{ line }}</div>
     </div>
     <div v-if="recovery" class="diag-recovery">
-      <div class="diag-section-title mono">RECOVERY STATUS</div>
+      <div class="diag-section-title">恢复状态</div>
       <div class="diag-event mono">
         {{ recovery.canonical_type }}
         <template v-if="recovery.decision"> · {{ recovery.decision }}</template>
@@ -125,18 +125,20 @@ export default {
 </script>
 
 <style scoped>
-.diag { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; border-left: 3px solid var(--line); }
-.diag.is-warn { border-left-color: var(--amber); background: var(--amber-dim); }
-.diag.is-block { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad-dim) 65%, transparent); }
+.diag { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; border-left: 3px solid var(--line); }
+.diag.is-warn { border-left-color: var(--amber); }
+.diag.is-block { border-left-color: var(--bad); }
 .diag-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.diag-kicker { font-size: 10px; letter-spacing: 0.1em; color: var(--ink-3); }
-.diag-title { font-size: 14px; font-weight: 700; color: var(--ink); margin-top: 4px; }
-.diag-summary { font-size: 12px; color: var(--ink-2); margin-top: 4px; }
+.diag-kicker { font-size: 12px; color: var(--ink-3); }
+.is-warn .diag-kicker { color: var(--amber); }
+.is-block .diag-kicker { color: var(--bad); }
+.diag-title { font-size: 15px; font-weight: 600; color: var(--ink); margin-top: 2px; }
+.diag-summary { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
 .diag-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.diag-events { display: flex; flex-direction: column; gap: 6px; }
-.diag-recovery { display: flex; flex-direction: column; gap: 6px; }
-.diag-section-title { font-size: 10px; letter-spacing: 0.08em; color: var(--ink-3); }
-.diag-event { font-size: 11px; color: var(--ink-2); padding: 7px 9px; border-radius: var(--r-sm); background: var(--panel-2); }
+.diag-events, .diag-recovery { display: flex; flex-direction: column; }
+.diag-section-title { font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+.diag-event { font-family: var(--mono); font-size: 12px; color: var(--ink-2); padding: 5px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.diag-section-title + .diag-event { border-top: 0; }
 @media (max-width: 720px) {
   .diag-top { flex-direction: column; }
   .diag-actions { justify-content: flex-start; }

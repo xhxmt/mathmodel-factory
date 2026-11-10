@@ -371,18 +371,18 @@ export default {
 
 .form-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
 .tmpl { display: flex; align-items: center; gap: 6px; }
-.tmpl-lbl { font-size: 10px; color: var(--ink-3); letter-spacing: 0.12em; text-transform: uppercase; }
+.tmpl-lbl { font-size: 11.5px; color: var(--ink-3); letter-spacing: 0; }
 .tmpl-btn { padding: 4px 9px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-2); font-size: 11px; cursor: pointer; }
 .tmpl-btn:hover { background: var(--panel-3); color: var(--ink); border-color: var(--live); }
 .form-hint { font-size: 12px; color: var(--ink-3); margin: 4px 0 10px; }
-.form-hint kbd { font-family: var(--mono); font-size: 10px; padding: 1px 5px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r-xs); }
+.form-hint kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 5px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r-xs); }
 .answer { font-size: 13px; }
 .form-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 .meta { font-size: 11px; color: var(--ink-3); }
 .saved { color: var(--ok); }
 .foot-btns { display: flex; gap: 8px; }
 
-.tag { display: inline-flex; align-items: center; gap: 5px; font: 600 10.5px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 8px; border-radius: var(--r-xs); }
+.tag { display: inline-flex; align-items: center; gap: 5px; font: 600 12px/1 var(--sans); letter-spacing: 0; padding: 4px 8px; border-radius: var(--r-xs); }
 .tag-amber { color: var(--amber); border: 1px solid var(--amber-line); background: var(--amber-dim); }
 
 /* markdown */
@@ -420,6 +420,6 @@ export default {
 .joint-attestations { margin: 14px 0; padding: 12px; border: 1px solid var(--amber-line); border-radius: var(--r-sm); }
 .joint-attestations legend { font-size: 12px; padding: 0 5px; }
 .joint-attestations label { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.6; margin: 8px 0; }
-.joint-attestations input { margin-top: 3px; accent-color: var(--amber); }
+.joint-attestations input { margin-top: 3px; accent-color: var(--accent); }
 .joint-attestations p { font-size: 11px; margin: 12px 0 0; }
 </style>

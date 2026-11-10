@@ -176,7 +176,7 @@ export default {
 .picked { display: flex; align-items: center; gap: 11px; padding: 12px 14px; background: var(--panel-2); border: 1px solid var(--line); border-left: 2px solid var(--ok); border-radius: var(--r); color: var(--ok); }
 .pk-info { flex: 1; min-width: 0; }
 .pk-name { font-size: 12.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pk-size { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
+.pk-size { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
 
 .prog { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .prog-bar { flex: 1; height: 5px; background: var(--bg-2); border-radius: 5px; overflow: hidden; }
@@ -184,7 +184,7 @@ export default {
 .prog .mono { font-size: 11px; color: var(--ink-3); }
 
 .chk { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
-.chk input { accent-color: var(--amber); width: 15px; height: 15px; }
+.chk input { accent-color: var(--accent); width: 15px; height: 15px; }
 
 .m-err { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--bad-dim); border: 1px solid var(--bad); border-radius: var(--r-sm); color: var(--bad); font-size: 12.5px; }
 

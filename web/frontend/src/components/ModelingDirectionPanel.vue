@@ -122,8 +122,8 @@ export default {
 <style scoped>
 .md-panel { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
 .md-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.md-title { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 13px; }
-.md-count { padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink-3); font-size: 10px; }
+.md-title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.md-count { padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink-3); font-size: 11.5px; }
 .spin { animation: spin 0.7s linear infinite; }
 .md-loading { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .md-skel { min-height: 156px; border: 1px solid var(--line); border-radius: var(--r); background: linear-gradient(90deg, var(--panel-2), var(--panel-3), var(--panel-2)); background-size: 220% 100%; animation: sk 1.2s infinite linear; }

@@ -1,342 +1,258 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Paper Factory — 建模工坊控制台</title>
-  <meta name="color-scheme" content="dark light">
+  <title>建模工坊</title>
+  <meta name="color-scheme" content="light dark">
   <!-- Self-hosted Latin font subsets (woff2). CJK glyphs fall through the --sans stack to system fonts, so the console works offline. -->
   <link rel="preload" href="/fonts/fonts.css" as="style">
   <link rel="stylesheet" href="/fonts/fonts.css">
   <style>
     /* ===================================================================
-       PAPER FACTORY · "Aurora Glass"
-       Deep-space dark + violet/cyan/emerald aurora glow, frosted-glass
-       panels, vivid status colors. Brand gradient = decorative accent;
-       amber stays reserved for "needs you" semantics.
+       PAPER FACTORY · 研究工具
+       浅色为默认并跟随系统切换深色；中性底色 + 唯一强调色（蓝）。
+       琥珀只表示“需要你处理”，绿/红只表示完成/失败。
+       旧组件使用的令牌名（--panel、--live、--amber、--grad…）保留，
+       映射到新色板，这样所有对话框自动换成同一套配色。
        =================================================================== */
-    :root, [data-theme="dark"] {
-      --bg:        #070810;
-      --bg-2:      #0a0c15;
-      /* frosted glass surfaces */
-      --panel:     rgba(255,255,255,0.045);
-      --panel-2:   rgba(255,255,255,0.075);
-      --panel-3:   rgba(255,255,255,0.11);
-      --line:      rgba(255,255,255,0.09);
-      --line-2:    rgba(255,255,255,0.17);
-      --glass-hi:  rgba(255,255,255,0.16);
-      --grid:      rgba(255,255,255,0.028);
+    :root {
+      --bg:        #f7f7f5;
+      --bg-2:      #efefec;
+      --surface:   #ffffff;
+      --panel:     #ffffff;
+      --panel-2:   #f4f4f1;
+      --panel-3:   #ebebe7;
+      --line:      #e6e5e0;
+      --line-2:    #d4d3cd;
+      --glass-hi:  transparent;
+      --grid:      transparent;
 
-      --ink:       #eef0f6;
-      --ink-2:     #a6adbb;
-      --ink-3:      #6b7280;
+      --ink:       #1d1d1b;
+      --ink-2:     #5b5a55;
+      --ink-3:     #8e8c85;
 
-      /* Aurora brand — decorative gradient accent */
-      --brand:     #a78bfa;
-      --brand-2:   #22d3ee;
-      --brand-3:   #34d399;
-      --accent:    #a78bfa;
-      --accent-dim: rgba(167,139,250,0.16);
-      --accent-line:rgba(167,139,250,0.42);
-      --accent-glow:rgba(167,139,250,0.42);
-      --accent-ink:#0d0a18;
-      --grad:      linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
-      --grad-soft: linear-gradient(135deg, rgba(167,139,250,0.20), rgba(34,211,238,0.15));
+      --accent:      #2f5bd3;
+      --accent-2:    #2448ad;
+      --accent-dim:  #eaf0fd;
+      --accent-line: #b9cbf5;
+      --accent-glow: transparent;
+      --accent-ink:  #ffffff;
+      --brand:   var(--accent);
+      --brand-2: var(--accent);
+      --brand-3: var(--ok);
+      --grad:      var(--accent);
+      --grad-soft: var(--accent-dim);
+      --aur-1: transparent; --aur-2: transparent; --aur-3: transparent; --aur-4: transparent; --aur-5: transparent;
 
-      /* Aurora background blobs (soft radial washes, alpha baked in) */
-      --aur-1: rgba(124,58,237,0.22);
-      --aur-2: rgba(34,211,238,0.14);
-      --aur-3: rgba(16,185,129,0.12);
-      --aur-4: rgba(167,139,250,0.13);
-      --aur-5: rgba(34,211,238,0.10);
+      /* 需要你处理 */
+      --amber:      #a35a00;
+      --amber-2:    #8a4b00;
+      --amber-ink:  #ffffff;
+      --amber-dim:  #fdf3e1;
+      --amber-line: #f0cf95;
+      --amber-glow: transparent;
 
-      /* Amber — reserved for "needs you" / gate stop semantics */
-      --amber:     #fbbf24;
-      --amber-2:   #fcd34d;
-      --amber-ink: #1a1300;
-      --amber-dim: rgba(251,191,36,0.14);
-      --amber-line:rgba(251,191,36,0.42);
-      --amber-glow:rgba(251,191,36,0.42);
+      /* 运行中 = 强调色 */
+      --live:      var(--accent);
+      --live-2:    var(--accent-2);
+      --live-dim:  var(--accent-dim);
+      --live-line: var(--accent-line);
+      --live-glow: transparent;
 
-      /* Live cyan — running / data flowing */
-      --live:      #22d3ee;
-      --live-2:    #0891b2;
-      --live-dim:  rgba(34,211,238,0.14);
-      --live-line: rgba(34,211,238,0.42);
-      --live-glow: rgba(34,211,238,0.45);
+      --ok:        #1f7a4d;
+      --ok-dim:    #e7f4ec;
+      --ok-glow:   transparent;
 
-      --ok:        #34d399;
-      --ok-dim:    rgba(52,211,153,0.14);
-      --ok-glow:   rgba(52,211,153,0.40);
+      --bad:       #c03535;
+      --err:       #c03535;
+      --bad-dim:   #fbeaea;
+      --bad-glow:  transparent;
 
-      --bad:       #fb7185;
-      --err:       #fb7185;
-      --bad-dim:   rgba(251,113,133,0.14);
-      --bad-glow:  rgba(251,113,133,0.42);
+      --paused:    #807e77;
+      --paused-dim:#efeeea;
 
-      --paused:    #94a3b8;
-      --paused-dim:rgba(148,163,184,0.14);
+      --overlay:   rgba(29, 29, 27, 0.32);
 
-      --overlay:   rgba(5,6,12,0.62);
+      --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Hanken Grotesk', sans-serif;
 
-      --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-      --sans: 'Hanken Grotesk', 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-
-      --r-xs: 4px; --r-sm: 7px; --r: 9px; --r-lg: 14px; --r-xl: 18px;
+      --r-xs: 4px; --r-sm: 6px; --r: 8px; --r-lg: 10px; --r-xl: 14px;
       --ease: cubic-bezier(0.4, 0, 0.2, 1);
       --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-      --shadow:    0 10px 34px rgba(0,0,0,0.5);
-      --shadow-lg: 0 26px 74px rgba(0,0,0,0.66);
-      --header-h: 60px;
+      --shadow:    0 1px 2px rgba(29,29,27,0.06), 0 4px 14px rgba(29,29,27,0.06);
+      --shadow-lg: 0 2px 6px rgba(29,29,27,0.08), 0 18px 48px rgba(29,29,27,0.14);
+      --header-h: 56px;
+      --content-w: 1180px;
+      color-scheme: light;
     }
 
-    [data-theme="light"] {
-      --bg:        #f2f4fa;
-      --bg-2:      #e9ecf4;
-      --panel:     rgba(255,255,255,0.58);
-      --panel-2:   rgba(255,255,255,0.72);
-      --panel-3:   rgba(255,255,255,0.88);
-      --line:      rgba(20,24,40,0.10);
-      --line-2:    rgba(20,24,40,0.18);
-      --glass-hi:  rgba(255,255,255,0.9);
-      --grid:      rgba(20,24,40,0.045);
-
-      --ink:       #171a26;
-      --ink-2:     #4c5266;
-      --ink-3:     #8a90a3;
-
-      --brand:     #7c5ce0;
-      --brand-2:   #0e9db8;
-      --brand-3:   #18a06b;
-      --accent:    #7c5ce0;
-      --accent-dim: rgba(124,92,224,0.14);
-      --accent-line:rgba(124,92,224,0.42);
-      --accent-glow:rgba(124,92,224,0.28);
-      --accent-ink:#ffffff;
-      --grad:      linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
-      --grad-soft: linear-gradient(135deg, rgba(124,92,224,0.16), rgba(14,157,184,0.12));
-
-      --aur-1: rgba(124,92,224,0.14);
-      --aur-2: rgba(14,157,184,0.10);
-      --aur-3: rgba(24,160,107,0.08);
-      --aur-4: rgba(124,92,224,0.09);
-      --aur-5: rgba(14,157,184,0.07);
-
-      --amber:     #b45309;
-      --amber-2:   #92400e;
-      --amber-ink: #fff6e6;
-      --amber-dim: rgba(180,83,9,0.12);
-      --amber-line:rgba(180,83,9,0.40);
-      --amber-glow:rgba(180,83,9,0.22);
-
-      --live:      #0e9db8;
-      --live-2:    #0b7a90;
-      --live-dim:  rgba(14,157,184,0.12);
-      --live-line: rgba(14,157,184,0.40);
-      --live-glow: rgba(14,157,184,0.22);
-
-      --ok:        #18a06b;
-      --ok-dim:    rgba(24,160,107,0.12);
-      --ok-glow:   rgba(24,160,107,0.22);
-
-      --bad:       #dc2647;
-      --err:       #dc2647;
-      --bad-dim:   rgba(220,38,71,0.10);
-      --bad-glow:  rgba(220,38,71,0.22);
-
-      --paused:    #6b7280;
-      --paused-dim:rgba(107,114,128,0.12);
-
-      --overlay:   rgba(238,240,248,0.66);
-
-      --shadow:    0 8px 26px rgba(20,24,40,0.10);
-      --shadow-lg: 0 24px 58px rgba(20,24,40,0.18);
+    /* 深色：跟随系统，或用户显式选择 */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #151515; --bg-2: #1b1b1b; --surface: #1c1c1c; --panel: #1c1c1c; --panel-2: #232323; --panel-3: #2b2b2b;
+        --line: #2c2c2b; --line-2: #3a3a38;
+        --ink: #ecebe7; --ink-2: #a9a7a1; --ink-3: #74726d;
+        --accent: #7c9cf5; --accent-2: #9db5fa; --accent-dim: #1f2740; --accent-line: #34437a; --accent-ink: #0f1424;
+        --amber: #f0b45a; --amber-2: #f6c67d; --amber-ink: #241500; --amber-dim: #33270f; --amber-line: #5c4518;
+        --ok: #5cc28c; --ok-dim: #16301f; --bad: #f07a7a; --err: #f07a7a; --bad-dim: #3a1d1d;
+        --paused: #8f8d87; --paused-dim: #262625;
+        --overlay: rgba(0, 0, 0, 0.55);
+        --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.3);
+        --shadow-lg: 0 2px 6px rgba(0,0,0,0.4), 0 18px 48px rgba(0,0,0,0.5);
+        color-scheme: dark;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #151515; --bg-2: #1b1b1b; --surface: #1c1c1c; --panel: #1c1c1c; --panel-2: #232323; --panel-3: #2b2b2b;
+      --line: #2c2c2b; --line-2: #3a3a38;
+      --ink: #ecebe7; --ink-2: #a9a7a1; --ink-3: #74726d;
+      --accent: #7c9cf5; --accent-2: #9db5fa; --accent-dim: #1f2740; --accent-line: #34437a; --accent-ink: #0f1424;
+      --amber: #f0b45a; --amber-2: #f6c67d; --amber-ink: #241500; --amber-dim: #33270f; --amber-line: #5c4518;
+      --ok: #5cc28c; --ok-dim: #16301f; --bad: #f07a7a; --err: #f07a7a; --bad-dim: #3a1d1d;
+      --paused: #8f8d87; --paused-dim: #262625;
+      --overlay: rgba(0, 0, 0, 0.55);
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.3);
+      --shadow-lg: 0 2px 6px rgba(0,0,0,0.4), 0 18px 48px rgba(0,0,0,0.5);
+      color-scheme: dark;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
-
     html { -webkit-text-size-adjust: 100%; }
 
     body {
       font-family: var(--sans);
       font-size: 14px;
-      line-height: 1.55;
+      line-height: 1.6;
       color: var(--ink);
-      background-color: var(--bg);
-      /* gradient signal hairline (top) + faint engineering grid for texture */
-      background-image:
-        linear-gradient(90deg, transparent, var(--accent-line), var(--live), transparent),
-        linear-gradient(var(--grid) 1px, transparent 1px),
-        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-      background-size: 100% 1px, 34px 34px, 34px 34px;
-      background-position: top center, center top, center top;
-      background-repeat: no-repeat, repeat, repeat;
+      background: var(--bg);
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
       min-height: 100vh;
       overflow-x: hidden;
-      transition: background-color 0.4s var(--ease), color 0.4s var(--ease);
     }
 
-    /* Animated aurora field — two fixed layers of soft radial blobs.
-       Soft edges come from the gradients themselves (no filter:blur), and only
-       transform is animated, so compositing stays cheap under backdrop-filter. */
-    body::before, body::after {
-      content: '';
-      position: fixed;
-      inset: -6%;
-      z-index: 0;
-      pointer-events: none;
-      will-change: transform;
-    }
-    body::before {
-      background:
-        radial-gradient(40% 34% at 20% 26%, var(--aur-1), transparent 70%),
-        radial-gradient(36% 30% at 80% 16%, var(--aur-2), transparent 70%),
-        radial-gradient(34% 36% at 62% 76%, var(--aur-3), transparent 70%);
-      animation: auroraA 30s ease-in-out infinite alternate;
-    }
-    body::after {
-      background:
-        radial-gradient(30% 26% at 70% 58%, var(--aur-4), transparent 70%),
-        radial-gradient(26% 24% at 30% 82%, var(--aur-5), transparent 70%);
-      animation: auroraB 40s ease-in-out infinite alternate;
-    }
-    @keyframes auroraA { from { transform: translate3d(-2%, -1%, 0) scale(1); }    to { transform: translate3d(2%, 2%, 0) scale(1.06); } }
-    @keyframes auroraB { from { transform: translate3d(2%, 1%, 0) scale(1.05); }   to { transform: translate3d(-2%, -2%, 0) scale(1); } }
-
-    h1, h2, h3, h4, h5, h6 { font-weight: 700; letter-spacing: -0.01em; }
+    h1, h2, h3, h4, h5, h6 { font-weight: 600; letter-spacing: 0; color: var(--ink); }
 
     code, pre, .mono { font-family: var(--mono); }
+    .mono { font-size: 0.92em; }
     .tnum { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
 
-    a { color: var(--live); text-decoration: none; }
+    a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
 
-    #app { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; }
+    #app { position: relative; min-height: 100vh; display: flex; flex-direction: column; }
 
-    /* ---- micro-typography utility ---- */
+    /* 小标题：中文、常规字距，不再用等宽大写 */
     .label {
-      font: 500 10.5px/1 var(--mono);
-      letter-spacing: 0.16em;
-      text-transform: uppercase;
+      font: 500 12px/1.4 var(--sans);
+      letter-spacing: 0;
+      text-transform: none;
       color: var(--ink-3);
     }
 
-    /* ---- glass panels ---- */
+    /* 面板：白底细边，无毛玻璃 */
     .panel {
-      background: var(--panel);
-      -webkit-backdrop-filter: blur(18px) saturate(150%);
-      backdrop-filter: blur(18px) saturate(150%);
+      background: var(--surface);
       border: 1px solid var(--line);
       border-radius: var(--r-lg);
-      box-shadow: inset 0 1px 0 var(--glass-hi);
     }
     .panel-2 { background: var(--panel-2); }
 
-    /* ---- buttons ---- */
+    /* 按钮 */
     .btn {
-      font: 600 13px/1 var(--sans);
-      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-      padding: 9px 14px;
+      font: 500 13px/1.2 var(--sans);
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 7px 12px;
       border-radius: var(--r);
       border: 1px solid var(--line-2);
-      background: var(--panel-2);
-      -webkit-backdrop-filter: blur(10px);
-      backdrop-filter: blur(10px);
+      background: var(--surface);
       color: var(--ink);
       cursor: pointer;
       white-space: nowrap;
-      transition: background 0.15s var(--ease), border-color 0.15s var(--ease),
-                  transform 0.08s var(--ease), box-shadow 0.15s var(--ease), filter 0.15s var(--ease);
+      transition: background 0.12s var(--ease), border-color 0.12s var(--ease), color 0.12s var(--ease);
     }
-    .btn:hover { background: var(--panel-3); border-color: var(--ink-3); }
-    .btn:active { transform: translateY(1px); }
-    .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+    .btn:hover { background: var(--panel-2); }
+    .btn:active { transform: translateY(0.5px); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
     .btn svg { width: 15px; height: 15px; }
 
-    /* Primary CTA. Class name kept (.btn-amber) to avoid touching every call
-       site; visually it is now the aurora brand gradient. */
-    .btn-amber {
-      background: var(--grad); color: var(--accent-ink);
-      border-color: transparent; font-weight: 700;
-      box-shadow: 0 4px 18px var(--accent-glow);
+    /* 主按钮。类名 .btn-amber 沿用旧调用点，外观为实心强调色。 */
+    .btn-amber, .btn-primary {
+      background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
     }
-    .btn-amber:hover {
-      background: var(--grad); border-color: transparent;
-      filter: brightness(1.08);
-      box-shadow: 0 6px 26px var(--accent-glow), 0 0 0 1px var(--accent-line);
-    }
-    .btn-ghost { background: rgba(255,255,255,0.02); border-color: var(--line); }
-    .btn-ghost:hover { background: var(--panel-2); border-color: var(--line-2); }
-    .btn-danger { color: var(--bad); border-color: var(--bad-dim); background: var(--bad-dim); }
-    .btn-danger:hover { background: var(--bad); color: #fff; border-color: transparent; box-shadow: 0 4px 18px var(--bad-glow); }
-    .btn-sm { padding: 6px 10px; font-size: 12px; gap: 5px; }
-    .btn-sm svg { width: 13px; height: 13px; }
-    .btn-icon { padding: 8px; }
-    .btn-icon.btn-sm { padding: 6px; }
+    .btn-amber:hover, .btn-primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+    .btn-ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+    .btn-ghost:hover { background: var(--panel-2); color: var(--ink); }
+    .btn-danger { color: var(--bad); border-color: var(--line-2); background: var(--surface); }
+    .btn-danger:hover { background: var(--bad); color: #fff; border-color: var(--bad); }
+    .btn-sm { padding: 5px 9px; font-size: 12.5px; gap: 5px; }
+    .btn-sm svg { width: 14px; height: 14px; }
+    .btn-icon { padding: 7px; }
+    .btn-icon.btn-sm { padding: 5px; }
 
-    /* ---- form fields ---- */
+    /* 表单 */
     .field {
       width: 100%;
       font: 14px var(--sans);
-      padding: 11px 13px;
-      background: rgba(255,255,255,0.03);
+      padding: 8px 11px;
+      background: var(--surface);
       border: 1px solid var(--line-2);
       border-radius: var(--r);
       color: var(--ink);
-      transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+      transition: border-color 0.12s var(--ease), box-shadow 0.12s var(--ease);
     }
-    [data-theme="light"] .field { background: rgba(255,255,255,0.6); }
     .field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
     .field::placeholder { color: var(--ink-3); }
     textarea.field { resize: vertical; line-height: 1.6; }
 
-    /* ---- status dot ---- */
+    /* 状态点 */
     .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--ink-3); }
-    .dot.live   { background: var(--live);  box-shadow: 0 0 10px var(--live-glow);  animation: pulse 2s var(--ease) infinite; }
-    .dot.amber  { background: var(--amber); box-shadow: 0 0 10px var(--amber-glow); animation: pulse 1.4s var(--ease) infinite; }
-    .dot.ok     { background: var(--ok);    box-shadow: 0 0 8px var(--ok-glow); }
-    .dot.bad    { background: var(--bad);   box-shadow: 0 0 8px var(--bad-glow); }
+    .dot.live   { background: var(--live); animation: pulse 2s var(--ease) infinite; }
+    .dot.amber  { background: var(--amber); }
+    .dot.ok     { background: var(--ok); }
+    .dot.bad    { background: var(--bad); }
     .dot.paused { background: var(--paused); }
 
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    /* 状态标签（新组件共用） */
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font: 500 12px/1 var(--sans); white-space: nowrap;
+      padding: 4px 8px; border-radius: 999px;
+      background: var(--panel-2); color: var(--ink-2);
+    }
+    .pill.live   { background: var(--accent-dim); color: var(--accent); }
+    .pill.amber  { background: var(--amber-dim); color: var(--amber); }
+    .pill.ok     { background: var(--ok-dim); color: var(--ok); }
+    .pill.bad    { background: var(--bad-dim); color: var(--bad); }
+    .pill.paused { background: var(--paused-dim); color: var(--paused); }
+
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
     @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
     @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
-    @keyframes rise  { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes rise  { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes spin  { to { transform: rotate(360deg); } }
+    .rise { animation: rise 0.25s var(--ease-out) both; }
 
-    .rise { animation: rise 0.5s var(--ease-out) both; }
-
-    /* ---- spinner ---- */
     .spinner {
       width: 18px; height: 18px; border-radius: 50%;
       border: 2px solid var(--line-2); border-top-color: var(--accent);
       animation: spin 0.7s linear infinite;
     }
 
-    /* ---- scrollbars ---- */
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb {
-      background: var(--line-2); border-radius: 10px;
-      border: 2px solid transparent; background-clip: content-box;
-    }
+    ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 10px; border: 2px solid transparent; background-clip: content-box; }
     ::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: content-box; }
     * { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 
-    ::selection { background: var(--accent); color: #fff; }
-
+    ::selection { background: var(--accent-dim); color: var(--ink); }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-    /* KaTeX math (rendered into v-html content; inherits text color) */
     .katex { font-size: 1.04em; }
     .katex-display { overflow-x: auto; overflow-y: hidden; margin: 0.9em 0; padding: 2px 0; }
     .md-mathraw { color: var(--amber); font-family: var(--mono); font-size: 0.9em; }
 
-    /* Full-screen loading shim shown while async overlay chunks (ProjectWorkspace
-       subtree, modals) are being fetched. */
     .ws-overlay-loading, .overlay-loading {
       position: fixed; inset: 0; z-index: 200;
       display: flex; align-items: center; justify-content: center;

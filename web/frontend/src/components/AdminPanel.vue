@@ -470,9 +470,9 @@ export default {
 .audience-select { width: 100%; min-width: 0; padding: 8px 10px; color: var(--ink); background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-sm); }
 .showcase-rows { max-height: 310px; overflow-y: auto; }
 .showcase-row { cursor: pointer; }
-.showcase-row input { width: 17px; height: 17px; accent-color: var(--amber); flex-shrink: 0; }
+.showcase-row input { width: 17px; height: 17px; accent-color: var(--accent); flex-shrink: 0; }
 .showcase-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.badge { font-size: 10px; line-height: 1; padding: 4px 7px; border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-2); background: var(--panel); }
+.badge { font-size: 11.5px; line-height: 1; padding: 4px 7px; border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-2); background: var(--panel); }
 .st-pending { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
 .st-active, .st-approved { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: var(--ok-dim); }
 .st-rejected, .st-disabled, .st-failed { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); background: var(--bad-dim); }
