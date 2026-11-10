@@ -99,6 +99,60 @@ PROFILE_DECISIONS = {
 }
 
 
+#: A per-subproblem result directory as Step 5 names it (``problem1``,
+#: ``problem4``, optionally a suffix such as ``problem2a``).
+SUBPROBLEM_RESULT_DIR = re.compile(r"problem\d+[a-z0-9_-]*")
+
+
+def declared_result_path_issues(
+    registry: dict[str, object] | None, contract: dict[str, object] | None
+) -> list[str]:
+    """Declared solve outputs outside the directories Step 5 writes (F1).
+
+    Step 4 declares in ``claim_registry.json`` and ``quality_contract.json``
+    where each subproblem's solve output will be; Step 5 writes it to
+    ``results/<slug>/`` with the slug ``problem<N>``.  Acceptance A declared
+    ``results/qN/values.json``: the model profile only checked the schema, so
+    the mismatch surfaced after the full solve as ``PERMANENT_CLAIM_BINDING``.
+    Only files the ownership registry gives the solve (Stage 4) inside a
+    subdirectory of ``results/`` are checked; top-level files such as
+    ``results/canonical_results.json`` and sensitivity outputs are not.
+    """
+
+    from ..artifact_ownership import normalize_artifact_path
+    from ..artifact_policy import artifact_policy_owner_stage
+
+    paths: set[str] = set()
+    if isinstance(registry, dict):
+        for section in ("claims", "delivery_requirements"):
+            for claim in registry.get(section) or []:
+                for artifact in (claim.get("artifacts") or []) if isinstance(claim, dict) else []:
+                    if isinstance(artifact, dict) and isinstance(artifact.get("path"), str):
+                        paths.add(artifact["path"])
+    if isinstance(contract, dict):
+        for check in contract.get("competitiveness_checks") or []:
+            if not isinstance(check, dict):
+                continue
+            for value in check.values():
+                if isinstance(value, dict) and isinstance(value.get("path"), str):
+                    paths.add(value["path"])
+    issues = []
+    for raw in sorted(paths):
+        path = normalize_artifact_path(raw)
+        parts = path.split("/")
+        if len(parts) < 3 or parts[0] != "results":
+            continue
+        if artifact_policy_owner_stage(path) != 4:
+            continue
+        if not SUBPROBLEM_RESULT_DIR.fullmatch(parts[1].lower()):
+            issues.append(path)
+    return issues
+
+
+#: The paper profile's advisory visual-gate report, under its profile root.
+PAPER_VISUAL_GATE_REPORT = "visual_gate.latest.json"
+
+
 @dataclass(frozen=True)
 class StageCheck:
     name: str
@@ -303,7 +357,7 @@ class IncrementalAuditService:
         if profile is AuditProfile.RESULTS:
             return self._results_checks(project, checkpoint_step)
         if profile is AuditProfile.PAPER:
-            return self._paper_checks(project)
+            return [*self._paper_checks(project), self._paper_visual_check(project)]
         raise ValueError(f"unsupported incremental audit profile: {profile.value}")
 
     def _model_checks(self, project: Path) -> list[StageCheck]:
@@ -372,6 +426,24 @@ class IncrementalAuditService:
                 registry_detail,
             )
         )
+        if registry_valid:
+            mismatched = declared_result_path_issues(
+                registry, contract if valid else None
+            )
+            checks.append(
+                StageCheck(
+                    "claim_result_paths",
+                    not mismatched,
+                    "hard",
+                    "declared per-subproblem results use results/problem<N>/"
+                    if not mismatched
+                    else (
+                        "Step 5 writes per-subproblem results to results/problem<N>/ "
+                        "(prompts/step5_full_solve.txt); declared elsewhere: "
+                        + ", ".join(mismatched)
+                    ),
+                )
+            )
         return checks
 
     def _results_checks(
@@ -557,6 +629,85 @@ class IncrementalAuditService:
             )
         )
         return checks
+
+    def _paper_visual_check(self, project: Path) -> StageCheck:
+        """Run the PDF visual gate early, as advice (acceptance A, item 6).
+
+        Until now only the final audit rendered the PDF, so 3pt figure text, a
+        blank page or content past the page edge surfaced after the content
+        freeze, when the one repair cycle could already be spent.  The paper
+        profile now runs the same gate on the PDF Step 9/10 compiled.
+
+        The check is ``advisory``: it never fails the profile, never writes a
+        ledger row (a v1 Stage 8 exit would block on any open MAJOR row), and is
+        not part of the final audit's shared paper suite.  Its report lives
+        with the profile records under ``.factory/audits/profiles/paper/``,
+        outside every tracked artifact root, so writing it reopens nothing.
+        The review Steps read it from there.
+        """
+
+        root = self._profile_root(project, AuditProfile.PAPER)
+        report = root / PAPER_VISUAL_GATE_REPORT
+        pdf = project / f"{project.name}_paper.pdf"
+        relative = str(report.relative_to(project))
+        if not pdf.is_file():
+            return StageCheck(
+                "visual_gate", False, "advisory",
+                f"no compiled {pdf.name}; the visual gate runs at the final audit",
+                "", 0, False, True,
+            )
+        from .service import FinalAuditService
+
+        args: list[str | Path] = [pdf, "--output", report]
+        tex_log = project / f"{project.name}_paper.log"
+        if tex_log.is_file():
+            args.extend(["--tex-log", tex_log])
+        try:
+            max_pages = FinalAuditService._configured_max_pages(project)
+        except ValueError:
+            max_pages = None
+        if max_pages is not None:
+            args.extend(["--max-pages", str(max_pages)])
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            report.unlink(missing_ok=True)
+            result = self.runner.python(
+                self.factory_root,
+                project,
+                "scripts/pdf_visual_gate.py",
+                args,
+                label="audit_paper_visual_gate",
+                timeout_seconds=600,
+                accepted=(0, 1, 2),
+                log_path=root / "visual_gate.latest.log",
+            )
+        except OSError as exc:
+            return StageCheck(
+                "visual_gate", False, "advisory", f"command error: {exc}",
+                "", 1, False, True,
+            )
+        try:
+            value = json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            value = None
+        if not isinstance(value, dict):
+            value = {}
+        status = value.get("status")
+        if status not in {"PASS", "FAIL"}:
+            error = value.get("error") or f"exit={result.returncode}"
+            return StageCheck(
+                "visual_gate", False, "advisory", f"no verdict: {error}",
+                relative if report.is_file() else "",
+                result.returncode, result.timed_out, True,
+            )
+        return StageCheck(
+            "visual_gate",
+            status == "PASS",
+            "advisory",
+            f"status={status} blocking={value.get('blocking_findings', 0)}",
+            relative,
+            result.returncode,
+        )
 
     def _command_checks(
         self,
@@ -861,6 +1012,7 @@ class IncrementalAuditService:
                 "scripts/verify_spec_impl.py",
                 "scripts/verify_quality_contract.py",
                 "scripts/quality_contract.py",
+                "scripts/pdf_visual_gate.py",
             ]
         oracle_root = self.factory_root / "scripts" / "domain_oracles"
         if oracle_root.is_dir():
@@ -994,8 +1146,10 @@ class IncrementalAuditService:
             )
             for check in checks
             # A check without a verdict says nothing about the project: its
-            # row keeps whatever the last verdict recorded.
+            # row keeps whatever the last verdict recorded.  Advisory checks
+            # never write a row.
             if not (check.timed_out or check.indeterminate)
+            and check.severity != "advisory"
         ]
         sync_incremental_findings(
             project / "audit_issue_ledger.md", findings

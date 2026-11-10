@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-11-10 — 视觉问题提前发现、按负责的 Step 返工；Step 4 就核对结果路径；重算不再把模型问题留给 Step 4（验收 A 改进清单第 1、2 项）
+
+验收 A 最后没能交付，直接原因是最终评审的视觉门禁报了 10 个 blocking 问题（3pt 图内文字、空白页、内容超出页面），而唯一的修复循环已经用掉。本次改动让这类问题在审稿环节就被发现和修复，并补上两处让运行卡死的合同缺口。
+
+- **视觉门禁提前到 Step 10（改进清单第 6 项）**：`paper` profile 新增 `visual_gate` 检查，对 Step 9/10 编译的 `<base>_paper.pdf` 运行与最终审核相同的 `pdf_visual_gate.py`。它是 `advisory` 级：不让 profile 失败，不写台账行（v1 的 Stage 8 出口会被任何未关闭的 MAJOR 行挡住），也不在最终审核共用的 `paper_checks` 里。报告写在 `.factory/audits/profiles/paper/visual_gate.latest.json`，不在任何受跟踪的产物根目录下，写入不会触发回退。没有 PDF 或门禁没给出结论时记为 indeterminate。
+  - v2 的 Step 11 提示（overlay）要求把每条 blocking 发现写成 Category `paper` 的 BLOCKING 审稿行，于是由 Stage 8 出口强制修复；v2 的 Step 12 提示在核对清单里要求重新编译后自查视觉门禁（报告写到 `$TMPDIR`，不进项目目录）。v1 提示不变。
+- **F19(b) 视觉问题按负责的 Step 返工**：新模块 `factory_core/audit/visual_routing.py` 把 blocking 发现分成“图”（`UNREADABLY_SMALL_TEXT`、`LOW_IMAGE_RESOLUTION`，经 ownership registry 解析为 `figures/**` 的负责 Step，即 Step 8）和“版面”（其余，归修订 Step）。v2 最终评审给出 `REOPEN_REVISION_TEXT` 且有图的问题时，审核在结果里附上 `visual_recompute_steps`；引擎（`_final_judge_figure_rework`）照阶段 4 的“重算后返回”做法：删掉 Step 8 和 Step 11 之后的检查点，保留 Step 9–11 的，游标放到 Step 7。于是先重跑 Step 8 重画图，再直接回到 Step 12，不重写论文初稿。`STEP_REOPENED` 记 `rework_rule=visual_figure`、`text_resume_after_step`、`recompute_steps`、`return_subtask`、`recompute_reasons`。只有版面问题、`REOPEN_REVISION_MODEL`、v1 项目都保持原来的退回目标。
+  - 返工提示：每条视觉发现后面注明在哪里修（图改绘图脚本，版面改 paper.tex）；视觉发现在内容类判退时也一并列出（原来只在路由改判时列出）；走图返工时说明先重跑 Step 8、中间步骤不重跑。
+- **F19(d) 审核产物按快照留档**：每次最终审核记录 attempt 时，把 `judge_outputs/` 下的 `visual_gate.json`、`decision_route.json`、`aggregate.json` 按内容哈希存到 `.factory/audits/<snapshot>/judge_outputs/<sha256>.<名字>.archive`，并为该 attempt 写一个 `<时间戳>.judge_outputs.json` 清单。副本用 `.archive` 后缀，避免 `cleanup_project_artifacts` 对 `.factory` 下 `*.json` 的引用扫描（上限 200 个文件，验收 A 已有 480 个，这是已有的问题）进一步变长。
+- **F19(a) 不改**：视觉门禁已判 FAIL 时仍调用三个评审角色，这样一次修复循环能同时拿到内容反馈；现在内容发现和视觉发现都会进入返工提示。
+- **F1 Step 4 就核对结果路径**：`model` profile 新增 hard 检查 `claim_result_paths`：`claim_registry.json` 的 artifacts 和 `quality_contract.json` 的 `competitiveness_checks` 里，ownership registry 交给求解（Stage 4）、又位于 `results/` 子目录下的文件，目录名必须是 Step 5 使用的 `problem<N>`（可带后缀）。验收 A 登记的是 `results/qN/`，要到完整求解之后才报 `PERMANENT_CLAIM_BINDING`；现在 Step 4 当场重做。v2 的 Step 5 提示（overlay）写明这些登记路径就是必须写出的文件。
+- **C4 重算不再把模型问题留给 Step 4**：v2 的审稿问题重算不重跑 Step 4，但返工提示允许写“属于哪一步、为什么本步骤不改”，于是 Step 5 把一条 `model` 类问题的建模决定留给了 Step 4，该行在唯一一次重算后仍未关闭，运行以 `PERMANENT_REVIEW_LOOP_EXHAUSTED` 失败。现在有 `model` 类问题时，重算的第一个 Step 负责作出决定并同步改代码和 `model.md`、`assumption_ledger.md`、`symbol_table.md`（文档修改是向前修复），不得以“属于 Step 4”为由不改；后面的 Step 核对该决定已体现在自己的产物里。每个重算的 Step 还要就地改写自己报告（`solve_log.md`、`sensitivity_report.md`、`evaluation.md`、`visualization_log.md`）里被推翻的陈述，不能只在末尾追加。
+- `factory_core/audit/service.py`、`incremental.py`、`engine.py` 属于评审所用的工厂代码（`evaluator_contract`），已有的评审要在新代码下重跑才能被覆盖交付（S1）。dirty 分类器身份不变（09693f563ba2）。v1 提示逐字节不变；v2 overlay 的每一项都仍在模板中恰好出现一次。
+- 测试：新增 `tests/test_acceptance_a_visual_and_contract_fixes.py`（19 例）。
+
 ## 2026-11-09 — v2 交付合同评估与 Step 16 采用同样的入口门禁规则，代码审查标记以台账为准（s16 验证发现 F23 补充、F24）
 
 6876743 下 Step 16 成功（rev 862 复用 `OVERRIDDEN` 验收和已发布的 release，rev 863 `PROJECT_COMPLETED`）。但 worker 随后写出的 `delivery_manifest.json` 状态是 `LEGACY_DELIVERED`，不是 `GATE2_OVERRIDE_DELIVERED`，于是报“completed project failed final delivery evaluation”，没有归档到 `complete/`。交付合同评估（`evaluate_modeling_project.evaluate`）有两项失败：

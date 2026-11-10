@@ -270,8 +270,35 @@ its Step-13 exit unchanged. Likewise, after the v2 final Judge reopens with `REO
 findings (from `judge_outputs/aggregate.json`, verdict-checked) to every re-run
 Step after the reopen target until the final Judge starts again. When the
 decision router overrode a PASS aggregate (`decision_route.json`), the block
-lists the paper role's blocking/major issues and the blocking findings of
-`judge_outputs/visual_gate.json` instead.
+lists the paper role's blocking/major issues instead. The blocking findings of
+`judge_outputs/visual_gate.json` are listed in both cases, each tagged with where
+it is fixed (`factory_core/audit/visual_routing.py`: figure findings --
+`UNREADABLY_SMALL_TEXT`, `LOW_IMAGE_RESOLUTION` -- belong to Step 8, the
+registry owner of `figures/**`; the rest to `paper.tex`). A v2
+`REOPEN_REVISION_TEXT` whose visual gate has blocking figure findings carries
+`visual_recompute_steps` from the audit. The engine (`_final_judge_figure_rework`)
+then drops the Step 8 checkpoint and every checkpoint after the reopen target,
+keeps Steps 9-11, sets the cursor to Step 7 and records
+`rework_rule=visual_figure` with `text_resume_after_step`, `recompute_steps`,
+`return_subtask` and `recompute_reasons`, so figures are redrawn and the revision
+runs next, without a new draft. Layout-only, model and v1 reopens keep their
+target. The three Judge roles are still called when the visual gate FAILs, so one
+repair cycle gets both kinds of findings. Each final-audit attempt archives
+`visual_gate.json`, `decision_route.json` and `aggregate.json` by content under
+`.factory/audits/<snapshot>/judge_outputs/` (`*.archive`) with an attempt sidecar
+`<stamp>.judge_outputs.json`.
+
+The Step 10 `paper` profile also runs the PDF visual gate on the PDF Step 9/10
+compiled, as an `advisory` check: it never fails the profile, writes no ledger
+row, and is not part of the final audit's shared `paper_checks`. Its report is
+`.factory/audits/profiles/paper/visual_gate.latest.json`. The v2 Step 11 overlay
+turns its blocking findings into `paper` BLOCKING review rows, so the Stage 8
+exit enforces them. The `model` profile's hard `claim_result_paths` check
+requires every declared solve output (Stage 4 by the ownership registry) inside a
+`results/` subdirectory to use the Step 5 slug `problem<N>`. In a v2 review
+recompute, the first recomputed Step decides `model` rows (Step 4 is never
+re-run), and every recomputed Step rewrites the stale statements in its own
+report.
 
 A semantic reopen (a Stage changing content an earlier Stage owns) is
 budgeted per classifier identity: an initiating Stage may rewind at most
