@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { Projects } from '../lib/api.js'
 import { buildProblemArchives, filterProblemArchives } from '../lib/problemArchives.js'
-import { needsHuman } from '../lib/projectState.js'
+import { isActiveRun, needsHuman } from '../lib/projectState.js'
 import { normalizeProjectStatus } from '../lib/contracts.js'
 
 const filterChips = [
@@ -38,23 +38,32 @@ export function createProjectStore({ projectsApi = Projects } = {}) {
 
   const needsYou = computed(() => projects.value.filter(needsHuman))
   const others = computed(() => projects.value.filter((p) => !needsHuman(p)))
-  const archives = computed(() => buildProblemArchives(others.value))
+  // Runs the scheduler is working on right now (needs-you runs are listed above them).
+  const running = computed(() => others.value.filter(isActiveRun))
+  // Browsing lists each run once: runs already shown under "needs you" or
+  // "running" stay out of the problem list.  Searching or filtering looks at
+  // every run, so a search never misses a run listed in a priority section.
+  const archives = computed(() => buildProblemArchives(others.value.filter((p) => !isActiveRun(p))))
   const filteredOthers = computed(() => {
     const q = query.value.trim().toLowerCase()
     return others.value.filter((p) => {
       if (q && !p.base_name.toLowerCase().includes(q)) return false
       if (statusFilter.value === 'all') return true
-      if (statusFilter.value === 'running') return p.is_running || p.status === 'running'
+      if (statusFilter.value === 'running') return isActiveRun(p)
       return p.status === statusFilter.value
     })
   })
-  const filteredArchives = computed(() => filterProblemArchives(archives.value, {
-    query: query.value,
-    statusFilter: statusFilter.value,
-  }))
+  const filteredArchives = computed(() => {
+    const searching = query.value.trim() !== '' || statusFilter.value !== 'all'
+    if (!searching) return archives.value
+    return filterProblemArchives(buildProblemArchives(projects.value), {
+      query: query.value,
+      statusFilter: statusFilter.value,
+    })
+  })
   const counts = computed(() => ({
     needs: needsYou.value.length,
-    running: projects.value.filter((p) => p.is_running || p.status === 'running').length,
+    running: projects.value.filter(isActiveRun).length,
     completed: projects.value.filter((p) => p.status === 'completed').length,
     total: projects.value.length,
     problems: buildProblemArchives(projects.value).length,
@@ -143,6 +152,7 @@ export function createProjectStore({ projectsApi = Projects } = {}) {
     filterChips,
     needsYou,
     others,
+    running,
     archives,
     filteredOthers,
     filteredArchives,

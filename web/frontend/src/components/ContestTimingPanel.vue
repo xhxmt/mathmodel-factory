@@ -41,6 +41,11 @@ export default {
 .timing-head, .mode-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .timing-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
 .risk-pill { padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; color: var(--ink-2); font-size: 11.5px; }
+/* Deadline risk stays scannable: amber when it needs attention, red when the
+   content freeze is at risk or past; a safe forecast keeps the neutral pill. */
+.risk-guarded .risk-pill, .risk-warning .risk-pill { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-line); }
+.risk-critical .risk-pill, .risk-expired .risk-pill { color: var(--bad); background: var(--bad-dim); border-color: var(--bad); }
+.risk-critical, .risk-expired { border-color: var(--bad); }
 .mode-row { margin-top: 10px; padding: 9px 10px; border-radius: var(--r-sm); background: var(--panel-2); }
 .mode-row strong { font-size: 12px; }
 .mode-row span { color: var(--ink-2); font-size: 11px; text-align: right; }

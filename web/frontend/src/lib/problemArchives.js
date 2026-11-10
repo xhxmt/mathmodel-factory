@@ -1,3 +1,5 @@
+import { isActiveRun } from './projectState.js'
+
 function runTimestamp(project) {
   const raw = project?.last_updated
   if (raw === undefined || raw === null || raw === '') return 0
@@ -16,7 +18,7 @@ function archiveTitle(project) {
 
 function matchesStatus(project, filter) {
   if (!filter || filter === 'all') return true
-  if (filter === 'running') return Boolean(project?.is_running) || project?.status === 'running'
+  if (filter === 'running') return isActiveRun(project || {})
   return project?.status === filter
 }
 
@@ -43,7 +45,7 @@ export function buildProblemArchives(projects) {
         latest,
         run_count: runs.length,
         completed_count: runs.filter((run) => run.status === 'completed').length,
-        running_count: runs.filter((run) => run.is_running || run.status === 'running').length,
+        running_count: runs.filter((run) => isActiveRun(run)).length,
         needs_attention_count: runs.filter((run) => run.consultation_pending || run.selection_pending).length,
       }
     })

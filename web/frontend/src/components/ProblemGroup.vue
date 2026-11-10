@@ -1,6 +1,6 @@
 <template>
   <div class="group" :class="{ open }">
-    <div class="head" role="button" tabindex="0" :aria-expanded="open ? 'true' : 'false'" @click="open = !open" @keydown.enter.self="open = !open">
+    <div class="head" role="button" tabindex="0" :aria-expanded="open ? 'true' : 'false'" @click="open = !open" @keydown.enter.self="open = !open" @keydown.space.self.prevent="open = !open">
       <Icon name="chevron-right" :size="14" class="caret" />
       <div class="main">
         <div class="name">{{ archive.title }}</div>

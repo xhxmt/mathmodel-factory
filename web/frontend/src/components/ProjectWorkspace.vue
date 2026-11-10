@@ -167,7 +167,17 @@
             :diagnostics="diagnostics"
             @action="onDiagnosticsAction"
           />
-          <div v-else-if="project.evidence_validity !== 'INVALID' && !project.workflow_error" class="calm panel">
+          <div v-else-if="project.evidence_validity === 'INVALID' || project.workflow_error" class="invalid panel">
+            <div class="invalid-head">
+              <Icon name="alert-triangle" :size="16" />
+              <span>{{ project.workflow_error === 'RUNNER_EXIT_UNVERIFIED' ? '原运行进程已失联，子进程退出状态尚未确认，请先核对进程归属。' : project.evidence_validity === 'INVALID' ? '当前证据已失效，需要重新核验后才能确认审查结论与交付许可。' : project.reason_summary || '本次执行遇到错误，诊断接口暂未给出具体原因。' }}</span>
+            </div>
+            <dl v-if="project.workflow_error || project.evidence_errors?.length">
+              <div v-if="project.workflow_error"><dt>错误代码</dt><dd class="mono">{{ project.workflow_error }}</dd></div>
+              <div v-for="error in project.evidence_errors" :key="error"><dt>证据问题</dt><dd>{{ error }}</dd></div>
+            </dl>
+          </div>
+          <div v-else class="calm panel">
             <Icon name="check-circle" :size="16" />当前没有阻塞运行的问题
           </div>
         </section>
@@ -533,9 +543,11 @@ export default {
     // Earlier names (plan, evidence, delivery, diagnostics) still resolve.
     watch(() => route.query.tab, (tab) => {
       if (typeof tab !== 'string' || !tab) return
-      const { tab: resolved } = resolveWorkspaceTab(tab)
+      const { tab: resolved, view } = resolveWorkspaceTab(tab)
       if (!tabs.value.some((available) => available.key === resolved)) return
-      if (resolved === activeTab.value) return
+      // An alias with a nested view (?tab=plan, ?tab=evidence) still selects
+      // its subsection when the grouped tab is already active.
+      if (resolved === activeTab.value && !view) return
       syncingTab = true
       goTo(tab)
       syncingTab = false
@@ -720,6 +732,13 @@ export default {
 .seg-b.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
 
 .calm { display: flex; align-items: center; gap: 8px; padding: 14px 16px; color: var(--ok); }
+.invalid { padding: 14px 16px; border-color: var(--bad); }
+.invalid-head { display: flex; align-items: flex-start; gap: 8px; color: var(--bad); }
+.invalid-head :deep(svg) { flex-shrink: 0; margin-top: 2px; }
+.invalid dl { margin-top: 10px; display: grid; gap: 6px; font-size: 12.5px; }
+.invalid dl div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; }
+.invalid dt { color: var(--ink-3); }
+.invalid dd { color: var(--ink-2); overflow-wrap: anywhere; }
 .quality .block { scroll-margin-top: 16px; }
 
 @media (max-width: 720px) {
