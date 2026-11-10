@@ -30,7 +30,7 @@
 
       --ink:       #1d1d1b;
       --ink-2:     #5b5a55;
-      --ink-3:     #8e8c85;
+      --ink-3:     #6b6964;
 
       --accent:      #2f5bd3;
       --accent-2:    #2448ad;
@@ -87,26 +87,11 @@
       color-scheme: light;
     }
 
-    /* 深色：跟随系统，或用户显式选择 */
-    @media (prefers-color-scheme: dark) {
-      :root:not([data-theme="light"]) {
-        --bg: #151515; --bg-2: #1b1b1b; --surface: #1c1c1c; --panel: #1c1c1c; --panel-2: #232323; --panel-3: #2b2b2b;
-        --line: #2c2c2b; --line-2: #3a3a38;
-        --ink: #ecebe7; --ink-2: #a9a7a1; --ink-3: #74726d;
-        --accent: #7c9cf5; --accent-2: #9db5fa; --accent-dim: #1f2740; --accent-line: #34437a; --accent-ink: #0f1424;
-        --amber: #f0b45a; --amber-2: #f6c67d; --amber-ink: #241500; --amber-dim: #33270f; --amber-line: #5c4518;
-        --ok: #5cc28c; --ok-dim: #16301f; --bad: #f07a7a; --err: #f07a7a; --bad-dim: #3a1d1d;
-        --paused: #8f8d87; --paused-dim: #262625;
-        --overlay: rgba(0, 0, 0, 0.55);
-        --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.3);
-        --shadow-lg: 0 2px 6px rgba(0,0,0,0.4), 0 18px 48px rgba(0,0,0,0.5);
-        color-scheme: dark;
-      }
-    }
+    /* 深色：<head> 里的主题脚本在首次绘制前把 data-theme 设为已保存的选择或系统偏好 */
     :root[data-theme="dark"] {
       --bg: #151515; --bg-2: #1b1b1b; --surface: #1c1c1c; --panel: #1c1c1c; --panel-2: #232323; --panel-3: #2b2b2b;
       --line: #2c2c2b; --line-2: #3a3a38;
-      --ink: #ecebe7; --ink-2: #a9a7a1; --ink-3: #74726d;
+      --ink: #ecebe7; --ink-2: #a9a7a1; --ink-3: #96948e;
       --accent: #7c9cf5; --accent-2: #9db5fa; --accent-dim: #1f2740; --accent-line: #34437a; --accent-ink: #0f1424;
       --amber: #f0b45a; --amber-2: #f6c67d; --amber-ink: #241500; --amber-dim: #33270f; --amber-line: #5c4518;
       --ok: #5cc28c; --ok-dim: #16301f; --bad: #f07a7a; --err: #f07a7a; --bad-dim: #3a1d1d;
@@ -268,6 +253,18 @@
       }
     }
   </style>
+  <script>
+    /* 主题：在样式生效、首次绘制之前确定 data-theme（已保存的选择优先，否则跟随系统），
+       避免先画默认配色再切换。src/composables/useTheme.js 之后接管并跟随系统变化。 */
+    (function () {
+      var theme = null;
+      try { theme = localStorage.getItem('pf_theme'); } catch (error) { /* storage 不可用 */ }
+      if (theme !== 'light' && theme !== 'dark') {
+        theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
   <script>
     /* 最坏情况的自救：浏览器仍持有旧 index.html，而它引用的入口 chunk 已被新
        部署替换 → 入口 404、整页空白（此时没有任何业务 JS 能运行）。

@@ -1,6 +1,7 @@
 // Theme: follow the system unless the user picked one; the choice is stored
-// per browser.  `data-theme` is only set for an explicit choice, so the CSS
-// `prefers-color-scheme` rule handles the default.
+// per browser.  `data-theme` always holds the resolved theme: a blocking
+// script in index.html sets it before the first paint, and this module keeps
+// it in sync with the user's choice and with system changes.
 import { ref } from 'vue'
 
 const KEY = 'pf_theme'
@@ -22,9 +23,8 @@ const theme = ref(choice.value || (media?.matches ? 'dark' : 'light'))
 
 function apply() {
   const root = document.documentElement
-  if (choice.value) root.setAttribute('data-theme', choice.value)
-  else root.removeAttribute('data-theme')
   theme.value = choice.value || (media?.matches ? 'dark' : 'light')
+  root.setAttribute('data-theme', theme.value)
 }
 media?.addEventListener?.('change', apply)
 apply()

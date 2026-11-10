@@ -24,7 +24,7 @@
           <div class="tools">
             <template v-if="isAuthenticated">
               <button class="btn btn-primary btn-sm" @click="openNew"><Icon :name="isAdmin ? 'plus' : 'send'" :size="14" /><span class="hide-sm">{{ isAdmin ? '新建项目' : '申请项目' }}</span></button>
-              <span class="conn" :class="{ off: !wsConnected }" :title="wsConnected ? '实时连接正常' : '实时连接断开，正在重连'"><span class="dot" :class="wsConnected ? 'ok' : 'bad'"></span></span>
+              <span class="conn" :class="{ off: !wsConnected }" role="status" :aria-label="wsConnected ? '实时连接正常' : '实时连接断开，正在重连'" :title="wsConnected ? '实时连接正常' : '实时连接断开，正在重连'"><span class="dot" :class="wsConnected ? 'ok' : 'bad'"></span></span>
               <button class="btn btn-icon btn-ghost palette-btn" @click="showPalette = true" title="命令面板 (⌘K)"><Icon name="command" :size="16" /></button>
               <button class="btn btn-icon btn-ghost" @click="showRequests = true" title="项目申请"><Icon name="inbox" :size="16" /></button>
               <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showModels = true" title="模型管理"><Icon name="cpu" :size="16" /></button>
@@ -68,7 +68,7 @@
 
         <section class="section">
           <div class="s-bar">
-            <h2 class="s-title">全部题目<span class="count">{{ archives.length }}</span></h2>
+            <h2 class="s-title">全部题目<span class="count">{{ filteredArchives.length }}</span></h2>
             <div class="seg" role="tablist" aria-label="按状态筛选">
               <button v-for="f in filterChips" :key="f.key" role="tab" :aria-selected="statusFilter === f.key ? 'true' : 'false'" class="seg-b" :class="{ on: statusFilter === f.key }" @click="statusFilter = f.key">{{ f.label }}</button>
             </div>
@@ -82,6 +82,7 @@
               <ProjectRow v-else :project="archive.latest" @open="openProject" @action="onAction" />
             </template>
           </div>
+          <p v-else-if="projects.length && !query && statusFilter === 'all'" class="rest-note">其余运行都列在上面。</p>
           <div v-else class="empty panel">
             <Icon name="inbox" :size="26" />
             <p>{{ query || statusFilter !== 'all' ? '没有匹配的项目' : '还没有项目' }}</p>
@@ -215,6 +216,7 @@ export default {
       filterChips,
       needsYou,
       others,
+      running,
       archives,
       filteredOthers,
       filteredArchives,
@@ -228,10 +230,6 @@ export default {
       resetProjects,
     } = useProjects()
     const { wsConnected, connect, close } = useRealtime()
-    // Runs the scheduler is working on right now (needs-you runs are listed above).
-    const running = computed(() => others.value.filter((p) => (
-      p.is_running || ['running', 'retrying', 'archiving'].includes(p.execution_state || p.status)
-    )))
 
     const showNew = ref(false)
     const showPalette = ref(false)
@@ -528,6 +526,7 @@ export default {
 .page { width: 100%; max-width: var(--content-w); margin: 0 auto; padding: 28px 24px 64px; }
 .page-head { margin-bottom: 22px; }
 .page-head h1 { font-size: 22px; }
+.rest-note { color: var(--ink-3); font-size: 13px; padding: 4px 2px; }
 .summary { display: flex; flex-wrap: wrap; gap: 4px 0; margin-top: 4px; color: var(--ink-2); font-size: 13.5px; }
 .summary span + span::before { content: '·'; margin: 0 8px; color: var(--ink-3); }
 .s-warn { color: var(--amber); font-weight: 500; }

@@ -507,11 +507,25 @@ assert.equal(archives[0].running_count, 1)
 assert.deepEqual(filterProblemArchives(archives, { query: 'a_old' }).map((item) => item.key), ['sha256:a'])
 assert.deepEqual(filterProblemArchives(archives, { statusFilter: 'running' }).map((item) => item.key), ['sha256:a'])
 
+// One running predicate: retrying and archiving runs count as running everywhere.
+const retrying = buildProblemArchives([{ base_name: 'c', problem_key: 'sha256:c', status: 'retrying', execution_state: 'retrying' }])
+assert.equal(retrying[0].running_count, 1)
+assert.equal(filterProblemArchives(retrying, { statusFilter: 'running' }).length, 1)
+
 const store = createProjectStore({ projectsApi: { list: async () => runs } })
 await store.fetchProjects()
+// Browsing lists each run once: the running a_new is under "running", not in its problem group.
+assert.deepEqual(store.running.value.map((p) => p.base_name), ['a_new'])
 assert.equal(store.archives.value.length, 2)
-assert.equal(store.filteredArchives.value[0].run_count, 2)
+assert.deepEqual(store.filteredArchives.value[0].runs.map((p) => p.base_name), ['a_old'])
 assert.equal(store.counts.value.problems, 2)
+assert.equal(store.counts.value.running, 1)
+// Searching or filtering looks at every run, so the running one is still found.
+store.query.value = 'a_new'
+assert.deepEqual(store.filteredArchives.value.map((item) => item.run_count), [2])
+store.query.value = ''
+store.statusFilter.value = 'running'
+assert.deepEqual(store.filteredArchives.value.map((item) => item.key), ['sha256:a'])
 """
     )
 

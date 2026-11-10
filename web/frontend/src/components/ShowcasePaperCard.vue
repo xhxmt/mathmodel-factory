@@ -1,16 +1,13 @@
 <template>
   <div
     class="paper-row"
-    role="button"
-    tabindex="0"
     @click="$emit('open', paper)"
-    @keydown.enter.self="$emit('open', paper)"
   >
     <div class="mark"><Icon name="file-text" :size="16" /></div>
-    <div class="main">
-      <div class="title">{{ paper.title }}</div>
-      <div class="sub">{{ paper.collection }}<span class="sep">·</span><span class="mono">{{ paper.base_name }}</span></div>
-    </div>
+    <button type="button" class="main" @click.stop="$emit('open', paper)">
+      <span class="title">{{ paper.title }}</span>
+      <span class="sub">{{ paper.collection }}<span class="sep">·</span><span class="mono">{{ paper.base_name }}</span></span>
+    </button>
     <span class="meta tnum">{{ rel(paper.updated_at) }}</span>
     <span class="meta tnum">{{ bytes(paper.size_bytes) }}</span>
     <div class="actions" @click.stop>
@@ -67,9 +64,20 @@ export default {
   display: flex; align-items: center; justify-content: center;
   background: var(--accent-dim); color: var(--accent);
 }
-.main { min-width: 0; }
-.title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sub { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.title { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { display: block; font-size: 12.5px; color: var(--ink-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sep { margin: 0 6px; }
 .meta { font-size: 12px; color: var(--ink-3); text-align: right; white-space: nowrap; }
 .actions { display: flex; gap: 4px; justify-content: flex-end; }

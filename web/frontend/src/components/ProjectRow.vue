@@ -2,20 +2,17 @@
   <div
     class="row"
     :class="['tone-' + (tone || 'none'), { nested, attention: awaiting }]"
-    role="button"
-    tabindex="0"
     @click="$emit('open', project)"
-    @keydown.enter.self="$emit('open', project)"
   >
     <span class="dot" :class="tone"></span>
 
-    <div class="main">
-      <div class="title">
+    <button type="button" class="main" @click.stop="$emit('open', project)">
+      <span class="title">
         <span class="name">{{ nested ? project.base_name : (project.problem_title || project.base_name) }}</span>
         <span v-if="!nested && project.problem_title" class="run mono">{{ project.base_name }}</span>
-      </div>
-      <div class="sub" :class="{ warn: awaiting, bad: failed }">{{ hint }}</div>
-    </div>
+      </span>
+      <span class="sub" :class="{ warn: awaiting, bad: failed }">{{ hint }}</span>
+    </button>
 
     <div class="progress" :title="`进度 ${progress}%`">
       <div class="bar"><span :style="{ width: progress + '%' }" :class="tone"></span></div>
@@ -92,12 +89,23 @@ export default {
 .row.nested { padding-left: 30px; background: var(--bg); }
 .row.nested:hover { background: var(--panel-2); }
 
-.main { min-width: 0; }
+.main {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .name { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nested .name { font-family: var(--mono); font-size: 13px; font-weight: 400; }
 .run { color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; }
-.sub { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { display: block; font-size: 12.5px; color: var(--ink-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub.warn { color: var(--amber); }
 .sub.bad { color: var(--bad); }
 
