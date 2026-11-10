@@ -36,6 +36,12 @@ def claude_executable() -> str:
 def executor_blocker() -> str:
     if os.getenv("CODEX_ONLY", "0").lower() in {"1", "true", "yes", "on"}:
         return "当前运行设置了 CODEX_ONLY，无法执行已选择的 Claude 联合建模"
+    from .model_allowlist import ALLOWLIST_ENV, model_allowed
+
+    if not model_allowed(MODEL):
+        # Joint modeling pins its model and forbids fallback, so a run
+        # restricted to other models must not start it.
+        return f"当前运行设置了 {ALLOWLIST_ENV}，联合建模固定使用的 {MODEL} 不在允许列表中"
     try:
         claude_executable()
     except JointModelingError as exc:

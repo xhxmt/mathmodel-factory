@@ -1337,9 +1337,23 @@ class JudgeStep:
         if expected["image_inputs"]:
             if result.metadata.get("image_inputs") != expected["image_inputs"]:
                 raise judge_batch.JudgeBatchError("backend did not deliver the required page images")
+            transport = result.metadata.get("image_transport")
+            if transport is not None:
+                from ..adapters.models.backends import claude_image_transport_suffix_sha256
+
+                # The Claude CLI delivers pages through a prompt suffix; it is
+                # fixed by the image list, so recompute and bind it.
+                expected_suffix = claude_image_transport_suffix_sha256(
+                    project, [image["path"] for image in expected["image_inputs"]]
+                )
+                if result.metadata.get("image_transport_suffix_sha256") != expected_suffix:
+                    raise judge_batch.JudgeBatchError("image transport suffix does not match the page list")
             from scripts.judgment_receipt import _atomic_write_json
             metadata = json.loads(metadata_path.read_text())
             metadata["image_inputs"] = result.metadata["image_inputs"]
+            if transport is not None:
+                metadata["image_transport"] = transport
+                metadata["image_transport_suffix_sha256"] = result.metadata["image_transport_suffix_sha256"]
             _atomic_write_json(metadata_path, metadata)
         # Freeze only after the actual annotation succeeded and every input is
         # still identical. A failed/partial call leaves an uncommitted archive.

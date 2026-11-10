@@ -169,17 +169,101 @@ class CodexCliBackend(_ProcessModelBackend):
         return self._run(configured, argv, "codex")
 
 
+CLAUDE_IMAGE_TRANSPORT = "claude-read-tool-v1"
+
+
+def _claude_image_instructions(paths: list[str]) -> str:
+    listing = "\n".join(f"- {path}" for path in paths)
+    return (
+        "\n\n[必需的图片输入]\n"
+        f"本任务附带 {len(paths)} 个图片文件，它们是评审证据的一部分。"
+        "开始之前，必须用 Read 工具逐个打开下面每一个文件（使用给出的绝对路径），"
+        "不得跳过或只看其中一部分：\n"
+        f"{listing}\n"
+    )
+
+
+def claude_image_transport_suffix_sha256(project_dir: Path, image_files) -> str:
+    """The hash of the prompt suffix the Claude CLI receives for these images."""
+
+    paths = [str((Path(project_dir) / image).resolve()) for image in image_files]
+    return hashlib.sha256(_claude_image_instructions(paths).encode("utf-8")).hexdigest()
+
+
+def _claude_read_paths(log: Path) -> set[str]:
+    """Absolute paths the Claude CLI opened with its Read tool (stream-json log)."""
+
+    read: set[str] = set()
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return read
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name") == "Read"
+                and isinstance(block.get("input"), dict)
+            ):
+                path = block["input"].get("file_path")
+                if isinstance(path, str):
+                    read.add(str(Path(path).resolve()))
+    return read
+
+
 class ClaudeCliBackend(_ProcessModelBackend):
     name = "claude"
 
     def execute(self, request: ModelRequest) -> ExecutionResult:
-        if request.image_files:
-            return ExecutionResult.failed("PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
-                reason="Claude CLI adapter has no verified image transport")
-        argv = ["claude", "-p", request.prompt, "--dangerously-skip-permissions", "--effort", request.effort or "max"]
+        effort = request.effort or "max"
+        if not request.image_files:
+            argv = ["claude", "-p", request.prompt, "--dangerously-skip-permissions", "--effort", effort]
+            if request.model:
+                argv.extend(["--model", request.model])
+            return self._run(request, argv, "claude")
+        # Image transport: the Claude CLI has no attachment flag, so the
+        # prompt names each image and requires the model to open it with its
+        # Read tool (which renders images).  Delivery is then verified from
+        # the stream-json log: an image counts as delivered only when a Read
+        # tool call opened it.  The input observer still sees the original
+        # prompt; the transport suffix is bound by hash in the metadata.
+        paths = [str((request.project_dir / image).resolve()) for image in request.image_files]
+        suffix = _claude_image_instructions(paths)
+        argv = [
+            "claude", "-p", request.prompt + suffix, "--dangerously-skip-permissions",
+            "--effort", effort, "--output-format", "stream-json", "--verbose",
+        ]
         if request.model:
             argv.extend(["--model", request.model])
-        return self._run(request, argv, "claude")
+        result = self._run(request, argv, "claude")
+        if result.returncode != 0:
+            return result
+        metadata = dict(result.metadata)
+        log = request.project_dir / str(metadata.get("log", ""))
+        missing = sorted(set(paths) - _claude_read_paths(log))
+        metadata.update(
+            image_transport=CLAUDE_IMAGE_TRANSPORT,
+            image_transport_suffix_sha256=hashlib.sha256(suffix.encode("utf-8")).hexdigest(),
+        )
+        if missing:
+            # Not delivered: a backend failure (retried as infrastructure),
+            # never a run that claims the model saw the pages.
+            metadata.pop("image_inputs", None)
+            return ExecutionResult.failed(
+                "TRANSIENT_MODEL_BACKEND",
+                returncode=2,
+                reason="image_transport_unverified",
+                images_not_read=[str(Path(path).relative_to(request.project_dir.resolve())) for path in missing],
+                **{key: value for key, value in metadata.items() if key != "reason"},
+            )
+        return ExecutionResult.succeeded(**metadata)
 
 
 class DshBackend(_ProcessModelBackend):
