@@ -37,7 +37,9 @@ Modeling Factory 支持逐步选择模型(per-step model selection),即为不同
 **内置模型**(builtin=true):
 - `claude`: 本地 Claude CLI(默认)
 - `codex-gpt55`: Codex CLI 调用 GPT-5.5
-- `agy-gemini`: Antigravity SDK 调用 Gemini 3.1 Pro
+- `agy-gemini`: Antigravity CLI（`agy -p`）调用 Gemini 3.1 Pro
+
+`agy` 后端用 `agy` 命令行已登录的账号（不需要 `GEMINI_API_KEY`），`model` 填 `agy models` 列出的 id（如 `gemini-4-carbon-high`，推理强度已含在 id 中；`effort` 留空，填写时只接受 low/medium/high/xhigh/max）。`agy` 不在 PATH 上时依次查 `AGY_CLI`、`~/.local/bin/agy`。preflight 用 `agy models` 核对模型是否对该账号可用（不消耗额度）。该后端不接收图片，不能分给需要看 PDF 页面的评审角色。
 
 **外部 API 模型**(builtin=false):
 - `deepseek-chat` / `deepseek-reasoner`: DeepSeek API(适合评委打分)

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-11 — agy 后端改为直接调用 Antigravity CLI，可用 Gemini 4 写作
+
+`agy` 后端原来经 `scripts/agy_run.py` 调用 `google-antigravity` Python SDK，只认 `GEMINI_API_KEY`，而本机 `.venv` 没装 SDK，CLI 登录的账号也用不上。CLI 1.5.5 已有完整的无交互模式，现在 `AgyBackend` 直接运行 `agy -p`。
+
+- 命令：`agy --model <id> [--effort <e>] --dangerously-skip-permissions --disable-slash-commands --add-dir <项目> --add-dir <factory> --output-format stream-json --print-timeout <超时-30s> -p <prompt>`。`-p` 必须带值（CLI 不读普通 stdin prompt），历史 prompt 最大约 26 KB，远低于单个参数 128 KiB 的上限；超过 100 KB 的 prompt 留在 `logs/` 下的文件里，参数只要求 agent 读取该文件（`prompt_transport=prompt-file`）。
+- 成功以 stream-json 的 `result` 事件为准：退出码 0 但没有 `result`、`status` 不是 `SUCCESS` 或带 `finished_reason` 的，记 `TRANSIENT_MODEL_BACKEND`；`finished_reason=print_timeout` 记 `TRANSIENT_TIMEOUT`。元数据记录 `agy_model`、`agy_status`、`agy_conversation_id`、`agy_usage` 等。请求带 `final_response_file` 时写入 `result.response`。
+- 不需要 API key：用 `agy` 已登录的账号。CLI 依次从 `AGY_CLI`、PATH、`~/.local/bin/agy` 查找，找不到记 `PERMANENT_BACKEND_UNAVAILABLE`。仍拒绝图片输入。
+- preflight 的 agy 分支检查 CLI，并用 `agy models`（不消耗额度）核对模型 id 是否对该账号可用：在列表里 PASS，不在 FAIL，拿不到列表 UNKNOWN；不再要求 `GEMINI_API_KEY`。
+- 内置默认：dispatcher 的 `agy` 改为 `gemini-4-carbon-high`；Web 内置的 `agy-gemini` 改为 `gemini-3.1-pro-high`（`gemini-3.1-pro-preview` 已不在 CLI 的模型列表中）。
+- `scripts/agy_run.py` 与 `google-antigravity` 依赖不再被调用，暂时保留。
+- 测试：新增 `tests/test_agy_backend.py`（11 例）。
+
 ## 2026-11-10 — 视觉问题提前发现、按负责的 Step 返工；Step 4 就核对结果路径；重算不再把模型问题留给 Step 4（验收 A 改进清单第 1、2 项）
 
 验收 A 最后没能交付，直接原因是最终评审的视觉门禁报了 10 个 blocking 问题（3pt 图内文字、空白页、内容超出页面），而唯一的修复循环已经用掉。本次改动让这类问题在审稿环节就被发现和修复，并补上两处让运行卡死的合同缺口。
