@@ -66,6 +66,7 @@
 - [evaluation/calibration_report.md](evaluation/calibration_report.md)：评委校准报告。
 - [evaluation/EXPERIMENTS_STATUS.md](evaluation/EXPERIMENTS_STATUS.md)：实验状态与后续任务。
 - [experiments/README.md](experiments/README.md)：消融实验运行说明。
+- [docs/verification/2026-08-19-run4/final_validation_20260819.md](docs/verification/2026-08-19-run4/final_validation_20260819.md)：Run4 下游技术流程验证的历史快照与终态入口。
 - [docs/verification/](docs/verification/)：历史验证报告。
 
 ## Web、云服务与部署
@@ -104,4 +105,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料；根目录 `work/` 为本地临时工作目录，`.pytest_cache/` 为可再生测试缓存，均由 `.gitignore` 管理。
 
-**最后更新：2026-09-15**
+**最后更新：2026-11-11**
