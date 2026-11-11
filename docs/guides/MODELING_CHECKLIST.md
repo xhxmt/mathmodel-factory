@@ -2,7 +2,7 @@
 
 > 用途：Step 4 模型构建 / `modeling_scope_gate.md` 的口径自检。本文件**只讲方法论**，
 > **不含任何具体题目的答案数值或范文基准**——这是刻意的：运行时 agent 参考本题范文答案
-> 等于开卷考试，会污染 benchmark（见 `docs/RERUN0706_REPAIR_PLAN.md` §L5 / §E）。
+> 等于开卷考试，会污染 benchmark（见 `docs/archive/RERUN0706_REPAIR_PLAN.md` §L5 / §E）。
 > 需要用范文答案做校准是**赛后离线评估**的事，在 `evaluation/answer_keys/` 下进行，
 > 不在运行时。以下每条都能从**题面本身**推导，无需外部答案。
 
