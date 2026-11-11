@@ -310,11 +310,14 @@ python3 experiments/compare_ablations.py \
 # 在指定题目上运行单个消融（自动生成项目、运行、评估）
 ./experiments/ablation_no_judge.sh --problem B --reps 3
 
-# 运行现有的三个消融并生成对比报告
+# 运行现有的三个消融（每个只生成并评估自己的变体，加 --baseline 生成对照组）
 ./experiments/test_ablations.sh  # 先验证开关生效性（秒级）
-./experiments/ablation_no_judge.sh --problem B --reps 1
+./experiments/ablation_no_judge.sh --problem B --reps 1 --baseline
 ./experiments/ablation_no_innovation_protect.sh --problem B --reps 1
 ./experiments/ablation_no_consultation.sh --problem B --reps 1
+
+# 对比报告需要另外生成：基线 vs 各变体的分数差表
+python3 experiments/compare_ablations.py --baseline <基线项目> --variant <变体项目> ...
 ```
 
 详见：
