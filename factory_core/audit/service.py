@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +55,8 @@ _ROUTED_INFRASTRUCTURE_DECISIONS = {
 # and a hard role found the evidence insufficient (INDETERMINATE, which no
 # retry on the same evidence changes).  Transient Judge/packet/routing states
 # have no judgment and are retried, never overridden.
+#: Routing evidence archived per final-audit attempt (acceptance A, F19(d)).
+JUDGE_OUTPUT_ARCHIVE = ("visual_gate.json", "decision_route.json", "aggregate.json")
 _COMPLETED_JUDGMENT_ERROR_CLASSES = frozenset({"AUDIT_REPAIR_REQUIRED", "PERMANENT_FINAL_JUDGE"})
 _INDETERMINATE_JUDGMENT_ERROR_CLASSES = frozenset({"PERMANENT_JUDGE_EVIDENCE_INDETERMINATE"})
 _OVERRIDABLE_ERROR_CLASSES = (
@@ -616,6 +619,11 @@ class FinalAuditService:
                         else self.validator._gate2_resume(project, decision)
                     )
                 )
+                figure_rework = (
+                    self._figure_rework(project)
+                    if decision == "REOPEN_REVISION_TEXT" and resume_after is None
+                    else None
+                )
                 return self._failure(
                     project,
                     snapshot=snapshot,
@@ -625,7 +633,18 @@ class FinalAuditService:
                     returncode=0,
                     resume_after_step=resolved_resume,
                     judge_completed=judge_completed,
-                    evidence=judge_result.metadata,
+                    evidence={
+                        **judge_result.metadata,
+                        **({"visual_figure_rework": figure_rework} if figure_rework else {}),
+                    },
+                    extra_metadata=(
+                        {
+                            "visual_recompute_steps": figure_rework["steps"],
+                            "visual_recompute_codes": figure_rework["codes"],
+                        }
+                        if figure_rework and "steps" in figure_rework
+                        else None
+                    ),
                 )
         elif decision in _ROUTED_INFRASTRUCTURE_DECISIONS and not override:
             # The router found no judgeable result -- a visual gate that could
@@ -1202,6 +1221,47 @@ class FinalAuditService:
         )
         return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
+    @staticmethod
+    def _figure_rework(project: Path) -> dict[str, object] | None:
+        """Figure Steps a Stage catalog v2 text reopen recomputes first (F19(b)).
+
+        Only v2 has the recompute-and-return scheduling; a v1 text reopen keeps
+        resuming at the revision, whose figure-script edits rewind through the
+        ownership rule as before.  The version comes from a read-only snapshot:
+        analysis-only audits reach this branch and must not upgrade the schema
+        or change the journal mode of the live database.  An unreadable
+        database keeps the plain text reopen; when the visual gate had figure
+        findings, the returned record says the recompute was skipped and why
+        (it carries no ``steps``), so the evidence shows the lost route.
+        """
+
+        from ..stages import STAGE_CATALOG_VERSION_V2, catalog_for_version
+        from ..storage import SQLiteStateStore
+        from .visual_routing import (
+            blocking_findings,
+            figure_rework_plan,
+            finding_owner,
+            load_visual_gate,
+        )
+
+        report = load_visual_gate(project / "judge_outputs/visual_gate.json")
+        try:
+            version = SQLiteStateStore(project).read_stage_catalog_version()
+        except ValueError as exc:
+            codes = sorted(
+                {
+                    str(item.get("code"))
+                    for item in blocking_findings(report)
+                    if finding_owner(item.get("code")) == "figure"
+                }
+            )
+            if not codes:
+                return None
+            return {"skipped": "catalog_unreadable", "reason": str(exc), "codes": codes}
+        if version != STAGE_CATALOG_VERSION_V2:
+            return None
+        return figure_rework_plan(report, catalog_for_version(version))
+
     def _run_decision_router(self, project: Path) -> ExecutionResult | None:
         result = self.runner.python(
             self.factory_root,
@@ -1315,6 +1375,7 @@ class FinalAuditService:
         resume_after_step: int | None = None,
         judge_completed: bool = False,
         evidence: dict[str, object] | None = None,
+        extra_metadata: dict[str, object] | None = None,
     ) -> AuditOutcome:
         failure_evidence = dict(evidence or {})
         if snapshot is None:
@@ -1365,6 +1426,7 @@ class FinalAuditService:
         }
         if resume_after_step is not None:
             metadata["resume_after_step"] = resume_after_step
+            metadata.update(extra_metadata or {})
             execution = ExecutionResult.succeeded(**metadata)
         else:
             execution = ExecutionResult.failed(
@@ -1430,6 +1492,7 @@ class FinalAuditService:
         )
         payload = record.to_dict()
         _atomic_write_json(attempt, payload)
+        self._archive_judge_outputs(project, audit_dir, attempt)
         if not record.delivery_allowed:
             _atomic_write_json(audit_dir / "analysis_latest.json", payload)
             _atomic_write_json(
@@ -1447,6 +1510,45 @@ class FinalAuditService:
         ):
             _atomic_write_json(global_latest, payload)
         return record
+
+    @classmethod
+    def _archive_judge_outputs(
+        cls, project: Path, audit_dir: Path, attempt: Path
+    ) -> None:
+        """Keep the routing evidence each attempt saw (acceptance A, F19(d)).
+
+        ``judge_outputs/`` holds one current copy that every audit overwrites,
+        so the visual gate of an earlier final Judge could not be recovered.
+        Each file is stored once by content under the snapshot and the attempt
+        gets a sidecar naming the versions present when it was recorded.  The
+        copies end in ``.archive`` so receipt-reference scans of ``*.json``
+        under ``.factory`` (``cleanup_project_artifacts``) do not grow with them.  A
+        file this audit did not reach is the previous audit's copy; the sidecar
+        records its hash, not a claim that this attempt produced it.
+        """
+
+        archive = audit_dir / "judge_outputs"
+        listed: dict[str, object] = {}
+        for name in JUDGE_OUTPUT_ARCHIVE:
+            source = project / "judge_outputs" / name
+            if source.is_symlink() or not source.is_file():
+                continue
+            digest = cls._sha256_file(source)
+            target = archive / f"{digest}.{name}.archive"
+            if not target.is_file():
+                archive.mkdir(parents=True, exist_ok=True)
+                temporary = archive / f".{target.name}.tmp"
+                shutil.copyfile(source, temporary)
+                os.replace(temporary, target)
+            listed[name] = {
+                "sha256": digest,
+                "archived": str(target.relative_to(project)),
+            }
+        if listed:
+            _atomic_write_json(
+                attempt.with_name(attempt.stem + ".judge_outputs.json"),
+                {"schema_version": "final-audit-judge-outputs-v1", "files": listed},
+            )
 
     @staticmethod
     def _accepted_latest_for_snapshot(

@@ -24,12 +24,53 @@ V2_REVIEW_REWORK_LINE = (
     "没有该段，本步骤不是因审稿问题而重跑。"
 )
 
+V2_STEP5_SLUG_LINE = (
+    "`results/<subproblem>/` 的目录名用对应的 ascii slug（如 `problem1`、`problem2`、`problem4`），"
+    "slug 写法记录在 `solve_log.md` 顶部。"
+)
+# Acceptance A F1: Step 4 declared results/qN/, Step 5 chose problemN/.  The
+# model profile now requires results/problem<N>/ (claim_result_paths); Step 5
+# must write exactly the paths Step 4 declared.
+V2_STEP5_DECLARED_PATHS = (
+    "Step 4 已在 `claim_registry.json` 的 artifacts 和 `quality_contract.json` 的 competitiveness_checks 里"
+    "登记了每个子问题结果的路径（`results/problem<N>/...`）；这些路径就是本步骤必须写出的文件，"
+    "目录名和文件名都以登记为准，不要另起名字。确需改动时，同步改这两个文件并在 `solve_log.md` 写明原因。"
+)
+V2_STEP11_LEDGER_LINE = (
+    "- 读取 `audit_issue_ledger.md` 的 `## Incremental audit findings`。可以在审稿意见中引用 `AUDIT-PAPER-*`，"
+    "但这些行由机器审计维护，禁止手工改状态。"
+)
+# The paper profile runs the PDF visual gate early, as advice (acceptance A,
+# item 6).  In v2 the review is what turns it into rows the Stage 8 exit
+# enforces, so the defects are fixed in the review loop instead of surfacing
+# only at the final Judge.
+V2_VISUAL_GATE_REVIEW_LINE = (
+    "- PDF 视觉门禁（提前运行）：Step 10 的 `paper` 审计已对当时编译的 `<项目名>_paper.pdf` 运行了与最终审计"
+    "相同的视觉门禁，报告在 `.factory/audits/profiles/paper/visual_gate.latest.json`（`latest.json` 中名为 "
+    "`visual_gate` 的检查）。若其 `status` 为 `FAIL`，每条 `severity` 为 `blocking` 的发现（如 3–4pt 的图内文字、"
+    "空白页、内容超出页面）都会让最终审计判退论文。逐条（同一张图或同一页的可合并）写成 BLOCKING issue 追加到台账，"
+    "Category 写 `paper`，Notes 写明 code、PDF 页码、对应的图或段落和改法：图的问题由 Step 12 改绘图脚本并重新生成图，"
+    "版面问题由 Step 12 改 paper.tex。不要因为它是机器检查就跳过：最终审计之后只有一次修复机会。"
+)
+V2_VISUAL_GATE_RECHECK_LINE = (
+    "- [ ] 若台账中有 PDF 视觉门禁问题：重新编译后运行 "
+    "`python3 ../../scripts/pdf_visual_gate.py <项目名>_paper.pdf --output \"${TMPDIR:-/tmp}/visual_gate_check.json\"`，"
+    "确认 `blocking_findings` 为 0 再把这些行改为 RESOLVED（报告不要写进项目目录：项目里的新 JSON 文件会被当成未登记产物）"
+)
+
 # The computation Step each template renders, for the review rework block.
 REVIEW_REWORK_TEMPLATES = {
     "step5_full_solve.txt": 5,
     "step6_sensitivity.txt": 6,
     "step7_model_eval.txt": 7,
     "step8_visualization.txt": 8,
+}
+# The narrative report each recomputed Step owns (STEPS.md outputs).
+REVIEW_REWORK_REPORTS = {
+    5: "`solve_log.md`",
+    6: "`sensitivity_report.md`",
+    7: "`evaluation.md`",
+    8: "`visualization_log.md`",
 }
 
 
@@ -81,13 +122,32 @@ def review_rework_block(project: Path, template: str) -> str:
         for issue in open_review_issues(project / "audit_issue_ledger.md", {"BLOCKING", "MAJOR"})
     }
     lines = []
+    model_issues = False
     for issue_id in ids:
         issue = current.get(issue_id)
         if issue is None:
             lines.append(f"- {issue_id}：台账中已不是 OPEN 的 BLOCKING/MAJOR 行，以台账为准。")
         else:
+            model_issues = model_issues or issue.category.strip().lower() == "model"
             lines.append(f"- {issue_id}（{issue.category}，{issue.severity}）：{issue.notes}")
-    steps = "、".join(str(item) for item in reopen.payload.get("recompute_steps") or [])
+    recomputed = [item for item in reopen.payload.get("recompute_steps") or [] if type(item) is int]
+    steps = "、".join(str(item) for item in recomputed)
+    first = min(recomputed) if recomputed else step
+    # Acceptance A C4: Step 5 left a `model` row's decision "to Step 4", which
+    # v2 never re-runs, so the row survived the one recompute and the run
+    # failed with PERMANENT_REVIEW_LOOP_EXHAUSTED.
+    model_rule = (
+        (
+            "Step 4 在这次重算中不会重跑，所以 Category 为 `model` 的问题（建模决策、方程、假设）由本步骤负责："
+            "在本步骤作出决定并落实到代码，同步改 `model.md`、`assumption_ledger.md`、`symbol_table.md`"
+            "（文档修改是向前修复，不会触发回退），不得以“属于 Step 4”为由不改。"
+            if step == first
+            else f"Step 4 在这次重算中不会重跑，Category 为 `model` 的问题由 Step {first} 作出决定；"
+            "本步骤确认该决定已体现在本步骤的产物中，没有体现的在本步骤补上。"
+        )
+        if model_issues
+        else ""
+    )
     return (
         "【审稿返工 — 本次运行的原因】\n"
         f"引擎因下列 Step 11 审稿问题重算 Step {steps}（事件 rev {reopen.revision}，"
@@ -95,6 +155,11 @@ def review_rework_block(project: Path, template: str) -> str:
         "逐条判断根因是否在本步骤的产物（代码、结果、图、报告）中：在的，必须在本步骤修复"
         "（改代码后重新运行、重新生成产物；求解作业照常经 `solver_submit.sh` 提交），"
         "并在本步骤的日志或报告中逐条写明改了什么、证据在哪；不在的，写明它属于哪一步、为什么本步骤不改。"
+        + model_rule
+        + "重算后，把本步骤自己的报告（"
+        + REVIEW_REWORK_REPORTS[step]
+        + "）里被这次重算推翻的陈述（“未完成”“待办”“前置条件”、旧数字）就地改写，不要只在末尾追加新段落："
+        "Step 12 复核时会把过时的陈述当成问题仍未解决。"
         "不要修改这些行的 Status，Step 12 会复核后更新。研究员备注若与这些问题无关，以本段为准。\n"
         + "\n".join(lines)
         + "\n\n"
@@ -121,6 +186,13 @@ JUDGE_FINDING_CHARS = 1500
 
 JUDGE_VISUAL_FINDINGS_MAX = 20
 
+# Where a visual-gate finding is fixed (``audit.visual_routing.finding_owner``).
+VISUAL_OWNER_HINTS = {
+    "figure": "——图的问题：在 Step 8 的绘图脚本里修（加大图内字号、提高分辨率）并重新生成图，"
+              "不要在 LaTeX 里缩放了事；若该页其实是被缩小的表格，就改 paper.tex",
+    "layout": "——版面问题：在 paper.tex 里修（分页、浮动体、长表、溢出），并重新编译确认",
+}
+
 
 def _json_file(path: Path) -> dict | None:
     import json
@@ -135,12 +207,10 @@ def _json_file(path: Path) -> dict | None:
 def _visual_findings(project: Path) -> list[str]:
     """Blocking PDF visual-gate findings, one line per finding (page, code)."""
 
-    report = _json_file(project / "judge_outputs" / "visual_gate.json")
-    if report is None or report.get("status") != "FAIL":
-        return []
+    from ..audit.visual_routing import blocking_findings, finding_owner
+
+    blocking = blocking_findings(_json_file(project / "judge_outputs" / "visual_gate.json"))
     lines: list[str] = []
-    blocking = [item for item in report.get("findings") or []
-                if isinstance(item, dict) and item.get("severity") == "blocking"]
     for item in blocking[:JUDGE_VISUAL_FINDINGS_MAX]:
         evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
         detail = "，".join(
@@ -155,6 +225,7 @@ def _visual_findings(project: Path) -> list[str]:
             + (f"，PDF 第 {page} 页" if page is not None else "")
             + f"] {item.get('message', '')}"
             + (f"（{detail}）" if detail else "")
+            + VISUAL_OWNER_HINTS[finding_owner(item.get("code"))]
         )
     if len(blocking) > JUDGE_VISUAL_FINDINGS_MAX:
         lines.append(f"- ……另有 {len(blocking) - JUDGE_VISUAL_FINDINGS_MAX} 条，"
@@ -209,8 +280,10 @@ def _judge_findings(project: Path, verdict: str) -> list[str] | None:
                 f"- [{name} {item.get('ref_id', '')}，{item.get('severity')}] {text}"
                 + (f"（论文引文：{quote}）" if quote else "")
             )
-    if routed:
-        lines.extend(_visual_findings(project))
+    # The visual gate ran in the same final audit, before the Judge: its
+    # blocking findings belong to the repair whether they decided the reopen
+    # (a routed PASS aggregate) or came with a content verdict.
+    lines.extend(_visual_findings(project))
     return lines
 
 
@@ -256,6 +329,13 @@ def judge_rework_block(project: Path, template: str) -> str:
     if type(target) is int and step <= target:
         return ""
     verdict = str(reopen.payload["final_decision"])
+    route = (
+        f"引擎因此先重跑 Step {'、'.join(str(item) for item in reopen.payload.get('recompute_steps') or [])}"
+        f"（PDF 视觉门禁发现了图的问题，图归该步骤负责），中间已完成的论文步骤不重跑，"
+        f"随后回到 Step {reopen.payload.get('text_resume_after_step')} 之后继续，"
+        if reopen.payload.get("rework_rule") == "visual_figure"
+        else f"引擎因此退回到 Step {target} 之后，"
+    )
     findings = _judge_findings(project, verdict)
     if findings is None:
         findings = ["- 未能从 `judge_outputs/aggregate.json` 或 `decision_route.json` 读出与本次退回一致的评审发现；"
@@ -264,7 +344,7 @@ def judge_rework_block(project: Path, template: str) -> str:
         findings = ["- 评审未列出 fatal/blocking/major 级发现；请阅读 `judge_evaluation.md` 中各角色的结论。"]
     return (
         "【最终评审返工 — 本次运行的原因】\n"
-        f"Step 13 最终评审给出 `{verdict}`（事件 rev {reopen.revision}），引擎因此退回到 Step {target} 之后，"
+        f"Step 13 最终评审给出 `{verdict}`（事件 rev {reopen.revision}），{route}"
         "本步骤是这一轮修复的一部分。这是唯一的一次修复：若下一次最终评审仍不通过，就不能正常交付。"
         "下列评审发现就是本次运行要解决的事；只复核现有产物、因机器审计已 PASS 而不改，等于放弃这次修复。"
         "逐条判断根因是否在本步骤的产物中：在的，必须在本步骤从根源修复（模型推导、代码、结果、图、论文正文），"
@@ -281,6 +361,10 @@ V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
     # The v2 Stage 8 exit routes open results/model review issues back to
     # Steps 5-8 (engine.REVIEW_ISSUE_REWORK_RULE); the re-run Steps read them.
     "step5_full_solve.txt": (
+        (
+            V2_STEP5_SLUG_LINE + "\n8. `",
+            V2_STEP5_SLUG_LINE + V2_STEP5_DECLARED_PATHS + "\n8. `",
+        ),
         (
             "修复真相源和执行证据后让 runner 重跑 Step-5 `results` profile 自动更新。",
             "修复真相源和执行证据后让 runner 重跑 Step-5 `results` profile 自动更新。\n" + V2_REVIEW_REWORK_LINE,
@@ -307,12 +391,20 @@ V2_PROMPT_OVERLAY: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "step11_constructive_review.txt": (
         (
+            V2_STEP11_LEDGER_LINE + "\n\nIssue 严重度:",
+            V2_STEP11_LEDGER_LINE + "\n" + V2_VISUAL_GATE_REVIEW_LINE + "\n\nIssue 严重度:",
+        ),
+        (
             "Step 13 只做数学预审，完整的数学、执行和论文质量判决由 Step 15 后的 `final` 审计执行。",
             "完整的数学、执行和论文质量判决由 Step 13 最终审计执行：它在 Step 14 摘要、Step 15 润色和"
             "内容冻结审批之后，对最终文本运行唯一一次完整三角色 `final` 审计。",
         ),
     ),
     "step12_revision.txt": (
+        (
+            "- [ ] 所有 figures/*.pdf 引用真实存在\n- [ ] 所有 \\cite{}",
+            "- [ ] 所有 figures/*.pdf 引用真实存在\n" + V2_VISUAL_GATE_RECHECK_LINE + "\n- [ ] 所有 \\cite{}",
+        ),
         (
             "如果 Step 16 消费的 `final` 审计给出 `VERDICT: REOPEN_REVISION_TEXT`",
             "如果 Step 13 最终审计（内容冻结后对最终文本运行的唯一一次完整三角色 `final` 审计）"

@@ -145,6 +145,11 @@ REVIEW_UPSTREAM_CATEGORIES = frozenset({"results", "model"})
 V2_REVIEW_RECOMPUTE_LIMIT = 1
 V2_REVIEW_LOOP_LIMIT = 1
 REVIEW_ISSUE_REWORK_RULE = "review_issue"
+# A v2 final-Judge text reopen whose PDF visual gate found figure defects
+# (acceptance A, F19(b)): the figure Step (owner of ``figures/**``) is
+# recomputed first, the paper checkpoints between it and the reopen target
+# stay, and the scheduler then returns to the reopen target's next subtask.
+VISUAL_FIGURE_REWORK_RULE = "visual_figure"
 
 
 @dataclass(frozen=True)
@@ -843,16 +848,26 @@ class FactoryEngine:
                 resume_after = self._validated_resume_target(
                     resume_after, definition.id, self._catalog(state)
                 )
+                figure_rework = self._final_judge_figure_rework(
+                    state, stage_task, resume_after, result.metadata
+                )
+                # The Stage cursor: the figure recompute's start when the
+                # reopen re-draws figures first, else the reopen target.
+                cursor = (
+                    figure_rework["resume_after_step"]
+                    if figure_rework is not None
+                    else resume_after
+                )
                 reopen_changes = {
                     "status": WorkflowStatus.RUNNING,
-                    "last_completed_step": resume_after,
+                    "last_completed_step": cursor,
                     "active_step": None,
                     "attempt": 0,
                 }
                 reopen_kwargs = {}
                 if stage_task is not None:
                     reopen_changes.update(
-                        last_completed_stage=self._catalog(state).completed_stage_for_step(resume_after),
+                        last_completed_stage=self._catalog(state).completed_stage_for_step(cursor),
                         active_stage=None,
                         active_subtask=None,
                         source_step_id=None,
@@ -861,6 +876,8 @@ class FactoryEngine:
                         "invalidate_checkpoints_after_step": resume_after,
                         "subtask_baseline": None,
                     }
+                    if figure_rework is not None:
+                        reopen_kwargs["invalidate_stage_subtasks"] = figure_rework["subtasks"]
                 state = self._owned_transition(
                     state,
                     lease,
@@ -877,6 +894,18 @@ class FactoryEngine:
                             else {}
                         ),
                         **result.metadata,
+                        **(
+                            {
+                                "resume_after_step": cursor,
+                                "text_resume_after_step": resume_after,
+                                "rework_rule": VISUAL_FIGURE_REWORK_RULE,
+                                "recompute_steps": figure_rework["steps"],
+                                "return_subtask": figure_rework["return_subtask"],
+                                "recompute_reasons": figure_rework["reasons"],
+                            }
+                            if figure_rework is not None
+                            else {}
+                        ),
                     },
                     **reopen_kwargs,
                 )
@@ -1471,6 +1500,61 @@ class FactoryEngine:
             "causes": causes,
             "reasons": reasons,
         }
+
+    def _final_judge_figure_rework(
+        self,
+        state: WorkflowState,
+        stage_task: ScheduledStageTask | None,
+        resume_after: int,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """The figure recompute a v2 final-Judge text reopen asks for, if any.
+
+        The audit names the figure Steps (``visual_recompute_steps``).  They are
+        recomputed only when they ran before the reopen target and still hold
+        a checkpoint; otherwise the plain reopen already re-runs them.
+        """
+
+        steps = metadata.get("visual_recompute_steps")
+        if (
+            state.stage_catalog_version != STAGE_CATALOG_VERSION_V2
+            or stage_task is None
+            or stage_task.subtask != FINAL_JUDGE_SUBTASK
+            or metadata.get("final_decision") != "REOPEN_REVISION_TEXT"
+            or not isinstance(steps, list)
+            or not steps
+            or not all(type(step) is int for step in steps)
+        ):
+            return None
+        catalog = self._catalog(state)
+        try:
+            start = min(steps, key=catalog.step_position)
+            if catalog.step_position(start) >= catalog.step_position(resume_after):
+                return None
+        except KeyError:
+            return None
+        if start not in self._completed_computation_steps(state):
+            return None
+        plan = self._computation_recompute(
+            state,
+            start,
+            [],
+            [
+                f"PDF visual gate {code}: figures are owned by Step {start}"
+                for code in metadata.get("visual_recompute_codes") or ()
+            ],
+        )
+        plan["subtasks"] = [
+            (stage_id, key)
+            for stage_id, key in plan["subtasks"]
+            if catalog.step_position(catalog.subtask_for_key(key)[1].checkpoint_step_id)
+            < catalog.step_position(resume_after)
+        ]
+        if not plan["subtasks"]:
+            return None
+        after = catalog.subtasks_after_step(resume_after)
+        plan["return_subtask"] = after[0][1] if after else None
+        return plan
 
     def _is_v2_review_exit(self, state: WorkflowState, task: ScheduledStageTask) -> bool:
         return (

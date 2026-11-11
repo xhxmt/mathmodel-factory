@@ -1837,6 +1837,40 @@ class SQLiteStateStore:
         except (StateLeaseError, sqlite3.Error) as exc:
             raise ValueError("workflow approvals cannot be read without mutation") from exc
 
+    def read_stage_catalog_version(self) -> str | None:
+        """The recorded Stage catalog version, read without upgrading live state.
+
+        Analysis-only audits must not migrate the schema or change the journal
+        mode of ``state.db`` (``load()`` does both), so the version is read from
+        the same private main/WAL snapshot as the approvals.  An absent or
+        uninitialized database, or a schema without the column, has no version.
+        """
+        from .state_lease import (
+            StateLeaseError,
+            isolated_state_snapshot_ro,
+            state_commit_lease,
+        )
+
+        try:
+            with state_commit_lease(self.project_dir):
+                if not self.path.exists():
+                    return None
+                with isolated_state_snapshot_ro(self.path) as connection:
+                    columns = {
+                        row[1]
+                        for row in connection.execute("PRAGMA table_info(project_state)")
+                    }
+                    if "stage_catalog_version" not in columns:
+                        return None
+                    row = connection.execute(
+                        "SELECT stage_catalog_version FROM project_state WHERE singleton=1"
+                    ).fetchone()
+        except (StateLeaseError, sqlite3.Error) as exc:
+            raise ValueError(
+                "workflow catalog version cannot be read without mutation"
+            ) from exc
+        return str(row[0]) if row is not None and row[0] is not None else None
+
     @staticmethod
     def _insert_decision_request(
         connection: sqlite3.Connection,
