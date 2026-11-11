@@ -66,6 +66,7 @@
 - [evaluation/calibration_report.md](evaluation/calibration_report.md)：评委校准报告。
 - [evaluation/EXPERIMENTS_STATUS.md](evaluation/EXPERIMENTS_STATUS.md)：实验状态与后续任务。
 - [experiments/README.md](experiments/README.md)：消融实验运行说明。
+- [docs/verification/2026-08-19-run4/final_validation_20260819.md](docs/verification/2026-08-19-run4/final_validation_20260819.md)：Run4 下游技术流程验证的历史快照与终态入口。
 - [docs/verification/](docs/verification/)：历史验证报告。
 
 ## Web、云服务与部署
