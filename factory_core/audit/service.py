@@ -1227,17 +1227,20 @@ class FinalAuditService:
 
         Only v2 has the recompute-and-return scheduling; a v1 text reopen keeps
         resuming at the revision, whose figure-script edits rewind through the
-        ownership rule as before.
+        ownership rule as before.  The version comes from a read-only snapshot:
+        analysis-only audits reach this branch and must not upgrade the schema
+        or change the journal mode of the live database.  An unreadable
+        database keeps the plain text reopen.
         """
 
         from ..stages import STAGE_CATALOG_VERSION_V2, catalog_for_version
         from ..storage import SQLiteStateStore
         from .visual_routing import figure_rework_plan, load_visual_gate
 
-        store = SQLiteStateStore(project)
-        if not store.exists:
+        try:
+            version = SQLiteStateStore(project).read_stage_catalog_version()
+        except ValueError:
             return None
-        version = store.load().stage_catalog_version
         if version != STAGE_CATALOG_VERSION_V2:
             return None
         return figure_rework_plan(

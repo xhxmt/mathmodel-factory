@@ -651,6 +651,11 @@ class IncrementalAuditService:
         pdf = project / f"{project.name}_paper.pdf"
         relative = str(report.relative_to(project))
         if not pdf.is_file():
+            # An earlier run's report must not reach this run's review Steps.
+            try:
+                report.unlink(missing_ok=True)
+            except OSError:
+                pass
             return StageCheck(
                 "visual_gate", False, "advisory",
                 f"no compiled {pdf.name}; the visual gate runs at the final audit",
@@ -990,6 +995,9 @@ class IncrementalAuditService:
                 *common,
                 "scripts/claim_graph.py",
                 "scripts/quality_contract.py",
+                # claim_result_paths resolves the Stage-4 owner of each path.
+                "factory_core/artifact_ownership.py",
+                "factory_core/artifact_policy.py",
             ]
         elif profile is AuditProfile.RESULTS:
             selected = [

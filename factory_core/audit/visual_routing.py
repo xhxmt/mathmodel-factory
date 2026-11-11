@@ -46,9 +46,12 @@ def blocking_findings(report: dict[str, Any] | None) -> list[dict[str, Any]]:
 
     if not isinstance(report, dict) or report.get("status") != "FAIL":
         return []
+    findings = report.get("findings")
+    if not isinstance(findings, list):
+        return []
     return [
         item
-        for item in report.get("findings") or []
+        for item in findings
         if isinstance(item, dict) and item.get("severity") == "blocking"
     ]
 

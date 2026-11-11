@@ -284,9 +284,10 @@ keeps Steps 9-11, sets the cursor to Step 7 and records
 runs next, without a new draft. Layout-only, model and v1 reopens keep their
 target. The three Judge roles are still called when the visual gate FAILs, so one
 repair cycle gets both kinds of findings. Each final-audit attempt archives
-`visual_gate.json`, `decision_route.json` and `aggregate.json` by content under
-`.factory/audits/<snapshot>/judge_outputs/` (`*.archive`) with an attempt sidecar
-`<stamp>.judge_outputs.json`.
+whichever of `visual_gate.json`, `decision_route.json` and `aggregate.json`
+exist by content under `.factory/audits/<snapshot>/judge_outputs/` (`*.archive`),
+with an attempt sidecar `<stamp>.judge_outputs.json` written only when at least
+one was archived.
 
 The Step 10 `paper` profile also runs the PDF visual gate on the PDF Step 9/10
 compiled, as an `advisory` check: it never fails the profile, writes no ledger
@@ -295,7 +296,8 @@ row, and is not part of the final audit's shared `paper_checks`. Its report is
 turns its blocking findings into `paper` BLOCKING review rows, so the Stage 8
 exit enforces them. The `model` profile's hard `claim_result_paths` check
 requires every declared solve output (Stage 4 by the ownership registry) inside a
-`results/` subdirectory to use the Step 5 slug `problem<N>`. In a v2 review
+`results/` subdirectory to use the Step 5 slug `problem<N>` (an optional
+lowercase `[a-z0-9_-]` suffix is allowed). In a v2 review
 recompute, the first recomputed Step decides `model` rows (Step 4 is never
 re-run), and every recomputed Step rewrites the stale statements in its own
 report.

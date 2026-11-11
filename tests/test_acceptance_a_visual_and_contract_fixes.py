@@ -9,6 +9,7 @@ Step 4", which a v2 recompute never re-runs (C4).
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from factory_core.adapters.infrastructure.commands import CommandResult
@@ -37,7 +38,7 @@ from tests.test_stage_catalog_v2 import (
 # The blocking findings of acceptance A's last final Judge (rev 806).
 ACCEPTANCE_A_VISUAL = {
     "status": "FAIL",
-    "blocking_findings": 4,
+    "blocking_findings": 3,
     "findings": [
         {"code": "CONTENT_OUTSIDE_MEDIA_BOX", "severity": "blocking", "page": 8,
          "message": "PDF content extends outside the physical page box",
@@ -85,6 +86,9 @@ def test_only_blocking_figure_findings_ask_for_a_figure_recompute():
     assert figure_rework_plan({**ACCEPTANCE_A_VISUAL, "status": "PASS"}, CATALOG_V2) is None
     assert figure_rework_plan({**ACCEPTANCE_A_VISUAL, "status": "INDETERMINATE"}, CATALOG_V2) is None
     assert figure_rework_plan(None, CATALOG_V2) is None
+    # A malformed FAIL report (findings not a list) asks for nothing, not a crash.
+    for findings in (3, {"code": "UNREADABLY_SMALL_TEXT"}, "blocking", None):
+        assert figure_rework_plan({"status": "FAIL", "findings": findings}, CATALOG_V2) is None
 
 
 def test_the_final_audit_asks_for_a_figure_recompute_only_in_v2(tmp_path):
@@ -102,6 +106,26 @@ def test_the_final_audit_asks_for_a_figure_recompute_only_in_v2(tmp_path):
     _write_visual(v1, ACCEPTANCE_A_VISUAL)
     assert FinalAuditService._figure_rework(v1) is None
     assert FinalAuditService._figure_rework(tmp_path / "no-state") is None
+
+
+def test_the_figure_rework_reads_the_catalog_without_touching_the_live_database(tmp_path):
+    # Analysis-only audits reach _figure_rework; load() would upgrade the
+    # schema and switch the live database to WAL.
+    v2_store(tmp_path, last_completed_step=15)
+    _write_visual(tmp_path, ACCEPTANCE_A_VISUAL)
+    database = tmp_path / ".factory" / "state.db"
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0] == "delete"
+    connection.close()
+    before = database.read_bytes()
+
+    assert FinalAuditService._figure_rework(tmp_path)["steps"] == [8]
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    connection.close()
+    assert database.read_bytes() == before
+    assert not Path(f"{database}-wal").exists()
 
 
 def _figure_reopen_judge():
@@ -297,7 +321,7 @@ def test_paper_profile_reports_visual_findings_without_failing_or_touching_the_l
     assert "audit_paper_visual_gate" in runner.calls
     [check] = [c for c in outcome.record.evidence["checks"] if c["name"] == "visual_gate"]
     assert check["severity"] == "advisory" and check["passed"] is False
-    assert check["detail"] == "status=FAIL blocking=4"
+    assert check["detail"] == "status=FAIL blocking=3"
     assert check["report"] == ".factory/audits/profiles/paper/visual_gate.latest.json"
     assert outcome.record.evidence["warnings"] == []
     assert outcome.record.evidence["hard_failures"] == []
@@ -309,12 +333,17 @@ def test_paper_profile_reports_visual_findings_without_failing_or_touching_the_l
 
 def test_paper_profile_without_a_pdf_or_verdict_says_so(tmp_path):
     project = _paper_project(tmp_path, pdf=False)
+    # A report left by an earlier run must not reach this run's review Steps.
+    stale = project / ".factory/audits/profiles/paper/visual_gate.latest.json"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(json.dumps(ACCEPTANCE_A_VISUAL), encoding="utf-8")
     outcome = IncrementalAuditService(
         tmp_path / "factory", runner=VisualRunner(ACCEPTANCE_A_VISUAL)
     ).run_project(project, "paper")
     [check] = [c for c in outcome.record.evidence["checks"] if c["name"] == "visual_gate"]
     assert outcome.record.status is AuditStatus.PASS
     assert check["indeterminate"] is True and "no compiled demo_paper.pdf" in check["detail"]
+    assert not stale.exists()
 
     project = _paper_project(tmp_path / "second")
     outcome = IncrementalAuditService(
@@ -370,6 +399,14 @@ def _declare(project: Path, path: str) -> None:
     registry = json.loads((project / "claim_registry.json").read_text())
     registry["claims"][0]["artifacts"].append({"path": path, "roles": ["execution"]})
     (project / "claim_registry.json").write_text(json.dumps(registry))
+
+
+def test_the_model_snapshot_binds_the_owner_rule_of_claim_result_paths(tmp_path):
+    from factory_core.audit.domain import AuditProfile
+
+    files = IncrementalAuditService(tmp_path)._checker_files(AuditProfile.MODEL)
+    assert "factory_core/artifact_ownership.py" in files
+    assert "factory_core/artifact_policy.py" in files
 
 
 def test_model_audit_fails_at_step4_on_a_path_step5_will_not_write(tmp_path):
