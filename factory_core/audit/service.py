@@ -642,7 +642,7 @@ class FinalAuditService:
                             "visual_recompute_steps": figure_rework["steps"],
                             "visual_recompute_codes": figure_rework["codes"],
                         }
-                        if figure_rework
+                        if figure_rework and "steps" in figure_rework
                         else None
                     ),
                 )
@@ -1230,23 +1230,37 @@ class FinalAuditService:
         ownership rule as before.  The version comes from a read-only snapshot:
         analysis-only audits reach this branch and must not upgrade the schema
         or change the journal mode of the live database.  An unreadable
-        database keeps the plain text reopen.
+        database keeps the plain text reopen; when the visual gate had figure
+        findings, the returned record says the recompute was skipped and why
+        (it carries no ``steps``), so the evidence shows the lost route.
         """
 
         from ..stages import STAGE_CATALOG_VERSION_V2, catalog_for_version
         from ..storage import SQLiteStateStore
-        from .visual_routing import figure_rework_plan, load_visual_gate
+        from .visual_routing import (
+            blocking_findings,
+            figure_rework_plan,
+            finding_owner,
+            load_visual_gate,
+        )
 
+        report = load_visual_gate(project / "judge_outputs/visual_gate.json")
         try:
             version = SQLiteStateStore(project).read_stage_catalog_version()
-        except ValueError:
-            return None
+        except ValueError as exc:
+            codes = sorted(
+                {
+                    str(item.get("code"))
+                    for item in blocking_findings(report)
+                    if finding_owner(item.get("code")) == "figure"
+                }
+            )
+            if not codes:
+                return None
+            return {"skipped": "catalog_unreadable", "reason": str(exc), "codes": codes}
         if version != STAGE_CATALOG_VERSION_V2:
             return None
-        return figure_rework_plan(
-            load_visual_gate(project / "judge_outputs/visual_gate.json"),
-            catalog_for_version(version),
-        )
+        return figure_rework_plan(report, catalog_for_version(version))
 
     def _run_decision_router(self, project: Path) -> ExecutionResult | None:
         result = self.runner.python(

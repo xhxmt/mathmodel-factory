@@ -128,6 +128,26 @@ def test_the_figure_rework_reads_the_catalog_without_touching_the_live_database(
     assert not Path(f"{database}-wal").exists()
 
 
+def test_an_unreadable_database_records_the_skipped_figure_recompute(tmp_path, monkeypatch):
+    v2_store(tmp_path, last_completed_step=15)
+
+    def unreadable(self):
+        raise ValueError("workflow catalog version cannot be read without mutation")
+
+    monkeypatch.setattr(SQLiteStateStore, "read_stage_catalog_version", unreadable)
+    _write_visual(tmp_path, ACCEPTANCE_A_VISUAL)
+    record = FinalAuditService._figure_rework(tmp_path)
+    assert record == {
+        "skipped": "catalog_unreadable",
+        "reason": "workflow catalog version cannot be read without mutation",
+        "codes": ["UNREADABLY_SMALL_TEXT"],
+    }
+    assert "steps" not in record
+    # Without figure findings there is nothing to skip.
+    _write_visual(tmp_path, LAYOUT_ONLY_VISUAL)
+    assert FinalAuditService._figure_rework(tmp_path) is None
+
+
 def _figure_reopen_judge():
     return Lifecycle(result={
         "resume_after_step": 11,
