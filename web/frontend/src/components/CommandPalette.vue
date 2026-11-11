@@ -107,7 +107,7 @@ export default {
 .pal { width: 100%; max-width: 560px; overflow: hidden; box-shadow: var(--shadow-lg); }
 .pal-in { display: flex; align-items: center; gap: 11px; padding: 15px 16px; border-bottom: 1px solid var(--line); color: var(--ink-3); }
 .pal-input { flex: 1; background: none; border: none; outline: none; color: var(--ink); font: 15px var(--sans); }
-.pal-esc { font-size: 10px; padding: 2px 6px; border: 1px solid var(--line-2); border-radius: var(--r-xs); color: var(--ink-3); }
+.pal-esc { font-size: 11.5px; padding: 2px 6px; border: 1px solid var(--line-2); border-radius: var(--r-xs); color: var(--ink-3); }
 
 .pal-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
 .pal-empty { padding: 28px; text-align: center; color: var(--ink-3); font-size: 13px; }
@@ -117,7 +117,7 @@ export default {
 .pi-ic { color: var(--ink-3); flex-shrink: 0; }
 .pi-label { flex: 1; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pi-sub { font-size: 11px; color: var(--ink-3); }
-.pi-kind { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--r-xs); }
+.pi-kind { font-size: 11.5px; letter-spacing: 0; color: var(--ink-3); padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--r-xs); }
 
 .pal-enter-active, .pal-leave-active { transition: opacity 0.2s var(--ease); }
 .pal-enter-active .pal, .pal-leave-active .pal { transition: transform 0.24s var(--ease-out), opacity 0.24s var(--ease-out); }

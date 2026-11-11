@@ -1,191 +1,104 @@
 <template>
   <div class="ws">
-    <!-- header -->
-    <header class="ws-head">
-      <div class="wh-left">
-        <button class="btn btn-icon btn-ghost" @click="$emit('close')" title="返回 (Esc)">
-          <Icon name="arrow-left" :size="16" />
+    <header class="ws-top">
+      <div class="ws-top-in">
+        <button class="btn btn-icon btn-ghost back" @click="$emit('close')" title="返回项目列表 (Esc)">
+          <Icon name="arrow-left" :size="17" />
         </button>
-        <div class="wh-id">
-          <div class="wh-name">{{ project.problem_title || project.base_name }}<small class="run-name mono">{{ project.base_name }}</small></div>
-          <div class="wh-sub">
-            <span class="tag" :class="'st-' + project.status">
-              <span class="dot" :class="dotClass"></span>{{ statusLabel }}
-            </span>
-            <span class="wh-step mono">{{ stepLabel }}</span>
-            <span class="wh-time mono" v-if="project.last_updated">· {{ rel(project.last_updated) }}</span>
-            <span class="wh-pid mono" v-if="project.pid">· PID {{ project.pid }}</span>
+        <div class="ident">
+          <h1 class="title">{{ project.problem_title || project.base_name }}</h1>
+          <div class="meta">
+            <span class="pill" :class="dotClass"><span class="dot" :class="dotClass"></span>{{ statusLabel }}</span>
+            <span class="step">{{ stepLabel }}</span>
+            <span v-if="project.last_updated" class="muted">更新于 {{ rel(project.last_updated) }}</span>
+            <span class="muted mono run">{{ project.base_name }}</span>
           </div>
         </div>
-      </div>
-
-      <div class="wh-right">
-        <button
-          class="cloud-switch"
-          :class="{ on: cloudEnabled, busy: cloudSaving }"
-          role="switch"
-          :aria-checked="cloudEnabled ? 'true' : 'false'"
-          :disabled="cloudSaving || cloudConfigLoading"
-          :title="cloudSwitchTitle"
-          @click="toggleCloudAcceleration"
-        >
-          <span class="switch-track"><span class="switch-thumb"></span></span>
-          <Icon name="zap" :size="14" />
-          <span class="hide-xs">{{ cloudSwitchLabel }}</span>
-        </button>
-        <button class="btn btn-sm btn-ghost" @click="refresh" title="刷新">
-          <Icon name="refresh" :size="14" :class="{ spin: loading }" />
-        </button>
-        <button v-if="isAdmin" class="btn btn-sm btn-ghost" @click="showModels = true" title="模型管理">
-          <Icon name="cpu" :size="14" /> <span class="hide-xs">模型</span>
-        </button>
-        <button v-if="primaryAction" class="btn btn-sm" :class="primaryAction.kind === 'navigate' ? 'btn-amber' : 'btn-ghost'" @click="performPrimary">
-          <Icon :name="primaryAction.icon" :size="14" /> {{ primaryAction.label }}
-        </button>
-        <template v-if="project.is_running || project.status === 'paused'">
-          <button v-if="!killArm" class="btn btn-sm btn-danger" @click="killArm = true">
-            <Icon name="stop" :size="14" /> 终止
+        <div class="controls">
+          <button class="btn btn-icon btn-ghost" @click="refresh" title="刷新">
+            <Icon name="refresh" :size="16" :class="{ spin: loading }" />
           </button>
-          <button v-else class="btn btn-sm btn-danger" @click="act('kill')" @blur="killArm = false">
-            确认终止？
+          <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showModels = true" title="模型分配">
+            <Icon name="cpu" :size="16" />
           </button>
-        </template>
-      </div>
-    </header>
-
-    <nav class="ws-tabs" aria-label="项目工作区视图">
-      <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        class="ws-tab"
-        :class="{ on: activeTab === tab.key, attention: tab.attention }"
-        @click="activeTab = tab.key"
-      >
-        <Icon :name="tab.icon" :size="13" />
-        <span>{{ tab.label }}</span>
-      </button>
-    </nav>
-
-    <ActionCenter
-      :actions="workspaceActions"
-      @navigate="onWorkspaceAction"
-    />
-
-    <div class="ws-scroll">
-      <div v-if="activeTab === 'overview'" class="overview rise">
-        <StageProgressPanel :project="project" />
-        <AuditStatusPanel :project="project" @navigate="activeTab = $event" />
-        <div class="overview-grid">
-          <button class="ov-card panel" @click="activeTab = 'pipeline'">
-            <span class="ov-l label">当前阶段</span>
-            <span class="ov-v mono">{{ contestPhaseLabel }}</span>
-          </button>
-          <button class="ov-card panel" @click="activeTab = 'pipeline'">
-            <span class="ov-l label">比赛时钟</span>
-            <span class="ov-v mono">{{ contestClockLabel }}</span>
-          </button>
-          <button class="ov-card panel" @click="activeTab = project.selection_pending ? 'selection' : project.consultation_pending ? 'consultation' : 'diagnostics'">
-            <span class="ov-l label">人工/诊断</span>
-            <span class="ov-v">{{ project.selection_pending ? '等待选方案' : project.consultation_pending ? '等待你处理' : project.workflow_error ? '需核对执行诊断' : project.evidence_validity === 'INVALID' ? '需重新核验证据' : diagnostics?.status?.reason_code ? '查看诊断事项' : '无待办事项' }}</span>
-          </button>
-          <button class="ov-card panel" @click="activeTab = 'logs'">
-            <span class="ov-l label">日志</span>
-            <span class="ov-v mono">实时跟随</span>
-          </button>
-          <button class="ov-card panel" @click="activeTab = 'cloud'">
-            <span class="ov-l label">云端</span>
-            <span class="ov-v mono">{{ cloudEnabled ? '已启用' : '未启用' }}</span>
-          </button>
-          <button v-if="project.active_stage" class="ov-card panel" @click="activeTab = 'diagnostics'">
-            <span class="ov-l label">调度位置</span>
-            <span class="ov-v mono">{{ schedulerLabel }}</span>
+          <template v-if="project.is_running || project.status === 'paused'">
+            <button v-if="!killArm" class="btn btn-sm btn-danger" @click="killArm = true" title="终止运行">
+              <Icon name="stop" :size="14" /><span class="hide-xs">终止</span>
+            </button>
+            <button v-else class="btn btn-sm btn-danger armed" @click="act('kill')" @blur="killArm = false">确认终止</button>
+          </template>
+          <button v-if="primaryAction" class="btn btn-sm" :class="primaryAction.kind === 'navigate' ? 'btn-primary' : ''" @click="performPrimary">
+            <Icon :name="primaryAction.icon" :size="14" />{{ primaryAction.label }}
           </button>
         </div>
-        <JointModelingPanel :base="project.base_name" :revision="project.revision" @changed="refresh" />
+      </div>
+      <nav class="tabs" role="tablist" aria-label="项目视图">
+        <button
+          v-for="tab in tabs"
+          :key="tab.key"
+          role="tab"
+          :aria-selected="activeTab === tab.key ? 'true' : 'false'"
+          class="tab"
+          :class="{ on: activeTab === tab.key, attention: tab.attention }"
+          @click="activeTab = tab.key"
+        >
+          {{ tab.label }}<span v-if="tab.attention" class="badge"></span>
+        </button>
+      </nav>
+    </header>
+
+    <main class="ws-body">
+      <div class="view" :class="{ fill: activeTab === 'artifacts' || activeTab === 'logs' }">
+      <!-- 概览 -->
+      <div v-if="activeTab === 'overview'" class="overview rise">
+        <section class="now panel">
+          <div class="now-main">
+            <div class="now-label">当前</div>
+            <div class="now-step">{{ stepLabel }}</div>
+            <p class="now-hint" :class="{ warn: awaiting, bad: failed }">{{ nowHint }}</p>
+          </div>
+          <div class="now-progress">
+            <div class="bar"><span :class="dotClass" :style="{ width: progress + '%' }"></span></div>
+            <span class="tnum">{{ progress }}%</span>
+          </div>
+          <dl class="facts">
+            <div><dt>比赛阶段</dt><dd>{{ contestPhaseLabel }}</dd></div>
+            <div><dt>比赛时钟</dt><dd>{{ contestClockLabel }}</dd></div>
+            <div v-if="project.active_stage"><dt>调度位置</dt><dd>{{ schedulerLabel }}</dd></div>
+            <div v-if="project.pid"><dt>进程</dt><dd class="mono">PID {{ project.pid }}</dd></div>
+          </dl>
+        </section>
+
+        <ActionCenter :actions="workspaceActions" @navigate="onWorkspaceAction" />
+
+        <section class="block">
+          <h2 class="block-title">阶段进度</h2>
+          <StageProgressPanel :project="project" />
+        </section>
+
+        <AuditStatusPanel :project="project" @navigate="goTo" />
+
         <ContestTimingPanel :timing="contestDashboard?.timing || {}" />
-        <DiagnosticsCard
-          v-if="diagnostics && diagnostics.status && diagnostics.status.reason_code"
-          class="rise"
-          :diagnostics="diagnostics"
-          @action="onDiagnosticsAction"
-        />
-        <ConsultationPanel
-          v-if="project.consultation_pending"
-          class="rise"
-          :base="project.base_name"
-          :gate="project.consultation_gate || ''"
-          :revision="project.revision"
-          @open-file="requestFile"
-          @answered="onAnswered"
-        />
-        <SelectionPanel
-          v-if="project.selection_pending"
-          class="rise"
-          :base="project.base_name"
-          :revision="project.revision"
-          @open-file="requestFile"
-          @changed="onSelectionChanged"
-        />
+
+        <JointModelingPanel :base="project.base_name" :revision="project.revision" @changed="refresh" />
+
         <ModelingDirectionPanel
           v-if="project.current_step <= 1"
-          class="rise"
           :base="project.base_name"
           :current-step="project.current_step"
           @changed="onModelingDirectionChanged"
         />
       </div>
 
-      <PipelineTimeline
-        v-else-if="activeTab === 'pipeline'"
-        :project="project"
+      <!-- 人工决策 / 咨询 -->
+      <SelectionPanel
+        v-else-if="activeTab === 'selection'"
         class="rise"
-        :current-step="project.current_step"
-        :steps-data="stepsData"
-        :awaiting="project.consultation_pending || project.selection_pending"
-        :registry="modelRegistry"
-        :assignments="projectAssignments"
+        :base="project.base_name"
+        :revision="project.revision"
         @open-file="requestFile"
-        @open-paper="requestPaper"
-        @assign="onAssign"
-        @manage-models="isAdmin ? (showModels = true) : null"
+        @changed="onSelectionChanged"
       />
-
-      <ProblemPlanPanel
-        v-else-if="activeTab === 'plan'"
-        class="tab-panel rise"
-        :base="project.base_name"
-        @open-file="requestFile"
-      />
-
-      <LogConsole
-        v-else-if="activeTab === 'logs'"
-        class="ws-logs tab-panel"
-        :base="project.base_name"
-        :active="activeTab === 'logs'"
-      />
-
-      <ArtifactBrowser
-        v-else-if="activeTab === 'artifacts'"
-        class="ws-art panel tab-panel"
-        :base="project.base_name"
-        :requested="artifactRequest"
-        :current-step="project.current_step"
-      />
-
-      <div v-else-if="activeTab === 'diagnostics'" class="tab-stack">
-        <AuditStatusPanel v-if="project.evidence_validity === 'INVALID' || project.workflow_error" :project="project" @navigate="activeTab = $event" />
-        <DiagnosticsCard
-          v-if="diagnostics && diagnostics.status && diagnostics.status.reason_code"
-          class="rise"
-          :diagnostics="diagnostics"
-          @action="onDiagnosticsAction"
-        />
-        <div v-else-if="project.evidence_validity !== 'INVALID' && !project.workflow_error" class="empty-panel panel">
-          <Icon name="check-circle" :size="28" />
-          <span>当前没有阻塞诊断</span>
-        </div>
-      </div>
-
       <ConsultationPanel
         v-else-if="activeTab === 'consultation'"
         class="rise"
@@ -196,70 +109,106 @@
         @answered="onAnswered"
       />
 
-      <SelectionPanel
-        v-else-if="activeTab === 'selection'"
-        class="rise"
+      <!-- 流程 -->
+      <div v-else-if="activeTab === 'pipeline'" class="rise">
+        <div class="subnav">
+          <div class="seg" role="tablist" aria-label="流程视图">
+            <button role="tab" class="seg-b" :class="{ on: pipelineView === 'steps' }" :aria-selected="pipelineView === 'steps' ? 'true' : 'false'" @click="pipelineView = 'steps'">步骤</button>
+            <button role="tab" class="seg-b" :class="{ on: pipelineView === 'plan' }" :aria-selected="pipelineView === 'plan' ? 'true' : 'false'" @click="pipelineView = 'plan'">任务图</button>
+          </div>
+        </div>
+        <PipelineTimeline
+          v-if="pipelineView === 'steps'"
+          :project="project"
+          :current-step="project.current_step"
+          :steps-data="stepsData"
+          :awaiting="project.consultation_pending || project.selection_pending"
+          :registry="modelRegistry"
+          :assignments="projectAssignments"
+          @open-file="requestFile"
+          @open-paper="requestPaper"
+          @assign="onAssign"
+          @manage-models="isAdmin ? (showModels = true) : null"
+        />
+        <ProblemPlanPanel v-else :base="project.base_name" @open-file="requestFile" />
+      </div>
+
+      <!-- 文件 -->
+      <ArtifactBrowser
+        v-else-if="activeTab === 'artifacts'"
+        class="ws-fill panel"
         :base="project.base_name"
-        :revision="project.revision"
-        @open-file="requestFile"
-        @changed="onSelectionChanged"
+        :requested="artifactRequest"
+        :current-step="project.current_step"
       />
 
-      <EvidenceCockpit
-        v-else-if="activeTab === 'evidence'"
-        class="tab-panel rise"
-        :evidence="contestDashboard?.evidence || {}"
-        :audits="contestDashboard?.audits || []"
-        @open-file="requestFile"
-        @navigate="activeTab = $event"
-      />
-
-      <DeliveryReadinessPanel
-        v-else-if="activeTab === 'delivery'"
-        class="tab-panel rise"
+      <!-- 日志 -->
+      <LogConsole
+        v-else-if="activeTab === 'logs'"
+        class="ws-fill"
         :base="project.base_name"
-        :delivery="contestDashboard?.delivery || {}"
-        :delivery-allowed="project.delivery_allowed"
-        @open-file="requestFile"
+        :active="activeTab === 'logs'"
       />
 
+      <!-- 求解 -->
       <SolverJobPanel
         v-else-if="activeTab === 'solver'"
-        class="tab-panel rise"
+        class="rise"
         :base="project.base_name"
         @changed="refresh"
       />
 
-      <CloudTaskPanel
-        v-else-if="activeTab === 'cloud'"
-        class="rise"
-        :base="project.base_name"
-        :project-config="cloudConfig"
-        @changed="onCloudPanelChanged"
-      />
-
-
-      <div v-else class="empty-panel panel">
-        <Icon name="folder" :size="28" />
-        <span>选择一个工作区视图</span>
+      <!-- 质量与交付 -->
+      <div v-else-if="activeTab === 'quality'" class="quality rise">
+        <section ref="diagnosticsSection" class="block">
+          <h2 class="block-title">诊断</h2>
+          <DiagnosticsCard
+            v-if="diagnostics && diagnostics.status && diagnostics.status.reason_code"
+            :diagnostics="diagnostics"
+            @action="onDiagnosticsAction"
+          />
+          <div v-else-if="project.evidence_validity === 'INVALID' || project.workflow_error" class="invalid panel">
+            <div class="invalid-head">
+              <Icon name="alert-triangle" :size="16" />
+              <span>{{ project.workflow_error === 'RUNNER_EXIT_UNVERIFIED' ? '原运行进程已失联，子进程退出状态尚未确认，请先核对进程归属。' : project.evidence_validity === 'INVALID' ? '当前证据已失效，需要重新核验后才能确认审查结论与交付许可。' : project.reason_summary || '本次执行遇到错误，诊断接口暂未给出具体原因。' }}</span>
+            </div>
+            <dl v-if="project.workflow_error || project.evidence_errors?.length">
+              <div v-if="project.workflow_error"><dt>错误代码</dt><dd class="mono">{{ project.workflow_error }}</dd></div>
+              <div v-for="error in project.evidence_errors" :key="error"><dt>证据问题</dt><dd>{{ error }}</dd></div>
+            </dl>
+          </div>
+          <div v-else class="calm panel">
+            <Icon name="check-circle" :size="16" />当前没有阻塞运行的问题
+          </div>
+        </section>
+        <section ref="evidenceSection" class="block">
+          <h2 class="block-title">证据</h2>
+          <EvidenceCockpit
+            :evidence="contestDashboard?.evidence || {}"
+            :audits="contestDashboard?.audits || []"
+            @open-file="requestFile"
+            @navigate="goTo"
+          />
+        </section>
+        <section ref="deliverySection" class="block">
+          <h2 class="block-title">交付</h2>
+          <DeliveryReadinessPanel
+            :base="project.base_name"
+            :delivery="contestDashboard?.delivery || {}"
+            :delivery-allowed="project.delivery_allowed"
+            @open-file="requestFile"
+          />
+        </section>
       </div>
-    </div>
+      </div>
+    </main>
 
     <ModelManager v-if="showModels && isAdmin" @close="showModels = false" />
-    <CloudAcceleratorDialog
-      v-if="showCloudDialog"
-      :base="project.base_name"
-      :step="project.current_step || 0"
-      :estimated-local="cloudEstimate.local"
-      :estimated-cloud="cloudEstimate.cloud"
-      @close="showCloudDialog = false"
-      @enabled="onCloudEnabled"
-    />
   </div>
 </template>
 
 <script>
-import { computed, defineAsyncComponent, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import AsyncLoadError from './AsyncLoadError.vue'
@@ -267,16 +216,23 @@ import ActionCenter from './ActionCenter.vue'
 import ContestTimingPanel from './ContestTimingPanel.vue'
 import ModelingDirectionPanel from './ModelingDirectionPanel.vue'
 import SelectionPanel from './SelectionPanel.vue'
-import { relativeTime } from '../lib/api.js'
-import { hasNativeStepCursor, projectStepIndex, projectStepName, stepConfigKey } from '../lib/steps.js'
-import { buildWorkspaceActions, workspaceTabs } from '../lib/workspaceUi.js'
-import { useToasts } from '../composables/useToasts.js'
-import { useModels } from '../composables/useModels.js'
 import AuditStatusPanel from './AuditStatusPanel.vue'
 import StageProgressPanel from './StageProgressPanel.vue'
-import { primaryControl, executionLabel, statusTone, stepText } from '../lib/projectState.js'
-import { statusLabel as mapStatusLabel } from '../lib/status.js'
-import { useProjectCloudConfig } from '../composables/useProjectCloudConfig.js'
+import { relativeTime } from '../lib/api.js'
+import { stepConfigKey } from '../lib/steps.js'
+import { buildWorkspaceActions, resolveWorkspaceTab, workspaceTabs } from '../lib/workspaceUi.js'
+import { useToasts } from '../composables/useToasts.js'
+import { useModels } from '../composables/useModels.js'
+import {
+  executionHint,
+  executionLabel,
+  executionStatus,
+  needsHuman,
+  primaryControl,
+  projectProgress,
+  statusTone,
+  stepText,
+} from '../lib/projectState.js'
 import { useProjectDiagnostics } from '../composables/useProjectDiagnostics.js'
 import { useProjectPolling } from '../composables/useProjectPolling.js'
 import { useProjectSteps } from '../composables/useProjectSteps.js'
@@ -303,13 +259,23 @@ const ConsultationPanel = defineAsyncComponent({ loader: () => import('./Consult
 const JointModelingPanel = defineAsyncComponent({ loader: () => import('./JointModelingPanel.vue'), ...asyncOpts })
 const DiagnosticsCard = defineAsyncComponent({ loader: () => import('./DiagnosticsCard.vue'), ...asyncOpts })
 const ModelManager = defineAsyncComponent({ loader: () => import('./ModelManager.vue'), ...asyncOpts })
-const CloudAcceleratorDialog = defineAsyncComponent({ loader: () => import('./CloudAcceleratorDialog.vue'), ...asyncOpts })
-const CloudTaskPanel = defineAsyncComponent({ loader: () => import('./CloudTaskPanel.vue'), ...asyncOpts })
 const EvidenceCockpit = defineAsyncComponent({ loader: () => import('./EvidenceCockpit.vue'), ...asyncOpts })
 const DeliveryReadinessPanel = defineAsyncComponent({ loader: () => import('./DeliveryReadinessPanel.vue'), ...asyncOpts })
+
+const PHASE_NAMES = {
+  problem_understanding: '题意与数据',
+  model_tournament: '模型竞赛',
+  model_and_solve: '建模与求解',
+  validation: '结果验证',
+  paper_construction: '论文构建',
+  deterministic_paper_audit: '确定性论文审计',
+  review_and_revision: '审稿与修订',
+  final_audit_and_delivery: '最终审计与交付',
+}
+
 export default {
   name: 'ProjectWorkspace',
-  components: { StageProgressPanel, JointModelingPanel, AuditStatusPanel, Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, CloudAcceleratorDialog, CloudTaskPanel, EvidenceCockpit, DeliveryReadinessPanel },
+  components: { StageProgressPanel, JointModelingPanel, AuditStatusPanel, Icon, ActionCenter, ContestTimingPanel, ModelingDirectionPanel, SelectionPanel, PipelineTimeline, ProblemPlanPanel, LogConsole, ArtifactBrowser, SolverJobPanel, ConsultationPanel, DiagnosticsCard, ModelManager, EvidenceCockpit, DeliveryReadinessPanel },
   props: {
     project: { type: Object, required: true },
     isAdmin: { type: Boolean, default: false },
@@ -325,61 +291,42 @@ export default {
     const { contestDashboard, contestDashboardLoading, fetchContestDashboard, resetContestDashboard } = useContestDashboard()
     const { diagnostics, diagnosticsLoading, fetchDiagnostics: fetchProjectDiagnostics, resetDiagnostics } = useProjectDiagnostics()
     const { startPolling, stopPolling } = useProjectPolling({ intervalMs: 8000, backoffIntervalMs: 30000 })
-    const {
-      cloudConfig,
-      cloudConfigLoading,
-      cloudSaving,
-      cloudEnabled,
-      cloudSwitchLabel,
-      cloudSwitchTitle,
-      fetchCloudConfig: fetchProjectCloudConfig,
-      setCloudAcceleration,
-    } = useProjectCloudConfig()
 
     const artifactRequest = ref(null)
     const activeTab = ref('overview')
+    const pipelineView = ref('steps')
     const killArm = ref(false)
     const nonce = ref(0)
     const showModels = ref(false)
-    const showCloudDialog = ref(false)
-    const cloudEstimate = ref({ local: 8, cloud: 2 })
-    const lastStep = ref(null)
     const clockNow = ref(Math.floor(Date.now() / 1000))
+    const diagnosticsSection = ref(null)
+    const evidenceSection = ref(null)
+    const deliverySection = ref(null)
 
     const statusLabel = computed(() => executionLabel(props.project))
     const primaryAction = computed(() => primaryControl(props.project))
-    function performPrimary() {
-      if (primaryAction.value?.kind === 'command') act(primaryAction.value.action)
-      else if (primaryAction.value?.tab) activeTab.value = primaryAction.value.tab
-    }
+    const dotClass = computed(() => statusTone(props.project))
+    const awaiting = computed(() => needsHuman(props.project))
+    const failed = computed(() => ['failed', 'interrupted', 'killed'].includes(executionStatus(props.project)))
+    const progress = computed(() => projectProgress(props.project))
+    const stepLabel = computed(() => stepText(props.project))
+    const nowHint = computed(() => {
+      if (executionStatus(props.project) === 'completed') return '工作流已结束；交付是否获准见“质量与交付”。'
+      if (failed.value && props.project.reason_summary) return props.project.reason_summary
+      return executionHint(props.project)
+    })
     const modelRegistry = computed(() => models.value?.registry || [])
     const projectAssignments = computed(() => models.value?.config?.[props.project.base_name] || {})
-    const dotClass = computed(() => statusTone(props.project))
-    const tabs = computed(() => {
-      const currentTabs = workspaceTabs({
-        consultationPending: props.project.consultation_pending,
-        selectionPending: props.project.selection_pending,
-        diagnostics: diagnostics.value,
-        cloudEnabled: cloudEnabled.value,
-      })
-      return currentTabs
-    })
+    const tabs = computed(() => workspaceTabs({
+      consultationPending: props.project.consultation_pending,
+      selectionPending: props.project.selection_pending,
+      diagnostics: diagnostics.value,
+    }))
     const workspaceActions = computed(() => buildWorkspaceActions(contestDashboard.value, stepsData.value, props.project))
-    const stepLabel = computed(() => stepText(props.project))
-    const phaseNames = {
-      problem_understanding: '题意与数据',
-      model_tournament: '模型竞赛',
-      model_and_solve: '建模与求解',
-      validation: '结果验证',
-      paper_construction: '论文构建',
-      deterministic_paper_audit: '确定性论文审计',
-      review_and_revision: '审稿与修订',
-      final_audit_and_delivery: '最终审计与交付',
-    }
     const contestPhaseLabel = computed(() => {
       const phase = props.project.contest_phase
-      if (!phase) return stepLabel.value
-      return `阶段 ${phase.id} / 8 · ${phaseNames[phase.name] || phase.name}`
+      if (!phase) return '未配置'
+      return `${phase.id} / 8 · ${PHASE_NAMES[phase.name] || phase.name}`
     })
     const schedulerLabel = computed(() => {
       if (!props.project.active_stage) return '未激活'
@@ -391,7 +338,7 @@ export default {
       const value = Math.max(0, Number(seconds) || 0)
       const hours = Math.floor(value / 3600)
       const minutes = Math.floor((value % 3600) / 60)
-      return `${hours}h ${String(minutes).padStart(2, '0')}m`
+      return `${hours} 小时 ${String(minutes).padStart(2, '0')} 分`
     }
     const contestClockLabel = computed(() => {
       const deadline = Number(props.project.contest_deadline_at || 0)
@@ -401,32 +348,36 @@ export default {
       if (clockNow.value < contentFreeze) return `距内容冻结 ${formatRemaining(contentFreeze - clockNow.value)}`
       if (clockNow.value < deliveryFreeze) return `最终审计期 · 距提交 ${formatRemaining(deadline - clockNow.value)}`
       if (clockNow.value < deadline) return `交付冻结 · 距提交 ${formatRemaining(deadline - clockNow.value)}`
-      return '比赛截止时间已到'
+      return '已截止'
     })
 
-    function fetchSteps() {
-      return fetchProjectSteps(props.project.base_name)
+    function performPrimary() {
+      if (primaryAction.value?.kind === 'command') act(primaryAction.value.action)
+      else if (primaryAction.value?.tab) goTo(primaryAction.value.tab)
     }
 
-    function fetchDiagnostics() {
-      return fetchProjectDiagnostics(props.project.base_name)
+    // Go to a view by its current or earlier name (deep links, action items and
+    // child panels still use evidence / delivery / diagnostics / plan).
+    function goTo(key) {
+      const { tab, view } = resolveWorkspaceTab(key)
+      if (!tabs.value.some((available) => available.key === tab)) {
+        activeTab.value = 'overview'
+        return
+      }
+      activeTab.value = tab
+      if (tab === 'pipeline' && view) pipelineView.value = view
+      if (tab === 'quality' && view) {
+        const target = { diagnostics: diagnosticsSection, evidence: evidenceSection, delivery: deliverySection }[view]
+        nextTick(() => target?.value?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }))
+      }
     }
 
-    function fetchCloudConfig() {
-      return fetchProjectCloudConfig(props.project.base_name)
-    }
-
-    function fetchDashboard() {
-      return fetchContestDashboard(props.project.base_name)
-    }
+    function fetchSteps() { return fetchProjectSteps(props.project.base_name) }
+    function fetchDiagnostics() { return fetchProjectDiagnostics(props.project.base_name) }
+    function fetchDashboard() { return fetchContestDashboard(props.project.base_name) }
 
     function refresh() {
-      Promise.allSettled([
-        fetchSteps(),
-        fetchDiagnostics(),
-        fetchCloudConfig(),
-        fetchDashboard(),
-      ])
+      Promise.allSettled([fetchSteps(), fetchDiagnostics(), fetchDashboard()])
       emit('refresh')
     }
 
@@ -470,23 +421,11 @@ export default {
         requestFile({ path: action.file, name: action.file.split('/').pop(), type: 'markdown' })
         return
       }
-      if (action?.tab && tabs.value.some((tab) => tab.key === action.tab)) activeTab.value = action.tab
-      else activeTab.value = 'overview'
+      goTo(action?.tab || 'overview')
     }
 
     function onEsc(event) {
       if (event.key === 'Escape' && !killArm.value) emit('close')
-    }
-
-    async function toggleCloudAcceleration() {
-      if (cloudSaving.value || cloudConfigLoading.value) return
-      const nextEnabled = !cloudEnabled.value
-      try {
-        await setCloudAcceleration(props.project.base_name, nextEnabled)
-        toasts.success(nextEnabled ? '云端加速已开启' : '云端加速已关闭', props.project.base_name)
-      } catch (error) {
-        toasts.error(error.response?.data?.detail || '云端加速设置失败')
-      }
     }
 
     function onDiagnosticsAction(actionId) {
@@ -529,7 +468,7 @@ export default {
         return
       }
       if (actionId === 'open_audit_timeline') {
-        activeTab.value = 'diagnostics'
+        goTo('diagnostics')
         return
       }
       if (actionId === 'retry_human_decision_commit') {
@@ -544,7 +483,6 @@ export default {
         return
       }
       const evidenceMap = {
-        open_runner_log: { path: 'logs/runner.log', type: 'text', name: 'runner.log' },
         open_entry_gate: { path: 'entry_gate.md', type: 'markdown', name: 'entry_gate.md' },
         open_reviewer_entry_artifacts: { path: 'reviewer_entry_map.md', type: 'markdown', name: 'reviewer_entry_map.md' },
         open_consultation_request: { path: `consultation/${props.project.consultation_gate || 'dynamic'}_request.md`, type: 'markdown', name: 'consultation request' },
@@ -576,49 +514,18 @@ export default {
       }
     }
 
-    // Automatic cloud prompts are disabled; full feature removal is deferred.
-    const cloudAcceleratorPromptsEnabled = false
-    let cloudDialogTimer = null
-    function checkCloudAccelerator(currentStep) {
-      if (cloudAcceleratorPromptsEnabled && lastStep.value !== null && currentStep !== lastStep.value) {
-        const computeSteps = [5, 6]
-        if (computeSteps.includes(currentStep)) {
-          cloudEstimate.value = currentStep === 5 ? { local: 6, cloud: 1.5 } : { local: 8, cloud: 2 }
-          if (cloudDialogTimer) clearTimeout(cloudDialogTimer)
-          cloudDialogTimer = setTimeout(() => {
-            cloudDialogTimer = null
-            if (props.project.is_running && !showCloudDialog.value) showCloudDialog.value = true
-          }, 5000)
-        }
-      }
-      lastStep.value = currentStep
-    }
-
-    function onCloudEnabled() {
-      emit('refresh')
-      fetchSteps()
-      fetchCloudConfig()
-    }
-
-    function onCloudPanelChanged() {
-      emit('refresh')
-      fetchCloudConfig()
-    }
-
     watch(() => props.project.base_name, () => {
       resetSteps()
       resetDiagnostics()
       resetContestDashboard()
       fetchSteps()
       fetchDiagnostics()
-      fetchCloudConfig()
       fetchDashboard()
     })
-    watch(() => props.project.current_step, (newStep) => {
+    watch(() => props.project.current_step, () => {
       fetchSteps()
       fetchDiagnostics()
       fetchDashboard()
-      checkCloudAccelerator(newStep)
     })
     watch(() => props.project.consultation_pending, (pending) => {
       if (pending) activeTab.value = 'consultation'
@@ -630,16 +537,19 @@ export default {
     }, { immediate: true })
 
     // ---- tab deep-linking: keep activeTab and route.query.tab in sync ----
-    const VALID_TABS = new Set(['overview', 'pipeline', 'plan', 'logs', 'artifacts', 'evidence', 'delivery', 'solver', 'diagnostics', 'consultation', 'selection', 'cloud'])
     let syncingTab = false
-    // URL -> tab. Only act when the URL explicitly carries a valid tab, so an
-    // absent ?tab leaves the consultation auto-jump / default 'overview' intact.
+    // URL -> tab. Only act when the URL explicitly carries a tab, so an absent
+    // ?tab leaves the human-decision auto-jump / default overview intact.
+    // Earlier names (plan, evidence, delivery, diagnostics) still resolve.
     watch(() => route.query.tab, (tab) => {
-      if (typeof tab !== 'string' || !VALID_TABS.has(tab)) return
-      if (!tabs.value.some((available) => available.key === tab)) return
-      if (tab === activeTab.value) return
+      if (typeof tab !== 'string' || !tab) return
+      const { tab: resolved, view } = resolveWorkspaceTab(tab)
+      if (!tabs.value.some((available) => available.key === resolved)) return
+      // An alias with a nested view (?tab=plan, ?tab=evidence) still selects
+      // its subsection when the grouped tab is already active.
+      if (resolved === activeTab.value && !view) return
       syncingTab = true
-      activeTab.value = tab
+      goTo(tab)
       syncingTab = false
     }, { immediate: true })
     // tab -> URL. Drop the key for 'overview' so the canonical URL stays clean.
@@ -656,7 +566,6 @@ export default {
     onMounted(() => {
       fetchSteps()
       fetchDiagnostics()
-      fetchCloudConfig()
       fetchDashboard()
       loadModels().catch(() => {})
       startPolling(
@@ -677,7 +586,6 @@ export default {
         },
       )
       window.addEventListener('keydown', onEsc)
-      lastStep.value = props.project.current_step
       contestClockTimer = window.setInterval(() => {
         clockNow.value = Math.floor(Date.now() / 1000)
       }, 30000)
@@ -685,7 +593,6 @@ export default {
 
     onBeforeUnmount(() => {
       stopPolling()
-      if (cloudDialogTimer) clearTimeout(cloudDialogTimer)
       if (contestClockTimer) clearInterval(contestClockTimer)
       window.removeEventListener('keydown', onEsc)
     })
@@ -696,6 +603,7 @@ export default {
       contestDashboardLoading,
       workspaceActions,
       activeTab,
+      pipelineView,
       tabs,
       loading,
       artifactRequest,
@@ -703,18 +611,17 @@ export default {
       showModels,
       diagnostics,
       diagnosticsLoading,
-      showCloudDialog,
-      cloudEstimate,
-      cloudConfig,
-      cloudConfigLoading,
-      cloudSaving,
-      cloudEnabled,
-      cloudSwitchLabel,
-      cloudSwitchTitle,
+      diagnosticsSection,
+      evidenceSection,
+      deliverySection,
       statusLabel,
       modelRegistry,
       projectAssignments,
       dotClass,
+      awaiting,
+      failed,
+      progress,
+      nowHint,
       primaryAction,
       performPrimary,
       stepLabel,
@@ -724,11 +631,10 @@ export default {
       rel: relativeTime,
       fetchSteps,
       fetchDiagnostics,
-      fetchCloudConfig,
       fetchDashboard,
-      toggleCloudAcceleration,
       refresh,
       act,
+      goTo,
       requestFile,
       requestPaper,
       onAnswered,
@@ -737,9 +643,6 @@ export default {
       onWorkspaceAction,
       onDiagnosticsAction,
       onAssign,
-      checkCloudAccelerator,
-      onCloudEnabled,
-      onCloudPanelChanged,
     }
   },
 }
@@ -749,164 +652,104 @@ export default {
 .ws {
   position: fixed; inset: 0; z-index: 200;
   display: flex; flex-direction: column;
-  min-width: 0; overflow-x: hidden;
+  min-width: 0; overflow: hidden;
   background: var(--bg);
-  background-image:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 34px 34px;
-  animation: wsin 0.32s var(--ease-out);
-}
-.run-name { display: block; font-size: 11px; color: var(--ink-3); margin-top: 4px; font-weight: 400; }
-.st-interrupted { color: var(--bad); background: var(--bad-dim); }
-.st-retrying { color: var(--amber); background: var(--amber-dim); }
-.st-archiving { color: var(--live); background: var(--live-dim); }
-@keyframes wsin { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: scale(1); } }
-
-.ws-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  padding: 12px 20px; min-height: var(--header-h);
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg) 62%, transparent);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
-  backdrop-filter: blur(22px) saturate(160%);
-  flex-shrink: 0;
-}
-.wh-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.wh-id { min-width: 0; }
-.wh-name { font-size: 17px; font-weight: 700; letter-spacing: 0.01em; }
-.wh-sub { display: flex; align-items: center; gap: 8px; margin-top: 3px; flex-wrap: wrap; }
-.wh-step { font-size: 11px; color: var(--ink-2); }
-.wh-time, .wh-pid { font-size: 11px; color: var(--ink-3); }
-.wh-right { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
-.spin { animation: spin 0.7s linear infinite; }
-.cloud-switch {
-  min-height: 30px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 10px 4px 5px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--panel-2);
-  color: var(--ink-2);
-  font: 600 12px/1 var(--sans);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.cloud-switch:hover:not(:disabled) { border-color: var(--live-line); color: var(--ink); }
-.cloud-switch.on { color: var(--live); border-color: var(--live-line); background: var(--live-dim); }
-.cloud-switch:disabled { opacity: 0.65; cursor: wait; }
-.switch-track {
-  width: 28px;
-  height: 16px;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--line);
-  display: inline-flex;
-  align-items: center;
-  transition: background 0.16s var(--ease);
-}
-.switch-thumb {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--ink-3);
-  transform: translateX(0);
-  transition: transform 0.16s var(--ease), background 0.16s var(--ease);
-}
-.cloud-switch.on .switch-track { background: var(--live-line); }
-.cloud-switch.on .switch-thumb { background: var(--live); transform: translateX(12px); }
-
-.ws-tabs {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-  overflow-x: auto;
-  flex-shrink: 0;
-}
-.ws-tab {
-  min-height: 32px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 11px;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--ink-3);
-  font: 700 12px/1 var(--sans);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.ws-tab:hover { color: var(--ink); background: var(--panel-2); }
-.ws-tab.on { color: var(--accent-ink); background: var(--grad); border-color: transparent; box-shadow: 0 2px 12px var(--accent-glow); }
-.ws-tab.attention { color: var(--amber); }
-.ws-tab.attention.on { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); box-shadow: none; }
-
-.ws-scroll { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 20px 32px; display: flex; flex-direction: column; gap: 16px; }
-
-.ws-split { display: grid; grid-template-columns: 0.92fr 1.25fr; gap: 16px; min-height: 520px; }
-.ws-logs { height: 62vh; min-height: 420px; }
-.ws-art { height: 62vh; min-height: 420px; overflow: hidden; }
-.tab-panel { height: calc(100vh - 170px); min-height: 520px; }
-.tab-stack, .overview { display: flex; flex-direction: column; gap: 16px; }
-.overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.ov-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 14px;
-  border-color: var(--line);
-  color: var(--ink);
-  cursor: pointer;
-  text-align: left;
-}
-.ov-card:hover { background: var(--panel-2); border-color: var(--line-2); }
-.ov-l { color: var(--ink-3); }
-.ov-v { color: var(--ink); font-size: 13px; line-height: 1.45; }
-.empty-panel {
-  min-height: 240px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--ink-3);
 }
 
-.tag { display: inline-flex; align-items: center; gap: 6px; font: 600 11px/1 var(--mono); letter-spacing: 0.05em; text-transform: uppercase; padding: 5px 9px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel-2); color: var(--ink-2); }
-.st-running { color: var(--live); border-color: var(--live-dim); background: var(--live-dim); }
-.st-awaiting_consultation { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
-.st-awaiting_selection { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
-.st-completed { color: var(--ok); border-color: var(--ok-dim); background: var(--ok-dim); }
-.st-paused { color: var(--paused); }
-.st-failed, .st-killed { color: var(--bad); border-color: var(--bad-dim); background: var(--bad-dim); }
-
-@media (max-width: 1080px) {
-  .ws-split { grid-template-columns: 1fr; }
-  .ws-logs, .ws-art { height: auto; min-height: 380px; }
-  .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* ---- header ---- */
+.ws-top { flex-shrink: 0; background: var(--surface); border-bottom: 1px solid var(--line); }
+.ws-top-in {
+  max-width: var(--content-w); margin: 0 auto;
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 24px 10px;
 }
-@media (max-width: 640px) {
-  .ws-head { padding: 12px; gap: 12px; flex-direction: column; align-items: stretch; }
-  .wh-left { flex: 1; gap: 10px; }
-  .wh-id { overflow: hidden; }
-  .wh-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wh-sub { gap: 6px; }
-  .wh-right { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-  .wh-right .btn { min-width: 32px; min-height: 32px; width: auto; height: auto; padding: 6px 9px; font-size: 12px; }
-  .cloud-switch { padding-right: 5px; }
-  .cloud-switch .hide-xs { display: none; }
-  .ws-tabs { padding-inline: 12px; }
-  .ws-scroll { padding: 16px 12px 24px; }
-  .overview-grid { grid-template-columns: 1fr; }
-  .tab-panel { height: auto; min-height: 420px; }
+.back { margin-left: -8px; }
+.ident { flex: 1; min-width: 0; }
+.title { font-size: 18px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 13px; }
+.meta .pill .dot { width: 6px; height: 6px; }
+.step { color: var(--ink); }
+.muted { color: var(--ink-3); }
+.run { font-size: 12px; }
+.controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.armed { background: var(--bad); color: #fff; border-color: var(--bad); }
+.spin { animation: spin 0.8s linear infinite; }
+
+.tabs {
+  max-width: var(--content-w); margin: 0 auto;
+  display: flex; gap: 2px; padding: 0 16px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  position: relative;
+  border: 0; background: none; cursor: pointer; white-space: nowrap;
+  padding: 10px 10px 11px; color: var(--ink-2);
+  font: 500 13.5px var(--sans);
+}
+.tab:hover { color: var(--ink); }
+.tab.on { color: var(--ink); }
+.tab.on::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
+.tab.attention { color: var(--amber); }
+.badge { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); margin-left: 6px; vertical-align: 2px; }
+
+/* ---- body ---- */
+.ws-body { flex: 1; min-height: 0; overflow-y: auto; }
+.view { max-width: var(--content-w); margin: 0 auto; padding: 22px 24px 56px; }
+.view.fill { padding-bottom: 24px; }
+.ws-fill { min-height: calc(100vh - 190px); }
+
+.overview, .quality { display: flex; flex-direction: column; gap: 18px; }
+.block { display: flex; flex-direction: column; gap: 10px; }
+.block-title { font-size: 14px; font-weight: 600; }
+
+/* 当前状态 */
+.now { padding: 18px 20px; display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 14px 24px; align-items: start; }
+.now-label { font-size: 12px; color: var(--ink-3); }
+.now-step { font-size: 17px; font-weight: 600; margin-top: 2px; }
+.now-hint { margin-top: 4px; color: var(--ink-2); }
+.now-hint.warn { color: var(--amber); }
+.now-hint.bad { color: var(--bad); }
+.now-progress { display: flex; align-items: center; gap: 10px; padding-top: 22px; font-size: 13px; color: var(--ink-2); }
+.bar { flex: 1; height: 6px; border-radius: 6px; background: var(--panel-3); overflow: hidden; }
+.bar span { display: block; height: 100%; border-radius: 6px; background: var(--ink-3); }
+.bar span.live { background: var(--accent); }
+.bar span.ok { background: var(--ok); }
+.bar span.amber { background: var(--amber); }
+.bar span.bad { background: var(--bad); }
+.facts {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; gap: 8px 32px;
+  padding-top: 14px; border-top: 1px solid var(--line);
+}
+.facts dt { font-size: 12px; color: var(--ink-3); }
+.facts dd { font-size: 13.5px; margin-top: 1px; }
+
+.subnav { margin-bottom: 14px; }
+.seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--panel-2); border-radius: var(--r); }
+.seg-b { border: 0; background: transparent; color: var(--ink-2); font: 500 13px var(--sans); padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+.seg-b:hover { color: var(--ink); }
+.seg-b.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+
+.calm { display: flex; align-items: center; gap: 8px; padding: 14px 16px; color: var(--ok); }
+.invalid { padding: 14px 16px; border-color: var(--bad); }
+.invalid-head { display: flex; align-items: flex-start; gap: 8px; color: var(--bad); }
+.invalid-head :deep(svg) { flex-shrink: 0; margin-top: 2px; }
+.invalid dl { margin-top: 10px; display: grid; gap: 6px; font-size: 12.5px; }
+.invalid dl div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; }
+.invalid dt { color: var(--ink-3); }
+.invalid dd { color: var(--ink-2); overflow-wrap: anywhere; }
+.quality .block { scroll-margin-top: 16px; }
+
+@media (max-width: 720px) {
+  .ws-top-in { padding: 10px 12px 6px; flex-wrap: wrap; }
+  .controls { width: 100%; justify-content: flex-end; }
+  .title { font-size: 16px; }
+  .run { display: none; }
+  .tabs { padding: 0 6px; }
+  .view { padding: 16px 12px 40px; }
+  .now { grid-template-columns: 1fr; }
+  .now-progress { padding-top: 0; }
+  .hide-xs { display: none; }
 }
 </style>

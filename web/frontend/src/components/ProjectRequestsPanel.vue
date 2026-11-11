@@ -124,7 +124,7 @@ export default {
 .req-meta { font-size: 11px; color: var(--ink-3); }
 .req-note { font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
 .req-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.badge { font-size: 10px; line-height: 1; padding: 4px 7px; border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-2); background: var(--panel); }
+.badge { font-size: 11.5px; line-height: 1; padding: 4px 7px; border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-2); background: var(--panel); }
 .st-pending { color: var(--amber); border-color: var(--amber-line); background: var(--amber-dim); }
 .st-approved { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: var(--ok-dim); }
 .st-rejected, .st-failed { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); background: var(--bad-dim); }

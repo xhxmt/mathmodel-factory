@@ -1,14 +1,14 @@
 <template>
   <section class="evidence panel">
     <header>
-      <div class="eyebrow">MACHINE EVIDENCE</div>
+      <div class="eyebrow">机器证据</div>
       <h2>证据驾驶舱</h2>
       <p>集中查看规范结果、求解回执、分阶段审计和三角色结论。</p>
     </header>
 
     <div class="method-strip">
-      <div><span>PRIMARY</span><strong class="mono">{{ canonical.primary_method || '未声明' }}</strong></div>
-      <div><span>AUXILIARY</span><strong class="mono">{{ canonical.auxiliary_method || 'NONE' }}</strong></div>
+      <div><span>主方法</span><strong class="mono">{{ canonical.primary_method || '未声明' }}</strong></div>
+      <div><span>辅助方法</span><strong class="mono">{{ canonical.auxiliary_method || '无' }}</strong></div>
       <button v-if="canonical.path" class="btn btn-sm btn-ghost" @click="open(canonical.path)">查看 canonical results</button>
     </div>
 
@@ -77,12 +77,12 @@ export default {
 
 <style scoped>
 .evidence { padding: 18px; }
-.eyebrow { color: var(--live); font: 800 9px var(--mono); letter-spacing: .16em; }
+.eyebrow { color: var(--live); font: 600 12px var(--sans); letter-spacing: 0; }
 h2 { margin: 4px 0 6px; font-size: 20px; }
 header p { margin: 0; color: var(--ink-2); font-size: 12px; }
 .method-strip { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: center; margin: 16px 0 10px; padding: 11px 12px; border: 1px solid var(--live-line); border-radius: var(--r); background: var(--live-dim); }
 .method-strip div { display: flex; flex-direction: column; gap: 3px; }
-.method-strip span { color: var(--live); font-size: 9px; letter-spacing: .1em; }
+.method-strip span { color: var(--live); font-size: 11.5px; letter-spacing: 0; }
 .method-strip strong { font-size: 12px; }
 .evidence-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .e-card { padding: 13px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
@@ -90,13 +90,13 @@ h3 { margin: 0 0 10px; font-size: 12px; }
 .headline-list { display: grid; gap: 7px; }
 .headline-list div, .role-row, .audit-row { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
 .headline-list div { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
-.headline-list span { color: var(--ink-3); font-size: 10px; }
+.headline-list span { color: var(--ink-3); font-size: 11.5px; }
 .headline-list strong { font-size: 11px; text-align: right; }
 .big-number { color: var(--live); font-size: 28px; font-weight: 900; }
 .big-number small { color: var(--ink-3); font-size: 12px; }
-.e-card p, .empty { color: var(--ink-3); font-size: 10px; }
+.e-card p, .empty { color: var(--ink-3); font-size: 11.5px; }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 9px 0; }
-.chips span { padding: 3px 6px; border-radius: 999px; background: var(--bg-2); color: var(--ink-2); font-size: 9px; }
+.chips span { padding: 3px 6px; border-radius: 999px; background: var(--bg-2); color: var(--ink-2); font-size: 11.5px; }
 .audit-row { width: 100%; padding: 7px 2px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; font: 11px var(--sans); }
 .audit-row:disabled { cursor: default; }
 .role-row { padding: 8px 2px; border-bottom: 1px solid var(--line); font-size: 11px; }

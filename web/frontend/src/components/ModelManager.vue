@@ -3,7 +3,7 @@
     <div class="modal panel rise">
       <!-- header -->
       <div class="m-head">
-        <div class="mh-l"><Icon name="cpu" :size="17" /><span>模型管理 · MODELS</span></div>
+        <div class="mh-l"><Icon name="cpu" :size="17" /><span>模型管理</span></div>
         <div class="tabs">
           <button class="tab" :class="{ on: tab === 'registry' }" @click="tab = 'registry'">模型库</button>
           <button class="tab" :class="{ on: tab === 'default' }" @click="tab = 'default'">默认预设</button>
@@ -252,17 +252,17 @@ export default {
 .mc { border: 1px solid var(--line-2); border-radius: var(--r); padding: 11px 12px; background: var(--panel-2); transition: opacity 0.15s var(--ease); }
 .mc.off { opacity: 0.5; }
 .mc-top { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
-.badge { font: 700 8.5px/1 var(--mono); letter-spacing: 0.08em; padding: 4px 6px; border-radius: var(--r-xs); flex-shrink: 0; }
+.badge { font: 700 8.5px/1 var(--mono); letter-spacing: 0; padding: 4px 6px; border-radius: var(--r-xs); flex-shrink: 0; }
 .badge.ag { background: var(--live-dim); color: var(--live); }
 .badge.api { background: var(--amber-dim); color: var(--amber); }
 .f-label { flex: 1; padding: 7px 10px; font-size: 13px; font-weight: 600; }
 .sw { display: flex; align-items: center; gap: 6px; cursor: pointer; font: 600 11px/1 var(--mono); color: var(--ink-2); white-space: nowrap; }
-.sw input { accent-color: var(--ok); width: 15px; height: 15px; }
+.sw input { accent-color: var(--accent); width: 15px; height: 15px; }
 
 .mc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
 .fld { display: flex; flex-direction: column; gap: 4px; }
 .fld.wide { grid-column: span 2; }
-.fl { font: 500 9.5px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+.fl { font: 500 12px/1 var(--sans); letter-spacing: 0; color: var(--ink-3); }
 .fl-hint { text-transform: none; letter-spacing: 0; color: var(--ink-3); opacity: 0.7; }
 .fld .field { padding: 8px 10px; font-size: 12.5px; }
 
@@ -276,7 +276,7 @@ export default {
 .ri-tx { min-width: 0; }
 .ri-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
 .api-ok { font: 700 8px/1 var(--mono); color: var(--amber); background: var(--amber-dim); padding: 3px 5px; border-radius: var(--r-xs); }
-.ri-def { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
+.ri-def { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
 .row-sel { display: flex; gap: 7px; flex-shrink: 0; }
 .sel { width: 178px; padding: 8px 10px; font-size: 12px; cursor: pointer; }
 

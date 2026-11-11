@@ -36,29 +36,36 @@ export function buildLogErrorContext(lines, radius = 2) {
   return safe.slice(Math.max(0, idx - radius), Math.min(safe.length, idx + radius + 1))
 }
 
-export function workspaceTabs({ consultationPending = false, selectionPending = false, diagnostics = null, cloudEnabled = false } = {}) {
+// Six views.  The step list and the task graph share "流程"; evidence,
+// delivery and diagnostics share "质量与交付".  Human decisions get their own
+// tab, placed right after the overview, only while one is pending.
+export function workspaceTabs({ consultationPending = false, selectionPending = false, diagnostics = null } = {}) {
   const hasDiagnostics = Boolean(diagnostics?.status?.reason_code)
   const tabs = [
     { key: 'overview', label: '概览', icon: 'activity' },
-    { key: 'pipeline', label: '流水线', icon: 'layers' },
-    { key: 'plan', label: '任务图', icon: 'git-branch' },
+    { key: 'pipeline', label: '流程', icon: 'layers' },
+    { key: 'artifacts', label: '文件', icon: 'folder' },
     { key: 'logs', label: '日志', icon: 'terminal' },
-    { key: 'artifacts', label: '产物', icon: 'folder' },
-    { key: 'evidence', label: '证据', icon: 'shield' },
-    { key: 'delivery', label: '交付', icon: 'package' },
-    { key: 'solver', label: '求解任务', icon: 'cpu' },
-    { key: 'diagnostics', label: '诊断', icon: 'alert-triangle', attention: hasDiagnostics },
-    { key: 'cloud', label: '云端', icon: 'zap', attention: cloudEnabled },
+    { key: 'solver', label: '求解', icon: 'cpu' },
+    { key: 'quality', label: '质量与交付', icon: 'shield', attention: hasDiagnostics },
   ]
-  if (consultationPending) {
-    const deliveryIndex = tabs.findIndex((tab) => tab.key === 'delivery')
-    tabs.splice(deliveryIndex, 0, { key: 'consultation', label: '咨询', icon: 'message-square', attention: true })
-  }
-  if (selectionPending) {
-    const diagnosticsIndex = tabs.findIndex((tab) => tab.key === 'diagnostics')
-    tabs.splice(diagnosticsIndex, 0, { key: 'selection', label: '人工决策', icon: 'git-branch', attention: true })
-  }
+  if (consultationPending) tabs.splice(1, 0, { key: 'consultation', label: '回填咨询', icon: 'message-square', attention: true })
+  if (selectionPending) tabs.splice(1, 0, { key: 'selection', label: '人工决策', icon: 'git-branch', attention: true })
   return tabs
+}
+
+// Earlier tab names still arrive from deep links (?tab=), action items and
+// child panels; map each onto the view that now holds it.
+export const WORKSPACE_TAB_ALIASES = Object.freeze({
+  plan: { tab: 'pipeline', view: 'plan' },
+  evidence: { tab: 'quality', view: 'evidence' },
+  delivery: { tab: 'quality', view: 'delivery' },
+  diagnostics: { tab: 'quality', view: 'diagnostics' },
+})
+
+export function resolveWorkspaceTab(key) {
+  const alias = WORKSPACE_TAB_ALIASES[key]
+  return alias ? { ...alias } : { tab: key, view: null }
 }
 
 export const CONTEST_PHASES = CONTEST_PHASES_V1
@@ -187,21 +194,3 @@ export function buildConsultationWorkflow(request = {}, answer = '') {
   }
 }
 
-export function buildCloudTaskPanel(status = {}, projectConfig = {}) {
-  const solvers = projectConfig.solver_types?.length
-    ? projectConfig.solver_types
-    : status.solvers || []
-  return {
-    available: Boolean(status.available),
-    enabled: Boolean(projectConfig.enabled),
-    region: status.region || projectConfig.region || 'N/A',
-    service: status.service || status.service_name || projectConfig.service_name || 'N/A',
-    threshold: projectConfig.threshold_time || 300,
-    solvers,
-    badges: [
-      status.available ? 'Cloud Run 可用' : 'Cloud Run 不可用',
-      projectConfig.enabled ? '本项目已启用' : '本项目未启用',
-      solvers.length ? solvers.join(', ') : '无求解器配置',
-    ],
-  }
-}

@@ -131,23 +131,23 @@ export default {
 <style scoped>
 .cb-root { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .cb-block { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
-.cb-label { color: var(--ink-3); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.cb-label { color: var(--ink-3); font-size: 11.5px; font-weight: 600; letter-spacing: 0; }
 .cb-notice { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: var(--r); color: var(--ink-3); }
 .cb-notice.level-error { border-style: solid; border-color: var(--bad); color: var(--bad); background: var(--bad-dim); }
 .cb-kv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 .cb-kv dt, .cb-kv dd { margin: 0; padding: 8px 10px; border-right: 1px solid var(--line); }
-.cb-kv dt { color: var(--ink-3); font-size: 10px; background: var(--panel-3); }
+.cb-kv dt { color: var(--ink-3); font-size: 11.5px; background: var(--panel-3); }
 .cb-kv dd { color: var(--ink-1); font-size: 11.5px; overflow-wrap: anywhere; }
 .cb-method-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .cb-method { display: flex; flex-direction: column; gap: 8px; min-height: 265px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
 .cb-method.selected { border-color: var(--ok); background: var(--ok-dim); }
 .cb-method-top, .cb-node-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .cb-rank { color: var(--amber); font-weight: 900; }
-.cb-source { color: var(--ink-3); font-size: 9.5px; text-align: right; }
+.cb-source { color: var(--ink-3); font-size: 11.5px; text-align: right; }
 .cb-method h3 { margin: 0; font-size: 14px; }
-.cb-path, .cb-risk, .cb-node-method { color: var(--ink-3); font-size: 10px; overflow-wrap: anywhere; }
+.cb-path, .cb-risk, .cb-node-method { color: var(--ink-3); font-size: 11.5px; overflow-wrap: anywhere; }
 .cb-badges { display: flex; flex-wrap: wrap; gap: 5px; }
-.cb-badges span { padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink-2); font-size: 10px; }
+.cb-badges span { padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink-2); font-size: 11.5px; }
 .cb-method p { flex: 1; margin: 0; color: var(--ink-2); font-size: 11.5px; line-height: 1.45; }
 .cb-dag { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .75fr); gap: 12px; }
 .cb-node-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -155,13 +155,13 @@ export default {
 .cb-node-order { display: grid; place-items: center; flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--amber-dim); color: var(--amber); font-weight: 900; }
 .cb-node-body { min-width: 0; }
 .cb-node-head strong { font-size: 12px; }
-.cb-node-head span { flex: none; color: var(--amber); font-size: 9px; }
-.cb-node p { margin: 5px 0; color: var(--ink-2); font-size: 10.5px; line-height: 1.4; }
+.cb-node-head span { flex: none; color: var(--amber); font-size: 11.5px; }
+.cb-node p { margin: 5px 0; color: var(--ink-2); font-size: 11.5px; line-height: 1.4; }
 .cb-edge-list { padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
-.cb-edge-title { margin-bottom: 7px; font-size: 11px; font-weight: 800; }
-.cb-edge { display: grid; grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr); align-items: center; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--ink-2); font-size: 10px; }
+.cb-edge-title { margin-bottom: 7px; font-size: 11px; font-weight: 600; }
+.cb-edge { display: grid; grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr); align-items: center; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--ink-2); font-size: 11.5px; }
 .cb-edge:last-child { border-bottom: 0; }
-.cb-edge em { grid-column: 1 / -1; color: var(--ink-3); font-size: 9px; font-style: normal; }
+.cb-edge em { grid-column: 1 / -1; color: var(--ink-3); font-size: 11.5px; font-style: normal; }
 .cb-artifact { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); color: var(--ink-1); text-align: left; cursor: pointer; }
 .cb-artifact span { display: flex; flex: 1; flex-direction: column; gap: 2px; }
 .cb-artifact small { color: var(--ink-3); }

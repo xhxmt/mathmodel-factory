@@ -37,19 +37,21 @@ export default {
 </script>
 
 <style scoped>
-.timing { padding: 14px; border-left: 3px solid var(--line-2); }
-.risk-safe { border-left-color: var(--ok); }
-.risk-guarded, .risk-warning { border-left-color: var(--amber); }
-.risk-critical, .risk-expired { border-left-color: var(--bad); }
+.timing { padding: 16px 18px; }
 .timing-head, .mode-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.timing-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 800; }
-.risk-pill { padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; color: var(--ink-2); font-size: 10px; }
+.timing-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.risk-pill { padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; color: var(--ink-2); font-size: 11.5px; }
+/* Deadline risk stays scannable: amber when it needs attention, red when the
+   content freeze is at risk or past; a safe forecast keeps the neutral pill. */
+.risk-guarded .risk-pill, .risk-warning .risk-pill { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-line); }
+.risk-critical .risk-pill, .risk-expired .risk-pill { color: var(--bad); background: var(--bad-dim); border-color: var(--bad); }
+.risk-critical, .risk-expired { border-color: var(--bad); }
 .mode-row { margin-top: 10px; padding: 9px 10px; border-radius: var(--r-sm); background: var(--panel-2); }
 .mode-row strong { font-size: 12px; }
 .mode-row span { color: var(--ink-2); font-size: 11px; text-align: right; }
 .timing-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 .timing-grid div { display: flex; flex-direction: column; gap: 4px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); }
-.timing-grid span { color: var(--ink-3); font-size: 9.5px; }
+.timing-grid span { color: var(--ink-3); font-size: 11.5px; }
 .timing-grid b { font-size: 11px; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .mode-row { align-items: flex-start; flex-direction: column; }

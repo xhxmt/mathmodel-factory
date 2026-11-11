@@ -16,15 +16,6 @@ def run_node(script: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_cloud_accelerator_does_not_invent_runtime_fallbacks():
-    component = (
-        REPO_ROOT / "web" / "frontend" / "src" / "components" / "CloudAcceleratorDialog.vue"
-    ).read_text(encoding="utf-8")
-
-    assert "cloudStatus.solvers?.join(', ') || '未报告'" in component
-    assert "python, julia" not in component
-
-
 def test_selection_request_binding_does_not_hide_gate_controls():
     component = (
         REPO_ROOT / "web" / "frontend" / "src" / "components" / "SelectionPanel.vue"
@@ -196,7 +187,6 @@ def test_frontend_contract_normalizers_shape_api_payloads():
 import assert from 'node:assert/strict'
 import {
   normalizeArtifact,
-  normalizeCloudConfig,
   normalizeProjectStatus,
   normalizeStepsPayload,
 } from './web/frontend/src/lib/contracts.js'
@@ -281,43 +271,6 @@ assert.deepEqual(normalizedSteps.open_issue_items[0], {
   issue: 'Fix appendix',
   required_action: '',
 })
-assert.deepEqual(normalizeCloudConfig({ enabled: 1, revision: '7', solver_types: 'python,julia' }), {
-  enabled: true,
-  revision: 7,
-  env_file: '',
-  threshold_time: 300,
-  solver_types: ['python', 'julia'],
-  project_id: '',
-  region: '',
-  service_name: '',
-})
-"""
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
-def test_cloud_controller_forwards_policy_revision():
-    result = run_node(
-        """
-import assert from 'node:assert/strict'
-import { createProjectCloudConfigController } from './web/frontend/src/composables/useProjectCloudConfig.js'
-
-const calls = []
-const controller = createProjectCloudConfigController({
-  cloudApi: {
-    projectConfig: async () => ({ enabled: false, revision: 12, solver_types: ['python'] }),
-    enable: async (baseName, revision) => {
-      calls.push([baseName, revision])
-      return { config: { enabled: true, revision: 13, solver_types: ['python'] } }
-    },
-  },
-})
-await controller.fetchCloudConfig('demo')
-await controller.setCloudAcceleration('demo', true)
-
-assert.deepEqual(calls, [['demo', 12]])
-assert.equal(controller.cloudConfig.value.revision, 13)
 """
     )
 
@@ -554,11 +507,27 @@ assert.equal(archives[0].running_count, 1)
 assert.deepEqual(filterProblemArchives(archives, { query: 'a_old' }).map((item) => item.key), ['sha256:a'])
 assert.deepEqual(filterProblemArchives(archives, { statusFilter: 'running' }).map((item) => item.key), ['sha256:a'])
 
+// One running predicate: retrying and archiving runs count as running everywhere.
+for (const state of ['retrying', 'archiving']) {
+  const active = buildProblemArchives([{ base_name: 'c', problem_key: 'sha256:c', status: state, execution_state: state }])
+  assert.equal(active[0].running_count, 1, state)
+  assert.equal(filterProblemArchives(active, { statusFilter: 'running' }).length, 1, state)
+}
+
 const store = createProjectStore({ projectsApi: { list: async () => runs } })
 await store.fetchProjects()
+// Browsing lists each run once: the running a_new is under "running", not in its problem group.
+assert.deepEqual(store.running.value.map((p) => p.base_name), ['a_new'])
 assert.equal(store.archives.value.length, 2)
-assert.equal(store.filteredArchives.value[0].run_count, 2)
+assert.deepEqual(store.filteredArchives.value[0].runs.map((p) => p.base_name), ['a_old'])
 assert.equal(store.counts.value.problems, 2)
+assert.equal(store.counts.value.running, 1)
+// Searching or filtering looks at every run, so the running one is still found.
+store.query.value = 'a_new'
+assert.deepEqual(store.filteredArchives.value.map((item) => item.run_count), [2])
+store.query.value = ''
+store.statusFilter.value = 'running'
+assert.deepEqual(store.filteredArchives.value.map((item) => item.key), ['sha256:a'])
 """
     )
 
@@ -669,11 +638,11 @@ def test_workspace_ui_helpers_cover_dashboard_enhancements():
 import assert from 'node:assert/strict'
 import {
   LOG_LEVELS,
-  buildCloudTaskPanel,
   buildConsultationWorkflow,
   buildLogErrorContext,
   filterLogLines,
   priorityArtifacts,
+  resolveWorkspaceTab,
   workspaceTabs,
 } from './web/frontend/src/lib/workspaceUi.js'
 
@@ -690,12 +659,19 @@ assert.deepEqual(buildLogErrorContext(logLines, 1).map((l) => l.n), [2, 3, 4])
 const tabs = workspaceTabs({
   consultationPending: true,
   diagnostics: { status: { reason_code: 'runner_failed' } },
-  cloudEnabled: true,
 })
-assert.deepEqual(tabs.map((t) => t.key), ['overview', 'pipeline', 'plan', 'logs', 'artifacts', 'evidence', 'consultation', 'delivery', 'solver', 'diagnostics', 'cloud'])
-assert.equal(tabs.find((t) => t.key === 'diagnostics').attention, true)
+assert.deepEqual(tabs.map((t) => t.key), ['overview', 'consultation', 'pipeline', 'artifacts', 'logs', 'solver', 'quality'])
+assert.equal(tabs.find((t) => t.key === 'quality').attention, true)
 assert.equal(workspaceTabs({}).some((t) => t.key === 'consultation'), false)
+assert.equal(workspaceTabs({}).some((t) => t.key === 'cloud'), false)
 assert.equal(workspaceTabs({ selectionPending: true }).find((t) => t.key === 'selection').attention, true)
+assert.deepEqual(workspaceTabs({ selectionPending: true }).map((t) => t.key).slice(0, 2), ['overview', 'selection'])
+// Earlier tab names (deep links, action items, child panels) land in their merged view.
+assert.deepEqual(resolveWorkspaceTab('plan'), { tab: 'pipeline', view: 'plan' })
+assert.deepEqual(resolveWorkspaceTab('diagnostics'), { tab: 'quality', view: 'diagnostics' })
+assert.deepEqual(resolveWorkspaceTab('evidence'), { tab: 'quality', view: 'evidence' })
+assert.deepEqual(resolveWorkspaceTab('delivery'), { tab: 'quality', view: 'delivery' })
+assert.deepEqual(resolveWorkspaceTab('logs'), { tab: 'logs', view: null })
 
 const artifacts = priorityArtifacts([
   { path: 'logs/runner.log', name: 'runner.log', type: 'text', group: 'diagnostics' },
@@ -712,11 +688,6 @@ const workflow = buildConsultationWorkflow({
 assert.equal(workflow.ready, false)
 assert.equal(workflow.checks.find((c) => c.key === 'length').ok, false)
 assert.equal(workflow.evidence.length, 2)
-
-assert.deepEqual(buildCloudTaskPanel(
-  { available: true, region: 'asia-east1', service: 'solver', solvers: ['python'] },
-  { enabled: true, solver_types: ['python', 'julia'], threshold_time: 300 },
-).badges, ['Cloud Run 可用', '本项目已启用', 'python, julia'])
 """
     )
 

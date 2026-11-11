@@ -39,7 +39,7 @@ def _run(project: Path, *args: str, check: bool = True) -> subprocess.CompletedP
     return subprocess.run(
         [str(WRAPPER), *args],
         cwd=project,
-        env={**os.environ, "CLOUD_SOLVER_QUARANTINED": "true"},
+        env=dict(os.environ),
         capture_output=True,
         text=True,
         timeout=20,

@@ -28,7 +28,6 @@ def test_deploy_script_runs_preflight_for_secret_manager_contract():
         "pyproject.toml",
         "uv.lock",
         "web/backend/requirements.lock",
-        "cloud/requirements.lock",
         "web/frontend/package-lock.json",
     ):
         assert locked_input in deploy
@@ -185,7 +184,6 @@ def test_reproducible_build_inputs_are_present_and_exported_from_uv_lock():
         REPO_ROOT / "pyproject.toml",
         REPO_ROOT / "uv.lock",
         REPO_ROOT / "web/backend/requirements.lock",
-        REPO_ROOT / "cloud/requirements.lock",
         REPO_ROOT / "web/frontend/package-lock.json",
     )
     assert all(path.is_file() and path.stat().st_size > 0 for path in expected)
@@ -193,9 +191,5 @@ def test_reproducible_build_inputs_are_present_and_exported_from_uv_lock():
     assert "--extra web" in web_export.splitlines()[1]
     assert "--extra models" in web_export.splitlines()[1]
     assert "google-antigravity==0.1.0" in web_export
-    assert "--extra cloud" in expected[3].read_text(encoding="utf-8").splitlines()[1]
-
-    dockerfile = (REPO_ROOT / "cloud/Dockerfile").read_text(encoding="utf-8")
-    assert "COPY requirements.lock" in dockerfile
-    assert "--require-hashes -r requirements.lock" in dockerfile
-    assert "COPY requirements.txt" not in dockerfile
+    # The Cloud Run solver and its hash-locked image export were removed.
+    assert not (REPO_ROOT / "cloud").exists()

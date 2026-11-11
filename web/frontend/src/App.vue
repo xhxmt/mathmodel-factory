@@ -6,152 +6,133 @@
   <template v-else>
     <LoginForm v-if="showLogin && !isAuthenticated" closable @login-success="onLogin" @close="showLogin = false" />
 
-    <div v-show="!selectedProject" class="console" :class="{ 'guest-console': !isAuthenticated }" :aria-hidden="selectedProject ? 'true' : 'false'">
-      <header class="rail">
-        <div class="brand">
-          <div class="mark"><Icon name="layers" :size="18" /></div>
-          <div class="brand-tx">
-            <div class="brand-name mono">PAPER FACTORY</div>
-            <div class="brand-sub mono">{{ isAuthenticated ? '建模工坊 · CONTROL' : '论文展厅 · SHOWCASE' }}</div>
+    <div v-show="!selectedProject" class="console" :aria-hidden="selectedProject ? 'true' : 'false'">
+      <header class="topbar">
+        <div class="topbar-in">
+          <div class="brand">
+            <div class="mark"><Icon name="layers" :size="15" /></div>
+            <span class="brand-name">建模工坊</span>
           </div>
-        </div>
 
-        <div v-if="isAuthenticated" class="kpis">
-          <button class="kpi amber" :class="{ flash: counts.needs > 0 }" @click="jumpNeeds" :disabled="!counts.needs">
-            <span class="k-val tnum">{{ counts.needs }}</span><span class="k-lbl">待你处理</span>
-          </button>
-          <div class="kpi"><span class="k-val live tnum">{{ counts.running }}</span><span class="k-lbl">运行中</span></div>
-          <div class="kpi"><span class="k-val ok tnum">{{ counts.completed }}</span><span class="k-lbl">已完成</span></div>
-          <div class="kpi"><span class="k-val tnum">{{ counts.total }}</span><span class="k-lbl">总数</span></div>
-        </div>
-        <div v-else class="guest-count mono">
-          <Icon name="book-open" :size="14" />
-          <span class="tnum">{{ showcasePapers.length }}</span> 篇展示论文
-        </div>
+          <div v-if="isAuthenticated" class="search">
+            <Icon name="search" :size="14" />
+            <input v-model="query" class="search-in" placeholder="搜索题目或运行…" spellcheck="false" />
+            <button v-if="query" class="clr" @click="query = ''" title="清除"><Icon name="x" :size="12" /></button>
+          </div>
+          <div v-else class="spacer"></div>
 
-        <div class="rr">
-          <template v-if="isAuthenticated">
-            <button class="btn btn-amber" @click="openNew"><Icon :name="isAdmin ? 'plus' : 'send'" :size="15" /> <span class="hide-sm">{{ isAdmin ? '新建' : '申请' }}</span></button>
-            <div class="hb mono" :class="{ off: !wsConnected }" :title="wsConnected ? '实时连接正常' : '正在重连'">
-              <span class="dot" :class="wsConnected ? 'live' : 'bad'"></span>{{ wsConnected ? 'LIVE' : 'RECONN' }}
+          <div class="tools">
+            <template v-if="isAuthenticated">
+              <button class="btn btn-primary btn-sm" @click="openNew"><Icon :name="isAdmin ? 'plus' : 'send'" :size="14" /><span class="hide-sm">{{ isAdmin ? '新建项目' : '申请项目' }}</span></button>
+              <span class="conn" :class="{ off: !wsConnected }" role="status" :aria-label="wsConnected ? '实时连接正常' : '实时连接断开，正在重连'" :title="wsConnected ? '实时连接正常' : '实时连接断开，正在重连'"><span class="dot" :class="wsConnected ? 'ok' : 'bad'"></span></span>
+              <button class="btn btn-icon btn-ghost palette-btn" @click="showPalette = true" title="命令面板 (⌘K)"><Icon name="command" :size="16" /></button>
+              <button class="btn btn-icon btn-ghost" @click="showRequests = true" title="项目申请"><Icon name="inbox" :size="16" /></button>
+              <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showModels = true" title="模型管理"><Icon name="cpu" :size="16" /></button>
+              <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showAdmin = true" title="用户与权限"><Icon name="shield" :size="16" /></button>
+            </template>
+            <button class="btn btn-icon btn-ghost" @click="toggleTheme" :title="theme === 'dark' ? '切换到浅色' : '切换到深色'"><Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="16" /></button>
+            <div v-if="isAuthenticated" class="user">
+              <span class="avatar">{{ (username || '?').slice(0, 1).toUpperCase() }}</span>
+              <span class="u-name hide-sm">{{ username }}</span>
+              <button class="btn btn-icon btn-ghost btn-sm" @click="logout" title="退出登录"><Icon name="log-out" :size="14" /></button>
             </div>
-            <button class="btn btn-icon btn-ghost" @click="showPalette = true" title="命令面板 (⌘K)"><Icon name="command" :size="15" /></button>
-            <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showAdmin = true" title="管理员"><Icon name="shield" :size="15" /></button>
-            <button class="btn btn-icon btn-ghost" @click="showRequests = true" title="项目申请"><Icon name="inbox" :size="15" /></button>
-            <button v-if="isAdmin" class="btn btn-icon btn-ghost" @click="showModels = true" title="模型管理"><Icon name="cpu" :size="15" /></button>
-          </template>
-          <button class="btn btn-icon btn-ghost" @click="toggleTheme" title="切换主题"><Icon :name="theme === 'dark' ? 'sun' : 'moon'" :size="15" /></button>
-          <div v-if="isAuthenticated" class="user">
-            <Icon name="user" :size="14" />
-            <span class="mono u-name hide-sm">{{ username }}</span>
-            <button class="u-out" @click="logout" title="退出登录"><Icon name="log-out" :size="14" /></button>
+            <button v-else class="btn btn-primary btn-sm" @click="showLogin = true"><Icon name="lock" :size="14" />登录</button>
           </div>
-          <div v-else class="user guest-user" title="当前为只读默认用户">
-            <Icon name="user" :size="14" />
-            <span class="mono u-name">默认用户</span>
-            <span class="guest-badge mono">访客</span>
-          </div>
-          <button v-if="!isAuthenticated" class="btn btn-amber login-btn" @click="showLogin = true">
-            <Icon name="lock" :size="14" /> <span>登录</span>
-          </button>
         </div>
       </header>
 
-      <main v-if="isAuthenticated" class="main">
-        <section v-if="needsYou.length" class="lane">
-          <div class="lane-h">
-            <Icon name="alert-triangle" :size="14" />
-            <span>等待你处理</span>
-            <span class="lane-n mono">{{ needsYou.length }}</span>
-          </div>
-          <div class="grid">
-            <ProjectCard v-for="p in needsYou" :key="p.base_name" :project="p" @open="openProject" @action="onAction" />
+      <main v-if="isAuthenticated" class="page">
+        <div class="page-head">
+          <h1>项目</h1>
+          <p class="summary">
+            <span v-if="counts.needs" class="s-warn">{{ counts.needs }} 个待你处理</span>
+            <span>{{ counts.running }} 个运行中</span>
+            <span>{{ counts.completed }} 个已完成</span>
+            <span>共 {{ counts.total }} 次运行</span>
+          </p>
+        </div>
+
+        <section v-if="needsYou.length" class="section">
+          <h2 class="s-title warn"><Icon name="alert-triangle" :size="15" />需要你处理<span class="count">{{ needsYou.length }}</span></h2>
+          <div class="list panel attention">
+            <ProjectRow v-for="p in needsYou" :key="p.base_name" :project="p" @open="openProject" @action="onAction" />
           </div>
         </section>
 
-        <section class="fleet">
-          <div class="fleet-h">
-            <span class="label">题目归档 · PROBLEMS <b class="mono">{{ archives.length }}</b><small class="run-total mono">{{ others.length }} RUNS</small></span>
-            <div class="filters">
-              <div class="search">
-                <Icon name="search" :size="13" />
-                <input v-model="query" class="search-in mono" placeholder="搜索题目或运行…" spellcheck="false" />
-                <button v-if="query" class="clr" @click="query = ''"><Icon name="x" :size="11" /></button>
-              </div>
-              <div class="chips">
-                <button v-for="f in filterChips" :key="f.key" class="chip" :class="{ on: statusFilter === f.key }" @click="statusFilter = f.key">{{ f.label }}</button>
-              </div>
+        <section v-if="running.length" class="section">
+          <h2 class="s-title"><span class="dot live"></span>运行中<span class="count">{{ running.length }}</span></h2>
+          <div class="list panel">
+            <ProjectRow v-for="p in running" :key="p.base_name" :project="p" @open="openProject" @action="onAction" />
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="s-bar">
+            <h2 class="s-title">全部题目<span class="count">{{ filteredArchives.length }}</span></h2>
+            <div class="seg" role="tablist" aria-label="按状态筛选">
+              <button v-for="f in filterChips" :key="f.key" role="tab" :aria-selected="statusFilter === f.key ? 'true' : 'false'" class="seg-b" :class="{ on: statusFilter === f.key }" @click="statusFilter = f.key">{{ f.label }}</button>
             </div>
           </div>
-
-          <div v-if="loading" class="grid">
-            <div v-for="i in 4" :key="i" class="skel panel"></div>
+          <div v-if="loading" class="list panel">
+            <div v-for="i in 4" :key="i" class="skel"></div>
           </div>
-          <div v-else-if="filteredArchives.length" class="grid">
+          <div v-else-if="filteredArchives.length" class="list panel">
             <template v-for="archive in filteredArchives" :key="archive.key">
-              <ProblemArchiveCard v-if="archive.run_count > 1" :archive="archive" @open="openProject" @action="onAction" />
-              <ProjectCard v-else :project="archive.latest" @open="openProject" @action="onAction" />
+              <ProblemGroup v-if="archive.run_count > 1" :archive="archive" @open="openProject" @action="onAction" />
+              <ProjectRow v-else :project="archive.latest" @open="openProject" @action="onAction" />
             </template>
           </div>
+          <p v-else-if="projects.length && !query.trim() && statusFilter === 'all'" class="rest-note">其余运行都列在上面。</p>
           <div v-else class="empty panel">
-            <Icon name="inbox" :size="34" />
-            <p>{{ query || statusFilter !== 'all' ? '无匹配项目' : '暂无项目' }}</p>
-            <span class="hint mono">点击「{{ isAdmin ? '新建' : '申请' }}」{{ isAdmin ? '创建项目' : '提交项目申请' }}</span>
+            <Icon name="inbox" :size="26" />
+            <p>{{ query.trim() || statusFilter !== 'all' ? '没有匹配的项目' : '还没有项目' }}</p>
+            <button v-if="!query.trim() && statusFilter === 'all'" class="btn btn-sm" @click="openNew">{{ isAdmin ? '新建项目' : '申请项目' }}</button>
           </div>
         </section>
 
-        <section class="fleet member-showcase">
-          <div class="fleet-h">
-            <span class="label">授权展示论文 · SHOWCASE <b class="mono">{{ filteredShowcasePapers.length }}</b></span>
-            <div class="search">
+        <section class="section">
+          <div class="s-bar">
+            <h2 class="s-title">展示论文<span class="count">{{ filteredShowcasePapers.length }}</span></h2>
+            <div class="search small">
               <Icon name="search" :size="13" />
-              <input v-model="showcaseQuery" class="search-in mono" placeholder="搜索展示论文…" spellcheck="false" />
-              <button v-if="showcaseQuery" class="clr" @click="showcaseQuery = ''" title="清除搜索"><Icon name="x" :size="11" /></button>
+              <input v-model="showcaseQuery" class="search-in" placeholder="搜索论文…" spellcheck="false" />
+              <button v-if="showcaseQuery" class="clr" @click="showcaseQuery = ''" title="清除"><Icon name="x" :size="12" /></button>
             </div>
           </div>
-          <div v-if="showcaseLoading" class="grid showcase-grid">
-            <div v-for="i in 3" :key="i" class="skel showcase-skel panel"></div>
-          </div>
-          <div v-else-if="filteredShowcasePapers.length" class="grid showcase-grid">
+          <div v-if="showcaseLoading" class="list panel"><div v-for="i in 2" :key="i" class="skel"></div></div>
+          <div v-else-if="filteredShowcasePapers.length" class="list panel">
             <ShowcasePaperCard v-for="paper in filteredShowcasePapers" :key="paper.base_name" :paper="paper" @open="openShowcasePaper" />
           </div>
           <div v-else class="empty panel">
-            <Icon :name="showcaseError ? 'alert-triangle' : 'book-open'" :size="34" />
-            <p>{{ showcaseError || (showcaseQuery ? '无匹配论文' : '暂无向你展示的论文') }}</p>
-            <button v-if="showcaseError" class="btn btn-sm btn-ghost" @click="loadShowcase"><Icon name="refresh" :size="13" /> 重试</button>
+            <Icon :name="showcaseError ? 'alert-triangle' : 'book-open'" :size="26" />
+            <p>{{ showcaseError || (showcaseQuery ? '没有匹配的论文' : '暂无向你展示的论文') }}</p>
+            <button v-if="showcaseError" class="btn btn-sm" @click="loadShowcase"><Icon name="refresh" :size="13" />重试</button>
           </div>
         </section>
       </main>
 
-      <main v-else class="main showcase-main">
-        <section class="showcase-heading">
-          <div>
-            <span class="label">PUBLIC PAPER ARCHIVE</span>
-            <h1>展示论文</h1>
-          </div>
-          <div class="readonly mono"><Icon name="shield" :size="13" /> READ ONLY</div>
-        </section>
-
-        <section class="fleet">
-          <div class="fleet-h">
-            <span class="label">论文 · PAPERS <b class="mono">{{ filteredShowcasePapers.length }}</b></span>
-            <div class="search">
+      <main v-else class="page">
+        <div class="page-head">
+          <h1>展示论文</h1>
+          <p class="summary"><span>数学建模竞赛论文，可在线阅读与下载</span></p>
+        </div>
+        <section class="section">
+          <div class="s-bar">
+            <h2 class="s-title">全部论文<span class="count">{{ filteredShowcasePapers.length }}</span></h2>
+            <div class="search small">
               <Icon name="search" :size="13" />
-              <input v-model="showcaseQuery" class="search-in mono" placeholder="搜索展示论文…" spellcheck="false" />
-              <button v-if="showcaseQuery" class="clr" @click="showcaseQuery = ''" title="清除搜索"><Icon name="x" :size="11" /></button>
+              <input v-model="showcaseQuery" class="search-in" placeholder="搜索论文…" spellcheck="false" />
+              <button v-if="showcaseQuery" class="clr" @click="showcaseQuery = ''" title="清除"><Icon name="x" :size="12" /></button>
             </div>
           </div>
-
-          <div v-if="showcaseLoading" class="grid showcase-grid">
-            <div v-for="i in 3" :key="i" class="skel showcase-skel panel"></div>
-          </div>
-          <div v-else-if="filteredShowcasePapers.length" class="grid showcase-grid">
+          <div v-if="showcaseLoading" class="list panel"><div v-for="i in 3" :key="i" class="skel"></div></div>
+          <div v-else-if="filteredShowcasePapers.length" class="list panel">
             <ShowcasePaperCard v-for="paper in filteredShowcasePapers" :key="paper.base_name" :paper="paper" @open="openShowcasePaper" />
           </div>
           <div v-else class="empty panel">
-            <Icon :name="showcaseError ? 'alert-triangle' : 'book-open'" :size="34" />
-            <p>{{ showcaseError || (showcaseQuery ? '无匹配论文' : '暂无展示论文') }}</p>
-            <button v-if="showcaseError" class="btn btn-sm btn-ghost" @click="loadShowcase"><Icon name="refresh" :size="13" /> 重试</button>
+            <Icon :name="showcaseError ? 'alert-triangle' : 'book-open'" :size="26" />
+            <p>{{ showcaseError || (showcaseQuery ? '没有匹配的论文' : '暂无展示论文') }}</p>
+            <button v-if="showcaseError" class="btn btn-sm" @click="loadShowcase"><Icon name="refresh" :size="13" />重试</button>
           </div>
         </section>
       </main>
@@ -174,8 +155,8 @@ import Icon from './components/Icon.vue'
 import AsyncLoadError from './components/AsyncLoadError.vue'
 import Toasts from './components/Toasts.vue'
 import LoginForm from './components/LoginForm.vue'
-import ProjectCard from './components/ProjectCard.vue'
-import ProblemArchiveCard from './components/ProblemArchiveCard.vue'
+import ProjectRow from './components/ProjectRow.vue'
+import ProblemGroup from './components/ProblemGroup.vue'
 import ShowcasePaperCard from './components/ShowcasePaperCard.vue'
 import ShowcasePaperViewer from './components/ShowcasePaperViewer.vue'
 import { Projects, Showcase, setUnauthorizedHandler, setServerErrorHandler } from './lib/api.js'
@@ -217,7 +198,7 @@ const AsyncProjectRequestsPanel = defineAsyncComponent({ loader: () => import('.
 
 export default {
   name: 'App',
-  components: { Icon, Toasts, LoginForm, ProjectCard, ProblemArchiveCard, ShowcasePaperCard, ShowcasePaperViewer, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager, AdminPanel: AsyncAdminPanel, ProjectRequestsPanel: AsyncProjectRequestsPanel },
+  components: { Icon, Toasts, LoginForm, ProjectRow, ProblemGroup, ShowcasePaperCard, ShowcasePaperViewer, ProjectWorkspace, NewProjectModal: AsyncNewProjectModal, CommandPalette: AsyncCommandPalette, ModelManager: AsyncModelManager, AdminPanel: AsyncAdminPanel, ProjectRequestsPanel: AsyncProjectRequestsPanel },
   setup() {
     const { theme, toggle: toggleTheme } = useTheme()
     const route = useRoute()
@@ -235,6 +216,7 @@ export default {
       filterChips,
       needsYou,
       others,
+      running,
       archives,
       filteredOthers,
       filteredArchives,
@@ -473,7 +455,7 @@ export default {
       theme, toggleTheme,
       authReady, isAuthenticated, username, role, status, isAdmin, projects, loading, wsConnected,
       selectedBase, selectedProject, showNew, showPalette, showModels, showAdmin, showRequests, query, statusFilter, filterChips,
-      needsYou, others, archives, filteredOthers, filteredArchives, counts,
+      needsYou, others, running, archives, filteredOthers, filteredArchives, counts,
       showLogin, showcasePapers, showcaseLoading, showcaseError, showcaseQuery, filteredShowcasePapers, selectedShowcasePaper,
       onLogin, logout, onAction, onCreated, onRequested, onAdminChanged,
       openProject: openProjectFromCard,
@@ -492,117 +474,94 @@ export default {
 <style scoped>
 .app-boot { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .console { min-height: 100vh; display: flex; flex-direction: column; }
-.lane .grid { grid-template-columns: repeat(auto-fit, minmax(min(360px,100%), 1fr)); }
 
-/* ---- status rail ---- */
-.rail {
+/* ---- top bar ---- */
+.topbar {
   position: sticky; top: 0; z-index: 90;
-  display: flex; align-items: center; gap: 22px;
-  padding: 11px 22px; min-height: var(--header-h);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg) 68%, transparent);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
-  backdrop-filter: blur(22px) saturate(160%);
 }
-.brand { display: flex; align-items: center; gap: 11px; }
+.topbar-in {
+  max-width: var(--content-w); margin: 0 auto;
+  height: var(--header-h); padding: 0 24px;
+  display: flex; align-items: center; gap: 20px;
+}
+.brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
 .mark {
-  width: 38px; height: 38px; border-radius: var(--r);
-  background: var(--grad); color: var(--accent-ink);
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--accent); color: var(--accent-ink);
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 0 20px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.28);
 }
-.brand-name { font-size: 14px; font-weight: 700; letter-spacing: 0.06em; }
-.brand-sub { font-size: 9.5px; color: var(--ink-3); letter-spacing: 0.14em; margin-top: 1px; }
+.brand-name { font-weight: 600; font-size: 15px; }
+.spacer { flex: 1; }
 
-.kpis { display: flex; align-items: stretch; gap: 8px; margin-left: 8px; }
-.kpi { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 16px; background: none; border: 1px solid transparent; border-radius: var(--r); }
-.kpi + .kpi { border-left: 1px solid var(--line); border-radius: 0; }
-.k-val { font-size: 20px; font-weight: 700; line-height: 1; color: var(--ink); }
-.k-val.live { color: var(--live); } .k-val.ok { color: var(--ok); }
-.k-lbl { font: 500 9.5px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
-.kpi.amber { cursor: pointer; border-radius: var(--r); border-color: transparent; }
-.kpi.amber .k-val { color: var(--ink-3); }
-.kpi.amber.flash { background: var(--amber-dim); border-color: var(--amber-line); }
-.kpi.amber.flash .k-val { color: var(--amber); }
-.kpi.amber.flash .k-lbl { color: var(--amber); }
-.kpi.amber:disabled { cursor: default; }
-.kpi.amber.flash { animation: kflash 2.2s var(--ease) infinite; }
-@keyframes kflash { 0%,100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 1px var(--amber-line); } }
+.search {
+  flex: 1; max-width: 420px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 10px; height: 34px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r);
+  color: var(--ink-3);
+}
+.search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.search.small { flex: 0 1 240px; height: 30px; }
+.search-in { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: 13.5px var(--sans); }
+.search-in::placeholder { color: var(--ink-3); }
+.clr { border: 0; background: none; color: var(--ink-3); cursor: pointer; display: flex; padding: 2px; border-radius: 4px; }
+.clr:hover { color: var(--ink); background: var(--panel-2); }
 
-.rr { display: flex; align-items: center; gap: 9px; margin-left: auto; }
-.hb { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--ok); padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--r-sm); }
-.hb.off { color: var(--bad); }
-.user { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 11px; border: 1px solid var(--line); border-radius: 100px; color: var(--ink-2); }
-.u-name { font-size: 12px; }
-.u-out { background: none; border: none; color: var(--ink-3); cursor: pointer; display: flex; padding: 4px; border-radius: 50%; }
-.u-out:hover { color: var(--bad); background: var(--bad-dim); }
-.guest-count { display: inline-flex; align-items: center; gap: 7px; margin-left: 8px; padding: 7px 11px; border-left: 1px solid var(--line); color: var(--ink-3); font-size: 11px; }
-.guest-count svg, .guest-count .tnum { color: var(--live); }
-.guest-user { padding-right: 6px; }
-.guest-badge { padding: 3px 5px; border-radius: var(--r-xs); background: var(--live-dim); color: var(--live); font-size: 8.5px; font-weight: 700; }
+.tools { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.tools > .btn-primary { margin-right: 6px; }
+.conn { display: inline-flex; padding: 0 8px; }
+.user { display: flex; align-items: center; gap: 8px; margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--line); }
+.avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel-3); color: var(--ink-2); font-size: 12px; font-weight: 600;
+}
+.u-name { font-size: 13px; color: var(--ink-2); }
 
-/* ---- main ---- */
-.main { flex: 1; max-width: 1480px; width: 100%; margin: 0 auto; padding: 22px 22px 60px; }
+/* ---- page ---- */
+.page { width: 100%; max-width: var(--content-w); margin: 0 auto; padding: 28px 24px 64px; }
+.page-head { margin-bottom: 22px; }
+.page-head h1 { font-size: 22px; }
+.rest-note { color: var(--ink-3); font-size: 13px; padding: 4px 2px; }
+.summary { display: flex; flex-wrap: wrap; gap: 4px 0; margin-top: 4px; color: var(--ink-2); font-size: 13.5px; }
+.summary span + span::before { content: '·'; margin: 0 8px; color: var(--ink-3); }
+.s-warn { color: var(--amber); font-weight: 500; }
 
-.lane { margin-bottom: 26px; }
-.lane-h { display: flex; align-items: center; gap: 9px; margin-bottom: 13px; color: var(--amber); font-weight: 700; font-size: 13px; }
-.lane-n { font: 700 11px/1 var(--mono); background: var(--amber); color: var(--amber-ink); padding: 3px 7px; border-radius: 100px; }
+.section { margin-top: 26px; }
+.section:first-of-type { margin-top: 0; }
+.s-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.s-bar .s-title { margin-bottom: 0; }
+.s-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; margin-bottom: 10px; color: var(--ink); }
+.s-title.warn { color: var(--amber); }
+.count { font-weight: 500; font-size: 12px; color: var(--ink-3); background: var(--panel-2); padding: 1px 7px; border-radius: 999px; }
 
-.fleet-h { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
-.fleet-h .label b { color: var(--ink); margin-left: 4px; }
-.run-total { margin-left: 8px; color: var(--ink-3); font-size: 9px; letter-spacing: 0.08em; }
-.filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.search { display: flex; align-items: center; gap: 7px; padding: 7px 11px; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r); color: var(--ink-3); }
-.search-in { background: none; border: none; outline: none; color: var(--ink); font-size: 12.5px; width: 150px; }
-.clr { background: none; border: none; color: var(--ink-3); cursor: pointer; display: flex; padding: 0; }
-.clr:hover { color: var(--ink); }
-.chips { display: flex; gap: 4px; padding: 3px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); }
-.chip { padding: 6px 11px; background: none; border: none; border-radius: var(--r-sm); color: var(--ink-3); font: 600 12px/1 var(--sans); cursor: pointer; }
-.chip:hover { color: var(--ink); }
-.chip.on { background: var(--panel-3); color: var(--ink); }
+.list { overflow: hidden; }
+.list.attention { border-color: var(--amber-line); }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+.seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--panel-2); border-radius: var(--r); overflow-x: auto; max-width: 100%; }
+.seg-b {
+  border: 0; background: transparent; color: var(--ink-2);
+  font: 500 12.5px var(--sans); padding: 4px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.seg-b:hover { color: var(--ink); }
+.seg-b.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
 
-.skel { height: 188px; position: relative; overflow: hidden; }
-.skel::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--panel-2), transparent); animation: sweep 1.4s infinite; }
+.skel { height: 58px; border-top: 1px solid var(--line); background: linear-gradient(90deg, transparent, var(--panel-2), transparent); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+.skel:first-child { border-top: 0; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
-.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; padding: 70px 20px; color: var(--ink-3); }
-.empty p { font-size: 15px; color: var(--ink-2); }
-.empty .hint { font-size: 11px; }
-
-/* ---- public paper showcase ---- */
-.showcase-main { padding-top: 28px; }
-.showcase-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 30px; padding: 0 2px 20px; border-bottom: 1px solid var(--line); }
-.showcase-heading h1 { margin-top: 7px; font-size: 27px; line-height: 1.15; letter-spacing: 0; }
-.readonly { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink-3); font-size: 9.5px; }
-.readonly svg { color: var(--ok); }
-.showcase-skel { height: 208px; }
-.member-showcase { margin-top: 34px; }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 36px 16px; color: var(--ink-3); text-align: center; }
+.empty p { color: var(--ink-2); }
 
 @media (max-width: 720px) {
-  .rail { flex-wrap: wrap; gap: 14px; }
-  .kpis { order: 3; width: 100%; justify-content: space-between; }
-  .kpi { flex: 1; }
-  .rr { margin-left: 0; width: 100%; flex-wrap: wrap; }
+  .topbar-in { flex-wrap: wrap; height: auto; padding: 8px 14px; gap: 8px 10px; }
+  .search { order: 3; flex: 1 0 100%; max-width: none; }
+  .conn, .palette-btn, .brand-name { display: none; }
   .hide-sm { display: none; }
-  .grid { grid-template-columns: 1fr; }
-  .guest-console .rail { gap: 10px; padding: 9px 12px; }
-  .guest-console .rr { margin-left: auto; gap: 6px; }
-  .guest-count { order: 3; width: 100%; margin: 0; padding: 7px 0 2px; border-left: 0; border-top: 1px solid var(--line); }
-  .showcase-main { padding-top: 20px; }
-  .showcase-heading { margin-bottom: 22px; }
-}
-
-@media (max-width: 460px) {
-  .guest-console .brand { gap: 8px; }
-  .guest-console .brand-sub { display: none; }
-  .guest-console .mark { width: 34px; height: 34px; }
-  .guest-badge { display: none; }
-  .login-btn { padding: 8px; }
-  .login-btn span { display: none; }
-  .main { padding-left: 12px; padding-right: 12px; }
-  .showcase-heading { align-items: center; }
-  .showcase-heading h1 { font-size: 23px; }
-  .readonly { padding: 6px; }
+  .page { padding: 20px 14px 48px; }
 }
 </style>

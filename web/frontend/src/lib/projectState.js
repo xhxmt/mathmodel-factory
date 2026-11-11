@@ -7,6 +7,11 @@ export const STAGES = STAGES_V1
 const index = (value) => value != null && Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 16 ? Number(value) : null
 export function executionStatus(project = {}) { return project.execution_state || project.status || 'unknown' }
 export function needsHuman(project = {}) { return Boolean(project.consultation_pending || project.selection_pending) }
+// The one "running" predicate: the home summary, the running list, the status
+// filter and archive counts must agree on it.
+export function isActiveRun(project = {}) {
+  return Boolean(project.is_running) || ['running', 'retrying', 'archiving'].includes(executionStatus(project))
+}
 export function statusTone(project = {}) {
   return { running: 'live', retrying: 'amber', awaiting_consultation: 'amber', awaiting_selection: 'amber',
     completed: 'ok', paused: 'paused', failed: 'bad', interrupted: 'bad', killed: 'bad', archiving: 'live' }[executionStatus(project)] || ''

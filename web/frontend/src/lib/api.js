@@ -3,7 +3,6 @@ import axios from 'axios'
 import {
   normalizeArtifact,
   normalizeAuthUser,
-  normalizeCloudConfig,
   normalizeContestDashboard,
   normalizeProjectRequest,
   normalizeProjectStatus,
@@ -189,19 +188,6 @@ export const Models = {
   saveRegistry: (models) => api.put('/api/models/registry', { models }).then((r) => r.data),
   // scope = project base_name, or "_default"; steps = { step_N: {primary, fallback} }
   saveConfig: (scope, steps) => api.put('/api/models/config', { scope, steps }).then((r) => r.data),
-}
-
-// ---- cloud (GCP Cloud Run solver acceleration) ----
-export const Cloud = {
-  status: () => api.get('/api/cloud/status').then((r) => r.data),
-  projectConfig: (b) => api.get(`/api/projects/${b}/cloud/config`).then((r) => normalizeCloudConfig(r.data)),
-  enable: (b, expectedRevision = null) => api.post(`/api/projects/${b}/cloud/enable`, {
-    expected_revision: expectedRevision,
-  }).then((r) => r.data),
-  disable: (b, expectedRevision = null) => api.post(`/api/projects/${b}/cloud/disable`, {
-    expected_revision: expectedRevision,
-  }).then((r) => r.data),
-  config: () => api.get('/api/cloud/config').then((r) => r.data),
 }
 
 // ---- solver jobs (per-project solver job listing and evidence) ----

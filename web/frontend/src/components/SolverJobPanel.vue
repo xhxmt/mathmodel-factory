@@ -43,7 +43,7 @@
       <div class="sp-list">
         <div v-for="job in filteredJobs" :key="job.job_id" class="sp-row">
           <div class="sp-main" @click="toggleExpand(job.job_id)">
-            <span class="sp-jobid mono">{{ job.job_id.substring(0, 16) }}</span>
+            <span class="sp-jobid mono" :title="job.job_id">{{ job.job_id }}</span>
             <span class="sp-runtime-badge">{{ job.runtime }}</span>
             <span class="sp-backend-dot" :class="`backend-${job.backend}`" :title="job.backend"></span>
             <span class="sp-status" :class="`status-${job.status.toLowerCase()}`">{{ solverStatusLabel(job.status) }}</span>
@@ -337,6 +337,7 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  padding: 18px 20px;
 }
 
 .sp-head {
@@ -423,15 +424,16 @@ export default {
 .sp-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-}
-
-.sp-row {
-  background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: var(--r);
   overflow: hidden;
 }
+
+.sp-row {
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+.sp-row:first-child { border-top: 0; }
 
 .sp-main {
   display: flex;
@@ -443,11 +445,16 @@ export default {
 }
 
 .sp-main:hover {
-  background: var(--panel-3);
+  background: var(--panel-2);
 }
 
 .sp-jobid {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.8125rem;
   color: var(--ink-2);
 }
@@ -576,7 +583,6 @@ export default {
   font-size: 0.75rem;
   font-weight: 500;
   color: var(--ink-2);
-  text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 

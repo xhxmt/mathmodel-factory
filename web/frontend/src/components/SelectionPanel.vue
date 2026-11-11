@@ -6,8 +6,8 @@
         <div><span>{{ gateMeta.title }}</span><small>{{ gateMeta.subtitle }}</small></div>
       </div>
       <div class="head-meta">
-        <span v-if="request.generation" class="revision mono">GEN {{ request.generation }}</span>
-        <span class="revision mono">REV {{ payload.workflow_revision ?? revision ?? '—' }}</span>
+        <span v-if="request.generation" class="revision">第 {{ request.generation }} 轮</span>
+        <span class="revision mono">r{{ payload.workflow_revision ?? revision ?? '—' }}</span>
         <button class="btn btn-icon btn-ghost btn-sm" @click="refresh" :disabled="loading" :title="requestStale ? '重新绑定当前内容' : '刷新'">
           <Icon name="refresh" :size="13" :class="{ spin: loading }" />
         </button>
@@ -241,25 +241,25 @@ export default {
 .sel-panel { display: flex; flex-direction: column; gap: 13px; padding: 16px; }
 .sel-head, .sel-title, .head-meta { display: flex; align-items: center; }
 .sel-head { justify-content: space-between; gap: 12px; }
-.sel-title { gap: 9px; font-weight: 800; font-size: 13px; }
+.sel-title { gap: 9px; font-weight: 600; font-size: 13px; }
 .sel-title div { display: flex; flex-direction: column; gap: 2px; }
-.sel-title small { color: var(--ink-3); font-size: 9.5px; font-weight: 500; }
+.sel-title small { color: var(--ink-3); font-size: 11.5px; font-weight: 500; }
 .head-meta { gap: 7px; }
-.revision { padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-3); font-size: 9px; }
-.request-binding { display: flex; flex-wrap: wrap; gap: 7px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--ink-3); font-size: 9px; }
+.revision { padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--r-xs); color: var(--ink-3); font-size: 11.5px; }
+.request-binding { display: flex; flex-wrap: wrap; gap: 7px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--ink-3); font-size: 11.5px; }
 .stale-request { padding: 10px 12px; border: 1px solid var(--bad); border-radius: var(--r-sm); background: var(--bad-dim); color: var(--bad); font-size: 11px; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .card { display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
 .card.selected { border-color: var(--ok); background: var(--ok-dim); }
 .top, .fact-row { display: flex; justify-content: space-between; gap: 8px; }
 .rank { color: var(--amber); font-weight: 900; font-size: 11px; }
-.family { color: var(--ink-3); font-size: 10px; }
+.family { color: var(--ink-3); font-size: 11.5px; }
 h3 { margin: 0; font-size: 14px; }
 .card p { margin: 0; color: var(--ink-2); font-size: 11px; line-height: 1.45; }
-.fact-row { padding-top: 6px; border-top: 1px solid var(--line); font-size: 10px; }
+.fact-row { padding-top: 6px; border-top: 1px solid var(--line); font-size: 11.5px; }
 .fact-row span, .risk-list > span { color: var(--ink-3); }
-.fact-row b { font-size: 10px; }
-.risk-list { font-size: 10px; }
+.fact-row b { font-size: 11.5px; }
+.risk-list { font-size: 11.5px; }
 .risk-list ul { margin: 5px 0 0; padding-left: 16px; color: var(--ink-2); }
 .evidence-links { display: flex; flex-wrap: wrap; gap: 5px; }
 .evidence-links button { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; padding: 3px 5px; border: 1px solid var(--line); border-radius: var(--r-xs); background: var(--bg-2); color: var(--live); font: 9px var(--mono); cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
@@ -273,12 +273,12 @@ h3 { margin: 0; font-size: 14px; }
 .approval-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .reject-note { padding: 10px 12px; border: 1px solid var(--bad); border-radius: var(--r-sm); background: var(--bad-dim); color: var(--bad); font-size: 11px; }
 .checklist label, .override-confirm { display: flex; align-items: flex-start; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--ink-2); font-size: 11px; }
-input[type='checkbox'] { accent-color: var(--amber); }
+input[type='checkbox'] { accent-color: var(--accent); }
 .decision-form { padding-top: 12px; border-top: 1px solid var(--line); }
 .decision-form label > span { display: block; margin-bottom: 6px; color: var(--ink-2); font-size: 11px; font-weight: 700; }
 textarea { width: 100%; resize: vertical; line-height: 1.5; }
 .decision-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; }
-.decision-footer > span { color: var(--ink-3); font-size: 9.5px; }
+.decision-footer > span { color: var(--ink-3); font-size: 11.5px; }
 .empty, .error { padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: var(--r); color: var(--ink-3); font-size: 12px; }
 .error { border-style: solid; border-color: var(--bad); background: var(--bad-dim); color: var(--bad); }
 .spin { animation: spin .7s linear infinite; }

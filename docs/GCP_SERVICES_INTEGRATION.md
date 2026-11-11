@@ -1,11 +1,11 @@
 # GCP 服务集成方案（历史设计快照）
 
 > [!WARNING]
-> 本文档是 2026-06 的历史设计快照，不是当前操作手册。Cloud Solver 自
-> 2026-07-29 起处于安全隔离状态：禁止匿名调用、云端执行默认关闭，所有
-> 求解任务走本地 `solver_submit.sh`。当前合同见
-> [`CLOUD_SOLVER_ENABLED.md`](../CLOUD_SOLVER_ENABLED.md)。在完整 P0 安全
-> 验收前，不要执行本文中的启用、自动删除、Secret 迁移或部署命令。
+> 本文档是 2026-06 的历史设计快照，不是当前操作手册。Cloud Solver 于
+> 2026-11-10 从代码库中移除，所有求解任务只走本地 `solver_submit.sh`。
+> 下文中的 Cloud Solver 启用步骤、`.env.cloud` / `USE_CLOUD_SOLVER` 配置、
+> `scripts/gcp_solver_client.sh` 和 `CLOUD_SOLVER_ENABLED.md` 都已不存在，
+> 相关章节只作历史记录，不得执行；其余 GCP 命令同样不要照此执行。
 
 ## 当前部署状态分析
 
