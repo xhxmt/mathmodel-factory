@@ -50,8 +50,15 @@ class PromptRenderer:
             review_rework_block,
         )
 
-        if Path(template).name in V2_PROMPT_OVERLAY and project_uses_catalog_v2(project):
+        from .contest_prompts import contest_prompt_block
+
+        v2_overlay = Path(template).name in V2_PROMPT_OVERLAY and project_uses_catalog_v2(project)
+        if v2_overlay:
             text = apply_v2_overlay(template, text)
+        # After the v2 overlay (its sentences must occur once in the shared
+        # template), before the rework blocks (those stay on top).
+        text = contest_prompt_block(self.root, project, template, values) + text
+        if v2_overlay:
             text = review_rework_block(project, template) + text
         text = judge_rework_block(project, template) + text
         text = self._apply_ablations(template, text)

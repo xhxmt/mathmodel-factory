@@ -1,0 +1,168 @@
+% =====================================================================
+% Modeling Factory -- MCM/ICM paper template (Step 9 starting point)
+% =====================================================================
+% Copy this file to <project>/<base>_paper.tex and fill it in; never
+% \input it from the factory.  It compiles as-is with compile_paper.sh.
+%
+% Class: mcmthesis v6.3.3 (LPPL 1.3c), vendored unmodified in
+% __FACTORY__/latex_templates/ next to this file.  compile_paper.sh puts
+% that directory on TEXINPUTS, so the project needs no copy of the class
+% and `\usepackage{abstract_placeholder}` resolves the same way.
+%
+% COMAP rules this layout follows:
+%   * Page 1 is the one-page Summary Sheet (problem, year, control number,
+%     title, summary, keywords).  The summary must fit on that page.
+%   * At most 25 pages from the Summary Sheet through the appendices
+%     (memo/letter, references and code appendices count).
+%   * The Report on Use of AI Tools follows \AImatter and does not count
+%     toward the 25 pages; it is required when AI tools were used, and the
+%     tools are also cited inline and listed in the references (COMAP AI
+%     policy v102025).
+%   * No names of team members, advisor or school on any page; the header
+%     carries only the Team Control Number.
+%   * English, readable font of at least 12 pt (the class is 12 pt).
+% =====================================================================
+\documentclass{mcmthesis}
+\mcmsetup{
+  tcn = {0000000},   % Team Control Number: placeholder, set at submission
+  problem = {A},     % Problem Chosen: A-F, from problem/problem_brief.md
+  sheet = true, titleinsheet = true, keywordsinsheet = true,
+  titlepage = false, abstract = false}
+% The class prints \the\year (the compile date) on the Summary Sheet; pin
+% the contest year so a later recompile of unchanged sources cannot change it.
+\renewcommand{\headset}{2027\\MCM/ICM\\Summary Sheet}
+\setlength{\headheight}{14pt}  % room for the "Team # ... Page X of Y" header
+% COMAP's AI policy names the appendix "Report on Use of AI Tools".
+\renewcommand{\reportname}{Report on Use of AI Tools}
+
+\usepackage{newtxtext}   % Times-like text face (COMAP asks for 12 pt Times)
+\usepackage{newtxmath}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\graphicspath{{figures/}}
+\usepackage{abstract_placeholder}
+
+\title{<Informative title: object + main method, about 10--15 words>}
+\author{}
+\date{}
+
+\begin{document}
+
+% ======================= Summary Sheet (page 1) =======================
+% Step 9 leaves the placeholder line below untouched; Step 14 replaces it
+% with the English summary (one page together with the keywords).
+\begin{abstract}
+\AbstractPlaceholder % ABSTRACT_PLACEHOLDER compatibility marker
+
+\begin{keywords}
+<Keyword 1>; <Keyword 2>; <Keyword 3>; <Keyword 4>
+\end{keywords}
+\end{abstract}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ============================ Introduction ============================
+\section{Introduction}
+\subsection{Problem Background}
+% Restate the context in your own words; do not copy the problem text.
+\subsection{Restatement of the Problem}
+% One item per task of the problem statement, in the problem's order.
+\subsection{Our Work}
+% One paragraph plus the workflow figure (an explain_model figure from
+% visualization_log.md) mapping each task to the model that answers it.
+
+% ===================== Assumptions and Justifications =================
+\section{Assumptions and Justifications}
+% From assumption_ledger.md; each assumption with its justification.
+\begin{enumerate}[label=\textbf{Assumption \arabic*:}, leftmargin=*]
+  \item <Statement>.
+  \textbf{Justification:} <one sentence>.
+\end{enumerate}
+
+% ============================== Notations =============================
+\section{Notations}
+% Must agree with symbol_table.md.
+\begin{table}[H]
+  \centering
+  \caption{Notations}
+  \begin{tabular}{cll}
+    \toprule
+    Symbol & Description & Unit \\
+    \midrule
+    $x_i$ & <description> & <unit> \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ======================= Data Preprocessing (opt.) ====================
+% \section{Data Preprocessing}
+
+% ===================== Models: one section per task ===================
+\section{Model I: <Task 1 model name>}
+\subsection{Model Formulation}
+\subsection{Solution}
+\subsection{Results}
+% Lead with the final answer and its main figure or table, then the
+% derivation and the checks.
+
+\section{Model II: <Task 2 model name>}
+\subsection{Model Formulation}
+\subsection{Solution}
+\subsection{Results}
+
+% ====================== Sensitivity Analysis ==========================
+\section{Sensitivity Analysis}
+% From sensitivity_report.md.
+
+% ================= Model Evaluation and Further Discussion ============
+\section{Model Evaluation and Further Discussion}
+\subsection{Strengths}
+\subsection{Weaknesses}
+\subsection{Further Discussion}
+% From evaluation.md.
+
+% ============================== Conclusion ============================
+\section{Conclusion}
+
+% ==================== Memo / Letter (only if required) =================
+% Keep only when the problem asks for a memo, letter, policy brief or
+% similar non-technical document (common in Problems C--F).  It counts
+% toward the 25 pages and is usually limited to one or two pages.
+% \memoto{<Recipient>}
+% \memofrom{Team \#\,0000000}
+% \memosubject{<Subject>}
+% \memodate{<Date>}
+% \begin{memo}[Memorandum]
+% <Body>
+% \end{memo}
+
+% ============================== References ============================
+\bibliographystyle{plain}
+\bibliography{references}
+
+% ============================== Appendices ============================
+\begin{appendices}
+\section{Core Code}
+% Only the code a reader needs to reproduce the main results; trim it
+% first when the page count is over 25.
+% \lstinputlisting[language=Python]{models/<stream>/03_solve.py}
+\end{appendices}
+
+% ========= Report on Use of AI Tools (not counted in 25 pages) ========
+% \AImatter closes the counted pages (the header "Page X of Y" ends here)
+% and switches to the uncounted AI report.  List every AI tool that
+% produced content in this paper: model name and version, what it was
+% used for, and the queries with their outputs (summarised when long).
+% The human team confirms this report before submission.
+\AImatter
+\begin{ReportAiUse}{9}
+  \bibitem{AI1} <Model name and version, provider>\\
+  Query1: <query>\\
+  Output: <output>
+\end{ReportAiUse}
+
+\end{document}
