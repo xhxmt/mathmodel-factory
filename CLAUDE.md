@@ -282,7 +282,10 @@ keeps Steps 9-11, sets the cursor to Step 7 and records
 `rework_rule=visual_figure` with `text_resume_after_step`, `recompute_steps`,
 `return_subtask` and `recompute_reasons`, so figures are redrawn and the revision
 runs next, without a new draft. Layout-only, model and v1 reopens keep their
-target. The three Judge roles are still called when the visual gate FAILs, so one
+target. The audit reads the catalog version from a read-only snapshot; when it
+cannot, the reopen stays a plain text reopen and, if there were figure findings,
+the evidence's `visual_figure_rework` records `skipped: catalog_unreadable` with
+the reason and codes (no `steps`, so nothing is routed). The three Judge roles are still called when the visual gate FAILs, so one
 repair cycle gets both kinds of findings. Each final-audit attempt archives
 whichever of `visual_gate.json`, `decision_route.json` and `aggregate.json`
 exist by content under `.factory/audits/<snapshot>/judge_outputs/` (`*.archive`),
