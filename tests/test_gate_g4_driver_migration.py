@@ -1175,7 +1175,9 @@ def test_the_explicit_guard_exists_because_a_cursor_cannot_carry_active_step():
     what is checked here.  The drivers themselves live under ``work/`` and are not
     in this repository, so "each migrated driver keeps the guard" is verified on
     the server by ``scripts/check_no_hand_written_drivers.py`` and recorded per
-    batch in ``runtime_simplification_g45c_batches.json``.
+    batch in ``docs/architecture/runtime_simplification_g45c_batches.json`` (removed
+    from the tree with the other runtime-simplification records; see Git history
+    before e6463f5).
 
     The test this replaces defined its own local ``guard()`` and asserted that
     ``guard(None)`` allowed the seeded state.  That seed satisfies it precisely
