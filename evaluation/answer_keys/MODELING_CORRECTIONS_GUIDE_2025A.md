@@ -1,7 +1,7 @@
 > ⛔ **ANSWER KEY — 仅供赛后离线评估，禁止运行时读取。**
 > 本文件含 2025A **本题范文的逐题答案数值**（P1≈1.4 / P3≈6.9 / P4≈11.126 / P5≈21 等），
 > 来源为官方公示优秀论文 A2022729。任何 Step 0–16 的运行时 agent **不得**读取、引用或据此
-> 标定目标——那等于开卷考试，会使 benchmark 成绩失真（见 `docs/RERUN0706_REPAIR_PLAN.md` §L5）。
+> 标定目标——那等于开卷考试，会使 benchmark 成绩失真（见 `docs/archive/RERUN0706_REPAIR_PLAN.md` §L5）。
 > 运行时的建模口径纠错请用 `docs/guides/MODELING_CHECKLIST.md`（方法论版，无本题答案）。
 > 本文件只在 `evaluation/answer_keys/` 下，不在 render_prompt 可达路径内。
 

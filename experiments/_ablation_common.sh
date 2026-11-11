@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# experiments/_ablation_common.sh — shared logic for the four ablation launchers.
+# experiments/_ablation_common.sh — shared logic for the three ablation launchers.
 #
 # Sourced, not executed. Provides arg parsing and the create -> run -> evaluate
 # flow so each ablation_*.sh launcher stays a few lines. See experiments/README.md.

@@ -1,10 +1,10 @@
 # `experiments/` — 消融实验（Ablation Study）
 
-本目录维护 Legacy Adapter 的消融实验，具体开关和运行方式见下文。逐个关闭流水线的四个"加料"机制，在同一道题上
+本目录维护 Legacy Adapter 的消融实验，具体开关和运行方式见下文。逐个关闭流水线的三个"加料"机制（原有的第四个 `no_method_lib` 已退役，见下文），在同一道题上
 重跑，用外部评分器（`evaluation/`）测量分数差——把"我们觉得这个组件有用"变成
 **数据支撑的证据**，供研究论文使用。
 
-## 四个消融开关
+## 三个消融开关
 
 每个开关是 Legacy Adapter 读取的环境变量，默认 OFF（未设或非真值）。真值为
 `1` / `true` / `yes` / `on`。prompt 类消融在 **render 时**生效（`render_prompt()`），
@@ -13,7 +13,6 @@
 | 环境变量 | 关闭的机制 | 实现位置 |
 |---|---|---|
 | `ABLATE_NO_CONSULTATION` | Step 1 的 web 文献检索 | `render_prompt()` 删掉 `step1_research_viability.txt:133` 的 web 子句 |
-| `ABLATE_NO_METHOD_LIB` | HMML-lite 方法库引用硬门 | Legacy Adapter 的 `check_method_citations()` 提前 `return 0` |
 | `ABLATE_NO_JUDGE` | Step 13 Gate-2 评委 + reopen | Legacy Adapter 的 `run_step_13()` 写 `VERDICT: PASS` stub，跳过真实评委 |
 | `ABLATE_NO_INNOVATION_PROTECT` | PROTECTED 不可降级规则 | `render_prompt()` 删掉 Steps 4/6/7/10/11/12/13/14 的 PROTECTED 强制行 |
 
@@ -31,13 +30,13 @@ snapshot re-exec（`env` 不带 `-i`，环境保留）。
 ./experiments/ablation_no_innovation_protect.sh --problem B --reps 3 --baseline
 
 # 先看要跑什么命令，不创建任何项目、不调用任何 agent
-./experiments/ablation_no_method_lib.sh --problem A --dry-run
+./experiments/ablation_no_consultation.sh --problem A --dry-run
 
 # 复用一个已存在的项目（只设开关跑一次 + 评分，不新建）
 ./experiments/ablation_no_judge.sh --existing ongoing/foo
 ```
 
-公共参数（四个 launcher 通用）：
+公共参数（三个 launcher 通用）：
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
@@ -76,14 +75,15 @@ python3 experiments/compare_ablations.py --baseline ... --variant ... --json
 - **`no_judge` 的混淆**：关闭 Step 13 同时移除了 Gate-2 reopen → Step 12 第二轮修订。
   所以它相对基线的差异**同时包含**"无评委"与"无评委触发的二次修订"两个效应，
   不能纯归因于评委本身。这是 write-PASS 这种 off-switch 的固有特性，已知并记录。
-- **`no_method_lib` 的边界**：开关关闭的是**程序性**引用硬门（真正的强制）。Step 0
-  的 prompt 不经 `render_prompt`，仍会软性建议只用已注册方法；故这是软约束而非硬约束的消融。
+- **`no_method_lib` 已退役**：它关闭的 `check_method_citations()` 引用硬门只存在于 Legacy
+  Adapter，Native 主流程没有这个门，`ABLATE_NO_METHOD_LIB` 也不再被读取，因此 launcher
+  已于 2026-11-11 删除。`evaluation/` 中的 `no_method_lib` 读数只是历史结果。
 - **统计稳健性**：每个变体至少 3 次重复取中位数。单次差异可能被流水线随机性淹没。
 
 ## 测试（不跑完整流水线）
 
-`test_ablations.sh` 验证四个开关确实改变行为，秒级完成，不调用任何 agent：
-语法检查、方法库门翻转、render_prompt 删除（ON 删掉 / OFF 保留双向断言）、
+`test_ablations.sh` 验证三个开关确实改变行为，秒级完成，不调用任何 agent：
+语法检查、render_prompt 删除（ON 删掉 / OFF 保留双向断言）、
 no-judge stub 契约、compare 脚本冒烟。
 
 ```bash
@@ -94,9 +94,8 @@ no-judge stub 契约、compare 脚本冒烟。
 
 | 文件 | 作用 |
 |---|---|
-| `_ablation_common.sh` | 共享：参数解析 + 创建→运行→评分流程（被四个 launcher source） |
+| `_ablation_common.sh` | 共享：参数解析 + 创建→运行→评分流程（被三个 launcher source） |
 | `ablation_no_consultation.sh` | 设 `ABLATE_NO_CONSULTATION=1` |
-| `ablation_no_method_lib.sh` | 设 `ABLATE_NO_METHOD_LIB=1` |
 | `ablation_no_judge.sh` | 设 `ABLATE_NO_JUDGE=1` |
 | `ablation_no_innovation_protect.sh` | 设 `ABLATE_NO_INNOVATION_PROTECT=1` |
 | `compare_ablations.py` | 基线 vs 变体的分数差表（复用 `scripts/parse_judge_score.py`） |

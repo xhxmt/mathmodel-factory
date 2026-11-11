@@ -75,24 +75,18 @@
 - [web/USAGE_GUIDE.md](web/USAGE_GUIDE.md)：上传、题目归档与权限使用说明。
 - [web/docs/deployment/DEPLOYMENT.md](web/docs/deployment/DEPLOYMENT.md)：唯一现役生产部署与回滚 runbook。
 - [SOLVER_JOBS_FEATURE.md](SOLVER_JOBS_FEATURE.md)：Solver Jobs API、前端面板、receipt 语义和维护边界。
-- [docs/GCP_SERVICES_INTEGRATION.md](docs/GCP_SERVICES_INTEGRATION.md)：历史 GCP 服务集成设计快照；其中的 Cloud Solver 启用步骤已过时（相关代码已于 2026-11-10 移除），不得执行，求解只在本地运行。
 - [docs/SECRET_MANAGER_GUIDE.md](docs/SECRET_MANAGER_GUIDE.md)：Secret Manager 配置。
 - [docs/deployment/](docs/deployment/)：历史 Web 部署验证记录。
 
-## 专题报告与修复记录
+## 方法库
 
 - [docs/METHOD_LIBRARY_INTELLIGENCE_USAGE.md](docs/METHOD_LIBRARY_INTELLIGENCE_USAGE.md)：方法库智能检索使用说明。
-- [docs/method_library_intelligence_summary.md](docs/method_library_intelligence_summary.md)：方法库优化总结。
-- [docs/OPTIMIZATION_REPORT_2026-06-23.md](docs/OPTIMIZATION_REPORT_2026-06-23.md)：2026-06-23 系统优化报告。
-- [docs/BLIND_2025A_FIX_PLAN.md](docs/BLIND_2025A_FIX_PLAN.md)：2025A blind 项目修复计划。
-- [docs/RERUN0706_REPAIR_PLAN.md](docs/RERUN0706_REPAIR_PLAN.md)：2025A rerun 事故链修复计划。
-- [docs/analysis_requests/](docs/analysis_requests/)：专题分析请求与结果。
-- [docs/changelogs/](docs/changelogs/)：专项变更记录。
-- [docs/superpowers/](docs/superpowers/)：历史设计与实施计划；仅作为项目记录保留。
 
 ## 历史归档
 
 - [docs/archive/](docs/archive/)：仍用于解释合并或审计决定的历史记录；过期的整理、优化和完成报告通过 Git 历史查询。
+- [docs/archive/RERUN0706_REPAIR_PLAN.md](docs/archive/RERUN0706_REPAIR_PLAN.md)：2025A rerun 事故链修复计划；建模清单与 2025A 纠错指南据其 §L5/§E 禁止用答案标定 benchmark。
+- 2026-11-11 整理时按上面的维护规则从工作树移除了已完成的一次性记录：`docs/superpowers/`（6–7 月设计与实施计划）、`docs/changelogs/`、`docs/analysis_requests/`、6 月的优化报告与 2025A blind 修复计划、方法库优化总结、GCP 服务集成设计快照，以及运行时简化项目的计划、评审回复与阶段 JSON（`docs/architecture/runtime_simplification_*`、`docs/architecture/RUNTIME_SIMPLIFICATION_*`）。需要时用 `git show e6463f5:<路径>` 查看。
 - `docs/sessions/`：历史对话与计划原文的本地归档目录，默认被 Git 忽略，不同步到远端。
 
 ## 文档维护规则
@@ -104,4 +98,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料；根目录 `work/` 为本地临时工作目录，`.pytest_cache/` 为可再生测试缓存，均由 `.gitignore` 管理。
 
-**最后更新：2026-09-15**
+**最后更新：2026-11-11**

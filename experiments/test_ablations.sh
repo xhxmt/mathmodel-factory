@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# experiments/test_ablations.sh — switch-effectiveness tests for the four
+# experiments/test_ablations.sh — switch-effectiveness tests for the three
 # ablation toggles. Fast (seconds), invokes NO agent, writes only to a mktemp
 # dir. The Legacy Adapter has no main() guard and runs top-level logic on source,
 # so we extract individual function bodies by name and eval them in isolation.
@@ -22,10 +22,10 @@ note() { printf '\n== %s ==\n' "$1"; }
 # Truthy helper (mirrors the Legacy Adapter); needed by every extracted function.
 _ablate_on() { case "${1,,}" in 1|true|yes|on) return 0;; *) return 1;; esac; }
 
-# Mirror Legacy Adapter startup: all four toggles are always bound (default 0), so
+# Mirror Legacy Adapter startup: all three toggles are always bound (default 0), so
 # extracted functions referencing them don't trip `set -u` when a test sets only
 # one via a command-prefix. Per-invocation prefixes still override these.
-export ABLATE_NO_CONSULTATION=0 ABLATE_NO_METHOD_LIB=0 \
+export ABLATE_NO_CONSULTATION=0 \
        ABLATE_NO_JUDGE=0 ABLATE_NO_INNOVATION_PROTECT=0
 
 # extract_fn <name> <file> : print the function body via brace counting.
@@ -59,20 +59,6 @@ done
 [ "$syntax_all" -eq 1 ] && ok "experiments/*.sh bash -n"
 if python3 -m py_compile "$FACTORY/experiments/compare_ablations.py" 2>/dev/null; then
     ok "compare_ablations.py py_compile"; else bad "compare_ablations.py py_compile"; fi
-
-# ── (b) method-library toggle ────────────────────────────────────────────────
-note "(b) ABLATE_NO_METHOD_LIB flips the citation gate"
-printf 'cites method_library/bogus/nope.md which is not registered\n' > "$TMP/viable_streams.md"
-if eval_fn check_method_citations; then
-    ABLATE_NO_METHOD_LIB=0 check_method_citations "$TMP" "$TMP/viable_streams.md" >/dev/null 2>&1
-    off_rc=$?
-    ABLATE_NO_METHOD_LIB=1 check_method_citations "$TMP" "$TMP/viable_streams.md" >/dev/null 2>&1
-    on_rc=$?
-    [ "$off_rc" -ne 0 ] && ok "OFF: bogus citation rejected (rc=$off_rc)" \
-        || bad "OFF: expected rejection, got rc=$off_rc"
-    [ "$on_rc" -eq 0 ] && ok "ON: gate disabled, citation passes (rc=0)" \
-        || bad "ON: expected rc=0, got rc=$on_rc"
-fi
 
 # ── (c) render_prompt strips on, keeps off ──────────────────────────────────
 note "(c) render_prompt prompt-text ablations"

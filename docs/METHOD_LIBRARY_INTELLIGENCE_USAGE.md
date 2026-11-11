@@ -288,5 +288,3 @@ python3 -c "import json; print(json.load(open('scripts/method_fit_model.json'))[
 ## 联系方式
 
 问题反馈: 在项目issue tracker提issue，标签 `enhancement:method-library`
-
-文档更新: `docs/method_library_intelligence_summary.md`
