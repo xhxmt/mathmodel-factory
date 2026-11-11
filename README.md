@@ -297,7 +297,7 @@ python3 experiments/compare_ablations.py \
 
 | 消融开关 | 关闭的机制 | 历史观察差值（不可作当前比较） |
 |---|---|---|
-| `ABLATE_NO_METHOD_LIB=1` | 方法库引用硬门 | -6.3（历史读数） |
+| `ABLATE_NO_METHOD_LIB=1`（已退役） | 方法库引用硬门（只存在于 Legacy Adapter，launcher 已删除） | -6.3（历史读数） |
 | `ABLATE_NO_JUDGE=1` | Step 13 评委 + reopen循环 | -3.4（历史读数） |
 | `ABLATE_NO_INNOVATION_PROTECT=1` | PROTECTED标记保护 | -2.7（历史读数） |
 | `ABLATE_NO_CONSULTATION=1` | Step 1 web文献检索 | -1.7（历史读数） |
@@ -310,9 +310,8 @@ python3 experiments/compare_ablations.py \
 # 在指定题目上运行单个消融（自动生成项目、运行、评估）
 ./experiments/ablation_no_judge.sh --problem B --reps 3
 
-# 运行所有四个消融并生成对比报告
+# 运行现有的三个消融并生成对比报告
 ./experiments/test_ablations.sh  # 先验证开关生效性（秒级）
-./experiments/ablation_no_method_lib.sh --problem B --reps 1
 ./experiments/ablation_no_judge.sh --problem B --reps 1
 ./experiments/ablation_no_innovation_protect.sh --problem B --reps 1
 ./experiments/ablation_no_consultation.sh --problem B --reps 1

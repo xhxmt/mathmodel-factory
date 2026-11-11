@@ -86,7 +86,7 @@
 
 - [docs/archive/](docs/archive/)：仍用于解释合并或审计决定的历史记录；过期的整理、优化和完成报告通过 Git 历史查询。
 - [docs/archive/RERUN0706_REPAIR_PLAN.md](docs/archive/RERUN0706_REPAIR_PLAN.md)：2025A rerun 事故链修复计划；建模清单与 2025A 纠错指南据其 §L5/§E 禁止用答案标定 benchmark。
-- 2026-11-11 整理时按上面的维护规则从工作树移除了已完成的一次性记录：`docs/superpowers/`（6–7 月设计与实施计划）、`docs/changelogs/`、`docs/analysis_requests/`、6 月的优化报告与 2025A blind 修复计划、方法库优化总结、GCP 服务集成设计快照，以及运行时简化项目的计划、评审回复与阶段 JSON（`docs/architecture/runtime_simplification_*`、`RUNTIME_SIMPLIFICATION_*`）。需要时用 `git show e6463f5:<路径>` 查看。
+- 2026-11-11 整理时按上面的维护规则从工作树移除了已完成的一次性记录：`docs/superpowers/`（6–7 月设计与实施计划）、`docs/changelogs/`、`docs/analysis_requests/`、6 月的优化报告与 2025A blind 修复计划、方法库优化总结、GCP 服务集成设计快照，以及运行时简化项目的计划、评审回复与阶段 JSON（`docs/architecture/runtime_simplification_*`、`docs/architecture/RUNTIME_SIMPLIFICATION_*`）。需要时用 `git show e6463f5:<路径>` 查看。
 - `docs/sessions/`：历史对话与计划原文的本地归档目录，默认被 Git 忽略，不同步到远端。
 
 ## 文档维护规则
