@@ -111,6 +111,13 @@ unregistered path --, `protected`, `bespoke_recovery`) keep the ownership rewind
 The replay rule `v2-inputs` mirrors this chain. v1 projects are unchanged;
 v2 prompt wording is a rendering overlay in `factory_core/steps/catalog_prompts.py`
 so v1 prompts stay byte-identical.
+MCM/ICM projects get the same treatment by contest: `factory_core/steps/contest_prompts.py`
+reads the contest from Step 0's declaration in `problem/feasibility_constraints.md`
+(else `problem/source.md`; CUMCM when undetermined) and prepends
+`prompts/mcm/<template>` to the paper-segment prompts (after the v2 overlay,
+below the rework blocks), so CUMCM prompts stay byte-identical. The MCM paper
+starts from `latex_templates/mcm_paper_template.tex` (vendored `mcmthesis`), and
+`docs/guides/MCM_WRITING_BENCHMARK.md` is its writing standard.
 
 `factory_core/` owns revisioned transitions, events, retry budgets, recovery,
 pending actions, native Stage/Step registration, audit, delivery and solver jobs.

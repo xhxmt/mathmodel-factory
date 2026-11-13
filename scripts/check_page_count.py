@@ -2,7 +2,9 @@
 """
 check_page_count.py - Check PDF page count and suggest appendix trimming
 
-For MCM/ICM papers with 25-page limit.
+For MCM/ICM papers with 25-page limit.  COMAP does not count the trailing
+"Report on Use of AI" (the pages after mcmthesis' \\AImatter), so the pages
+from the first page headed by that report onwards are excluded.
 
 Usage:
   python3 check_page_count.py <pdf_file> <limit>
@@ -36,6 +38,38 @@ def get_page_count(pdf_file: Path) -> int:
     return 0
 
 
+AI_REPORT_HEADING = "Report on Use of AI"
+
+
+def first_ai_report_page(pdf_file: Path) -> int | None:
+    """1-based page that starts the uncounted AI-use report, if any."""
+    try:
+        result = subprocess.run(
+            ['pdftotext', '-layout', str(pdf_file), '-'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+    except Exception:
+        return None
+    for index, page in enumerate(result.stdout.split('\f'), start=1):
+        # The report starts a page (after the running header), so a passing
+        # mention of it in the body text does not end the counted pages.
+        head = [line for line in page.splitlines() if line.strip()][:3]
+        if index > 1 and any(AI_REPORT_HEADING in line for line in head):
+            return index
+    return None
+
+
+def counted_page_count(pdf_file: Path) -> tuple[int, int]:
+    """(pages counted toward the limit, total PDF pages)."""
+    total = get_page_count(pdf_file)
+    ai_page = first_ai_report_page(pdf_file)
+    if ai_page is None or ai_page > total:
+        return total, total
+    return ai_page - 1, total
+
+
 def suggest_trimming(page_count: int, limit: int, project_dir: Path) -> None:
     """Suggest which code files to trim from appendix."""
     excess = page_count - limit
@@ -46,6 +80,7 @@ def suggest_trimming(page_count: int, limit: int, project_dir: Path) -> None:
     print()
 
     # Check for code appendix
+    code_files = []
     models_dir = project_dir / "models"
     if models_dir.exists():
         code_files = []
@@ -99,7 +134,12 @@ def main():
         print(f"Error: {pdf_file} not found", file=sys.stderr)
         sys.exit(1)
 
-    page_count = get_page_count(pdf_file)
+    page_count, total_pages = counted_page_count(pdf_file)
+    if page_count != total_pages:
+        print(
+            f"Counting {page_count} of {total_pages} pages: the "
+            f"'{AI_REPORT_HEADING}' from page {page_count + 1} on is not counted."
+        )
 
     if page_count <= limit:
         print(f"✓ Page count ({page_count}) is within limit ({limit})")

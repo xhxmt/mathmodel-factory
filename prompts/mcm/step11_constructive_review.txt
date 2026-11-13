@@ -1,0 +1,12 @@
+本步骤以美赛评委的视角审稿：初筛评委 6–10 分钟决定档次，终评评委细读模型、验证和灵敏度分析。
+
+替代下文的国赛规则：
+- 审稿标尺改为 `__FACTORY__/docs/guides/MCM_WRITING_BENCHMARK.md`（§3 评委看重什么、§4 初筛雷区、§5 结构与页数、§10 自查清单）；不读 `NATIONAL1_CALIBRATION_ANCHOR.md`，「锚点对照」改为对照该基准 §6 的 Summary 写法与 §5 的 O 奖结构。
+- 下文以“CUMCM 评分细则百分比”说明扣分的例子不适用。每条 issue 的「为什么」改写为它触犯的评委要求（引用基准 §3/§4 的条目），以及它会在哪一轮（初筛 / 终评）暴露。
+- 「中英混杂」「CUMCM 中文版应纯中文」「避免‘我们认为’」「开头总述 + 逐问交付」这几项检查不适用；改为检查：英文是否流畅准确、是否用第一人称现在时主动语态、是否有 AI 腔用语（基准 §7）、术语是否前后一致。
+- 审稿意见文件仍用中文写，引用论文原句时保留英文。
+
+美赛必查项（缺失按严重度登记为 issue）：
+- BLOCKING：题目的某项要求没有对应小节或没有明确答案；题目要求的 Memo / Letter / Policy Brief 缺失；超过 25 页（`python3 ../../scripts/check_page_count.py __BASE_NAME___paper.pdf 25`）；缺 Report on Use of AI Tools 或正文没有行内引用并在参考文献中列出所用 AI 工具；出现队员、指导老师或学校信息。
+- MAJOR：Summary 照抄 Introduction、缺任务的数值结果、或写成方法清单；假设没有 Justification 或从未被使用；没有基线对比或验证；Sensitivity Analysis 或 Strengths/Weaknesses 没有独立成节；关键证据只在附录；公式变量未定义；图表缺单位、坐标轴标签或未在正文解释。
+- MINOR：表头用难懂的希腊字母或缩写；无关图表；参考文献未在正文引用；AI 腔用语。
