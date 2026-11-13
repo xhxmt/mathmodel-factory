@@ -434,7 +434,7 @@ def test_the_comparator_is_silent_on_the_same_inputs():
     )
 
     assert first["state_hashes"] == second["state_hashes"], "replay hashes must reproduce"
-    assert first["aggregate_domain_root"] == second["aggregate_domain_root"]
+    assert first["tables"] == second["tables"]
     assert not {area: d for area, d in canary.compare(first, second).items() if d}
 
 

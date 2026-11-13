@@ -47,7 +47,7 @@ PRIORITY = {
 
 BADGES = {
     "WORKFLOW_REPLAY_MISMATCH": "事件重放异常",
-    "DECISION_RECEIPT_MISMATCH": "决策凭据损坏",
+    "DECISION_RECEIPT_MISMATCH": "旧批准无法使用",
     "SELECTION_PROJECTION_MISMATCH": "方法选择投影漂移",
     "CONSULTATION_PENDING": "等待人工",
     "AWAITING_STEP8_5": "等待 8.5 门禁",
@@ -165,10 +165,6 @@ def build_project_diagnostics(
                             raise ReplayIntegrityError(
                                 "replayed state differs from authoritative state"
                             )
-                        if not native_snapshot["aggregate_valid"]:
-                            raise ReplayIntegrityError(
-                                "workflow domain tables differ from the recorded aggregate root"
-                            )
                     except ReplayIntegrityError as exc:
                         return {
                             "source": "workflow_events",
@@ -224,8 +220,8 @@ def build_project_diagnostics(
                     projected["status"].update(
                         reason_code="DECISION_RECEIPT_MISMATCH",
                         reason_summary=(
-                            "A committed human decision has missing, tampered, or "
-                            "identity-mismatched receipt evidence"
+                            "A committed human approval predates subject binding "
+                            "(LEGACY_UNBOUND) and cannot authorize work"
                         ),
                         evidence=[
                             {

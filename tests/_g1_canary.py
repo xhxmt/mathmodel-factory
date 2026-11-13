@@ -110,6 +110,44 @@ def frozen_time():
         storage_module.SQLiteStateStore = original_store
 
 
+#: The workflow side tables a seed comparison covers (``events`` and
+#: ``project_state`` are compared on their own).
+DOMAIN_TABLES = (
+    "contest_policy",
+    "project_config",
+    "workflow_decision_requests",
+    "workflow_decision_instances",
+    "dirty_flags",
+    "dirty_causes",
+    "dirty_classifier_rebases",
+    "prompt_attempt_inputs",
+    "stage_checkpoints",
+    "stage_checkpoint_history",
+    "solver_jobs",
+    "dirty_flag_clear_receipts",
+    "dirty_cause_classification",
+)
+
+
+def domain_tables_digest(root: Path) -> dict[str, str]:
+    """One SHA-256 per side table, over its rows in a stable order."""
+
+    database = root / ".factory" / "state.db"
+    connection = sqlite3.connect(read_only_uri(database), uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        digest = {}
+        for table in DOMAIN_TABLES:
+            rows = [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
+            rows.sort(key=lambda row: json.dumps(row, sort_keys=True, default=str))
+            digest[table] = hashlib.sha256(
+                json.dumps(rows, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+        return digest
+    finally:
+        connection.close()
+
+
 def store_at(root: Path) -> SQLiteStateStore:
     """A store pinned to the canonical clock."""
 
@@ -208,7 +246,7 @@ def describe_seed(root: Path) -> dict[str, Any]:
         },
         "project_state": _normalise(project_state),
         "counts": counts,
-        "aggregate_domain_root": store_at(root).aggregate_domain_root(),
+        "domain_tables": domain_tables_digest(root),
     }
 
 
@@ -308,7 +346,6 @@ def collect(root: Path) -> dict[str, Any]:
             replay_events(snapshot["events"]) == replay_state(snapshot["state"])
         ),
         "event_replay_valid": snapshot["event_replay_valid"],
-        "aggregate_valid": snapshot["aggregate_valid"],
         # every recorded state hash, in order: the strongest per-event assertion
         "state_hashes": [envelope.get("state_hash_after") for envelope in envelopes],
         "events": [
@@ -325,7 +362,6 @@ def collect(root: Path) -> dict[str, Any]:
         # than only as a mystifying event_id mismatch
         "event_created_at": [event.created_at for event in events],
         "tables": _normalise(tables),
-        "aggregate_domain_root": store.aggregate_domain_root(),
         "files": file_manifest(root),
     }
 
@@ -367,15 +403,15 @@ def _short(value: Any, limit: int = 60) -> str:
 
 
 #: The canary's own internal-consistency answers.
-INTEGRITY_KEYS = ("event_replay_valid", "aggregate_valid", "replayed_matches_state")
+INTEGRITY_KEYS = ("event_replay_valid", "replayed_matches_state")
 
 
 def integrity_of(collected: dict) -> dict:
-    """The three consistency answers, as one comparable group.
+    """The consistency answers, as one comparable group.
 
     They were recorded and never compared, so both tracks could be internally
-    broken - a stream that does not replay, an aggregate root that does not
-    verify - while every equivalence assertion passed.  "These two runs agree" is
+    broken - a stream that does not replay - while every equivalence assertion
+    passed.  "These two runs agree" is
     worth little if neither is coherent.
     """
 
@@ -403,10 +439,6 @@ def compare(legacy: dict[str, Any], bounded: dict[str, Any]) -> dict[str, list[s
         "state_hashes": (legacy["state_hashes"], bounded["state_hashes"]),
         "event_created_at": (legacy["event_created_at"], bounded["event_created_at"]),
         "tables": (legacy["tables"], bounded["tables"]),
-        "aggregate_domain_root": (
-            legacy["aggregate_domain_root"],
-            bounded["aggregate_domain_root"],
-        ),
         # compared as well as asserted, so a track that is valid in one run and
         # invalid in the other is a finding rather than a silence
         "integrity": (integrity_of(legacy), integrity_of(bounded)),

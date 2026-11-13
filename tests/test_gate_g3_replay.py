@@ -72,7 +72,6 @@ def test_historical_stream_still_replays_and_matches_current_state(tmp_path, nam
     for field in REPLAY_FIELDS:
         assert replayed.get(field) == current.get(field), f"{name}:{field}"
     assert snapshot["event_replay_valid"] is True
-    assert snapshot["aggregate_valid"] is True
 
 
 @pytest.mark.parametrize("name", sorted(_REAL))

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-13 — 去掉防操作员自己的两层完整性校验：事件里的域表哈希、Human Gate 回执文件的反复核验
+
+这两层校验防的都是"有人绕过代码直接改了库或文件"，也就是单机部署下的操作员自己。引擎从不依据第一层做决定；第二层一旦触发，会让一个本来有效的人工决策凭空消失，直到有人修复。
+
+- **事件不再附带域表哈希，也不再计算 `aggregate_valid`**：以前每个事件都会写入 13 张 side table 的哈希（`effect_hashes_after`、`aggregate_root_hash_after`），`status_snapshot` 每次读取时再算三个完整性标志。这些标志只在 CLI `diagnostics` 和 Web 诊断卡里显示，引擎从不依据它们做决定。它们的代价是：每次加表都要写兼容分支（`dirty_classification` 的 side table 就是因此才设计成独立表），pause 失灵的 bug 也是因为 pause 依赖了它。删除 `_domain_effect_hashes`、`aggregate_domain_root`、`verify_aggregate_domain_root`，以及 `status_snapshot` 里的 `aggregate_valid`、`latest_effect_attestation_valid`、`effect_domain_generation_valid`。保留事件日志、`state_patch` 回放和 `event_replay_valid`：看板的时间拆分依赖回放，回放本身也能发现状态与事件不一致（CLI 与 Web 诊断仍报 `WORKFLOW_REPLAY_MISMATCH`）。历史事件里已有的哈希原样保留，只是不再读取。删除依赖这些哈希的一次性救场入口 `final_evidence_recovery.recover_final_evidence_config`（没有调用方）；已有项目中由它写入的更正记录，仍由 `classifier_equivalent_for_restored_checkpoints` 识别。测试用的状态比较器改为直接比较各表内容（`tests/_g1_canary.domain_tables_digest`）。
+- **人工决策以 SQLite 为准，回执文件只是投影**：以前每次读取决策都会用 O_NOFOLLOW 逐级读取 `.factory/decisions/<gate>/<request_id>/<decision_id>.json`，逐字段比对 SQLite。文件一旦缺失、被改动或被换成符号链接，决策就被当作不存在：Step 3 选择无法重建，交付验收拒绝，Web 显示 `DECISION_RECEIPT_MISMATCH`，只能用 `decision_receipt_repair.py` 修复。可这个文件本身就是由 SQLite 那一行生成的，比对它保护不了任何权威数据。现在 `verify_decision_receipt` 不读文件；记录决策时照常写一次文件（已有不同内容就覆盖），路径和 SHA-256 照旧存在 `artifact_refs`，所以交付回执、最终输入快照、联合建模引用的值都不变。仍然不能使用的只有在绑定主体之前记录的旧批准（`LEGACY_UNBOUND`），诊断卡上显示为"旧批准无法使用"。删除 `SQLiteStateStore.repair_decision_receipt` 和 `scripts/decision_receipt_repair.py`。
+- **评审身份**：`decision_receipts.py` 与 `storage.py` 在 `evaluator_contract` 的治理文件组里，内容变了，已有的评审要在新代码下重跑一次才能用于覆盖交付；删掉的 `decision_receipt_repair.py` 已从该清单移除。
+- **未做**：`state_lease.py` 的简化。它的跨进程提交锁和分析模式的只读快照都在使用，只有 inode 替换检查和把锁交给子进程这两小块可以再评估。
+
 ## 2026-11-10 — 视觉问题提前发现、按负责的 Step 返工；Step 4 就核对结果路径；重算不再把模型问题留给 Step 4（验收 A 改进清单第 1、2 项）
 
 验收 A 最后没能交付，直接原因是最终评审的视觉门禁报了 10 个 blocking 问题（3pt 图内文字、空白页、内容超出页面），而唯一的修复循环已经用掉。本次改动让这类问题在审稿环节就被发现和修复，并补上两处让运行卡死的合同缺口。

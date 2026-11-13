@@ -24,8 +24,8 @@
   `scheduler-activate`。Legacy Adapter 继续保持冻结兼容路径。
 - SQLite `events` 保持 append-only；schema v9 的所有新 transition 写入 event-v2
   `_workflow` 信封，记录 versioned state patch、前后状态哈希、主体/结果坐标、规范事件类型、
-  结构化 reason 和 contest policy/project config/决策/dirty/checkpoint/Solver
-  side-table aggregate root。
+  结构化 reason。（早期版本还写入各 side table 的 aggregate root，2026-11-13 起不再写入，
+  也不再校验；完整性只靠事件回放。）
 - Native Web 状态、Action Center、恢复状态和审计时间线从 SQLite 事件纯投影；只有 Legacy
   或 Native 数据库不可读时才回退到 `diagnostics/status.json`、heartbeat 和日志。
 

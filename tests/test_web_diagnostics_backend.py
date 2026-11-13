@@ -208,7 +208,7 @@ def test_prior_rejected_decision_projection_is_not_orphaned(tmp_path):
     assert diag["orphaned_artifacts"] == []
 
 
-def test_diagnostics_exposes_decision_receipt_mismatch(tmp_path):
+def test_diagnostics_ignores_an_edited_decision_receipt_projection(tmp_path):
     (tmp_path / f"{tmp_path.name}_paper.tex").write_text(
         "\\begin{document}approved\\end{document}\n", encoding="utf-8"
     )
@@ -233,10 +233,8 @@ def test_diagnostics_exposes_decision_receipt_mismatch(tmp_path):
         consultation_gate=None,
     )
 
-    assert diag["status"]["reason_code"] == "DECISION_RECEIPT_MISMATCH"
-    assert diag["decision_receipt_mismatches"][0]["request_id"] == decision[
-        "request_id"
-    ]
+    assert diag["status"]["reason_code"] != "DECISION_RECEIPT_MISMATCH"
+    assert diag["decision_receipt_mismatches"] == []
 
 
 def test_diagnostics_exposes_step3_projection_owner_and_mismatch(tmp_path):

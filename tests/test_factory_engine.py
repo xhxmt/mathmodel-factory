@@ -767,7 +767,7 @@ def test_a_checker_without_a_verdict_never_consumes_a_content_attempt(tmp_path):
     retries = [event for event in store.events() if event.type == "RETRY_SCHEDULED"]
     assert [event.payload["infrastructure_retries"] for event in retries] == [1, 2]
     assert [event.payload["content_attempts_used"] for event in retries] == [0, 0]
-    assert store.verify_aggregate_domain_root()
+    assert store.status_snapshot()["event_replay_valid"]
 
 
 def test_an_exhausted_infrastructure_budget_is_its_own_terminal_class(tmp_path):
@@ -803,7 +803,7 @@ def test_content_failures_keep_their_budget_between_infrastructure_retries(tmp_p
     failure = store.events()[-1]
     assert failure.payload["error_class"] == "AUDIT_REPAIR_REQUIRED"
     assert failure.payload["content_attempts_used"] == 2
-    assert store.verify_aggregate_domain_root()
+    assert store.status_snapshot()["event_replay_valid"]
 
 
 def test_a_model_backend_failure_never_consumes_a_content_attempt(tmp_path):

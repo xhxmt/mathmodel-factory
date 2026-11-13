@@ -586,7 +586,7 @@ def test_a_production_database_is_audited_read_only_and_migrated_in_a_copy(tmp_p
     assert after["user_version"] == before["user_version"] == 0
     assert after["has_v10_side_table"] is True
 
-    # The replay and aggregate contracts apply only to a versioned stream.  One
+    # The replay contract applies only to a versioned stream.  One
     # production database predates that generation (296 events, no envelope), so
     # the audit branches on the data rather than assuming every database is
     # replayable - asserting "valid" there would be asserting the wrong thing,
@@ -597,13 +597,9 @@ def test_a_production_database_is_audited_read_only_and_migrated_in_a_copy(tmp_p
         assert snapshot["event_replay_valid"] is False, (
             f"{name}: a pre-versioned stream cannot be replay-valid"
         )
-        assert snapshot["aggregate_valid"] is False
     else:
         assert enveloped == before["events"], f"{name}: the stream is only part-versioned"
         assert snapshot["event_replay_valid"] is True, f"{name}: replay broke on migration"
-        assert snapshot["aggregate_valid"] is True, f"{name}: the aggregate root drifted"
-        root = store.aggregate_domain_root()
-        assert _V10_SIDE_TABLE in root["effect_hashes"]
 
     # and the production database is byte- and mtime-identical
     assert sha256(database) == before_sha, f"{name}: the audit modified the database"

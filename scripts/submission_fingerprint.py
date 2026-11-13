@@ -201,7 +201,6 @@ def evaluator_contract_payload(
         "factory_core/storage.py",
         "factory_core/human_decisions.py",
         "factory_core/workflow_events.py",
-        "scripts/decision_receipt_repair.py",
     )
 
     def contract_group(version: int, paths: tuple[str, ...]) -> dict[str, object]:

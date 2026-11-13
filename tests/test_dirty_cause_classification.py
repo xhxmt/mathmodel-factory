@@ -6,8 +6,8 @@ Exit conditions covered here (hermetic):
   2 _upgrade_schema() accepts 9 -> 10
   3 9 -> 10 adds ONLY the side table + its triggers; no existing table changes
     column set, and no other trigger appears or disappears
-  4 the side table is registered under its own _domain_effect_hashes() key
-  5 a v9-shaped project upgrades and still reports aggregate_valid (the real
+  4 (retired with the per-event domain hashes, 2026-11-13)
+  5 a v9-shaped project upgrades and its event replay stays valid (the real
     A/B/R copies are verified separately; see the 0.7 report)
   6 dirty_causes' column set is byte-identical before and after the upgrade
   7 a cause with no provenance row reads back as legacy_unrecorded and is never
@@ -18,7 +18,6 @@ Exit conditions covered here (hermetic):
  10 an old v9 writer cannot continue business writes against a schema-10 DB
  11 running the migration twice is idempotent
  12 a migration failure rolls back completely (no half-migrated state)
-  +  the compatibility branch is not abused once the first v10 event exists
   +  the provenance derivation covers every change the classifier emits
 """
 from __future__ import annotations
@@ -122,9 +121,9 @@ def _schema_version(project: Path) -> int:
 def _rewind_to_v9(project: Path) -> None:
     """Make a faithful v9-shaped fixture out of a v10 project.
 
-    Drops the v10-only table and triggers, removes the v10 domain key from every
-    historical event payload (recomputing that event's aggregate root), and
-    rewinds the recorded schema version.  Events are append-only, so the events
+    Drops the v10-only table and triggers, removes the v10 domain key from any
+    historical event payload that still carries domain hashes, and rewinds the
+    recorded schema version.  Events are append-only, so the events
     triggers are temporarily dropped on this throwaway copy and restored
     afterwards with their original SQL.
 
@@ -262,24 +261,17 @@ def test_upgrade_only_adds_the_side_table_and_its_triggers(tmp_path):
     assert before_second == after_second
 
 
-# --------------------------------------------------------------------------- 4
-def test_side_table_has_its_own_domain_key(tmp_path):
-    _project, store = _initialize(tmp_path)
-    root = store.aggregate_domain_root()
-    assert _SIDE_TABLE in root["effect_hashes"]
-
-
 # --------------------------------------------------------------------------- 5
-def test_v9_project_upgrades_and_stays_aggregate_valid(tmp_path):
+def test_v9_project_upgrades_and_replay_stays_valid(tmp_path):
     project, store = _initialize(tmp_path)
     _rewind_to_v9(project)
 
-    before = store.status_snapshot()["aggregate_valid"]
+    before = store.status_snapshot()["event_replay_valid"]
     store.status_snapshot()  # upgrade
-    after = store.status_snapshot()["aggregate_valid"]
+    after = store.status_snapshot()["event_replay_valid"]
 
     assert before is True, "the v9 fixture should itself be self-consistent"
-    assert after is True, "upgrading must not break the historical aggregate"
+    assert after is True, "upgrading must not break event replay"
 
 
 # --------------------------------------------------------------------------- 7
@@ -541,57 +533,6 @@ def test_failed_migration_rolls_back_completely(tmp_path, monkeypatch):
         connection.close()
 
 
-# ------------------------------------------------------ compatibility branch use
-def test_first_v10_event_ends_the_tolerance_window(tmp_path):
-    project, store = _initialize(tmp_path)
-
-    # The migration itself writes no event when no rebase is due, so the new
-    # domain key is still covered only by the tolerant branch.
-    connection = _connect(project)
-    try:
-        effects = store.aggregate_domain_root()["effect_hashes"]
-    finally:
-        connection.close()
-    assert _SIDE_TABLE in effects
-
-    # From the first v10 event onward the key sets match, so the strict
-    # aggregate comparison applies to the new table too.
-    state = store.load()
-    store.transition(
-        expected_revision=state.revision,
-        event_type="DIRTY_FOR_TEST",
-        changes={},
-        dirty_changes=[],
-    )
-    snapshot = store.status_snapshot()
-    connection = _connect(project)
-    try:
-        latest = connection.execute(
-            "SELECT payload_json FROM events ORDER BY revision DESC LIMIT 1"
-        ).fetchone()[0]
-    finally:
-        connection.close()
-    prior = json.loads(latest)["_workflow"]["effect_hashes_after"]
-    assert set(prior) == set(effects)
-    assert snapshot["aggregate_valid"] is True
-
-    # Any unexpected change to the side table must now fail the aggregate.
-    connection = _connect(project)
-    try:
-        for trigger in _SIDE_TRIGGERS:
-            connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-        connection.execute(
-            f"INSERT INTO {_SIDE_TABLE}"
-            "(cause_id, classification_source, policy_schema, policy_contract_sha256)"
-            " VALUES ('tampered', 'fallback', 'x', 'y')"
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-    assert store.status_snapshot()["aggregate_valid"] is False
-
-
 # ------------------------------------------------- derivation completeness (extra)
 @pytest.mark.parametrize(
     "before,after,expected",
@@ -668,7 +609,6 @@ def test_read_paths_do_not_mutate_revision_or_events(tmp_path):
     store.events()
     store.dirty_flags()
     store.stage_checkpoints()
-    store.aggregate_domain_root()
     store.solver_jobs()
 
     connection = _connect(project)
@@ -722,59 +662,6 @@ def test_explicit_rebase_is_cas_guarded_and_is_the_only_writer(tmp_path):
 
     with pytest.raises(RevisionConflict):
         store.rebase_dirty_classifier(expected_revision=current.revision)
-
-
-def test_effect_domain_generation_must_be_monotonic(tmp_path):
-    """I2: a v9-shaped event after a v10 event must invalidate the aggregate.
-
-    The tolerant branch would accept such an event on its own (the latest event's
-    domain set differs from the current one), so this asserts the verifier
-    enforces the invariant instead of relying on writers never regressing.
-    """
-
-    project, store = _initialize(tmp_path)
-    state = store.load()
-    store.transition(
-        expected_revision=state.revision,
-        event_type="DIRTY_FOR_TEST",
-        changes={},
-        dirty_changes=[],
-    )
-    assert store.status_snapshot()["aggregate_valid"] is True
-
-    connection = _connect(project)
-    try:
-        connection.execute("DROP TRIGGER IF EXISTS events_append_only_update")
-        connection.execute("DROP TRIGGER IF EXISTS events_append_only_delete")
-        row = connection.execute(
-            "SELECT revision, created_at, attempt, payload_json FROM events "
-            "ORDER BY revision DESC LIMIT 1"
-        ).fetchone()
-        payload = json.loads(row["payload_json"])
-        envelope = payload["_workflow"]
-        effects = dict(envelope["effect_hashes_after"])
-        effects.pop(_SIDE_TABLE)  # regress to a v9-shaped domain set
-        envelope["effect_hashes_after"] = effects
-        envelope["aggregate_root_hash_after"] = canonical_hash(effects)
-        new_revision = int(row["revision"]) + 1
-        connection.execute(
-            "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
-            "VALUES (?, 'DIRTY_FOR_TEST', ?, NULL, ?, ?)",
-            (
-                new_revision,
-                int(row["created_at"]),
-                int(row["attempt"]),
-                json.dumps(payload, ensure_ascii=True, sort_keys=True),
-            ),
-        )
-        connection.execute(
-            "UPDATE project_state SET revision=? WHERE singleton=1", (new_revision,)
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-    assert store.status_snapshot()["aggregate_valid"] is False
 
 
 def test_provenance_insert_rejected_at_db_level_rolls_back_cause(tmp_path):
@@ -887,7 +774,6 @@ def test_read_migration_keeps_replay_equal_to_current_state(tmp_path):
 
     snapshot = store.status_snapshot()
     assert snapshot["event_replay_valid"] is True
-    assert snapshot["aggregate_valid"] is True
 
     connection = _connect(project)
     try:
@@ -931,57 +817,12 @@ def test_genuine_write_converges_workflow_schema_version(tmp_path):
 
     snapshot = store.status_snapshot()
     assert snapshot["event_replay_valid"] is True
-    assert snapshot["aggregate_valid"] is True
 
     from factory_core.workflow_events import REPLAY_FIELDS, replay_events, replay_state
 
     replayed = replay_events(snapshot["events"])
     current = replay_state(snapshot["state"])
     assert all(replayed.get(f) == current.get(f) for f in REPLAY_FIELDS)
-
-
-def test_attestation_without_domain_map_fails_closed(tmp_path):
-    """I2 addition: an attested aggregate root must carry its domain map."""
-
-    project, store = _initialize(tmp_path)
-    state = store.load()
-    store.transition(
-        expected_revision=state.revision,
-        event_type="DIRTY_FOR_TEST",
-        changes={},
-        dirty_changes=[],
-    )
-    assert store.status_snapshot()["effect_domain_generation_valid"] is True
-
-    connection = _connect(project)
-    try:
-        connection.execute("DROP TRIGGER IF EXISTS events_append_only_update")
-        connection.execute("DROP TRIGGER IF EXISTS events_append_only_delete")
-        row = connection.execute(
-            "SELECT revision, created_at, attempt, payload_json FROM events "
-            "ORDER BY revision DESC LIMIT 1"
-        ).fetchone()
-        payload = json.loads(row["payload_json"])
-        envelope = payload["_workflow"]
-        # malformed: attests a root but drops the domain map it was computed from
-        del envelope["effect_hashes_after"]
-        new_revision = int(row["revision"]) + 1
-        connection.execute(
-            "INSERT INTO events(revision, type, created_at, step, attempt, payload_json) "
-            "VALUES (?, 'DIRTY_FOR_TEST', ?, NULL, ?, ?)",
-            (new_revision, int(row["created_at"]), int(row["attempt"]),
-             json.dumps(payload, ensure_ascii=True, sort_keys=True)),
-        )
-        connection.execute(
-            "UPDATE project_state SET revision=? WHERE singleton=1", (new_revision,)
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-    snapshot = store.status_snapshot()
-    assert snapshot["effect_domain_generation_valid"] is False
-    assert snapshot["aggregate_valid"] is False
 
 
 def test_dirty_clear_rebase_is_bound_into_the_transition_payload(tmp_path):
@@ -1377,7 +1218,6 @@ def test_s1d_replay_regression_on_v9_fixture(tmp_path):
 
     snapshot = store.status_snapshot()
     assert snapshot["event_replay_valid"] is True
-    assert snapshot["aggregate_valid"] is True
 
     # a genuine write converges it, and replay still equals current state
     written = store.transition(
@@ -1388,7 +1228,6 @@ def test_s1d_replay_regression_on_v9_fixture(tmp_path):
     assert written.schema_version == 10
     after = store.status_snapshot()
     assert after["event_replay_valid"] is True
-    assert after["aggregate_valid"] is True
 
 
 def test_s1d_new_cause_records_policy_aware_provenance(tmp_path):
