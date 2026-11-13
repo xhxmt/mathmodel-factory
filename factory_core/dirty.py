@@ -138,18 +138,6 @@ def _canonical_hash(value: object) -> str:
     return _sha256_bytes(encoded)
 
 
-def classifier_contract_sha256() -> str:
-    source = Path(__file__).read_bytes()
-    ownership = Path(__file__).with_name("artifact_ownership.py").read_bytes()
-    return _sha256_bytes(
-        DIRTY_CLASSIFIER_SCHEMA.encode("ascii")
-        + b"\0"
-        + source
-        + b"\0"
-        + ownership
-    )
-
-
 def solver_receipt_job_id(path: str) -> str | None:
     """Return the durable solver job id encoded by a receipt artifact path."""
 

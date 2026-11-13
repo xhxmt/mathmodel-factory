@@ -24,12 +24,6 @@ class JointModelingStep:
     factory_root: object
     backend: object | None = None
 
-    @property
-    def requires_prompt_input_receipt(self):
-        # The wrapper supplies the same flag for ordinary PromptStep execution;
-        # synthesis is preparatory work and can only finish in a human await.
-        return getattr(self.original, "requires_prompt_input_receipt", False)
-
     def _synthesis_pending(self, project):
         return self.step_id == 3 and current_synthesis(project) is None
 

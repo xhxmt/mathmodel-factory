@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .workflow_events import canonical_hash
 
@@ -149,34 +149,3 @@ def build_effective_prompt_receipt(
     }
     receipt_id = canonical_hash(identity)
     return {**identity, "receipt_id": receipt_id}
-
-
-def verify_effective_prompt_receipt(
-    stored: Mapping[str, Any], current: Mapping[str, Any]
-) -> tuple[bool, tuple[str, ...]]:
-    errors: list[str] = []
-    if stored.get("schema_version") != EFFECTIVE_PROMPT_SCHEMA:
-        errors.append("stored prompt receipt schema is invalid")
-    fields = (
-        "attempt_key",
-        "stage",
-        "subtask",
-        "source_step_id",
-        "attempt",
-        "consultation_decision_ids",
-        "researcher_note_sha256",
-        "human_review_sha256",
-        "prompt_template_sha256",
-        "model_config_sha256",
-        "effective_prompt_sha256",
-        "prompt_inputs_sha256",
-    )
-    for field in fields:
-        if stored.get(field) != current.get(field):
-            errors.append(f"effective prompt input drift: {field}")
-    stored_identity = {
-        key: value for key, value in stored.items() if key not in {"receipt_id", "bound_revision"}
-    }
-    if stored.get("receipt_id") != canonical_hash(stored_identity):
-        errors.append("stored prompt receipt identity hash mismatch")
-    return not errors, tuple(errors)

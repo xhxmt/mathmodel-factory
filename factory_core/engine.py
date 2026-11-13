@@ -1355,8 +1355,6 @@ class FactoryEngine:
                 )
         return state
 
-    # These methods participate in the frozen persisted-owner symbol manifest;
-    # keep their source-span coordinates stable when editing earlier code.
     def _stage_manifest_delta(
         self,
         task: ScheduledStageTask,
@@ -1396,9 +1394,7 @@ class FactoryEngine:
             return "MISSING", output_fingerprint, after, dirty_changes
         before = dict(baseline["manifest"])
         dirty_changes = []
-        # Schema v10 provenance: derived outside the frozen classifier module so
-        # that dirty.py's bytes (part of the frozen classifier contract identity)
-        # stay untouched.
+        # Schema v10 provenance: why each change was attributed as it was.
         sources = classification_sources(before, after)
         v2 = state.stage_catalog_version == STAGE_CATALOG_VERSION_V2
         if v2:
@@ -1832,37 +1828,6 @@ class FactoryEngine:
             **transition_guards,
         )
 
-    def _prompt_input_receipt_valid(
-        self, task: ScheduledStageTask, result: ExecutionResult
-    ) -> bool:
-        if not getattr(
-            task.definition.lifecycle,
-            "requires_prompt_input_receipt",
-            False,
-        ):
-            return True
-        if result.metadata.get("prompt_input_schema") != (
-            "factory-effective-prompt-v1"
-        ):
-            return False
-        receipt_id = str(
-            result.metadata.get("prompt_input_receipt_id") or ""
-        )
-        attempt_key_value = str(
-            result.metadata.get("prompt_input_attempt_key") or ""
-        )
-        if not receipt_id or not attempt_key_value:
-            return False
-        stored = self.store.prompt_attempt_input(attempt_key_value)
-        return bool(
-            stored is not None
-            and stored.get("receipt_id") == receipt_id
-            and stored.get("effective_prompt_sha256")
-            == result.metadata.get("effective_prompt_sha256")
-            and stored.get("prompt_inputs_sha256")
-            == result.metadata.get("prompt_inputs_sha256")
-        )
-
     def _contract_protection_violation(self) -> dict[str, Any] | None:
         """The contract's pre-commit protection check, as a payload or ``None``.
 
@@ -1916,35 +1881,6 @@ class FactoryEngine:
         input_fingerprint, output_fingerprint, after, dirty_changes = (
             self._stage_manifest_delta(task)
         )
-
-        if not self._prompt_input_receipt_valid(task, result):
-            receipt_id = str(
-                result.metadata.get("prompt_input_receipt_id") or ""
-            )
-            attempt_key_value = str(
-                result.metadata.get("prompt_input_attempt_key") or ""
-            )
-            return self._stage_transition(
-                state,
-                lease,
-                event_type="STEP_FAILED",
-                changes={
-                    "status": WorkflowStatus.FAILED,
-                    "runner_pid": None,
-                    "runner_lease_id": None,
-                    "heartbeat_at": None,
-                },
-                payload={
-                    "error_class": "PERMANENT_PROMPT_INPUT_RECEIPT_MISSING",
-                    "stage": task.stage_id,
-                    "subtask": task.subtask,
-                    "source_step": task.source_step_id,
-                    "prompt_input_receipt_id": receipt_id,
-                    "prompt_input_attempt_key": attempt_key_value,
-                },
-                dirty_changes=dirty_changes,
-                event_step=task.source_step_id,
-            )
 
         # S6: the contract's protected manifest and committed checkpoints are
         # verified here, immediately before a successful checkpoint can commit, so

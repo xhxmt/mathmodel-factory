@@ -332,21 +332,38 @@ def test_normalization_and_case_folding_match_the_legacy_matcher():
     )
 
 
-def test_the_module_does_not_change_the_frozen_classifier_identity():
-    """S1-A must not disturb the frozen trust root.
+def test_classifier_identity_is_a_version_not_a_hash_of_source_bytes(monkeypatch):
+    """Editing a classifier module must not move the identity by itself.
 
-    ``artifact_policy`` is deliberately outside ``classifier_contract_sha256()``;
-    if importing/using it moved that hash, historical receipts would stop being
-    comparable.
+    The identity used to hash the bytes of the classifier modules, so a comment
+    or a refactor invalidated checkpoints and forced a dirty rebase.  It is now
+    an explicit version: reading no source file and moving only when bumped.
     """
 
-    import factory_core.dirty as dirty
-    import factory_core.current_dirty as current_dirty
+    import pathlib
 
-    assert dirty.classifier_contract_sha256() == (
-        "c451a9d0be64fabd185c7561b67093956e663db6e845915cd320fea1cbabc515"
+    import factory_core.current_dirty as current_dirty
+    from factory_core.input_dependency_policy import input_dependency_contract_sha256
+    from factory_core.stage_catalog_v2_policy import v2_classifier_contract_sha256
+
+    before = current_dirty.classifier_contract_sha256()
+    before_v2 = v2_classifier_contract_sha256(before)
+    before_inputs = input_dependency_contract_sha256()
+
+    def no_source_reads(self, *args, **kwargs):
+        raise AssertionError(f"identity read source bytes: {self}")
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", no_source_reads)
+    assert current_dirty.classifier_contract_sha256() == before
+    assert v2_classifier_contract_sha256(before) == before_v2
+    assert input_dependency_contract_sha256() == before_inputs
+
+    monkeypatch.setattr(
+        current_dirty,
+        "CLASSIFIER_CONTRACT_VERSION",
+        current_dirty.CLASSIFIER_CONTRACT_VERSION + 1,
     )
-    assert current_dirty.classifier_contract_sha256() != dirty.classifier_contract_sha256()
+    assert current_dirty.classifier_contract_sha256() != before
 
 
 # ------------------------------------------------------- policy semantics (S1.3)
