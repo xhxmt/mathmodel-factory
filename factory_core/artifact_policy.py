@@ -38,9 +38,9 @@ without a second ownership registry.
 
 Relationship to the classifier identity
 ---------------------------------------
-This module is deliberately NOT part of ``classifier_contract_sha256()``
-(``factory_core/dirty.py`` + ``artifact_ownership.py``), whose bytes are a frozen
-compatibility trust root and are hashed into historical receipts.  The provenance
+The classifier identity is a version constant
+(``current_dirty.CLASSIFIER_CONTRACT_VERSION``), not a hash of source bytes:
+bump it when a policy change here alters what a path produces.  The provenance
 contract that explains how a change was *attributed* is
 ``dirty_classification.classification_contract_sha256()``; the contract that
 explains what a change *produces* stays with the classifier identity.  Keeping

@@ -9,6 +9,41 @@
 - **评审身份**：`decision_receipts.py` 与 `storage.py` 在 `evaluator_contract` 的治理文件组里，内容变了，已有的评审要在新代码下重跑一次才能用于覆盖交付；删掉的 `decision_receipt_repair.py` 已从该清单移除。
 - **未做**：`state_lease.py` 的简化。它的跨进程提交锁和分析模式的只读快照都在使用，只有 inode 替换检查和把锁交给子进程这两小块可以再评估。
 
+## 2026-11-13 — 去掉只会让运行停下的加固：提示词输入只记录不比对、投影偏离就地重建、评审身份收窄、分类器身份改为版本号
+
+这几处检查防的都是操作员自己或代码本身的变化，触发后没有自动出路，只能等人 `retry-step`，或者让已完成的工作作废。
+
+- **提示词输入只记录，不再事后比对**（`factory_core/steps/prompt_step.py`）：以前模型跑完后会重新渲染提示词，只要研究员备注、`human_review.md`、`web/model_config.json`、`model_registry.json`、`dispatcher.py`、提示词模板中任何一项变了，就判 `PERMANENT_PROMPT_INPUT_DRIFT` / `PERMANENT_CONSULTATION_INPUT_DRIFT`，整次运行作废。验收 A 中途把 effort 从 max 调成 high，Step 1 就因此重跑。v2 的返工提示块引用台账当前的 Notes 和状态，Step 运行期间改了这些行也会触发同样的判定。现在 `PROMPT_INPUT_BOUND` 回执照常在调用模型前写入，事后不再比对；中断恢复时，只要产物通过验证就提升，不管之后输入有没有变化（没有回执说明模型还没被调用，仍然重试）。同一个尝试键已有内容不同的回执时，不再判 `PERMANENT_PROMPT_INPUT_CONFLICT`：结果里记 `prompt_input_errors` 和 `prompt_input_receipt_durable=false`，Step 照常运行，已存的回执保持不变。删除错误类 `PERMANENT_PROMPT_INPUT_DRIFT`、`PERMANENT_CONSULTATION_INPUT_DRIFT`、`PERMANENT_PROMPT_INPUT_CONFLICT`、`PERMANENT_PROMPT_INPUT_AUTHORITY_CHANGED`、`PERMANENT_PROMPT_INPUT_RECEIPT_MISSING`，以及引擎提交检查点前对回执的复核（`engine._prompt_input_receipt_valid`）和 `requires_prompt_input_receipt` 标记。删除注释里自认不可达的 `PromptStep._execute_standalone_compatibility`；没有引擎状态时统一报 `PERMANENT_PROMPT_INPUT_AUTHORITY_INVALID`，不调用模型。
+- **prepare 阶段的投影偏离就地重建后继续**：以前咨询投影偏离时，代码先重建、再返回 `ready=False`，引擎把它当作 `PERMANENT_INVALID_PREPARE_RESULT`，只能等人 `retry-step`。现在重建成功就继续。Step 4 的 Step 3 选择投影偏离时，也先从 SQLite 决策重建再核验；只有无法重建，或重建后仍不一致（候选证据变了，决策本身不再成立）时才停。
+- **评审身份收窄到真正决定评审结论的代码**（`scripts/submission_fingerprint.py`，`EVALUATOR_CONTRACT_VERSION` 8 → 9）：以前 `evaluator_contract` 绑定约 70 个文件，包括 `engine.py`、`storage.py`、`cli.py`、`state_lease.py`、交付和治理代码，以及整份 `model_config.json` / `model_registry.json`。改动任何一个都会让已评审的快照作废（S1），比赛中途的修复必须重跑最终评审，放行授权也随之失效。现在只绑定：三个评审提示词；决定评审看到什么的代码（证据包与证据视图、客观证据及其中的数字和符号检查、claim graph、论文源解析、提交包清单）；决定结论如何聚合与路由的代码（聚合、裁决路由、视觉门禁、评审调用）；以及解析出的评审模型条目。去掉 `finalization_contract`、`governance_contract` 两组。版本号变化会让已有的评审在新代码下作废一次，需要重跑一次最终评审。
+- **dirty 分类器身份改为显式版本号**：以前身份是 8 个源文件字节的哈希（`dirty.py`、`artifact_ownership.py`、`current_dirty.py`、`current_artifact_ownership.py`、`paper_sources.py`、`artifact_policy.py`、`stage_catalog_v2_policy.py`、`input_dependency_policy.py`），哪怕只改一行注释，Stage 9 检查点也会作废（验收 A rev 473 的 `STAGE_CHECKPOINT_INVALIDATED: dirty-classifier contract changed`），并触发一次 dirty rebase。现在身份是 `current_dirty.CLASSIFIER_CONTRACT_VERSION`；v2 再加上 `V2_DIRTY_POLICY_VERSION` 和 `INPUT_DEPENDENCY_POLICY_VERSION`。只在某个路径的分类或重算范围真的改变时才递增。删除 `dirty.classifier_contract_sha256`（字节冻结的信任根）以及钉死它哈希值的测试。身份值这次变化一次：已经有 Stage 9 检查点的进行中项目，会按"分类器变更"把 Step 12 之后的检查点作废一次（v1 还会重跑条件数学预审），未结的 dirty 记录按原有 rebase 流程迁移。本机目前没有进行中的项目。
+- **删除没有调用方的文件**：`factory_core/final_contract_retry.py`（专门应付评审合同变化的一次性重试入口，未接入任何命令）和 `scripts/run_codex_tui_judge.py`（codex TUI 评审备用通道，没有调用方），以及它们的测试。两者原本只因出现在评审身份的文件清单里而保留（见 2026-11-11 条目）。删除注释 `engine.py` 里已经没有消费方的"保持 source-span 坐标稳定"约束。
+- **保留**：`evaluation/` 离线评估工具包（`calibration_judge`、`evaluate_calibration`、`capability_harness`、selector/shadow 系列、`judge_reliability`），它们是衡量论文质量的工具，只是从评审身份里移了出去；`decision_receipt_repair.py`、`persistent_launcher.py`（有文档的运维入口）；`solver_reconcile.py`（计划中的求解对账闸）。step_v2 调度分支这次没有删：58 个引擎通用行为测试（重试、失败分类、期限、租约）跑在这条路径上，迁移到 Stage 路径需要单独一个改动。
+- 测试：完整核心套件除 2 个依赖本机生产库的测试外全部通过（这 2 个在 origin/main 上同样失败）。
+
+## 2026-11-11 — 美赛（MCM/ICM）论文模板与写作提示词
+
+Step 9 的美赛分支原来只在提示里给了一份 `article` 骨架，`mcmthesis` 没有 vendor；写作环节（Step 8.5–15）的提示词全部按国赛写（国一锚点、中文 600 字摘要、禁止第一人称等），美赛题会照国赛规则写。
+
+- **模板**：`latex_templates/mcmthesis.cls` 原样 vendor TeX Live 中的 mcmthesis v6.3.3（LPPL 1.3c，许可证在 `mcmthesis.LICENSE`）；`latex_templates/mcm_paper_template.tex` 是原样可编译的起稿模板：第 1 页 Summary Sheet（摘要位置是与国赛相同的 `\AbstractPlaceholder` 行），正文 Introduction / Assumptions and Justifications / Notations / 每个任务一节 Model / Sensitivity Analysis / Model Evaluation and Further Discussion / Conclusion，可选 Memo，References、Appendices，最后是 `\AImatter` 之后不计页数的 Report on Use of AI Tools（COMAP AI 政策 v102025 的标题）。摘要页年份写死（类文件默认印编译当天的年份，重编译会改变 PDF 字节）；控制号保留占位，由人在提交前填写。
+- **评审基准**：`docs/guides/MCM_WRITING_BENCHMARK.md`，依据 COMAP 2026 竞赛说明、AI 政策、评委意见汇编《20 Years of Good Advice》和评审轮次说明：评审流程对写法的要求、25 页与 AI 披露等硬规则、评委看重的维度与初筛雷区、O 奖论文结构与页数预算、Summary 写法、英文写作（评委偏好第一人称现在时主动语态，与国赛相反）、A–F 题型差异、非技术文档、自查清单。
+- **美赛提示词**：`prompts/mcm/` 下为 Step 8.5、9、11、12、14、15 各写一段美赛专用要求，说明替代哪些国赛规则（标尺、语言、摘要篇幅、审稿必查项、英文去机器味、页数与 AI 披露检查）。新模块 `factory_core/steps/contest_prompts.py` 从 Step 0 写在 `problem/feasibility_constraints.md` 的竞赛类型声明判断竞赛（取标签后第一个竞赛名，所以“竞赛类型：CUMCM，不是 MCM/ICM”判为国赛；无声明时看 `problem/source.md`，都没有时按国赛），美赛/ICM 项目渲染时在共用提示前加上这段，国赛项目的提示逐字节不变。该段加在 v2 overlay 之后、返工段之前。
+- `scripts/check_page_count.py` 不再计入 Report on Use of AI (Tools) 起的页（以页首出现该标题为准），并修复项目没有 `models/` 时提示精简方案会抛 `UnboundLocalError` 的问题。`modeling_guide.md` 指向该模板。
+- 未改：最终审核的 `max_pages`（`problem/deliverables.json`）按 PDF 总页数计，若对美赛项目配置 25 页，会把 AI 报告也算进去；Step 0、比赛时长（74 小时，美赛为 96 小时）和 Judge 角色提示仍按国赛写。
+- 测试：新增 `tests/test_mcm_template.py`（2 例，其中一例经 `compile_paper.sh` 实际编译模板）和 `tests/test_contest_prompts.py`（竞赛判断、国赛逐字节不变、v2 overlay 共存）。
+
+## 2026-11-11 — agy 后端改为直接调用 Antigravity CLI，可用 Gemini 4 写作
+
+`agy` 后端原来经 `scripts/agy_run.py` 调用 `google-antigravity` Python SDK，只认 `GEMINI_API_KEY`，而本机 `.venv` 没装 SDK，CLI 登录的账号也用不上。CLI 1.5.5 已有完整的无交互模式，现在 `AgyBackend` 直接运行 `agy -p`。
+
+- 命令：`agy --model <id> [--effort <e>] --dangerously-skip-permissions --disable-slash-commands --add-dir <项目> --add-dir <factory> --output-format stream-json --print-timeout <超时-30s> -p <prompt>`。`-p` 必须带值（CLI 不读普通 stdin prompt），历史 prompt 最大约 26 KB，远低于单个参数 128 KiB 的上限；超过 100 KB 的 prompt 留在 `logs/` 下的文件里，参数只要求 agent 读取该文件（`prompt_transport=prompt-file`）。
+- 成功以 stream-json 的 `result` 事件为准：退出码 0 但没有 `result`、`status` 不是 `SUCCESS` 或带 `finished_reason` 的，记 `TRANSIENT_MODEL_BACKEND`；`finished_reason=print_timeout` 记 `TRANSIENT_TIMEOUT`。元数据记录 `agy_model`、`agy_status`、`agy_conversation_id`、`agy_usage` 等。请求带 `final_response_file` 时写入 `result.response`。
+- 不需要 API key：用 `agy` 已登录的账号。CLI 依次从 `AGY_CLI`、PATH、`~/.local/bin/agy` 查找，找不到记 `PERMANENT_BACKEND_UNAVAILABLE`。仍拒绝图片输入。
+- preflight 的 agy 分支检查 CLI，并用 `agy models`（不消耗额度）核对模型 id 是否对该账号可用：在列表里 PASS，不在 FAIL，拿不到列表 UNKNOWN；不再要求 `GEMINI_API_KEY`。
+- 内置默认：dispatcher 的 `agy` 改为 `gemini-4-carbon-high`；Web 内置的 `agy-gemini` 改为 `gemini-3.1-pro-high`（`gemini-3.1-pro-preview` 已不在 CLI 的模型列表中）。
+- `scripts/agy_run.py` 与 `google-antigravity` 依赖不再被调用，暂时保留。
+- 测试：新增 `tests/test_agy_backend.py`（11 例）。
+
 ## 2026-11-10 — 视觉问题提前发现、按负责的 Step 返工；Step 4 就核对结果路径；重算不再把模型问题留给 Step 4（验收 A 改进清单第 1、2 项）
 
 验收 A 最后没能交付，直接原因是最终评审的视觉门禁报了 10 个 blocking 问题（3pt 图内文字、空白页、内容超出页面），而唯一的修复循环已经用掉。本次改动让这类问题在审稿环节就被发现和修复，并补上两处让运行卡死的合同缺口。

@@ -138,9 +138,8 @@ def _paper_key_present(path: str, before: dict, after: dict) -> bool:
 def classification_sources(before: dict, after: dict) -> dict[tuple[str, str], str]:
     """Derive each change's provenance by mirroring the classifiers' branch order.
 
-    Kept outside ``factory_core/dirty.py`` on purpose: that module's bytes are a
-    frozen compatibility trust root and are hashed into
-    ``classifier_contract_sha256()``.
+    Kept outside ``factory_core/dirty.py`` so that provenance stays a separate
+    contract from the classification itself.
 
     Keys are ``(flag_value, cause_artifact)`` -- the same key the frozen
     classifier uses for its ``remember()`` de-duplication, so every emitted

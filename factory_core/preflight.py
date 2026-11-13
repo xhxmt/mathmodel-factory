@@ -179,6 +179,33 @@ def _probe_openai_compatible(base_url: str, key: str, http_get: HttpGet, timeout
     return Check("provider", verdict, f"{url}: {detail}")
 
 
+def _agy_models(cli: str, environ: Mapping[str, str], timeout: float) -> list[str] | None:
+    """The model ids ``agy models`` offers the logged-in account, or None."""
+
+    try:
+        completed = subprocess.run(
+            [cli, "models"], capture_output=True, text=True, timeout=timeout,
+            stdin=subprocess.DEVNULL, env=dict(environ),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return [line.split("\t", 1)[0].strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def _probe_agy_model(cli: str, model: str, environ: Mapping[str, str], timeout: float) -> Check:
+    """Whether the logged-in Antigravity account offers ``model`` (spends no quota)."""
+
+    models = _agy_models(cli, environ, max(timeout, 30.0))
+    if not models:
+        return Check("provider", UNKNOWN, "agy models gave no list (not logged in, or offline)")
+    if model in models:
+        return Check("provider", PASS, f"{model} is offered to the logged-in account")
+    return Check("provider", FAIL, f"{model} is not among the {len(models)} models agy offers this account",
+                 {"available": models})
+
+
 def check_model(
     model_id: str,
     entry: Mapping[str, str] | None,
@@ -203,8 +230,18 @@ def check_model(
     elif backend == "claude":
         findings.append(Check("executable", PASS if _executable("claude") else FAIL, "claude CLI " + ("found" if _executable("claude") else "not found on PATH")))
     elif backend == "agy":
-        script = factory_root / "scripts" / "agy_run.py"
-        findings.append(Check("executable", PASS if script.is_file() else FAIL, f"{script.name} {'present' if script.is_file() else 'missing'}"))
+        from .adapters.models.backends import agy_cli_path
+
+        cli = agy_cli_path(dict(environ))
+        if not cli:
+            findings.append(Check("executable", FAIL, "agy CLI not found (set AGY_CLI or put agy on PATH)"))
+        else:
+            findings.append(Check("executable", PASS, f"agy CLI found: {cli}"))
+            if http_get is not None and entry.get("model"):
+                findings.append(_probe_agy_model(cli, entry["model"], dict(environ), timeout))
+            elif http_get is None:
+                findings.append(Check("provider", UNKNOWN, "network probes disabled"))
+        key_env = ""  # the CLI authenticates with its own login, not an API key
     elif backend == "dsh":
         node = environ.get("DSH_NODE", "").strip() or (shutil.which("node") or "")
         cli = environ.get("DSH_CLI", "").strip() or (shutil.which("dsh") or "")

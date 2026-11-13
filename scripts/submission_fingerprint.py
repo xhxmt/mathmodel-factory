@@ -21,7 +21,7 @@ from factory_core.bibliography import bibliography_evidence_record
 
 
 FINGERPRINT_VERSION = 10
-EVALUATOR_CONTRACT_VERSION = 8
+EVALUATOR_CONTRACT_VERSION = 9
 FACTORY_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -119,103 +119,41 @@ def evaluator_contract_payload(
         "primary": get_model_entry(registry_path, primary),
         "fallback": get_model_entry(registry_path, fallback) if fallback else None,
     }
+    # Only the code that decides what the Judge sees and how its verdicts are
+    # aggregated and routed belongs to the evaluator.  Engine, storage,
+    # delivery and governance code does not change a judgment, so changing it
+    # must not invalidate one (it used to: about 70 files were bound here, and
+    # any factory fix made a judged snapshot unusable for delivery).
     implementation_files = (
-        "run_paper.sh",
-        "factory_core/cli.py",
-        "factory_core/domain.py",
-        "factory_core/engine.py",
-        "factory_core/final_judge_projection.py",
-        "factory_core/final_contract_retry.py",
-        "factory_core/registry.py",
-        "factory_core/audit/domain.py",
-        "factory_core/audit/incremental.py",
-        "factory_core/audit/ledger.py",
-        "factory_core/audit/persistence.py",
-        "factory_core/audit/service.py",
-        "factory_core/audit/acceptance.py",
-        "factory_core/native_boundary.py",
-        "factory_core/state_lease.py",
-        "factory_core/steps/catalog.py",
-        "factory_core/steps/specialized.py",
-        "factory_core/steps/validators.py",
+        "factory_core/judge_batch.py",
         "factory_core/paper_sources.py",
         "factory_core/submission_bundle.py",
-        "factory_core/solver_input_coverage.py",
-        "factory_core/solver_input_versions.py",
-        "factory_core/submission_routes.py",
-        "compile_paper.sh",
-        "scripts/latex_dependency_guard.py",
-        "scripts/package_submission.py",
-        "scripts/claim_graph.py",
-        "scripts/canonical_claims.py",
-        "factory_core/judge_batch.py",
-        "factory_core/solver_dependency_guard.py",
-        "scripts/verify_numbers.py",
-        "scripts/verify_symbols.py",
-        "scripts/verify_deliverables.py",
-        "scripts/verify_derived_artifacts.py",
-        "scripts/verify_invariants.py",
-        "scripts/verify_spec_impl.py",
-        "scripts/verify_quality_contract.py",
-        "scripts/verify_provenance.py",
         "scripts/judge_packet.py",
+        "scripts/packet_context.py",
+        "scripts/packet_evidence.py",
+        "scripts/evidence_grounding.py",
         "scripts/objective_evidence.py",
         "scripts/build_objective_evidence.py",
-        "scripts/judge_reliability.py",
-        "scripts/evidence_grounding.py",
-        "scripts/packet_context.py",
-        "scripts/aggregate_judges.py",
-        "scripts/judge_decision_router.py",
-        "scripts/judgment_receipt.py",
-        "scripts/pdf_visual_gate.py",
-        "scripts/capability_harness.py",
-        "scripts/shadow_cutover.py",
-        "scripts/llm_judge_call.py",
-        "scripts/api_agent_run.py",
-        "scripts/packet_evidence.py",
+        "scripts/verify_numbers.py",
+        "scripts/verify_symbols.py",
+        "scripts/claim_graph.py",
+        "scripts/canonical_claims.py",
+        "scripts/json_evidence_view.py",
         "scripts/numpy_evidence_view.py",
         "scripts/document_evidence_view.py",
-        "factory_core/adapters/models/backends.py",
-        "factory_core/adapters/models/dispatcher.py",
         "scripts/solver_evidence_selection.py",
-        "scripts/run_codex_tui_judge.py",
-        "scripts/model_dispatch_config.py",
+        "scripts/aggregate_judges.py",
+        "scripts/judge_decision_router.py",
+        "scripts/pdf_visual_gate.py",
+        "scripts/llm_judge_call.py",
+        "scripts/api_agent_run.py",
     )
     prompt_files = (
         "prompts/judges/math_auditor.txt",
         "prompts/judges/execution_auditor.txt",
         "prompts/judges/paper_reviewer.txt",
     )
-    finalization_files = (
-        "factory_core/finalization.py",
-        "factory_core/delivery/release.py",
-        "factory_core/audit/acceptance.py",
-        "factory_core/submission_bundle.py",
-        "factory_core/bibliography.py",
-        "scripts/package_submission.py",
-        "scripts/submission_fingerprint.py",
-        "scripts/verify_number_chain.py",
-    )
-    governance_files = (
-        "factory_core/decision_receipts.py",
-        "factory_core/storage.py",
-        "factory_core/human_decisions.py",
-        "factory_core/workflow_events.py",
-    )
 
-    def contract_group(version: int, paths: tuple[str, ...]) -> dict[str, object]:
-        records = {
-            relative: _versioned_file_record(root, relative) for relative in paths
-        }
-        return {
-            "version": version,
-            "files": records,
-            "contract_sha256": hashlib.sha256(
-                json.dumps(records, sort_keys=True, separators=(",", ":")).encode(
-                    "utf-8"
-                )
-            ).hexdigest(),
-        }
     return {
         "version": EVALUATOR_CONTRACT_VERSION,
         "execution_step_id": execution_step_id,
@@ -234,17 +172,15 @@ def evaluator_contract_payload(
             relative: _versioned_file_record(root, relative)
             for relative in implementation_files
         },
-        "finalization_contract": contract_group(1, finalization_files),
-        "governance_contract": contract_group(1, governance_files),
         "prompts": {
             relative: _versioned_file_record(root, relative)
             for relative in prompt_files
         },
+        # The resolved Judge models, not the whole configuration files: an
+        # assignment for some other Step does not change this evaluator.
         "model_dispatch": {
             "selection_source": selection_source,
             "selection": selected,
-            "config": _versioned_file_record(root, "web/model_config.json"),
-            "registry": _versioned_file_record(root, "web/model_registry.json"),
         },
         "runtime_policy": {
             "judge_policy_mode": (

@@ -23,19 +23,21 @@ of a v2 Stage subtask before the upstream-owner decision:
    canonical results, solver receipts and the claim registry keep their
    owners: changing what is computed still reopens the computation.
 
-This module is part of the v2 classifier identity
-(:func:`v2_classifier_contract_sha256`), so editing it invalidates v2 Stage 9
-checkpoints exactly as a v1 classifier change invalidates v1 ones.  It is not
-part of the v1 identity: a v1 project's classification is unchanged.
+These rules are part of the v2 classifier identity
+(:func:`v2_classifier_contract_sha256`): bump ``V2_DIRTY_POLICY_VERSION`` when a
+change to them alters an owner, which invalidates v2 Stage 9 checkpoints exactly
+as a v1 classifier change invalidates v1 ones.  They are not part of the v1
+identity: a v1 project's classification is unchanged.
 """
 
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 from typing import Any
 
 V2_DIRTY_POLICY_SCHEMA = "factory-stage-catalog-v2-dirty-policy-v1"
+#: Bump when a rule below changes an owner (see the module docstring).
+V2_DIRTY_POLICY_VERSION = 1
 
 # Step 13 projections owned by the v2 Judge Stage.
 JUDGE_STAGE = 10
@@ -110,7 +112,7 @@ def v2_classifier_contract_sha256(base_classifier_sha256: str) -> str:
             [
                 V2_DIRTY_POLICY_SCHEMA.encode(),
                 base_classifier_sha256.encode(),
-                Path(__file__).read_bytes(),
+                str(V2_DIRTY_POLICY_VERSION).encode(),
                 input_dependency_contract_sha256().encode(),
             ]
         )

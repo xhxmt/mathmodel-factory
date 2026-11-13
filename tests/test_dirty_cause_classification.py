@@ -1168,7 +1168,6 @@ def test_classification_contract_covers_the_policy_layer_but_not_the_classifier(
 
     import inspect
 
-    import factory_core.dirty as dirty
     from factory_core.current_dirty import classifier_contract_sha256 as classifier_sha
 
     members_source = inspect.getsource(classification_contract_sha256)
@@ -1176,11 +1175,6 @@ def test_classification_contract_covers_the_policy_layer_but_not_the_classifier(
 
     # provenance identity != classifier identity
     assert classification_contract_sha256() != classifier_sha()
-
-    # the frozen classifier trust root is untouched by S1-D
-    assert dirty.classifier_contract_sha256() == (
-        "c451a9d0be64fabd185c7561b67093956e663db6e845915cd320fea1cbabc515"
-    )
 
 
 def test_provenance_contract_moves_when_a_contract_member_moves(tmp_path):

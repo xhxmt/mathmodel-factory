@@ -147,9 +147,11 @@ an input behind a filename macro; use literal `\input`, `\include`, `\subfile`,
 `\lstinputlisting` paths. For competitions that require specific document
 classes:
 
-- US contest (MCM/ICM): use `mcmthesis` or the contest's published
-  template. Keep page count under the contest limit (currently 25 pages
-  for MCM, including summary sheet).
+- US contest (MCM/ICM): start from the vendored
+  `latex_templates/mcm_paper_template.tex` (`mcmthesis` class, also vendored
+  there). Keep page count under the contest limit (currently 25 pages,
+  summary sheet through appendices; the Report on Use of AI after
+  `\AImatter` is not counted and must be kept).
 - Chinese national contest (CUMCM): use the official CUMCM template.
   Section ordering is prescribed; do not improvise.
 - Other competitions: follow the published template exactly. Style
