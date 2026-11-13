@@ -40,7 +40,7 @@ def test_concurrent_logs_keep_failure_classification_per_call(tmp_path, monkeypa
     assert [path.read_text() for path in logs] == ["unsupported model\n", "connection reset\n"]
 
 
-@pytest.mark.parametrize("backend_type", [AgyBackend, ApiAgentBackend])
+@pytest.mark.parametrize("backend_type", [ApiAgentBackend])
 def test_concurrent_file_based_calls_keep_distinct_prompts(tmp_path, monkeypatch, backend_type):
     monkeypatch.setattr("factory_core.adapters.models.backends.time.strftime", lambda _: "same-second")
     barrier = Barrier(2)
@@ -58,4 +58,36 @@ def test_concurrent_file_based_calls_keep_distinct_prompts(tmp_path, monkeypatch
     assert [result.returncode for result in results] == [0, 0]
     assert [result.metadata["observed_prompt"] for result in results] == ["stream_a", "stream_b"]
     assert len({result.metadata["prompt_path"] for result in results}) == 2
+    assert len({result.metadata["log"] for result in results}) == 2
+
+
+def test_concurrent_agy_calls_keep_distinct_prompts_and_logs(tmp_path, monkeypatch):
+    """The agy CLI takes the prompt as ``-p``; each call still keeps its own prompt file and log."""
+
+    monkeypatch.setattr("factory_core.adapters.models.backends.time.strftime", lambda _: "same-second")
+    cli = tmp_path / "agy"
+    cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cli.chmod(0o755)
+    monkeypatch.setenv("AGY_CLI", str(cli))
+    barrier = Barrier(2)
+
+    class Supervisor:
+        def run(self, request):
+            prompt = request.argv[-1]
+            request.stdout_path.parent.mkdir(parents=True, exist_ok=True)
+            request.stdout_path.write_text(
+                '{"event":"result","result":{"status":"SUCCESS","response":"%s"}}\n' % prompt,
+                encoding="utf-8",
+            )
+            barrier.wait(timeout=5)
+            return ProcessResult(0, False, 0.01, 123, {"observed_prompt": prompt})
+
+    backend = AgyBackend(tmp_path, Supervisor())
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda text: backend.execute(request_for(tmp_path, text)), ["stream_a", "stream_b"]))
+
+    assert [result.returncode for result in results] == [0, 0]
+    assert [result.metadata["observed_prompt"] for result in results] == ["stream_a", "stream_b"]
+    files = [tmp_path / result.metadata["prompt_file"] for result in results]
+    assert [path.read_text(encoding="utf-8") for path in files] == ["stream_a", "stream_b"]
     assert len({result.metadata["log"] for result in results}) == 2
