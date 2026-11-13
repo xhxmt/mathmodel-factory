@@ -1,18 +1,7 @@
 """Append-only provenance for dirty causes (workflow schema v10).
 
-Schema 9 -> 10 adds exactly two things: this table (plus its append-only
-triggers) and one new ``_domain_effect_hashes()`` domain key.  No existing
-table changes shape, because every existing domain hash is a canonical hash
-over ``SELECT *`` rows and would otherwise fail historical `aggregate_valid`
-checks.
-
-Why a side table rather than a column on ``dirty_causes``: the compatibility
-branch in ``SQLiteStateStore.status_snapshot()`` only tolerates a *different
-set of domain keys*.  Adding a column keeps the key set identical, so the
-strict aggregate comparison applies and every historical project would report
-``aggregate_valid = False``.  A new domain key takes the tolerant branch for
-pre-v10 events and the strict branch from the first v10 event onward -- which
-is exactly the behaviour we want.
+Schema 9 -> 10 adds exactly this table and its append-only triggers; no
+existing table changes shape.
 
 Historical causes are never back-filled: the classification path a v9 cause
 took cannot be reconstructed from today's classifier, so it reads back as

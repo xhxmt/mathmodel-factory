@@ -93,7 +93,6 @@ def test_a_built_stream_replays_and_matches_current_state(hermetic_project):
     ]
     assert mismatches == []
     assert snapshot["event_replay_valid"] is True
-    assert snapshot["aggregate_valid"] is True
 
 
 def test_hash_verification_is_not_a_no_op(hermetic_project):

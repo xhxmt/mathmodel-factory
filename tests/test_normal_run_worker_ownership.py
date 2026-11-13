@@ -107,7 +107,7 @@ def test_a_broken_event_chain_does_not_prevent_stopping_the_runner(tmp_path, ope
         connection.execute('UPDATE project_state SET attempt = attempt + 5')  # an un-evented edit
         connection.commit()
         connection.close()
-        assert store.status_snapshot()['aggregate_valid'] is False
+        assert store.status_snapshot()['event_replay_valid'] is False
 
         result = getattr(service, operation)('demo', expected_revision=state.revision)
 

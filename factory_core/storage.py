@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import sqlite3
 import time
@@ -1310,11 +1309,7 @@ class SQLiteStateStore:
         ensure_dirty_rebase_schema(connection)
         ensure_prompt_receipt_schema(connection)
         # Schema 9 -> 10 adds exactly the append-only provenance side table and
-        # its triggers, plus one new _domain_effect_hashes() key.  No existing
-        # table changes shape: each existing domain hash is a canonical hash over
-        # SELECT * rows, so a shape change would fail historical aggregate_valid
-        # checks.  A new domain key instead takes the tolerant per-domain branch
-        # for pre-v10 events.
+        # its triggers.
         ensure_dirty_cause_classification_schema(connection)
         # 0.7.2: only the PHYSICAL schema version is written here.
         #
@@ -1389,9 +1384,6 @@ class SQLiteStateStore:
             except (AttributeError, json.JSONDecodeError):
                 prior_versioned = False
         safe_payload = dict(_redact(payload or {}))
-        effect_hashes = self._domain_effect_hashes(connection)
-        safe_payload["effect_hashes_after"] = effect_hashes
-        safe_payload["aggregate_root_hash_after"] = canonical_hash(effect_hashes)
         return build_event_payload(
             project_id=str(before["project_id"]),
             revision=revision,
@@ -1402,73 +1394,6 @@ class SQLiteStateStore:
             after=self._state_from_row(after),
             force_snapshot=not prior_versioned,
         )
-
-    @staticmethod
-    def _domain_effect_hashes(connection: sqlite3.Connection) -> dict[str, str]:
-        def rows_hash(query: str) -> str:
-            rows = connection.execute(query).fetchall()
-            return canonical_hash([dict(row) for row in rows])
-
-        return {
-            "contest_policy": rows_hash(
-                "SELECT * FROM contest_policy ORDER BY singleton"
-            ),
-            "project_config": rows_hash(
-                "SELECT * FROM project_config ORDER BY singleton"
-            ),
-            "decision_requests": rows_hash(
-                "SELECT * FROM workflow_decision_requests ORDER BY gate_type, generation"
-            ),
-            "decision_instances": rows_hash(
-                "SELECT * FROM workflow_decision_instances ORDER BY request_id"
-            ),
-            "dirty_flags": rows_hash(
-                "SELECT * FROM dirty_flags ORDER BY flag, owner_stage"
-            ),
-            "dirty_causes": rows_hash(
-                "SELECT * FROM dirty_causes ORDER BY cause_revision, cause_id"
-            ),
-            "dirty_classifier_rebases": rows_hash(
-                "SELECT * FROM dirty_classifier_rebases ORDER BY created_at, rebase_id"
-            ),
-            "prompt_attempt_inputs": rows_hash(
-                "SELECT * FROM prompt_attempt_inputs ORDER BY bound_revision, attempt_key"
-            ),
-            "stage_checkpoints": rows_hash(
-                "SELECT * FROM stage_checkpoints ORDER BY stage_id, subtask"
-            ),
-            "checkpoint_history": rows_hash(
-                "SELECT * FROM stage_checkpoint_history ORDER BY completed_revision, checkpoint_id"
-            ),
-            "solver_jobs": rows_hash("SELECT * FROM solver_jobs ORDER BY job_id"),
-            "dirty_clear_receipts": rows_hash(
-                "SELECT * FROM dirty_flag_clear_receipts "
-                "ORDER BY revision, flag, owner_stage"
-            ),
-            # Schema v10.  Registering the provenance side table as its own
-            # domain is what keeps pre-v10 events verifiable: their domain key
-            # set is smaller, so status_snapshot() takes the tolerant per-domain
-            # branch.  From the first v10 event onward the key sets match and the
-            # strict aggregate comparison applies, so any unexpected change to
-            # this table fails the aggregate check.
-            "dirty_cause_classification": rows_hash(
-                "SELECT * FROM dirty_cause_classification ORDER BY cause_id"
-            ),
-        }
-
-    def aggregate_domain_root(self) -> dict[str, Any]:
-        if not self.path.is_file():
-            raise StateNotInitialized(f"workflow state does not exist: {self.path}")
-        with self._session() as connection:
-            self._upgrade_schema(connection)
-            effect_hashes = self._domain_effect_hashes(connection)
-        return {
-            "effect_hashes": effect_hashes,
-            "aggregate_root_hash": canonical_hash(effect_hashes),
-        }
-
-    def verify_aggregate_domain_root(self) -> bool:
-        return bool(self.status_snapshot()["aggregate_valid"])
 
     def initialize(
         self,
@@ -1624,9 +1549,6 @@ class SQLiteStateStore:
                 )
             event_type = "PROJECT_IMPORTED" if imported else "PROJECT_CREATED"
             payload = _redact(import_payload or {})
-            effect_hashes = self._domain_effect_hashes(connection)
-            payload["effect_hashes_after"] = effect_hashes
-            payload["aggregate_root_hash_after"] = canonical_hash(effect_hashes)
             row = connection.execute(
                 "SELECT * FROM project_state WHERE singleton = 1"
             ).fetchone()
@@ -1664,7 +1586,7 @@ class SQLiteStateStore:
         return int(self._clock())
 
     def status_snapshot(self) -> dict[str, Any]:
-        """Read state, events, policy and domain hashes in one SQLite snapshot."""
+        """Read state, events and policy in one SQLite snapshot."""
         if not self.exists:
             raise StateNotInitialized(f"workflow state does not exist: {self.path}")
         with self._session() as connection:
@@ -1677,70 +1599,13 @@ class SQLiteStateStore:
                 raise StateNotInitialized(f"workflow state is not initialized: {self.path}")
             event_rows = connection.execute("SELECT * FROM events ORDER BY revision").fetchall()
             policy = connection.execute("SELECT * FROM contest_policy WHERE singleton = 1").fetchone()
-            effects = self._domain_effect_hashes(connection)
         # Assemble the public view after releasing the DB lease. All raw rows
-        # and hashes above still belong to the same committed read snapshot.
+        # above still belong to the same committed read snapshot.
         state = self._state_from_row(row)
         events = [WorkflowEvent(
             revision=r["revision"], type=r["type"], created_at=r["created_at"],
             step=r["step"], attempt=r["attempt"], payload=json.loads(r["payload_json"]),
         ) for r in event_rows]
-        expected = next((e.payload[ENVELOPE_KEY] for e in reversed(events)
-                         if isinstance(e.payload.get(ENVELOPE_KEY), dict)
-                         and e.payload[ENVELOPE_KEY].get("aggregate_root_hash_after")), None)
-        # -- 0.7.2 (review I9): name the three distinct integrity questions instead
-        # of overloading one flag.  They answer different things:
-        #   latest_effect_attestation_valid  current domain projection matches the
-        #                                    most recent aggregate attestation
-        #   effect_domain_generation_valid   the effect-domain key set never shrank
-        #                                    and every attestation is well-formed
-        #   event_replay_valid               replaying the stream reproduces the
-        #                                    state the database currently reports
-        latest_effect_attestation_valid = True
-        if expected is not None:
-            prior = expected.get("effect_hashes_after")
-            if isinstance(prior, dict) and set(prior) != set(effects):
-                # The key sets differ because a domain was added since (schema 10
-                # introduced dirty_cause_classification).  Tolerate that, but keep
-                # the attestation self-consistent: the recorded root was computed
-                # over exactly this recorded map when the event was written, so it
-                # must still hash to it.  Without this the differing-key branch
-                # checked the map against the current projection and never against
-                # the root the event claims, which is the one link a stale or
-                # inconsistent attestation would hide behind.
-                latest_effect_attestation_valid = (
-                    canonical_hash(prior) == expected["aggregate_root_hash_after"]
-                    and all(effects.get(k) == v for k, v in prior.items())
-                )
-            else:
-                latest_effect_attestation_valid = (
-                    canonical_hash(effects) == expected["aggregate_root_hash_after"]
-                )
-
-        # Effect-domain generation must be monotonic: once an event records a
-        # domain key, no later event may omit it.  Without this the key-set
-        # tolerance above would accept a v9-shaped event arriving after a v10
-        # event and silently stop covering the new domains.
-        effect_domain_generation_valid = True
-        domains_seen: set[str] = set()
-        for event in events:
-            envelope = event.payload.get(ENVELOPE_KEY)
-            if not isinstance(envelope, dict):
-                continue
-            keys = envelope.get("effect_hashes_after")
-            if keys is None:
-                # An event that attests an aggregate root must carry the domain
-                # map that root was computed from, otherwise the attestation is
-                # unverifiable (review I2).
-                if envelope.get("aggregate_root_hash_after") is not None:
-                    effect_domain_generation_valid = False
-                    break
-                continue
-            if not isinstance(keys, dict) or not domains_seen <= set(keys):
-                effect_domain_generation_valid = False
-                break
-            domains_seen |= set(keys)
-
         # The event stream must rebuild the state the database reports.  A
         # read-triggered DDL migration may not move a _REPLAY_FIELDS member
         # without an event (review Major 1).
@@ -1756,13 +1621,6 @@ class SQLiteStateStore:
 
         return {"state": state, "events": events,
                 "contest_policy": dict(policy) if policy is not None else None,
-                "aggregate_valid": (
-                    latest_effect_attestation_valid
-                    and effect_domain_generation_valid
-                    and event_replay_valid
-                ),
-                "latest_effect_attestation_valid": latest_effect_attestation_valid,
-                "effect_domain_generation_valid": effect_domain_generation_valid,
                 "event_replay_valid": event_replay_valid,
                 "now_epoch": self.now_epoch()}
 
@@ -2085,132 +1943,6 @@ class SQLiteStateStore:
             return None
         return payload
 
-    def repair_decision_receipt(self, request_id: str) -> dict[str, Any]:
-        """Recreate a missing receipt only when bytes match the persisted hash."""
-
-        import hashlib
-
-        request_id = str(request_id).strip()
-        if not request_id or not self.path.is_file():
-            raise InvalidTransition("decision request does not exist")
-        with self._session() as connection:
-            self._upgrade_schema(connection)
-            row = connection.execute(
-                """
-                SELECT r.request_id, r.gate_type, r.generation, r.kind,
-                       r.subject_fingerprint, r.options_fingerprint,
-                       r.request_json, d.decision_id, d.outcome, d.approved,
-                       d.decided_at, d.decision_json
-                FROM workflow_decision_requests AS r
-                JOIN workflow_decision_instances AS d ON d.request_id=r.request_id
-                WHERE r.request_id=?
-                """,
-                (request_id,),
-            ).fetchone()
-        if row is None:
-            raise InvalidTransition("resolved decision request does not exist")
-        decision_json = json.loads(row["decision_json"])
-        references = decision_json.get("artifact_refs") or []
-        if len(references) != 1 or not isinstance(references[0], dict):
-            raise InvalidTransition("decision has no unique immutable receipt reference")
-        reference = references[0]
-        receipt = {
-            "schema_version": "factory-human-decision-receipt-v1",
-            "decision_id": str(row["decision_id"]),
-            "request_id": str(row["request_id"]),
-            "gate": str(row["gate_type"]),
-            "generation": int(row["generation"]),
-            "kind": str(row["kind"]),
-            "outcome": str(row["outcome"]),
-            "approved": (
-                None if row["approved"] is None else bool(row["approved"])
-            ),
-            "decided_at": int(row["decided_at"]),
-            "subject_fingerprint": str(row["subject_fingerprint"]),
-            "options_fingerprint": str(row["options_fingerprint"]),
-            "decision": self._decision_identity_payload(decision_json),
-            "projection_refs": list(decision_json.get("projection_refs") or ()),
-        }
-        encoded = (
-            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        ).encode("utf-8")
-        if reference.get("size") != len(encoded) or reference.get(
-            "sha256"
-        ) != hashlib.sha256(encoded).hexdigest():
-            raise InvalidTransition(
-                "persisted decision cannot reproduce the original receipt hash"
-            )
-        relative = reference.get("path")
-        expected_gate = re.sub(r"[^A-Za-z0-9._-]", "_", str(row["gate_type"]))
-        expected = Path(
-            ".factory",
-            "decisions",
-            expected_gate,
-            request_id,
-            f"{row['decision_id']}.json",
-        )
-        if (
-            not isinstance(relative, str)
-            or Path(relative).is_absolute()
-            or Path(relative) != expected
-            or ".." in Path(relative).parts
-        ):
-            raise InvalidTransition("decision receipt path does not match identity")
-        target = self.project_dir / expected
-        if target.exists() or target.is_symlink():
-            from .decision_receipts import verify_decision_receipt
-
-            verification = verify_decision_receipt(
-                self.project_dir, self._decision_payload(row)
-            )
-            if verification.valid:
-                return {"status": "already_valid", **verification.to_dict()}
-            raise InvalidTransition(
-                "receipt path already exists but is invalid; refusing to overwrite evidence"
-            )
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
-        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow
-        directory_descriptor = os.open(self.project_dir, directory_flags)
-        try:
-            for component in expected.parts[:-1]:
-                try:
-                    next_descriptor = os.open(
-                        component, directory_flags, dir_fd=directory_descriptor
-                    )
-                except FileNotFoundError:
-                    os.mkdir(component, 0o700, dir_fd=directory_descriptor)
-                    next_descriptor = os.open(
-                        component, directory_flags, dir_fd=directory_descriptor
-                    )
-                os.close(directory_descriptor)
-                directory_descriptor = next_descriptor
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow
-            descriptor = os.open(
-                expected.name, flags, 0o600, dir_fd=directory_descriptor
-            )
-            try:
-                with os.fdopen(descriptor, "wb", closefd=True) as handle:
-                    handle.write(encoded)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            except BaseException:
-                os.unlink(expected.name, dir_fd=directory_descriptor)
-                raise
-        except BaseException:
-            raise
-        finally:
-            os.close(directory_descriptor)
-        from .decision_receipts import verify_decision_receipt
-
-        verification = verify_decision_receipt(
-            self.project_dir, self._decision_payload(row)
-        )
-        if not verification.valid:
-            raise InvalidTransition(
-                "reconstructed receipt did not pass immutable verification"
-            )
-        return {"status": "repaired", **verification.to_dict()}
-
     def assert_pending_decision_current(self, gate: str | None = None) -> dict[str, Any]:
         state = self.load()
         pending = state.pending_action or {}
@@ -2450,13 +2182,8 @@ class SQLiteStateStore:
         encoded_receipt = (
             json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         )
-        if receipt_path.exists():
-            if receipt_path.is_symlink() or not receipt_path.is_file():
-                raise InvalidTransition("decision receipt path is not a regular file")
-            if receipt_path.read_text(encoding="utf-8") != encoded_receipt:
-                raise InvalidTransition("immutable decision receipt collision")
-        else:
-            atomic_write_text(receipt_path, encoded_receipt)
+        # A projection of this SQLite decision: (re)written, never trusted back.
+        atomic_write_text(receipt_path, encoded_receipt)
         safe["decision_id"] = decision_id
         if projection_refs:
             safe["projection_refs"] = projection_refs

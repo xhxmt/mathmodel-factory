@@ -66,7 +66,7 @@ def test_snapshot_remains_one_revision_during_concurrent_write(tmp_path, monkeyp
         snapshot = reading.result()
     assert snapshot['state'].revision == old.revision
     assert snapshot['events'][-1].revision == old.revision
-    assert snapshot['aggregate_valid']
+    assert snapshot['event_replay_valid']
     assert other.status_snapshot()['state'].revision == new.revision
 
 

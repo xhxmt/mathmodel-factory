@@ -634,7 +634,7 @@ def test_normal_final_audit_still_blocks_unresolved_issue_ledger(
     assert outcome.record.delivery_allowed is False
 
 
-def test_content_freeze_receipt_removed_during_judge_blocks_acceptance(
+def test_content_freeze_receipt_file_removed_during_judge_does_not_block_acceptance(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "factory"
@@ -672,9 +672,9 @@ def test_content_freeze_receipt_removed_during_judge_blocks_acceptance(
 
     outcome = service.run(context, analysis_only=False)
 
-    assert outcome.record.status is AuditStatus.INDETERMINATE
-    assert outcome.record.error_class == "PERMANENT_FINAL_ACCEPTANCE_RECEIPT"
-    assert outcome.record.delivery_allowed is False
+    # The approval lives in SQLite; its receipt file is only a projection.
+    assert outcome.record.status is AuditStatus.PASS
+    assert not outcome.record.error_class
 
 
 def test_final_audit_reuses_valid_pass_for_same_snapshot(

@@ -1,16 +1,23 @@
+"""Human-decision receipts.
+
+A decision is authoritative in SQLite (append-only request and instance rows).
+When it is recorded, the store also writes ``.factory/decisions/<gate>/
+<request_id>/<decision_id>.json`` and keeps that file's path, size and SHA-256
+in the decision's ``artifact_refs``.  The file is a projection of the SQLite
+row for people and tools to read; nothing re-reads it to decide whether the
+decision exists.  (It used to be verified byte for byte on every read, and a
+missing or edited copy made a valid decision disappear until it was repaired.)
+
+What still makes a decision unusable is in the decision itself: an approval
+recorded before decisions were bound to their subject (``LEGACY_UNBOUND``)
+cannot authorize anything.
+"""
+
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-import re
-import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
-
-
-DECISION_RECEIPT_SCHEMA = "factory-human-decision-receipt-v1"
 
 
 @dataclass(frozen=True)
@@ -31,170 +38,30 @@ class DecisionReceiptVerification:
         }
 
 
-def _read_contained_once(project: Path, relative: Path) -> bytes:
-    """Read one regular file through an O_NOFOLLOW descriptor chain."""
-
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(project, directory_flags)
-    try:
-        for component in relative.parts[:-1]:
-            next_descriptor = os.open(
-                component,
-                directory_flags | nofollow,
-                dir_fd=descriptor,
-            )
-            os.close(descriptor)
-            descriptor = next_descriptor
-        file_descriptor = os.open(
-            relative.parts[-1], os.O_RDONLY | nofollow, dir_fd=descriptor
-        )
-        try:
-            before = os.fstat(file_descriptor)
-            if not stat.S_ISREG(before.st_mode):
-                raise OSError("receipt is not a regular file")
-            chunks: list[bytes] = []
-            while True:
-                chunk = os.read(file_descriptor, 1024 * 1024)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            after = os.fstat(file_descriptor)
-            if (
-                before.st_dev,
-                before.st_ino,
-                before.st_size,
-                before.st_mtime_ns,
-                before.st_ctime_ns,
-            ) != (
-                after.st_dev,
-                after.st_ino,
-                after.st_size,
-                after.st_mtime_ns,
-                after.st_ctime_ns,
-            ):
-                raise OSError("receipt changed while it was being read")
-            data = b"".join(chunks)
-            if len(data) != after.st_size:
-                raise OSError("receipt size changed while it was being read")
-            return data
-        finally:
-            os.close(file_descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _decision_identity(decision: Mapping[str, Any]) -> dict[str, Any]:
-    excluded = {
-        "artifact_refs",
-        "projection_refs",
-        "decision_id",
-        "outcome",
-        "receipt_verification",
-    }
-    return {key: value for key, value in decision.items() if key not in excluded}
-
-
 def verify_decision_receipt(
     project_dir: str | Path,
     decision: Mapping[str, Any],
 ) -> DecisionReceiptVerification:
-    """Verify receipt bytes, path safety, schema, and database identity."""
+    """Whether the SQLite decision can be used; never reads the receipt file."""
 
-    project = Path(project_dir).resolve()
+    del project_dir
+    refs = decision.get("artifact_refs")
+    reference = refs[0] if isinstance(refs, list) and refs and isinstance(refs[0], Mapping) else {}
+    path = reference.get("path") if isinstance(reference.get("path"), str) else None
+    sha256 = reference.get("sha256") if isinstance(reference.get("sha256"), str) else None
     if decision.get("subject_fingerprint") == "LEGACY_UNBOUND":
         if decision.get("kind") == "approval":
             return DecisionReceiptVerification(
                 False,
                 ("legacy approval has no immutable content-bound receipt",),
+                path=path,
+                sha256=sha256,
                 legacy_unbound=True,
             )
         return DecisionReceiptVerification(
-            True, (), legacy_unbound=True
+            True, (), path=path, sha256=sha256, legacy_unbound=True
         )
-
-    errors: list[str] = []
-    refs = decision.get("artifact_refs")
-    if not isinstance(refs, list) or len(refs) != 1 or not isinstance(refs[0], Mapping):
-        return DecisionReceiptVerification(
-            False, ("decision must reference exactly one immutable receipt",)
-        )
-    reference = refs[0]
-    relative = reference.get("path")
-    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
-        return DecisionReceiptVerification(False, ("decision receipt path is invalid",))
-    relative_path = Path(relative)
-    if ".." in relative_path.parts or "\\" in relative:
-        return DecisionReceiptVerification(
-            False, ("decision receipt path escapes its evidence root",), path=relative
-        )
-    expected_gate = re.sub(r"[^A-Za-z0-9._-]", "_", str(decision.get("gate") or ""))
-    expected_relative = Path(
-        ".factory",
-        "decisions",
-        expected_gate,
-        str(decision.get("request_id") or ""),
-        f"{decision.get('decision_id')}.json",
-    ).as_posix()
-    if relative != expected_relative:
-        errors.append("decision receipt path does not match database identity")
-
-    lexical = Path(os.path.abspath(project / relative_path))
-    try:
-        path_relative = lexical.relative_to(project)
-    except ValueError:
-        return DecisionReceiptVerification(
-            False, tuple(errors + ["decision receipt escapes project"]), path=relative
-        )
-    try:
-        data = _read_contained_once(project, path_relative)
-    except OSError:
-        errors.append(
-            "decision receipt is missing, non-regular, or traverses a symlink"
-        )
-        return DecisionReceiptVerification(False, tuple(errors), path=relative)
-
-    actual_size = len(data)
-    actual_sha256 = hashlib.sha256(data).hexdigest()
-    if reference.get("size") != actual_size:
-        errors.append("decision receipt size mismatch")
-    if reference.get("sha256") != actual_sha256:
-        errors.append("decision receipt SHA-256 mismatch")
-    try:
-        receipt = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        errors.append("decision receipt JSON is invalid")
-        return DecisionReceiptVerification(
-            False, tuple(errors), path=relative, sha256=actual_sha256
-        )
-    if not isinstance(receipt, dict):
-        errors.append("decision receipt root is not an object")
-        return DecisionReceiptVerification(
-            False, tuple(errors), path=relative, sha256=actual_sha256
-        )
-    expected_fields = {
-        "schema_version": DECISION_RECEIPT_SCHEMA,
-        "decision_id": decision.get("decision_id"),
-        "request_id": decision.get("request_id"),
-        "gate": decision.get("gate"),
-        "generation": decision.get("generation"),
-        "kind": decision.get("kind"),
-        "outcome": decision.get("outcome"),
-        "approved": decision.get("approved"),
-        "subject_fingerprint": decision.get("subject_fingerprint"),
-        "options_fingerprint": decision.get("options_fingerprint"),
-        "decision": _decision_identity(decision),
-        "projection_refs": decision.get("projection_refs") or [],
-    }
-    for field, expected in expected_fields.items():
-        if receipt.get(field) != expected:
-            errors.append(f"decision receipt {field} mismatch")
-    decided_at = receipt.get("decided_at")
-    if not isinstance(decided_at, int) or isinstance(decided_at, bool):
-        errors.append("decision receipt decided_at is invalid")
-    return DecisionReceiptVerification(
-        not errors, tuple(errors), path=relative, sha256=actual_sha256
-    )
+    return DecisionReceiptVerification(True, (), path=path, sha256=sha256)
 
 
 def verified_approval_receipts(

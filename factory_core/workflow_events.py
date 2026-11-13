@@ -248,8 +248,6 @@ def build_event_payload(
         or (safe_payload.get("resolution") or {}).get("decision_id"),
         "artifact_manifest_sha256": safe_payload.get("artifact_manifest_sha256")
         or safe_payload.get("output_fingerprint"),
-        "effect_hashes_after": safe_payload.get("effect_hashes_after"),
-        "aggregate_root_hash_after": safe_payload.get("aggregate_root_hash_after"),
         "reason": normalize_reason(event_type, safe_payload).to_dict(),
         "side_effect_refs": side_effect_refs,
     }

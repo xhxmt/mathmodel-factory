@@ -1471,7 +1471,7 @@ class FactoryService:
     def _recorded_runner_identity(snapshot: dict[str, Any]) -> str | None:
         """The launch identity recorded for the current runner pid and lease.
 
-        Deliberately independent of ``aggregate_valid``: the token is checked
+        Deliberately independent of the store's replay validity: the token is checked
         against the live process (``_process_identity``), which is evidence
         on its own.  Gating it on the store's replay validity made a project
         whose event chain had broken impossible to stop (run2, rev 713, 771,

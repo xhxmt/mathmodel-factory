@@ -138,9 +138,11 @@ but content-freeze rejection clears the pending action, invalidates downstream
 checkpoints, records `WORK_REOPENED`, and returns to Stage 9. The next
 generation is created only when repaired work reaches the Gate again. Never
 infer approval from the existence of a decision row or a selected option
-string. Current Approval decisions also require a verified immutable receipt;
-missing, symlinked, hash-mismatched, or identity-mismatched evidence fails
-closed.
+string. The SQLite rows are the decision: the receipt file written beside it
+(`.factory/decisions/<gate>/<request_id>/<decision_id>.json`, referenced by
+path and SHA-256 in `artifact_refs`) is a projection and is never re-read to
+decide whether the decision exists. An approval recorded before subject binding
+(`LEGACY_UNBOUND`) cannot authorize anything.
 
 Experimental Authority/Phase sources and historical runners are preserved in
 `~/paper_new`; see `docs/architecture/NATIVE_MAINLINE.md`. They are not imported
@@ -385,7 +387,7 @@ transition supersedes it.
 
 Pause and kill decide how to stop the runner before committing anything. The
 launch identity recorded for the current pid and lease is verified against the
-live process, independently of `aggregate_valid`; a gone or reused pid needs no
+live process, independently of the event replay check; a gone or reused pid needs no
 signal, and a live pid without a verifiable identity (or the controller's own
 pid) refuses the operation with `InvalidTransition` (message prefixed
 `STOP_IDENTITY_UNAVAILABLE` or `STOP_SELF`) and commits nothing.

@@ -545,82 +545,23 @@ def test_cli_diagnostics_reports_replay_parity(tmp_path, capsys):
     }
 
 
-def test_aggregate_domain_root_detects_side_table_divergence(tmp_path):
+def test_events_carry_no_domain_table_hashes(tmp_path):
     store = SQLiteStateStore(tmp_path, clock=lambda: 100)
     initial = store.initialize(project_id="demo", project_type="modeling")
     store.transition(
         expected_revision=initial.revision,
-        event_type="DOMAIN_ROOT_ESTABLISHED_FOR_TEST",
+        event_type="ANY_TRANSITION_FOR_TEST",
         changes={},
     )
-    assert store.verify_aggregate_domain_root() is True
 
-    with store._session() as connection:
-        connection.execute(
-            """
-            INSERT INTO dirty_flags(
-                flag, owner_stage, cause_revision, cause_artifact,
-                baseline_fingerprint, current_fingerprint,
-                classifier_contract_sha256
-            ) VALUES ('MATH_DIRTY', 8, 1, 'paper/paper.tex', ?, ?, ?)
-            """,
-            ("a" * 64, "b" * 64, "c" * 64),
-        )
-
-    assert store.verify_aggregate_domain_root() is False
-
-
-def test_aggregate_domain_root_detects_contest_policy_divergence(tmp_path):
-    store = SQLiteStateStore(tmp_path, clock=lambda: 100)
-    state = store.initialize(
-        project_id="demo",
-        project_type="modeling",
-        contest_policy={
-            "profile": "contest_core_v1",
-            "contest_started_at": 100,
-            "contest_deadline_at": 1000,
-            "content_freeze_at": 800,
-            "delivery_freeze_at": 900,
-            "delivery_reserve_seconds": 200,
-        },
-    )
-    store.transition(
-        expected_revision=state.revision,
-        event_type="DOMAIN_ROOT_ESTABLISHED_FOR_TEST",
-        changes={},
-    )
-    assert store.verify_aggregate_domain_root() is True
-
-    with store._session() as connection:
-        connection.execute(
-            "UPDATE contest_policy SET profile='tampered' WHERE singleton=1"
-        )
-
-    assert store.verify_aggregate_domain_root() is False
-
-
-def test_aggregate_domain_root_detects_project_config_divergence(tmp_path):
-    store = SQLiteStateStore(tmp_path, clock=lambda: 100)
-    state = store.initialize(project_id="demo", project_type="modeling")
-    configured = store.configure_solver_policy(
-        expected_revision=state.revision,
-        mode="local",
-        threshold_seconds=300,
-        allowed_runtimes=["python"],
-    )
-    store.transition(
-        expected_revision=configured.revision,
-        event_type="DOMAIN_ROOT_ESTABLISHED_FOR_TEST",
-        changes={},
-    )
-    assert store.verify_aggregate_domain_root() is True
-
-    with store._session() as connection:
-        connection.execute(
-            "UPDATE project_config SET solver_mode='cloud' WHERE singleton=1"
-        )
-
-    assert store.verify_aggregate_domain_root() is False
+    for event in store.events():
+        envelope = event.payload.get("_workflow") or {}
+        assert "effect_hashes_after" not in event.payload
+        assert "effect_hashes_after" not in envelope
+        assert "aggregate_root_hash_after" not in envelope
+    snapshot = store.status_snapshot()
+    assert snapshot["event_replay_valid"] is True
+    assert "aggregate_valid" not in snapshot
 
 
 def _record_content_freeze_approval(tmp_path):
@@ -639,82 +580,40 @@ def _record_content_freeze_approval(tmp_path):
     return store, decision
 
 
-def test_deleted_content_freeze_receipt_blocks_gate(tmp_path):
+@pytest.mark.parametrize("change", ["deleted", "edited", "symlinked"])
+def test_receipt_file_is_a_projection_that_cannot_unmake_a_decision(tmp_path, change):
     store, decision = _record_content_freeze_approval(tmp_path)
     receipt = tmp_path / decision["artifact_refs"][0]["path"]
-    receipt.unlink()
+    if change == "deleted":
+        receipt.unlink()
+    elif change == "edited":
+        receipt.write_text('{"approved":false}\n', encoding="utf-8")
+    else:
+        target = receipt.with_suffix(".saved.json")
+        receipt.rename(target)
+        receipt.symlink_to(target)
 
-    assert store.decision("content_freeze") is None
-    verification = store.decision_history("content_freeze")[0][
-        "receipt_verification"
-    ]
-    assert verification["valid"] is False
-    assert any("missing" in error for error in verification["errors"])
+    current = store.decision("content_freeze")
 
-
-def test_tampered_content_freeze_receipt_blocks_gate(tmp_path):
-    store, decision = _record_content_freeze_approval(tmp_path)
-    receipt = tmp_path / decision["artifact_refs"][0]["path"]
-    receipt.write_text('{"approved":false}\n', encoding="utf-8")
-
-    assert store.decision("content_freeze") is None
-    verification = store.decision_history("content_freeze")[0][
-        "receipt_verification"
-    ]
-    assert "decision receipt SHA-256 mismatch" in verification["errors"]
+    assert current is not None
+    assert current["decision_id"] == decision["decision_id"]
+    assert current["receipt_verification"]["valid"] is True
 
 
-def test_receipt_request_identity_must_match_database(tmp_path):
+def test_legacy_unbound_approval_cannot_authorize():
     from factory_core.decision_receipts import verify_decision_receipt
 
-    _store, decision = _record_content_freeze_approval(tmp_path)
-    receipt = tmp_path / decision["artifact_refs"][0]["path"]
-    payload = json.loads(receipt.read_text(encoding="utf-8"))
-    payload["request_id"] = "wrong-request"
-    receipt.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    rebound = {
-        **decision,
-        "artifact_refs": [artifact_ref(tmp_path, receipt)],
-    }
-
-    verification = verify_decision_receipt(tmp_path, rebound)
+    verification = verify_decision_receipt(
+        "/nonexistent",
+        {"kind": "approval", "subject_fingerprint": "LEGACY_UNBOUND"},
+    )
 
     assert verification.valid is False
-    assert "decision receipt request_id mismatch" in verification.errors
+    assert verification.legacy_unbound is True
 
 
-def test_receipt_symlink_is_rejected(tmp_path):
-    store, decision = _record_content_freeze_approval(tmp_path)
-    receipt = tmp_path / decision["artifact_refs"][0]["path"]
-    target = receipt.with_suffix(".saved.json")
-    receipt.rename(target)
-    receipt.symlink_to(target)
-
-    assert store.decision("content_freeze") is None
-    verification = store.decision_history("content_freeze")[0][
-        "receipt_verification"
-    ]
-    assert any("symlink" in error for error in verification["errors"])
-
-
-def test_missing_decision_receipt_can_be_repaired_from_immutable_database(
-    tmp_path,
-):
-    store, decision = _record_content_freeze_approval(tmp_path)
-    receipt = tmp_path / decision["artifact_refs"][0]["path"]
-    original = receipt.read_bytes()
-    receipt.unlink()
-
-    result = store.repair_decision_receipt(decision["request_id"])
-
-    assert result["status"] == "repaired"
-    assert receipt.read_bytes() == original
-    assert store.decision("content_freeze") is not None
-
-
-def test_final_input_snapshot_binds_content_freeze_receipt(tmp_path):
+def test_final_input_snapshot_binds_the_approval_from_sqlite(tmp_path):
     from factory_core.finalization import (
-        FinalizationSnapshotChanged,
         build_final_input_manifest,
         verify_final_input_snapshot,
     )
@@ -724,44 +623,11 @@ def test_final_input_snapshot_binds_content_freeze_receipt(tmp_path):
     assert snapshot.manifest["approval_receipts"][0]["decision_id"] == decision[
         "decision_id"
     ]
-    receipt = tmp_path / decision["artifact_refs"][0]["path"]
-    receipt.unlink()
+    (tmp_path / decision["artifact_refs"][0]["path"]).unlink()
 
-    with pytest.raises(FinalizationSnapshotChanged) as raised:
-        verify_final_input_snapshot(tmp_path, snapshot)
-
-    assert raised.value.changed_paths == ["<approval-receipts>"]
-
-
-def test_decision_receipt_repair_refuses_to_overwrite_corrupt_evidence(tmp_path):
-    from factory_core.domain import InvalidTransition
-
-    store, decision = _record_content_freeze_approval(tmp_path)
-    receipt = tmp_path / decision["artifact_refs"][0]["path"]
-    receipt.write_text('{"corrupt":true}\n', encoding="utf-8")
-
-    with pytest.raises(InvalidTransition, match="refusing to overwrite"):
-        store.repair_decision_receipt(decision["request_id"])
-
-
-def test_decision_receipt_repair_refuses_symlinked_evidence_directory(tmp_path):
-    store, decision = _record_content_freeze_approval(tmp_path)
-    receipt = tmp_path / decision["artifact_refs"][0]["path"]
-    receipt.unlink()
-    request_dir = receipt.parent
-    gate_dir = request_dir.parent
-    decisions_dir = gate_dir.parent
-    request_dir.rmdir()
-    gate_dir.rmdir()
-    decisions_dir.rmdir()
-    outside = tmp_path / "outside-receipts"
-    outside.mkdir()
-    decisions_dir.symlink_to(outside, target_is_directory=True)
-
-    with pytest.raises(OSError):
-        store.repair_decision_receipt(decision["request_id"])
-
-    assert list(outside.iterdir()) == []
+    # The binding comes from the SQLite decision, so losing the projection
+    # file changes nothing.
+    verify_final_input_snapshot(tmp_path, snapshot)
 
 
 # ===========================================================================
