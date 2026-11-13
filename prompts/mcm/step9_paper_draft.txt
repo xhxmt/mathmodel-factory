@@ -1,0 +1,32 @@
+论文按下文「B. MCM/ICM 美赛模式」的竞赛类型处理，但**以本段为准**；下文 B 分支里的 `article` 骨架、`\textbf{Keywords}` 写法和 `__BASE_NAME__.pdf` 页数检查路径都已作废。
+
+**质量标尺**：`__FACTORY__/docs/guides/MCM_WRITING_BENCHMARK.md`（全文必读，尤其 §3–§7）。它替代 `EXCELLENT_PAPER_WRITING_BENCHMARK.md` 中只适用于国赛的规则（中文章节名、“开头总述 + 逐问交付”的中文摘要、禁止第一人称等）；可视化基准 `EXCELLENT_PAPER_VISUALIZATION_BENCHMARK.md` 的图表角色规则照常适用。
+
+**模板（硬性要求）**：复制 `__FACTORY__/latex_templates/mcm_paper_template.tex` 为 `__BASE_NAME___paper.tex` 后在其上填写。文档类是 `mcmthesis`（v6.3.3，已 vendor 在 `__FACTORY__/latex_templates/`，compile_paper.sh 已把该目录加进 TEXINPUTS，项目里不要拷贝类文件）。不要改用 `article`，不要 `\input` 工厂里的模板。模板原样可编译：先编一次空模板确认环境，再填内容。
+
+模板里必须保留 / 填写：
+- `\mcmsetup{...}`：`problem` 填题号（A–F，取自 `problem/problem_brief.md`）；`tcn` 保留占位 `0000000`——真实 Team Control Number 由人在提交前填写，不得编造。
+- `\renewcommand{\headset}{<竞赛年份>\\MCM/ICM\\Summary Sheet}`：改成竞赛年份，不要删（删掉后摘要页会印编译当天的年份，重编译会改变 PDF）。
+- 摘要页：`\begin{abstract}` 内保留 `\AbstractPlaceholder % ABSTRACT_PLACEHOLDER compatibility marker` 这一行（Step 14 替换）；`keywords` 环境里填 4–6 个英文关键词。`abstract` 环境必须在 `\maketitle` 之前。
+- `\title{}`：信息量足的英文标题（研究对象 + 主方法，约 10–15 词）。
+- 任何页面不得出现队员、指导老师或学校名称。
+
+**正文结构（按顺序，英文章节名）**：
+1. `Introduction`：Problem Background（自己的话，不抄题面）/ Restatement of the Problem（逐任务列出）/ Our Work（`explain_model` 流程图：任务 → 模型 → 输出）。
+2. `Assumptions and Justifications`：取自 `assumption_ledger.md`，4–8 条，每条一句 Justification，且在模型中确实用到。
+3. `Notations`：与 `symbol_table.md` 一致（Symbol / Description / Unit）。
+4. 数据类题目加 `Data Preprocessing`。
+5. 每个任务一节 `Model I/II/...: <名称>`，内含 Model Formulation / Solution / Results。小节首句给出该任务的答案，再展开推导与验证；每节至少一个主图或主表（取自 `anchor_figure_plan.md`）。
+6. `Sensitivity Analysis`（取自 `sensitivity_report.md`，带数字）。
+7. `Model Evaluation and Further Discussion`：Strengths / Weaknesses / Further Discussion（取自 `evaluation.md`）。
+8. `Conclusion`：逐任务复述答案与建议。
+9. Memo / Letter / Policy Brief：只在题目要求时写，用模板中的 `memo` 环境；按题面写给指定读者，不写方法和公式，数字与正文一致；计入 25 页。
+10. `References`：每条在正文中被引用；所用 AI 工具也要在相关内容处行内引用并列入参考文献（COMAP AI 政策要求）。
+11. `appendices`：只放复现主结果所需的核心代码。
+12. `\AImatter` + `ReportAiUse`（标题 Report on Use of AI Tools）：**必须保留**。逐条写实际参与本论文的模型或工具：名称与版本、提供方、用途（建模、求解代码、写作、润色……）、代表性 Query 与 Output 摘要；不得编造未发生的对话。最终内容由人在提交前确认。
+
+**写作**：英文；第一人称复数、现在时、主动语态（"We formulate …"）——下文“不写我们/本团队”的规则不适用于美赛。其余规则照下文执行：数字可追溯到 results/、headline 数字用生成的宏、`deliverables.json` 声明的策略表、图表叙事角色、正文无内部工程痕迹。工作文档（如本步骤要求的 Markdown 报告）仍用中文。
+
+**页数**：≤ 25 页，从 Summary Sheet 到附录（含 Memo/Letter、参考文献、代码附录）；Report on Use of AI Tools 不计。编译后运行 `python3 ../../scripts/check_page_count.py __BASE_NAME___paper.pdf 25`（脚本自动扣除 AI 报告页），超页先删附录代码，再合并次要图表，最后压缩推导。
+
+**sanity check 增补**：`grep "documentclass{mcmthesis}"`、`grep "AImatter"`、`grep "begin{ReportAiUse}"` 都必须命中 `__BASE_NAME___paper.tex`；下文“CUMCM 模式必须命中 cumcmthesis”一条不适用。

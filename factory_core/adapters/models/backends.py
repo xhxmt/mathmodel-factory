@@ -395,34 +395,172 @@ class DshBackend(_ProcessModelBackend):
         return self._run(configured, argv, "dsh")
 
 
+# A rendered step prompt travels as the ``-p`` argument: the CLI has no plain
+# stdin prompt (``-p`` needs a value, and ``--input-format stream-json`` has no
+# published message schema).  Linux caps one argv element at 128 KiB; recorded
+# step prompts peak near 26 KB.  A prompt above this bound stays in its file and
+# the argument only tells the agent to read it.
+AGY_ARGV_PROMPT_LIMIT = 100_000
+AGY_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+def agy_cli_path(environ: dict[str, str] | None = None) -> str:
+    """The Antigravity CLI to run: ``AGY_CLI``, then PATH, then ``~/.local/bin``.
+
+    The installer puts ``agy`` in ``~/.local/bin``, which a service manager's PATH
+    often lacks; the login it uses lives under the same home directory.
+    """
+
+    environ = os.environ if environ is None else environ
+    configured = (environ.get("AGY_CLI") or "").strip()
+    if configured:
+        return configured if Path(configured).is_file() and os.access(configured, os.X_OK) else ""
+    found = shutil.which("agy", path=environ.get("PATH"))
+    if found:
+        return found
+    fallback = Path.home() / ".local" / "bin" / "agy"
+    return str(fallback) if fallback.is_file() and os.access(fallback, os.X_OK) else ""
+
+
+def _agy_events(log: Path) -> tuple[dict, dict]:
+    """The ``init`` and the last ``result`` payloads of a stream-json log."""
+
+    init: dict = {}
+    result: dict = {}
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return init, result
+    for line in lines:
+        if not line.startswith("{"):
+            continue  # stderr shares the log: progress lines are not events
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("event") == "init" and isinstance(event.get("init"), dict):
+            init = event["init"]
+        elif event.get("event") == "result" and isinstance(event.get("result"), dict):
+            result = event["result"]
+    return init, result
+
+
 class AgyBackend(_ProcessModelBackend):
+    """Drive one workflow step with a headless Antigravity CLI run (``agy -p``).
+
+    The CLI uses the account logged in with ``agy`` (OAuth under
+    ``~/.gemini/antigravity-cli``), so no ``GEMINI_API_KEY`` is needed, and it
+    offers the models ``agy models`` lists for that account.  The run is agentic:
+    file tools and a shell, with the project and factory root added as
+    workspaces and every tool permission auto-approved.  There is no sandbox, so
+    isolation is prompt-only, as with the Claude CLI.
+
+    Success is read from the stream-json ``result`` event, not only the exit
+    status: a run counts only when that event says ``SUCCESS`` without a
+    ``finished_reason`` (which marks a cut-off or failed turn).
+    """
+
     name = "agy"
 
-    def execute(self, request: ModelRequest) -> ExecutionResult:
+    def command(self, request: ModelRequest):
         if request.image_files:
-            return ExecutionResult.failed("PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
-                reason="Agy adapter has no verified image transport")
-        prompt_file = request.project_dir / "logs" / f"step_{request.step_id}_agy_{os.getpid()}_{uuid4().hex}.prompt.txt"
-        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+            return ExecutionResult.failed(
+                "PERMANENT_MULTIMODAL_UNSUPPORTED", returncode=2,
+                reason="the agy adapter has no verified image transport",
+            )
+        cli = agy_cli_path({**os.environ, **request.env})
+        if not cli:
+            return ExecutionResult.failed(
+                "PERMANENT_BACKEND_UNAVAILABLE", returncode=127,
+                reason="the Antigravity CLI was not found; install agy and log in, "
+                       "or set AGY_CLI to its path",
+            )
+        effort = (request.effort or "").strip().lower()
+        if effort and effort not in AGY_EFFORTS:
+            return ExecutionResult.failed(
+                "PERMANENT_MODEL_CONFIG", returncode=2,
+                reason=f"agy effort must be one of {sorted(AGY_EFFORTS)}, got {effort!r}",
+            )
+        with deadline_scope(request.deadline_epoch):
+            timeout_seconds = cap_timeout(request.timeout_seconds)
+        # The CLI's own limit fires first, so a cut-off turn reports itself
+        # (exit 3, finished_reason=print_timeout) before the supervisor kills it.
+        print_timeout = max(30, timeout_seconds - 30)
+
+        logs = request.project_dir / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        prompt_file = logs / f"step_{request.step_id}_agy_{os.getpid()}_{uuid4().hex}.prompt.txt"
         prompt_file.write_text(request.prompt, encoding="utf-8")
-        python = self.factory_root / ".venv" / "bin" / "python3"
-        if not python.is_file():
-            python = Path(sys.executable)
-        argv = [
-            str(python),
-            str(self.factory_root / "scripts" / "agy_run.py"),
-            "--prompt-file",
-            str(prompt_file),
-            "--timeout-secs",
-            str(max(60, request.timeout_seconds - 30)),
-            "--workspace",
-            str(request.project_dir),
-            "--workspace",
-            str(self.factory_root),
-            "--model",
-            request.model or "gemini-3.1-pro-preview",
-        ]
-        return self._run(request, argv, "agy")
+        if len(request.prompt.encode("utf-8")) <= AGY_ARGV_PROMPT_LIMIT:
+            prompt_argument, transport = request.prompt, "argv"
+        else:
+            prompt_argument = (
+                f"本任务的完整指令在文件 {prompt_file.resolve()} 中（UTF-8 文本，篇幅较长）。"
+                "先用文件读取工具完整读取该文件，然后严格按其中的全部指令执行。"
+            )
+            transport = "prompt-file"
+
+        workdir = request.workdir or request.project_dir
+        argv = [cli]
+        if request.model:
+            argv.extend(["--model", request.model])
+        if effort:
+            argv.extend(["--effort", effort])
+        argv.extend([
+            "--dangerously-skip-permissions",
+            "--disable-slash-commands",
+            "--add-dir", str(request.project_dir.resolve()),
+            "--add-dir", str(self.factory_root),
+            "--output-format", "stream-json",
+            "--print-timeout", f"{print_timeout}s",
+            "-p", prompt_argument,
+        ])
+        configured = replace(request, workdir=workdir, timeout_seconds=timeout_seconds)
+        return configured, argv, {"prompt_transport": transport,
+                                  "prompt_file": str(prompt_file.relative_to(request.project_dir))}
+
+    def execute(self, request: ModelRequest) -> ExecutionResult:
+        command = self.command(request)
+        if isinstance(command, ExecutionResult):
+            return command
+        configured, argv, extra = command
+        outcome = self._run(configured, argv, "agy")
+        metadata = {**outcome.metadata, **extra}
+        log = request.project_dir / str(metadata.get("log", ""))
+        init, result = _agy_events(log)
+        if init.get("model"):
+            metadata["agy_model"] = init["model"]
+        if result:
+            metadata["agy_status"] = result.get("status")
+            for key in ("conversation_id", "finished_reason", "num_turns", "usage"):
+                if result.get(key) is not None:
+                    metadata[f"agy_{key}"] = result[key]
+        finished_reason = result.get("finished_reason")
+        if finished_reason == "print_timeout":
+            metadata.pop("reason", None)
+            return ExecutionResult.failed(
+                "TRANSIENT_TIMEOUT", returncode=outcome.returncode or 124,
+                reason="agy print timeout: the turn was cut off", **metadata,
+            )
+        if outcome.returncode != 0:
+            return ExecutionResult.failed(outcome.error_class, returncode=outcome.returncode, **metadata)
+        if not result or result.get("status") != "SUCCESS" or finished_reason:
+            # Exit 0 without a completed turn is not a success: the step's
+            # artefacts may be missing or partial.
+            metadata.pop("reason", None)
+            return ExecutionResult.failed(
+                "TRANSIENT_MODEL_BACKEND", returncode=2,
+                reason=("agy exited 0 without a result event" if not result else
+                        f"agy result status {result.get('status')!r}"
+                        + (f", finished_reason {finished_reason!r}" if finished_reason else "")),
+                **metadata,
+            )
+        if request.final_response_file is not None and isinstance(result.get("response"), str):
+            request.final_response_file.parent.mkdir(parents=True, exist_ok=True)
+            request.final_response_file.write_text(result["response"], encoding="utf-8")
+        return ExecutionResult.succeeded(**metadata)
 
 
 class ApiAgentBackend(_ProcessModelBackend):

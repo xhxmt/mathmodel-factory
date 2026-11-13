@@ -12,6 +12,29 @@
 - **保留**：`evaluation/` 离线评估工具包（`calibration_judge`、`evaluate_calibration`、`capability_harness`、selector/shadow 系列、`judge_reliability`），它们是衡量论文质量的工具，只是从评审身份里移了出去；`decision_receipt_repair.py`、`persistent_launcher.py`（有文档的运维入口）；`solver_reconcile.py`（计划中的求解对账闸）。step_v2 调度分支这次没有删：58 个引擎通用行为测试（重试、失败分类、期限、租约）跑在这条路径上，迁移到 Stage 路径需要单独一个改动。
 - 测试：完整核心套件除 2 个依赖本机生产库的测试外全部通过（这 2 个在 origin/main 上同样失败）。
 
+## 2026-11-11 — 美赛（MCM/ICM）论文模板与写作提示词
+
+Step 9 的美赛分支原来只在提示里给了一份 `article` 骨架，`mcmthesis` 没有 vendor；写作环节（Step 8.5–15）的提示词全部按国赛写（国一锚点、中文 600 字摘要、禁止第一人称等），美赛题会照国赛规则写。
+
+- **模板**：`latex_templates/mcmthesis.cls` 原样 vendor TeX Live 中的 mcmthesis v6.3.3（LPPL 1.3c，许可证在 `mcmthesis.LICENSE`）；`latex_templates/mcm_paper_template.tex` 是原样可编译的起稿模板：第 1 页 Summary Sheet（摘要位置是与国赛相同的 `\AbstractPlaceholder` 行），正文 Introduction / Assumptions and Justifications / Notations / 每个任务一节 Model / Sensitivity Analysis / Model Evaluation and Further Discussion / Conclusion，可选 Memo，References、Appendices，最后是 `\AImatter` 之后不计页数的 Report on Use of AI Tools（COMAP AI 政策 v102025 的标题）。摘要页年份写死（类文件默认印编译当天的年份，重编译会改变 PDF 字节）；控制号保留占位，由人在提交前填写。
+- **评审基准**：`docs/guides/MCM_WRITING_BENCHMARK.md`，依据 COMAP 2026 竞赛说明、AI 政策、评委意见汇编《20 Years of Good Advice》和评审轮次说明：评审流程对写法的要求、25 页与 AI 披露等硬规则、评委看重的维度与初筛雷区、O 奖论文结构与页数预算、Summary 写法、英文写作（评委偏好第一人称现在时主动语态，与国赛相反）、A–F 题型差异、非技术文档、自查清单。
+- **美赛提示词**：`prompts/mcm/` 下为 Step 8.5、9、11、12、14、15 各写一段美赛专用要求，说明替代哪些国赛规则（标尺、语言、摘要篇幅、审稿必查项、英文去机器味、页数与 AI 披露检查）。新模块 `factory_core/steps/contest_prompts.py` 从 Step 0 写在 `problem/feasibility_constraints.md` 的竞赛类型声明判断竞赛（取标签后第一个竞赛名，所以“竞赛类型：CUMCM，不是 MCM/ICM”判为国赛；无声明时看 `problem/source.md`，都没有时按国赛），美赛/ICM 项目渲染时在共用提示前加上这段，国赛项目的提示逐字节不变。该段加在 v2 overlay 之后、返工段之前。
+- `scripts/check_page_count.py` 不再计入 Report on Use of AI (Tools) 起的页（以页首出现该标题为准），并修复项目没有 `models/` 时提示精简方案会抛 `UnboundLocalError` 的问题。`modeling_guide.md` 指向该模板。
+- 未改：最终审核的 `max_pages`（`problem/deliverables.json`）按 PDF 总页数计，若对美赛项目配置 25 页，会把 AI 报告也算进去；Step 0、比赛时长（74 小时，美赛为 96 小时）和 Judge 角色提示仍按国赛写。
+- 测试：新增 `tests/test_mcm_template.py`（2 例，其中一例经 `compile_paper.sh` 实际编译模板）和 `tests/test_contest_prompts.py`（竞赛判断、国赛逐字节不变、v2 overlay 共存）。
+
+## 2026-11-11 — agy 后端改为直接调用 Antigravity CLI，可用 Gemini 4 写作
+
+`agy` 后端原来经 `scripts/agy_run.py` 调用 `google-antigravity` Python SDK，只认 `GEMINI_API_KEY`，而本机 `.venv` 没装 SDK，CLI 登录的账号也用不上。CLI 1.5.5 已有完整的无交互模式，现在 `AgyBackend` 直接运行 `agy -p`。
+
+- 命令：`agy --model <id> [--effort <e>] --dangerously-skip-permissions --disable-slash-commands --add-dir <项目> --add-dir <factory> --output-format stream-json --print-timeout <超时-30s> -p <prompt>`。`-p` 必须带值（CLI 不读普通 stdin prompt），历史 prompt 最大约 26 KB，远低于单个参数 128 KiB 的上限；超过 100 KB 的 prompt 留在 `logs/` 下的文件里，参数只要求 agent 读取该文件（`prompt_transport=prompt-file`）。
+- 成功以 stream-json 的 `result` 事件为准：退出码 0 但没有 `result`、`status` 不是 `SUCCESS` 或带 `finished_reason` 的，记 `TRANSIENT_MODEL_BACKEND`；`finished_reason=print_timeout` 记 `TRANSIENT_TIMEOUT`。元数据记录 `agy_model`、`agy_status`、`agy_conversation_id`、`agy_usage` 等。请求带 `final_response_file` 时写入 `result.response`。
+- 不需要 API key：用 `agy` 已登录的账号。CLI 依次从 `AGY_CLI`、PATH、`~/.local/bin/agy` 查找，找不到记 `PERMANENT_BACKEND_UNAVAILABLE`。仍拒绝图片输入。
+- preflight 的 agy 分支检查 CLI，并用 `agy models`（不消耗额度）核对模型 id 是否对该账号可用：在列表里 PASS，不在 FAIL，拿不到列表 UNKNOWN；不再要求 `GEMINI_API_KEY`。
+- 内置默认：dispatcher 的 `agy` 改为 `gemini-4-carbon-high`；Web 内置的 `agy-gemini` 改为 `gemini-3.1-pro-high`（`gemini-3.1-pro-preview` 已不在 CLI 的模型列表中）。
+- `scripts/agy_run.py` 与 `google-antigravity` 依赖不再被调用，暂时保留。
+- 测试：新增 `tests/test_agy_backend.py`（11 例）。
+
 ## 2026-11-10 — 视觉问题提前发现、按负责的 Step 返工；Step 4 就核对结果路径；重算不再把模型问题留给 Step 4（验收 A 改进清单第 1、2 项）
 
 验收 A 最后没能交付，直接原因是最终评审的视觉门禁报了 10 个 blocking 问题（3pt 图内文字、空白页、内容超出页面），而唯一的修复循环已经用掉。本次改动让这类问题在审稿环节就被发现和修复，并补上两处让运行卡死的合同缺口。

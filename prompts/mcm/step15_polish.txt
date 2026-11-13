@@ -1,0 +1,6 @@
+替代下文的国赛规则：
+- 「中英文混杂术语（CUMCM 国赛中文版）」一项不适用；改为英文润色：拼写与语法、术语前后一致、有日常含义的术语首次出现时已定义、数字带单位。
+- 去机器味按 `__FACTORY__/docs/guides/MCM_WRITING_BENCHMARK.md` §7 执行：第一人称复数、现在时、主动语态（"We fit …"，不是 "It was found that …"）；删去 *delve into*、*plays a crucial role*、*It is worth noting that*、*In conclusion*、*seamlessly*、*a myriad of*、没有证据支撑的 *comprehensive* / *robust*；避免每段同一句式开头。下文中文改写示例只作方法参考。
+- 引文审计增补：所用 AI 工具必须在相关内容处行内引用并列入参考文献；Report on Use of AI Tools 保留在 `\AImatter` 之后，条目与实际使用的模型一致。
+- 交付前核对：Summary 仍在第 1 页；`python3 ../../scripts/check_page_count.py __BASE_NAME___paper.pdf 25` 通过；全文无队员、指导老师或学校信息；`tcn` 仍是占位 `0000000`（由人在提交前填写）。
+- `citation_audit.md` 等工作文档仍用中文。

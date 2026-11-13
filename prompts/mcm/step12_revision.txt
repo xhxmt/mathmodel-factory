@@ -1,0 +1,6 @@
+替代下文的国赛规则：
+- 修订标尺改为 `__FACTORY__/docs/guides/MCM_WRITING_BENCHMARK.md`；不按“开头总述 + 逐问交付”的中文结构重排，改按基准 §5 的英文章节结构和 §6 的 Summary 写法。
+- 论文正文保持英文，第一人称复数、现在时、主动语态；`revision_summary.md` 等工作文档仍用中文。
+- 修订不得破坏模板契约：`\documentclass{mcmthesis}`、`\mcmsetup`、竞赛年份的 `\headset`、摘要占位行（Step 14 之前）、`\AImatter` 与 Report on Use of AI Tools 都保留；全文不得出现队员、指导老师或学校信息。
+- 每次修订后重新编译并运行 `python3 ../../scripts/check_page_count.py __BASE_NAME___paper.pdf 25`；超页先删附录代码，再合并次要图表，最后压缩推导，不删题目要求的内容。
+- 若审稿意见指出缺少题目要求的 Memo / Letter / Policy Brief，在本步骤补写（数字只取正文已有的数）。

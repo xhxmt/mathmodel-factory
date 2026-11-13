@@ -1,0 +1,10 @@
+本步骤写美赛的 Summary（Summary Sheet 上的英文摘要）。
+
+替代下文的国赛规则：
+- 标尺改为 `__FACTORY__/docs/guides/MCM_WRITING_BENCHMARK.md` §6；不读 `NATIONAL1_CALIBRATION_ANCHOR.md`。下文“字数硬下限 600 字”“CUMCM 常规区间 600–1200”“开头总述 + 逐问交付的中文摘要”均不适用；质量硬标准第 2–6 条（精确数值、算法动机、段落不同构、禁止泛化尾巴、不写免责清单）照常适用。
+- 英文，第一人称复数、现在时、主动语态。标题、Summary 与 Keywords **必须同在 PDF 第 1 页**；一般 350–550 词，以排进一页为准。
+- 结构：1–2 句背景与统一思路 → 每个任务一段（模型 + 一句动机 + 精确数值结果或明确结论 + 验证），模型名称可加粗 → 1–2 句灵敏度/稳健性结论（带数字）→ 若题目要求 Memo/Letter，一句话点明读者与建议。素材取 `reviewer_entry_map.md` 的英文「总体主线」与各任务「摘要压缩版」。
+- 禁止：照抄 Introduction；“Read inside for results”式悬念；只罗列方法不报结果；按时间顺序叙述过程；没有数字的 "our model performs well"。
+- 关键词写在 `\begin{keywords}...\end{keywords}` 里（模板已留好），不要改成 `\textbf{关键词}`。
+- `abstract_draft.md` 的元信息与说明仍用中文，「字数」一栏写英文词数。
+- 嵌入后用 `compile_paper.sh` 编译，再用 `pdftotext -f 1 -l 1 -layout __BASE_NAME___paper.pdf -` 确认第 1 页包含 `Keywords`；溢出到第 2 页就删减到一页内。

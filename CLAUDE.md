@@ -111,6 +111,13 @@ unregistered path --, `protected`, `bespoke_recovery`) keep the ownership rewind
 The replay rule `v2-inputs` mirrors this chain. v1 projects are unchanged;
 v2 prompt wording is a rendering overlay in `factory_core/steps/catalog_prompts.py`
 so v1 prompts stay byte-identical.
+MCM/ICM projects get the same treatment by contest: `factory_core/steps/contest_prompts.py`
+reads the contest from Step 0's declaration in `problem/feasibility_constraints.md`
+(else `problem/source.md`; CUMCM when undetermined) and prepends
+`prompts/mcm/<template>` to the paper-segment prompts (after the v2 overlay,
+below the rework blocks), so CUMCM prompts stay byte-identical. The MCM paper
+starts from `latex_templates/mcm_paper_template.tex` (vendored `mcmthesis`), and
+`docs/guides/MCM_WRITING_BENCHMARK.md` is its writing standard.
 
 `factory_core/` owns revisioned transitions, events, retry budgets, recovery,
 pending actions, native Stage/Step registration, audit, delivery and solver jobs.
@@ -227,6 +234,12 @@ only when the log shows a Read of it, otherwise the call is
 the original prompt; the transport suffix is bound by hash, which the Judge
 recomputes from the page list and records in the role's receipt metadata. Unlike codex, the
 Claude backend gives Judge roles no sandbox: isolation there is prompt-only.
+The `agy` backend runs the Antigravity CLI (`agy -p <prompt> --output-format
+stream-json`) under the account `agy` is logged in as (no `GEMINI_API_KEY`), with
+the project and factory root as `--add-dir` workspaces and no sandbox; a run
+succeeds only when the stream's `result` event says `SUCCESS` without a
+`finished_reason`, and it refuses page images. Preflight checks the model id
+against `agy models`.
 
 An incremental-audit check that ends without a verdict (timeout, signal, a log
 ending in an uncaught traceback, or a last line naming an exhausted host
