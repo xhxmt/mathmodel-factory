@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-13 — 去掉只会让运行停下的加固：提示词输入只记录不比对、投影偏离就地重建、评审身份收窄、分类器身份改为版本号
+
+这几处检查防的都是操作员自己或代码本身的变化，触发后没有自动出路，只能等人 `retry-step`，或者让已完成的工作作废。
+
+- **提示词输入只记录，不再事后比对**（`factory_core/steps/prompt_step.py`）：以前模型跑完后会重新渲染提示词，只要研究员备注、`human_review.md`、`web/model_config.json`、`model_registry.json`、`dispatcher.py`、提示词模板中任何一项变了，就判 `PERMANENT_PROMPT_INPUT_DRIFT` / `PERMANENT_CONSULTATION_INPUT_DRIFT`，整次运行作废。验收 A 中途把 effort 从 max 调成 high，Step 1 就因此重跑。v2 的返工提示块引用台账当前的 Notes 和状态，Step 运行期间改了这些行也会触发同样的判定。现在 `PROMPT_INPUT_BOUND` 回执照常在调用模型前写入，事后不再比对；中断恢复时，只要产物通过验证就提升，不管之后输入有没有变化（没有回执说明模型还没被调用，仍然重试）。同一个尝试键已有内容不同的回执时，不再判 `PERMANENT_PROMPT_INPUT_CONFLICT`：结果里记 `prompt_input_errors` 和 `prompt_input_receipt_durable=false`，Step 照常运行，已存的回执保持不变。删除错误类 `PERMANENT_PROMPT_INPUT_DRIFT`、`PERMANENT_CONSULTATION_INPUT_DRIFT`、`PERMANENT_PROMPT_INPUT_CONFLICT`、`PERMANENT_PROMPT_INPUT_AUTHORITY_CHANGED`、`PERMANENT_PROMPT_INPUT_RECEIPT_MISSING`，以及引擎提交检查点前对回执的复核（`engine._prompt_input_receipt_valid`）和 `requires_prompt_input_receipt` 标记。删除注释里自认不可达的 `PromptStep._execute_standalone_compatibility`；没有引擎状态时统一报 `PERMANENT_PROMPT_INPUT_AUTHORITY_INVALID`，不调用模型。
+- **prepare 阶段的投影偏离就地重建后继续**：以前咨询投影偏离时，代码先重建、再返回 `ready=False`，引擎把它当作 `PERMANENT_INVALID_PREPARE_RESULT`，只能等人 `retry-step`。现在重建成功就继续。Step 4 的 Step 3 选择投影偏离时，也先从 SQLite 决策重建再核验；只有无法重建，或重建后仍不一致（候选证据变了，决策本身不再成立）时才停。
+- **评审身份收窄到真正决定评审结论的代码**（`scripts/submission_fingerprint.py`，`EVALUATOR_CONTRACT_VERSION` 8 → 9）：以前 `evaluator_contract` 绑定约 70 个文件，包括 `engine.py`、`storage.py`、`cli.py`、`state_lease.py`、交付和治理代码，以及整份 `model_config.json` / `model_registry.json`。改动任何一个都会让已评审的快照作废（S1），比赛中途的修复必须重跑最终评审，放行授权也随之失效。现在只绑定：三个评审提示词；决定评审看到什么的代码（证据包与证据视图、客观证据及其中的数字和符号检查、claim graph、论文源解析、提交包清单）；决定结论如何聚合与路由的代码（聚合、裁决路由、视觉门禁、评审调用）；以及解析出的评审模型条目。去掉 `finalization_contract`、`governance_contract` 两组。版本号变化会让已有的评审在新代码下作废一次，需要重跑一次最终评审。
+- **dirty 分类器身份改为显式版本号**：以前身份是 8 个源文件字节的哈希（`dirty.py`、`artifact_ownership.py`、`current_dirty.py`、`current_artifact_ownership.py`、`paper_sources.py`、`artifact_policy.py`、`stage_catalog_v2_policy.py`、`input_dependency_policy.py`），哪怕只改一行注释，Stage 9 检查点也会作废（验收 A rev 473 的 `STAGE_CHECKPOINT_INVALIDATED: dirty-classifier contract changed`），并触发一次 dirty rebase。现在身份是 `current_dirty.CLASSIFIER_CONTRACT_VERSION`；v2 再加上 `V2_DIRTY_POLICY_VERSION` 和 `INPUT_DEPENDENCY_POLICY_VERSION`。只在某个路径的分类或重算范围真的改变时才递增。删除 `dirty.classifier_contract_sha256`（字节冻结的信任根）以及钉死它哈希值的测试。身份值这次变化一次：已经有 Stage 9 检查点的进行中项目，会按"分类器变更"把 Step 12 之后的检查点作废一次（v1 还会重跑条件数学预审），未结的 dirty 记录按原有 rebase 流程迁移。本机目前没有进行中的项目。
+- **删除没有调用方的文件**：`factory_core/final_contract_retry.py`（专门应付评审合同变化的一次性重试入口，未接入任何命令）和 `scripts/run_codex_tui_judge.py`（codex TUI 评审备用通道，没有调用方），以及它们的测试。两者原本只因出现在评审身份的文件清单里而保留（见 2026-11-11 条目）。删除注释 `engine.py` 里已经没有消费方的"保持 source-span 坐标稳定"约束。
+- **保留**：`evaluation/` 离线评估工具包（`calibration_judge`、`evaluate_calibration`、`capability_harness`、selector/shadow 系列、`judge_reliability`），它们是衡量论文质量的工具，只是从评审身份里移了出去；`decision_receipt_repair.py`、`persistent_launcher.py`（有文档的运维入口）；`solver_reconcile.py`（计划中的求解对账闸）。step_v2 调度分支这次没有删：58 个引擎通用行为测试（重试、失败分类、期限、租约）跑在这条路径上，迁移到 Stage 路径需要单独一个改动。
+- 测试：完整核心套件除 2 个依赖本机生产库的测试外全部通过（这 2 个在 origin/main 上同样失败）。
+
 ## 2026-11-11 — 美赛（MCM/ICM）论文模板与写作提示词
 
 Step 9 的美赛分支原来只在提示里给了一份 `article` 骨架，`mcmthesis` 没有 vendor；写作环节（Step 8.5–15）的提示词全部按国赛写（国一锚点、中文 600 字摘要、禁止第一人称等），美赛题会照国赛规则写。

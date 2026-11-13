@@ -125,7 +125,7 @@ def test_consultation_decision_rebuilds_human_review_section(tmp_path):
     assert "Use robust plan A exactly." in review
 
 
-def test_consultation_projection_tamper_blocks_agent(tmp_path):
+def test_consultation_projection_tamper_is_repaired_from_sqlite(tmp_path):
     root, project, _store = _resolve_cli_consultation(tmp_path)
     review = project / "human_review.md"
     review.write_text(
@@ -138,8 +138,13 @@ def test_consultation_projection_tamper_blocks_agent(tmp_path):
         project, "demo", 4, 1, 30, SQLiteStateStore(project).load().revision
     ))
 
-    assert prepared.ready is False
-    assert "Consultation projection drift" in prepared.reason
+    # The projection is rebuilt from the SQLite decision instead of stopping
+    # the Step; the tampered answer is never what the agent reads.  (This
+    # fixture has no Step 3 decision, so Step 4 prepare still stops there.)
+    assert "Consultation projection" not in prepared.reason
+    text = review.read_text(encoding="utf-8")
+    assert "Use robust plan A exactly." in text
+    assert "plan B" not in text
 
 
 def test_effective_prompt_binds_consultation_answer(tmp_path):
@@ -168,7 +173,7 @@ def test_effective_prompt_binds_consultation_answer(tmp_path):
     ).hexdigest()
 
 
-def test_post_decision_human_review_edit_invalidates_execution(tmp_path):
+def test_human_review_edit_during_execution_is_recorded_not_rejected(tmp_path):
     root, project, _store = _resolve_cli_consultation(tmp_path)
     review = project / "human_review.md"
 
@@ -188,9 +193,12 @@ def test_post_decision_human_review_edit_invalidates_execution(tmp_path):
         project, "demo", 4, 1, 30, SQLiteStateStore(project).load().revision
     ))
 
-    assert result.returncode == 2
-    assert result.error_class == "PERMANENT_CONSULTATION_INPUT_DRIFT"
-    assert result.metadata["human_review_changed_during_execution"] is True
+    # The receipt records what the model was sent; a later edit does not
+    # discard the run.  The next prepare rebuilds the projection.
+    assert result.returncode == 0
+    assert not result.error_class
+    assert result.metadata["prompt_input_receipt_id"]
+    assert "Use robust plan A exactly." in dispatcher.requests[-1].prompt
 
 
 
@@ -272,7 +280,7 @@ def test_prompt_interruption_after_receipt_can_recover_only_same_inputs(tmp_path
     assert decision.metadata["prompt_input_receipt_id"]
 
 
-def test_prompt_recovery_detects_researcher_note_change(tmp_path):
+def test_prompt_recovery_promotes_valid_artifacts_after_researcher_note_change(tmp_path):
     root, project, store = _resolve_cli_consultation(tmp_path)
     (root / "web").mkdir(parents=True, exist_ok=True)
     notes = root / "web" / "notes.json"
@@ -296,11 +304,11 @@ def test_prompt_recovery_detects_researcher_note_change(tmp_path):
         StepError("TRANSIENT_INTERRUPTION"),
     )
 
-    assert decision.disposition is RecoveryDisposition.RETRY
-    assert any("researcher_note_sha256" in item for item in decision.metadata["prompt_input_errors"])
+    assert decision.disposition is RecoveryDisposition.COMPLETE
+    assert decision.metadata["prompt_input_receipt_valid"] is True
 
 
-def test_prompt_recovery_detects_consultation_projection_drift(tmp_path):
+def test_prompt_recovery_promotes_valid_artifacts_after_consultation_projection_drift(tmp_path):
     root, project, store = _resolve_cli_consultation(tmp_path)
     step = _prompt_step(root, RecordingDispatcher())
     context = StepContext(
@@ -324,7 +332,8 @@ def test_prompt_recovery_detects_consultation_projection_drift(tmp_path):
         StepError("TRANSIENT_INTERRUPTION"),
     )
 
-    assert decision.disposition is RecoveryDisposition.RETRY
+    assert decision.disposition is RecoveryDisposition.COMPLETE
+    assert decision.metadata["prompt_input_receipt_valid"] is True
 
 
 
@@ -628,7 +637,7 @@ def test_stale_request_concurrency_leaves_only_request_scoped_staging(tmp_path):
     assert consultation_staging_path(project, request.request_id) == staged
 
 
-def test_prompt_recovery_detects_prompt_template_change(tmp_path):
+def test_prompt_recovery_promotes_valid_artifacts_after_prompt_template_change(tmp_path):
     root, project, store = _resolve_cli_consultation(tmp_path)
     step = _prompt_step(root, RecordingDispatcher())
     context = StepContext(
@@ -650,14 +659,11 @@ def test_prompt_recovery_detects_prompt_template_change(tmp_path):
         StepError("TRANSIENT_INTERRUPTION"),
     )
 
-    assert decision.disposition is RecoveryDisposition.RETRY
-    assert any(
-        "prompt_template_sha256" in item
-        for item in decision.metadata["prompt_input_errors"]
-    )
+    assert decision.disposition is RecoveryDisposition.COMPLETE
+    assert decision.metadata["prompt_input_receipt_valid"] is True
 
 
-def test_prompt_recovery_detects_model_config_change(tmp_path):
+def test_prompt_recovery_promotes_valid_artifacts_after_model_config_change(tmp_path):
     root, project, store = _resolve_cli_consultation(tmp_path)
     (root / "web").mkdir(parents=True, exist_ok=True)
     config = root / "web" / "model_config.json"
@@ -680,11 +686,8 @@ def test_prompt_recovery_detects_model_config_change(tmp_path):
         StepError("TRANSIENT_INTERRUPTION"),
     )
 
-    assert decision.disposition is RecoveryDisposition.RETRY
-    assert any(
-        "model_config_sha256" in item
-        for item in decision.metadata["prompt_input_errors"]
-    )
+    assert decision.disposition is RecoveryDisposition.COMPLETE
+    assert decision.metadata["prompt_input_receipt_valid"] is True
 
 
 def test_semantic_reopen_crossing_consultation_owner_invalidates_decision(tmp_path):

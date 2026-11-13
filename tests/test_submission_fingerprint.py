@@ -240,9 +240,17 @@ def test_evaluator_contract_records_prompt_implementation_and_registry_selection
 
     assert contract["prompts"]["prompts/judges/paper_reviewer.txt"]["sha256"]
     assert contract["implementation"]["scripts/aggregate_judges.py"]["sha256"]
-    assert contract["implementation"]["factory_core/engine.py"]["sha256"]
-    assert contract["implementation"]["factory_core/audit/service.py"]["sha256"]
-    assert contract["implementation"]["factory_core/state_lease.py"]["sha256"]
+    assert contract["implementation"]["scripts/judge_packet.py"]["sha256"]
+    # Engine, storage, delivery and governance code does not decide a judgment.
+    for relative in (
+        "factory_core/engine.py",
+        "factory_core/audit/service.py",
+        "factory_core/state_lease.py",
+        "factory_core/storage.py",
+    ):
+        assert relative not in contract["implementation"]
+    assert "finalization_contract" not in contract
+    assert "governance_contract" not in contract
     dispatch = contract["model_dispatch"]
     assert dispatch["selection_source"] == "model_config"
     assert dispatch["selection"]["primary_id"] == "judge-a"
@@ -258,11 +266,6 @@ def test_evaluator_contract_records_prompt_implementation_and_registry_selection
         "scripts/aggregate_judges.py",
         "scripts/judge_packet.py",
         "scripts/llm_judge_call.py",
-        "factory_core/engine.py",
-        "factory_core/audit/service.py",
-        "factory_core/audit/acceptance.py",
-        "factory_core/steps/specialized.py",
-        "factory_core/native_boundary.py",
         "web/model_config.json",
         "web/model_registry.json",
         "scripts/verify_numbers.py",
@@ -304,6 +307,51 @@ def test_final_fingerprint_changes_when_evaluator_contract_changes(
         path.write_bytes(path.read_bytes() + b"changed\n")
 
     assert submission_fingerprint(project, "demo") != before
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "factory_core/engine.py",
+        "factory_core/audit/service.py",
+        "factory_core/audit/acceptance.py",
+        "factory_core/steps/specialized.py",
+        "factory_core/native_boundary.py",
+    ],
+)
+def test_final_fingerprint_ignores_code_that_does_not_decide_the_judgment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    project = tmp_path / "demo"
+    make_submission(project)
+    factory = tmp_path / "factory"
+    make_evaluator_factory(factory)
+    monkeypatch.setattr(submission_fingerprint_module, "FACTORY_ROOT", factory)
+    before = submission_fingerprint(project, "demo")
+
+    path = factory / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((path.read_bytes() if path.exists() else b"") + b"changed\n")
+
+    assert submission_fingerprint(project, "demo") == before
+
+
+def test_final_fingerprint_ignores_models_the_judge_does_not_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "demo"
+    make_submission(project)
+    factory = tmp_path / "factory"
+    make_evaluator_factory(factory)
+    monkeypatch.setattr(submission_fingerprint_module, "FACTORY_ROOT", factory)
+    before = submission_fingerprint(project, "demo")
+
+    registry = factory / "web" / "model_registry.json"
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    payload["models"].append({"id": "unrelated", "backend": "openai", "model": "other"})
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert submission_fingerprint(project, "demo") == before
 
 
 def test_final_fingerprint_binds_runtime_judge_policy(

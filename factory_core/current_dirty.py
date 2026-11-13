@@ -1,6 +1,5 @@
 """Native v10 classifier extension; historical v9 identities remain verifiable."""
 import hashlib
-from pathlib import Path
 from . import dirty as frozen
 from .artifact_policy import NATIVE_POLICY, artifact_policy
 from .current_artifact_ownership import ADDITIONAL_OWNERSHIP, artifact_pattern_matches
@@ -12,18 +11,19 @@ from .dirty import (
 DIRTY_CLASSIFIER_SCHEMA = "factory-native-dirty-classifier-v10"
 
 
+#: The classifier's identity.  Dirty causes, checkpoint receipts, reopen
+#: budgets and rebases are keyed by it.  Bump it when a change makes some path
+#: produce a different ``DirtyChange`` (this module, ``dirty.py``, the ownership
+#: registries, ``artifact_policy.py`` or ``paper_sources.py``).  Editing those
+#: files without changing a classification -- a comment, a refactor, a helper --
+#: leaves the identity alone, so it no longer invalidates checkpoints.
+CLASSIFIER_CONTRACT_VERSION = 1
+
+
 def classifier_contract_sha256():
-    root = Path(__file__).parent
-    # S1-B: NATIVE_POLICY decides which DirtyChange a path now produces, so the
-    # registry that holds it is part of the classifier identity - the contract
-    # that answers "what does this change produce" (Q14: the provenance contract
-    # that answers "why was it attributed so" stays separate).
-    members = ("current_dirty.py", "current_artifact_ownership.py", "paper_sources.py",
-               "artifact_policy.py")
-    return hashlib.sha256(b"\0".join([
-        DIRTY_CLASSIFIER_SCHEMA.encode(), frozen.classifier_contract_sha256().encode(),
-        *(name.encode() + b"\0" + (root / name).read_bytes() for name in members),
-    ])).hexdigest()
+    return hashlib.sha256(
+        f"{DIRTY_CLASSIFIER_SCHEMA}\0{CLASSIFIER_CONTRACT_VERSION}".encode()
+    ).hexdigest()
 
 
 def classify_manifest_changes(before, after):

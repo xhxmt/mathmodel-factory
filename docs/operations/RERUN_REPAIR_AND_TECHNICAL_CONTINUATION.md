@@ -133,11 +133,11 @@ for strict bool/int/float/array normalization and precise field errors.
 Native execution uses `current_artifact_ownership.py` (native v2) and
 `current_dirty.py` (native v10). The two exact root evidence rules are additive;
 unknown paths still fail closed. Final/submission manifests record the new
-ownership schema and new native dirty receipts carry a distinct source-bound
-classifier identity. Normal rebase preserves historical causes/clear receipts.
-`artifact_ownership.py` and `dirty.py` remain byte-frozen v1/v9 compatibility
-sources for the M0.2/M0.3 prototype; their registry indices and identity goldens
-are not updated or represented as approval for the new native contracts.
+ownership schema and new native dirty receipts carry the native classifier
+identity, an explicit version (`current_dirty.CLASSIFIER_CONTRACT_VERSION`) that
+moves only when a classification changes, not with the source bytes. Normal
+rebase preserves historical causes/clear receipts. `artifact_ownership.py` keeps
+the v1 registry that the native extension appends to.
 Existing native tests use the current classifier for new receipts; historical
 identity tests still verify the frozen sources. Additive engine recovery hooks
 are below the frozen owner-policy symbol spans, retaining their bytes/anchors.

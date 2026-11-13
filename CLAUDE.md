@@ -177,10 +177,17 @@ Markdown forms are projections. For current Native projects,
 `method_decision.md` carries the same machine-verifiable identity header. Step 3
 validation and Step 4 prepare both verify the receipt, current candidate
 fingerprints, and every projection identity field; `human_review.md` cannot
-override them. Consultation decisions likewise store the exact answer in
+override them. A drifted projection is rebuilt from SQLite in prepare and the
+Step continues; only a projection that cannot be rebuilt, or still disagrees
+afterwards (the candidate evidence changed), stops it. Consultation decisions likewise store the exact answer in
 SQLite, deterministically rebuild their `human_review.md` section, inject the
 verified answer into the effective model prompt, and bind that prompt plus Web
-researcher notes by SHA-256 in the Step result/checkpoint evidence.
+researcher notes by SHA-256 in the Step result/checkpoint evidence. That
+receipt (`PROMPT_INPUT_BOUND`) records what the model was sent; it is never
+compared again after the run. Inputs that change during or after a run (a note,
+`human_review.md`, the model configuration, a prompt template, the ledger a
+rework block quotes) are recorded, not rejected, and recovery promotes valid
+artifacts whatever changed since.
 
 Artifact responsibility is centralized in
 `factory_core/artifact_ownership.py`. Dirty classification, semantic reopen,
@@ -318,6 +325,13 @@ recompute, the first recomputed Step decides `model` rows (Step 4 is never
 re-run), and every recomputed Step rewrites the stale statements in its own
 report.
 
+The classifier identity is an explicit version, not a hash of source bytes:
+`current_dirty.CLASSIFIER_CONTRACT_VERSION`, plus `V2_DIRTY_POLICY_VERSION`
+(`stage_catalog_v2_policy.py`) and `INPUT_DEPENDENCY_POLICY_VERSION`
+(`input_dependency_policy.py`) for v2. Bump the relevant one when a change makes
+some path classify or re-run differently; editing the classifier modules
+otherwise leaves the identity, and every checkpoint bound to it, alone.
+
 A semantic reopen (a Stage changing content an earlier Stage owns) is
 budgeted per classifier identity: an initiating Stage may rewind at most
 `STAGE_SEMANTIC_REOPEN_LIMIT` (2) times and a run at most
@@ -342,9 +356,10 @@ kept, and starts a fresh attempt 1; dirty state, checkpoints, the contest
 deadline and other budgets still apply. The retried attempt binds its prompt
 inputs under a key derived from the `STEP_RETRY_AUTHORIZED` revision, so an
 input corrected for the retry (a researcher note, `human_review.md`) does not
-collide with the failed attempt's immutable receipt. Any prompt-input binding
-conflict fails the Step as `PERMANENT_PROMPT_INPUT_CONFLICT` instead of killing
-the worker and leaving the project `running` with a dead runner. A plain resume of such a project
+collide with the failed attempt's immutable receipt. A binding conflict that
+remains is recorded on the result (`prompt_input_errors`,
+`prompt_input_receipt_durable=false`) and the Step still runs; the stored receipt
+of that attempt key is kept. A plain resume of such a project
 recovers the failed attempt and stops at `PERMANENT_ATTEMPT_BUDGET_EXHAUSTED`.
 Do not edit the state database or write one-off authorization events instead.
 
@@ -433,8 +448,14 @@ fingerprint, the execution packet (`judge_packet._is_execution_evidence`) and
 logs stay inputs. `compile_paper.sh`
 also pins `SOURCE_DATE_EPOCH` (caller value, else the main source's mtime), so
 recompiling unchanged sources reproduces the PDF bytes. The snapshot also
-binds the evaluator code (`evaluator_contract`), so a judgment made before a
-factory code change cannot be overridden after it; rerun the Judge first. The override store is an operational boundary for the single-operator deployment,
+binds the evaluator (`evaluator_contract`): the three Judge prompts, the code
+that decides what the Judge sees (packet builder and evidence views, objective
+evidence with its number and symbol checks, claim graph, paper sources,
+submission bundle) and how verdicts are aggregated and routed (aggregation,
+decision router, visual gate, Judge callers), and the resolved Judge models. A
+judgment made before a change to any of those cannot be overridden after it;
+rerun the Judge first. Engine, storage, delivery and governance code, and model
+assignments for other Steps, are not part of it. The override store is an operational boundary for the single-operator deployment,
 not cryptographic isolation from another process running as the same Unix UID.
 The same control database owns identity and `project_acl`, but none of those
 records replaces project-local workflow decisions in `.factory/state.db` or

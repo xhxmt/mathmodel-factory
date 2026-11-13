@@ -214,25 +214,47 @@ def test_method_projection_rejects_spoofed_fields_before_machine_header(tmp_path
     assert "method_decision.md machine header is not canonical" in verification.errors
 
 
-def test_step4_refuses_selection_projection_drift(tmp_path):
-    project = tmp_path / "project"
-    seed_authoritative_step3_decision(project)
-    chosen = project / "chosen_method.md"
-    chosen.write_text(
-        chosen.read_text(encoding="utf-8").replace("DECISION_ID:", "DECISION_ID: tampered-", 1),
-        encoding="utf-8",
-    )
-    step = PromptStep(
+def _step4_prompt_step(tmp_path):
+    return PromptStep(
         contract_for(4),
         renderer=None,  # type: ignore[arg-type]
         dispatcher=None,  # type: ignore[arg-type]
         validator=NativeArtifactValidator(tmp_path, 4),
     )
 
-    prepared = step.prepare(StepContext(project, project.name, 4, 1, 300, 1))
+
+def test_step4_rebuilds_a_drifted_selection_projection_and_continues(tmp_path):
+    project = tmp_path / "project"
+    decision = seed_authoritative_step3_decision(project)
+    chosen = project / "chosen_method.md"
+    chosen.write_text(
+        chosen.read_text(encoding="utf-8").replace("DECISION_ID:", "DECISION_ID: tampered-", 1),
+        encoding="utf-8",
+    )
+
+    prepared = _step4_prompt_step(tmp_path).prepare(
+        StepContext(project, project.name, 4, 1, 300, 1)
+    )
+
+    assert prepared.ready is True
+    assert "tampered-" not in chosen.read_text(encoding="utf-8")
+    assert f"DECISION_ID: {decision['decision_id']}" in chosen.read_text(encoding="utf-8")
+    assert verify_step3_projections(project).valid is True
+
+
+def test_step4_refuses_a_selection_whose_candidates_changed(tmp_path):
+    project = tmp_path / "project"
+    seed_authoritative_step3_decision(project)
+    # Not a projection: the evidence the decision was made on changed, so a
+    # rebuild cannot make the selection current again.
+    write(project / "m1_spec.md", "# m1\nrewritten after the selection\n")
+
+    prepared = _step4_prompt_step(tmp_path).prepare(
+        StepContext(project, project.name, 4, 1, 300, 1)
+    )
 
     assert prepared.ready is False
-    assert "selection projection drift" in prepared.reason
+    assert "Step 3" in prepared.reason
 
 
 def test_tampered_human_review_cannot_override_sqlite_selection(tmp_path):

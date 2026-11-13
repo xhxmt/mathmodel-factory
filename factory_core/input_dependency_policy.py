@@ -34,8 +34,9 @@ results from sensitivity results.  The engine may narrow this further with
 solver-job receipts (the scripts and inputs a completed job actually used).
 
 Only Stage catalog v2 projects use this rule; v1 projects keep the ownership
-rule unchanged.  This module is part of the v2 classifier identity
-(:func:`input_dependency_contract_sha256`).
+rule unchanged.  This rule is part of the v2 classifier identity
+(:func:`input_dependency_contract_sha256`); bump
+``INPUT_DEPENDENCY_POLICY_VERSION`` when a change alters which Steps re-run.
 """
 
 from __future__ import annotations
@@ -43,9 +44,10 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 from dataclasses import dataclass
-from pathlib import Path
 
 INPUT_DEPENDENCY_POLICY_SCHEMA = "factory-stage-catalog-v2-input-dependency-v1"
+#: Bump when a change alters which Steps re-run (see the module docstring).
+INPUT_DEPENDENCY_POLICY_VERSION = 1
 
 #: The computation Steps, in execution order.  Re-running starts at the
 #: earliest completed consumer and continues through the last one.
@@ -219,5 +221,5 @@ def input_dependency_contract_sha256() -> str:
     """Identity of this rule, folded into the v2 classifier identity."""
 
     return hashlib.sha256(
-        b"\0".join([INPUT_DEPENDENCY_POLICY_SCHEMA.encode(), Path(__file__).read_bytes()])
+        f"{INPUT_DEPENDENCY_POLICY_SCHEMA}\0{INPUT_DEPENDENCY_POLICY_VERSION}".encode()
     ).hexdigest()

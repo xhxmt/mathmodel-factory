@@ -18,7 +18,6 @@ from ..effective_prompt import (
     EFFECTIVE_PROMPT_SCHEMA,
     attempt_key,
     build_effective_prompt_receipt,
-    verify_effective_prompt_receipt,
 )
 from .catalog import StepContract
 from .gates import prepare_human_gates
@@ -52,13 +51,8 @@ class PromptStep:
     dispatcher: ModelDispatcher
     validator: NativeArtifactValidator
 
-    requires_prompt_input_receipt = True
-
     def prepare(self, context) -> PrepareResult:
-        from ..consultation_projection import (
-            ensure_all_consultation_projections,
-            verify_consultation_projections,
-        )
+        from ..consultation_projection import ensure_all_consultation_projections
         from ..selection_projection import (
             rebuild_step3_projections,
             step3_projection_required,
@@ -68,24 +62,15 @@ class PromptStep:
         gate = prepare_human_gates(context.project_dir, context.step_id)
         if not gate.ready:
             return gate
-        observed = verify_consultation_projections(context.project_dir)
+        # Projections are rebuilt deterministically from SQLite.  A drifted
+        # projection is repaired here and the Step goes on; only a projection
+        # that cannot be rebuilt (or still disagrees after the rebuild) stops it.
         try:
             consultation = ensure_all_consultation_projections(context.project_dir)
         except (OSError, ValueError) as exc:
             return PrepareResult(
                 ready=False,
                 reason=f"Consultation projection rebuild failed: {exc}",
-                evidence=("human_review.md",),
-            )
-        if not observed.valid:
-            errors = observed.errors or consultation.errors
-            return PrepareResult(
-                ready=False,
-                reason=(
-                    "Consultation projection drift: "
-                    + "; ".join(errors)
-                    + "; deterministic projection rebuilt, retry prepare"
-                ),
                 evidence=("human_review.md",),
             )
         if not consultation.valid:
@@ -104,6 +89,16 @@ class PromptStep:
                 return PrepareResult(ready=False, reason=str(exc))
         if context.step_id == 4 and step3_projection_required(context.project_dir):
             verification = verify_step3_projections(context.project_dir)
+            if not verification.valid:
+                try:
+                    rebuild_step3_projections(context.project_dir)
+                except ValueError as exc:
+                    return PrepareResult(
+                        ready=False,
+                        reason=f"Step 3 selection projection rebuild failed: {exc}",
+                        evidence=("chosen_method.md", "method_decision.md"),
+                    )
+                verification = verify_step3_projections(context.project_dir)
             if not verification.valid:
                 return PrepareResult(
                     ready=False,
@@ -197,110 +192,6 @@ class PromptStep:
         )
         return prompt, researcher_note, receipt
 
-    def _execute_standalone_compatibility(self, context) -> ExecutionResult:
-        """Preserve direct lifecycle use without fabricating durable evidence.
-
-        Native engine execution always has an initialized SQLite store and
-        therefore cannot enter this branch. The result deliberately omits the
-        ``factory-effective-prompt-v1`` identity fields, so the Stage checkpoint
-        guard would reject it if it were ever routed back into an engine run.
-        """
-
-        from ..storage import SQLiteStateStore
-
-        assert self.contract.prompt is not None
-        store = _project_store(context)
-        if store.exists or int(context.revision) != 0:
-            raise RuntimeError(
-                "standalone PromptStep compatibility requires revision 0 and no workflow state"
-            )
-        import hashlib
-
-        review = context.project_dir / "human_review.md"
-        human_review_sha256 = (
-            hashlib.sha256(review.read_bytes()).hexdigest()
-            if review.is_file() and not review.is_symlink()
-            else "MISSING"
-        )
-        researcher_note = self.renderer.user_note(
-            context.project_dir.name, context.step_id
-        )
-        prompt = self.renderer.render(
-            self.contract.prompt,
-            context.project_dir,
-            step_key=context.step_id,
-            include_preamble=context.step_id != 0,
-            researcher_note=researcher_note,
-        )
-        if store.exists:
-            return ExecutionResult.failed(
-                "PERMANENT_PROMPT_INPUT_AUTHORITY_CHANGED",
-                returncode=2,
-                prompt_input_mode="standalone_compatibility",
-                prompt_input_receipt_durable=False,
-            )
-        result = self.dispatcher.execute(
-            ModelRequest(
-                project_dir=context.project_dir,
-                step_id=context.step_id,
-                attempt=context.attempt,
-                prompt=prompt,
-                timeout_seconds=context.timeout_seconds,
-                hang_timeout_seconds=self.contract.hang_timeout_seconds,
-                deadline_epoch=context.deadline_epoch,
-            ),
-            step_key=context.step_id,
-            defaults=self.contract.default_models,
-        )
-        if store.exists:
-            return ExecutionResult.failed(
-                "PERMANENT_PROMPT_INPUT_AUTHORITY_CHANGED",
-                returncode=2,
-                **result.metadata,
-                prompt_input_mode="standalone_compatibility",
-                prompt_input_receipt_durable=False,
-            )
-        from ..consultation_projection import verify_consultation_projections
-
-        consultation = verify_consultation_projections(context.project_dir)
-        current_human_review_sha256 = (
-            hashlib.sha256(review.read_bytes()).hexdigest()
-            if review.is_file() and not review.is_symlink()
-            else "MISSING"
-        )
-        if store.exists:
-            return ExecutionResult.failed(
-                "PERMANENT_PROMPT_INPUT_AUTHORITY_CHANGED",
-                returncode=2,
-                **result.metadata,
-                prompt_input_mode="standalone_compatibility",
-                prompt_input_receipt_durable=False,
-            )
-        if (
-            not consultation.valid
-            or current_human_review_sha256 != human_review_sha256
-        ):
-            return ExecutionResult.failed(
-                "PERMANENT_CONSULTATION_INPUT_DRIFT",
-                returncode=2,
-                **result.metadata,
-                prompt_input_mode="standalone_compatibility",
-                prompt_input_receipt_durable=False,
-                consultation_projection_errors=list(consultation.errors),
-                human_review_changed_during_execution=(
-                    current_human_review_sha256 != human_review_sha256
-                ),
-            )
-        return ExecutionResult(
-            returncode=result.returncode,
-            error_class=result.error_class,
-            metadata={
-                **result.metadata,
-                "prompt_input_mode": "standalone_compatibility",
-                "prompt_input_receipt_durable": False,
-            },
-        )
-
     @staticmethod
     def _receipt_metadata(receipt: dict) -> dict:
         return {
@@ -320,12 +211,8 @@ class PromptStep:
         }
 
     def execute(self, context) -> ExecutionResult:
-        from ..storage import SQLiteStateStore
-
         store = _project_store(context)
-        if not store.exists:
-            return self._execute_standalone_compatibility(context)
-        if store.load().control_mode != "engine":
+        if not store.exists or store.load().control_mode != "engine":
             return ExecutionResult.failed(
                 "PERMANENT_PROMPT_INPUT_AUTHORITY_INVALID",
                 returncode=2,
@@ -344,23 +231,27 @@ class PromptStep:
                 active_stage=state.active_stage,
             )
         prompt, _researcher_note, proposed = self._build_inputs(context)
+        # The receipt records which inputs this attempt was sent.  It never
+        # decides whether the Step may run or whether its work counts: inputs
+        # that change during or after the run (a researcher note, the model
+        # configuration, the ledger a rework block quotes) are recorded, not
+        # rejected.
         try:
             _bound_state, stored = store.bind_prompt_attempt_input(
                 expected_revision=context.revision,
                 receipt=proposed,
             )
+            receipt_metadata = self._receipt_metadata(stored)
         except RevisionConflict:
             raise
         except InvalidTransition as exc:
-            # Escaping here kills the worker and leaves the project "running"
-            # with a dead runner and no failure event; fail the Step instead.
-            return ExecutionResult.failed(
-                "PERMANENT_PROMPT_INPUT_CONFLICT",
-                returncode=2,
-                prompt_input_attempt_key=str(proposed.get("attempt_key") or ""),
-                prompt_input_receipt_durable=False,
-                prompt_input_errors=[str(exc)],
-            )
+            # The attempt key already holds a receipt for other inputs.  That
+            # stored record stays as it is; this attempt carries its own.
+            receipt_metadata = {
+                **self._receipt_metadata(proposed),
+                "prompt_input_receipt_durable": False,
+                "prompt_input_errors": [str(exc)],
+            }
         result = self.dispatcher.execute(
             ModelRequest(
                 project_dir=context.project_dir,
@@ -374,55 +265,10 @@ class PromptStep:
             step_key=context.step_id,
             defaults=self.contract.default_models,
         )
-        from ..consultation_projection import verify_consultation_projections
-
-        consultation = verify_consultation_projections(context.project_dir)
-        if not consultation.valid:
-            import hashlib
-
-            review = context.project_dir / "human_review.md"
-            current_review_sha256 = (
-                hashlib.sha256(review.read_bytes()).hexdigest()
-                if review.is_file() and not review.is_symlink()
-                else "MISSING"
-            )
-            return ExecutionResult.failed(
-                "PERMANENT_CONSULTATION_INPUT_DRIFT",
-                returncode=2,
-                **result.metadata,
-                **self._receipt_metadata(stored),
-                consultation_projection_errors=list(consultation.errors),
-                human_review_changed_during_execution=(
-                    current_review_sha256
-                    != stored.get("human_review_sha256")
-                ),
-            )
-        try:
-            _current_prompt, _current_note, current = self._build_inputs(
-                context,
-                selected_revision=int(stored["selected_revision"]),
-            )
-        except (OSError, ValueError) as exc:
-            return ExecutionResult.failed(
-                "PERMANENT_PROMPT_INPUT_DRIFT",
-                returncode=2,
-                **result.metadata,
-                **self._receipt_metadata(stored),
-                prompt_input_errors=[str(exc)],
-            )
-        valid, errors = verify_effective_prompt_receipt(stored, current)
-        if not valid:
-            return ExecutionResult.failed(
-                "PERMANENT_PROMPT_INPUT_DRIFT",
-                returncode=2,
-                **result.metadata,
-                **self._receipt_metadata(stored),
-                prompt_input_errors=list(errors),
-            )
         return ExecutionResult(
             returncode=result.returncode,
             error_class=result.error_class,
-            metadata={**result.metadata, **self._receipt_metadata(stored)},
+            metadata={**result.metadata, **receipt_metadata},
         )
 
     def validate(self, context):
@@ -455,54 +301,6 @@ class PromptStep:
                     "prompt_input_schema": EFFECTIVE_PROMPT_SCHEMA,
                     "prompt_input_receipt_valid": False,
                     "prompt_input_attempt_key": key,
-                },
-            )
-        from ..consultation_projection import verify_consultation_projections
-        import hashlib
-
-        review = context.project_dir / "human_review.md"
-        current_review_sha256 = (
-            hashlib.sha256(review.read_bytes()).hexdigest()
-            if review.is_file() and not review.is_symlink()
-            else "MISSING"
-        )
-        consultation = verify_consultation_projections(context.project_dir)
-        if (
-            not consultation.valid
-            or current_review_sha256 != stored.get("human_review_sha256")
-        ):
-            errors = list(consultation.errors)
-            if current_review_sha256 != stored.get("human_review_sha256"):
-                errors.append("effective prompt input drift: human_review_sha256")
-            return RecoveryDecision(
-                RecoveryDisposition.RETRY,
-                reason="consultation input changed since the interrupted attempt",
-                evidence=("human_review.md",),
-                metadata={
-                    "prompt_input_schema": EFFECTIVE_PROMPT_SCHEMA,
-                    "prompt_input_receipt_valid": False,
-                    "prompt_input_receipt_id": stored.get("receipt_id"),
-                    "prompt_input_errors": errors,
-                },
-            )
-        try:
-            _prompt, _note, current = self._build_inputs(
-                context,
-                selected_revision=int(stored["selected_revision"]),
-            )
-            valid, errors = verify_effective_prompt_receipt(stored, current)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            valid, errors = False, (str(exc),)
-        if not valid:
-            return RecoveryDecision(
-                RecoveryDisposition.RETRY,
-                reason="effective prompt input changed since the interrupted attempt",
-                evidence=(".factory/state.db",),
-                metadata={
-                    "prompt_input_schema": EFFECTIVE_PROMPT_SCHEMA,
-                    "prompt_input_receipt_valid": False,
-                    "prompt_input_receipt_id": stored.get("receipt_id"),
-                    "prompt_input_errors": list(errors),
                 },
             )
         validation = self.validator.validate(context)

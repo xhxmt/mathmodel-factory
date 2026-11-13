@@ -480,18 +480,44 @@ def test_prompt_step_validates_once_in_engine_not_during_model_call(tmp_path):
         SuccessfulDispatcher(),
         validator,
     )
-    context = StepContext(tmp_path, tmp_path.name, 4, 1, 30, 0)
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(project_id=tmp_path.name, project_type="modeling")
+    state = store.transition(
+        expected_revision=state.revision,
+        event_type="STEP_STARTED",
+        changes={"active_step": 4, "attempt": 1},
+        payload={"fixture": True},
+    )
+    context = StepContext(tmp_path, tmp_path.name, 4, 1, 30, state.revision)
 
     result = step.execute(context)
 
     assert result.returncode == 0
-    assert result.metadata["prompt_input_mode"] == "standalone_compatibility"
-    assert result.metadata["prompt_input_receipt_durable"] is False
-    assert "prompt_input_receipt_id" not in result.metadata
-    assert not (tmp_path / ".factory" / "state.db").exists()
+    assert result.metadata["prompt_input_receipt_id"]
     assert validator.calls == 0
     assert step.validate(context).is_valid is True
     assert validator.calls == 1
+
+
+def test_prompt_step_refuses_to_run_without_engine_state(tmp_path):
+    class RefusingDispatcher:
+        @staticmethod
+        def execute(_request, **_kwargs):
+            raise AssertionError("the model must not be called")
+
+    contract = next(item for item in STEP_CONTRACTS if item.id == 4)
+    step = PromptStep(
+        contract,
+        PromptRenderer(tmp_path / "factory"),
+        RefusingDispatcher(),
+        None,  # type: ignore[arg-type]
+    )
+
+    result = step.execute(StepContext(tmp_path, tmp_path.name, 4, 1, 30, 0))
+
+    assert result.returncode == 2
+    assert result.error_class == "PERMANENT_PROMPT_INPUT_AUTHORITY_INVALID"
+    assert not (tmp_path / ".factory" / "state.db").exists()
 
 
 def test_parallel_proposals_report_exit_zero_missing_artifacts(tmp_path):

@@ -296,15 +296,22 @@ def test_retried_attempt_binds_corrected_inputs_under_a_new_key(tmp_path):
     assert len(set(keys)) == 2
 
 
-def test_conflicting_prompt_input_fails_the_step_instead_of_killing_the_worker(tmp_path):
+def test_conflicting_prompt_input_is_recorded_and_the_step_still_runs(tmp_path):
     project, store, step, set_note = _prompt_project_at_stage_cursor(tmp_path)
     set_note("first attempt")
-    assert step.execute(_context(project, store)).returncode == 0
+    first = step.execute(_context(project, store))
+    assert first.returncode == 0
 
     set_note("changed without a retry")
     result = step.execute(_context(project, store))
 
-    assert result.returncode == 2
-    assert result.error_class == "PERMANENT_PROMPT_INPUT_CONFLICT"
+    # The receipt never decides whether the Step runs.  The stored record of
+    # the attempt key stays; this run carries its own, unstored receipt.
+    assert result.returncode == 0
+    assert not result.error_class
     assert "different content" in result.metadata["prompt_input_errors"][0]
+    assert result.metadata["prompt_input_receipt_durable"] is False
     assert result.metadata["prompt_input_attempt_key"].endswith(":attempt:1")
+    assert result.metadata["researcher_note_sha256"] != first.metadata["researcher_note_sha256"]
+    stored = store.prompt_attempt_input(result.metadata["prompt_input_attempt_key"])
+    assert stored["receipt_id"] == first.metadata["prompt_input_receipt_id"]
