@@ -296,7 +296,7 @@ DEFAULT_MODEL_REGISTRY = [
         "id": "agy-gemini",
         "label": "Antigravity · Gemini 3.1 Pro",
         "backend": "agy",
-        "model": "gemini-3.1-pro-preview",
+        "model": "gemini-3.1-pro-high",
         "enabled": True,
         "builtin": True,
     },

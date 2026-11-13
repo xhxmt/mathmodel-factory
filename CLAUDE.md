@@ -220,6 +220,12 @@ only when the log shows a Read of it, otherwise the call is
 the original prompt; the transport suffix is bound by hash, which the Judge
 recomputes from the page list and records in the role's receipt metadata. Unlike codex, the
 Claude backend gives Judge roles no sandbox: isolation there is prompt-only.
+The `agy` backend runs the Antigravity CLI (`agy -p <prompt> --output-format
+stream-json`) under the account `agy` is logged in as (no `GEMINI_API_KEY`), with
+the project and factory root as `--add-dir` workspaces and no sandbox; a run
+succeeds only when the stream's `result` event says `SUCCESS` without a
+`finished_reason`, and it refuses page images. Preflight checks the model id
+against `agy models`.
 
 An incremental-audit check that ends without a verdict (timeout, signal, a log
 ending in an uncaught traceback, or a last line naming an exhausted host
