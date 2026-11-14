@@ -1189,3 +1189,48 @@ def test_recent_logs_without_a_logs_directory(tmp_path):
     response = asyncio.run(mod.get_recent_logs("demo", lines=5, current_user=user))
 
     assert response == {"logs": []}
+
+
+def test_recent_logs_shows_native_command_logs(tmp_path):
+    """A final audit, Judge, compile or delivery writes ``native_*`` logs only.
+
+    The console has to follow them; otherwise it keeps showing the last model
+    log for the whole audit.
+    """
+
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    user = mod.UserInfo(username="admin", role="admin")
+    logs_dir = tmp_path / "ongoing" / "demo" / "logs"
+    logs_dir.mkdir(parents=True)
+    model = logs_dir / "step_13_codex_20260912_065035_2968707.log"
+    audit = logs_dir / "native_judge_packet_20260912_064919_2968707.log"
+    model.write_text("model output\n", encoding="utf-8")
+    audit.write_text("packet built\n", encoding="utf-8")
+    os.utime(model, (1000, 1000))
+    os.utime(audit, (2000, 2000))
+
+    response = asyncio.run(mod.get_recent_logs("demo", lines=5, current_user=user))
+
+    assert response["file"] == audit.name
+    assert "packet built" in response["logs"]
+
+
+def test_recent_logs_shows_a_crashed_worker_log_but_skips_empty_ones(tmp_path):
+    mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
+    user = mod.UserInfo(username="admin", role="admin")
+    logs_dir = tmp_path / "ongoing" / "demo" / "logs"
+    logs_dir.mkdir(parents=True)
+    model = logs_dir / "step_5_codex_20260912_065035_1.log"
+    crashed = logs_dir / "worker_20260912_070000.log"
+    empty = logs_dir / "worker_20260912_080000.log"
+    model.write_text("model output\n", encoding="utf-8")
+    crashed.write_text("Traceback (most recent call last):\n", encoding="utf-8")
+    empty.write_text("", encoding="utf-8")
+    os.utime(model, (1000, 1000))
+    os.utime(crashed, (2000, 2000))
+    os.utime(empty, (3000, 3000))
+
+    response = asyncio.run(mod.get_recent_logs("demo", lines=5, current_user=user))
+
+    assert response["file"] == crashed.name
+    assert "Traceback (most recent call last):" in response["logs"]

@@ -4,7 +4,6 @@ export const DIAGNOSTIC_ACTION_LABEL = {
   open_reviewer_entry_artifacts: '查看 8.5 入口材料',
   open_consultation_request: '查看咨询请求',
   open_human_review: '查看 human_review.md',
-  open_failed_artifact: '查看失败产物',
   open_gate_evidence: '查看门禁证据',
   open_audit_timeline: '查看审计时间线',
   retry_human_decision_commit: '重新提交人工决策',

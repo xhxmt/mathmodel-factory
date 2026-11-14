@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14 — 实时日志跟上 Native 运行实际写出的日志
+
+- **`/api/projects/{base}/logs`**：候选日志由 `step_*.log` + `runner.log` 扩为 `step_*.log`、`native_*.log`、`worker_*.log`、`runner.log`。Native 运行时，最终审计、评审、编译和交付只写 `native_*` 日志（`adapters/infrastructure/commands.py`），引擎 worker 崩溃时的 traceback 只在 `worker_*.log`（`FactoryService`）里；此前实时日志面板在这些阶段一直停留在最后一份模型日志上。选择规则不变：最新修改时间优先、非空文件优先（正常结束的 worker 日志是空的，不会盖过其他日志）。`runner.log` 只有已退役的 shell runner 会写，为历史项目保留。原先重复的 `step_*_{claude,codex,agy}_*.log` 模式已由 `step_*.log` 覆盖，删去。
+- **前端**：删除诊断动作 `open_failed_artifact` 的映射和标签。后端从不发出这个动作，它指向的 `logs/runner.log` 在 Native 项目里也不存在。
+
 ## 2026-11-14 — 删除从未接入的求解对账模块、旧单评委提示词和 6 月一次性报告
 
 - **`factory_core/solver_reconcile.py`**（535 行）：只读的求解任务"有效状态"诊断，回答进程是否结束、回执是否完整、工作流是否还需要这个任务三个问题，为验收 A/B 的残留 `running` 任务而写。引擎、CLI、Web 从未调用它，模块自己写着持久化是"后续的单独步骤"，10 月 11 日以来没有改动。连同 `tests/test_solver_reconcile.py` 和只测它的 G2 gate（`tests/test_gate_g2_solver.py`）一起删除；`test_gate_hermetic.py`、`test_gate_reads_only_copies.py`、`_gate_projects.py` 中相关的断言和说明同步去掉。

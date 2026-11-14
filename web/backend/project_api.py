@@ -786,10 +786,14 @@ def recent_logs_payload(project: Path, lines: int) -> dict[str, Any]:
     """Select the newest non-empty log and return its tail.
 
     Blocking by design: the route hands this to the threadpool, so the directory
-    scan, the stat calls and the read stay off the event loop.  The selection
-    rule is unchanged from when this body lived inline in the route -- newest
-    mtime wins, non-empty files are preferred, and ``runner.log`` participates --
-    but the read is now bounded to the requested tail.
+    scan, the stat calls and the read stay off the event loop.  Newest mtime
+    wins and non-empty files are preferred.  The candidates are what a Native
+    run writes directly under ``logs/``: model output (``step_*``), the
+    audit, Judge, compile and delivery commands (``native_*``,
+    ``adapters/infrastructure/commands.py``) and the engine worker's own
+    stdout/stderr (``worker_*``, ``FactoryService``; usually empty unless the
+    worker crashed).  ``runner.log`` is still read for historical projects
+    from the retired shell runner.  The read is bounded to the requested tail.
     """
 
     logs_dir = project / "logs"
@@ -797,16 +801,8 @@ def recent_logs_payload(project: Path, lines: int) -> dict[str, Any]:
         return {"logs": []}
 
     candidates: list[Path] = []
-    for pattern in (
-        "step_*.log",
-        "step_*_claude_*.log",
-        "step_*_codex_*.log",
-        "step_*_agy_*.log",
-    ):
-        candidates.extend(logs_dir.glob(pattern))
-    runner_log = logs_dir / "runner.log"
-    if runner_log.is_file():
-        candidates.append(runner_log)
+    for pattern in ("step_*.log", "native_*.log", "worker_*.log", "runner.log"):
+        candidates.extend(path for path in logs_dir.glob(pattern) if path.is_file())
 
     candidates = sorted(candidates, key=_log_mtime, reverse=True)
     candidates = [path for path in candidates if _log_is_non_empty(path)] or candidates
