@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-14 — 删除从未运行过的 selector / shadow 放权脚本
+
+R0a → R3 selector 路线的六个脚本在 2026-08-08 实现并通过本地测试，此后三个月没有在真实数据上运行过，也没有产出任何报告；运行路径和 `evaluation/run_evaluation.sh` 都不读取它们的输出。
+
+- **删除**：`scripts/capability_harness.py`、`hard_gate_calibration.py`、`selector_calibration.py`、`shadow_portfolio.py`、`selector_cutover_authorization.py`、`shadow_cutover.py`，以及对应的 6 个测试文件，约 5,000 行代码。
+- **归档**：`evaluation/` 下的 `CAPABILITY_HARNESS.md`、`SELECTOR_ROLLOUT_PLAN.md`、`SELECTOR_RELIABILITY.md`、`SELECTOR_AUTHORIZATION.md`、`SHADOW_PORTFOLIO.md` 移到 `docs/archive/selector/`，附恢复说明。
+- **保留**：`judge_reliability.py`（`run_evaluation.sh` 调用）；`calibration_judge.py`、`evaluate_calibration.py`、`proxy_calibration.py`（生成 `run_evaluation.sh` 读取的 `proxy_calibration_report.json`），以及 `evaluation/` 下的全部校准数据、报告和提示词。
+- **没动**：`factory_core/dirty_rebase.py`。核对后发现它不是死代码：每次 dirty-clear transition 都内嵌一次 rebase，把现有 dirty 标记改绑到当前分类器身份；没有它，递增 `CLASSIFIER_CONTRACT_VERSION` 后清除会报 `dirty clear classifier does not match the dirty cause`。本机已有项目也带着 `final_evidence_recovery` 识别的更正记录。
+
 ## 2026-11-13 — 去掉防操作员自己的两层完整性校验：事件里的域表哈希、Human Gate 回执文件的反复核验
 
 这两层校验防的都是"有人绕过代码直接改了库或文件"，也就是单机部署下的操作员自己。引擎从不依据第一层做决定；第二层一旦触发，会让一个本来有效的人工决策凭空消失，直到有人修复。

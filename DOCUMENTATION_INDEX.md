@@ -57,10 +57,6 @@
 
 - [docs/complete_project_contract_audit.md](docs/complete_project_contract_audit.md)：历史完成项目与当前交付契约的审计说明。
 - [evaluation/README.md](evaluation/README.md)：独立外部评估框架。
-- [evaluation/SELECTOR_ROLLOUT_PLAN.md](evaluation/SELECTOR_ROLLOUT_PLAN.md)：Selector 可靠性、影子 portfolio 与人工放权的现役实施计划。
-- [evaluation/SELECTOR_RELIABILITY.md](evaluation/SELECTOR_RELIABILITY.md)：R0b 同题 pairwise selector、TIE 带与 holdout 合同。
-- [evaluation/SHADOW_PORTFOLIO.md](evaluation/SHADOW_PORTFOLIO.md)：R3 advisory-only portfolio 编排与报告合同。
-- [evaluation/SELECTOR_AUTHORIZATION.md](evaluation/SELECTOR_AUTHORIZATION.md)：人工放权 receipt、scope、有效期和撤销合同。
 - [evaluation/human_rubric.md](evaluation/human_rubric.md)：人工评审量表。
 - [evaluation/baseline_scores.md](evaluation/baseline_scores.md)：基准评分记录。
 - [evaluation/calibration_report.md](evaluation/calibration_report.md)：评委校准报告。
@@ -86,6 +82,7 @@
 ## 历史归档
 
 - [docs/archive/](docs/archive/)：仍用于解释合并或审计决定的历史记录；过期的整理、优化和完成报告通过 Git 历史查询。
+- [docs/archive/selector/](docs/archive/selector/README.md)：已归档的 selector 放权计划与合同（脚本于 2026-11-14 删除，从未在真实数据上运行）。
 - [docs/archive/RERUN0706_REPAIR_PLAN.md](docs/archive/RERUN0706_REPAIR_PLAN.md)：2025A rerun 事故链修复计划；建模清单与 2025A 纠错指南据其 §L5/§E 禁止用答案标定 benchmark。
 - 2026-11-11 整理时按上面的维护规则从工作树移除了已完成的一次性记录：`docs/superpowers/`（6–7 月设计与实施计划）、`docs/changelogs/`、`docs/analysis_requests/`、6 月的优化报告与 2025A blind 修复计划、方法库优化总结、GCP 服务集成设计快照，以及运行时简化项目的计划、评审回复与阶段 JSON（`docs/architecture/runtime_simplification_*`、`docs/architecture/RUNTIME_SIMPLIFICATION_*`）。需要时用 `git show e6463f5:<路径>` 查看。
 - `docs/sessions/`：历史对话与计划原文的本地归档目录，默认被 Git 忽略，不同步到远端。
