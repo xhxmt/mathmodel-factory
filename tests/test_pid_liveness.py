@@ -134,7 +134,13 @@ def test_a_foreign_live_runner_blocks_a_second_writer(tmp_path, monkeypatch):
     root = tmp_path / "project"
     root.mkdir()
     store = SQLiteStateStore(root)
-    state = store.initialize(project_id="liveness", project_type="modeling")
+    from factory_core.stages import STAGE_SCHEDULER_GENERATION
+
+    state = store.initialize(
+        project_id="liveness",
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
     store.transition(
         expected_revision=state.revision,
         event_type="RUNNER_ATTACHED_FOR_TEST",

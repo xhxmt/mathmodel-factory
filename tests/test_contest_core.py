@@ -16,8 +16,9 @@ from factory_core.contest import (
 )
 from factory_core.domain import ExecutionResult, ValidationResult, WorkflowStatus
 from factory_core.engine import FactoryEngine
-from factory_core.registry import StepDefinition, StepRegistry
+from factory_core.registry import StepDefinition
 from factory_core.storage import SQLiteStateStore
+from tests._stage_engine import initialize_stage_project, stage_registry_with
 from factory_core.steps.gates import prepare_human_gates
 from factory_core.steps.catalog import catalog_payload
 from factory_core.service import FactoryService
@@ -166,14 +167,13 @@ def test_engine_caps_step_context_to_global_remaining_budget(tmp_path):
     policy = ContestPolicy.default(started_at=1_000)
     clock = lambda: policy.content_freeze_at - 75
     store = SQLiteStateStore(tmp_path, clock=clock)
-    store.initialize(
-        project_id="demo",
-        project_type="modeling",
+    initialize_stage_project(
+        store,
+        last_completed_step=14,
         contest_policy=policy.to_dict(),
     )
     lifecycle = SuccessfulLifecycle()
-    registry = StepRegistry()
-    registry.register(
+    registry = stage_registry_with(
         StepDefinition(
             id=15,
             name="polish",
@@ -185,7 +185,9 @@ def test_engine_caps_step_context_to_global_remaining_budget(tmp_path):
 
     state = FactoryEngine(tmp_path, store=store, registry=registry).run(max_steps=1)
 
-    assert state.status is WorkflowStatus.COMPLETED
+    # Step 15 succeeded; the one-subtask bound stops before Step 16.
+    assert state.status is WorkflowStatus.READY
+    assert state.last_completed_step == 15
     assert lifecycle.timeouts == [75, 75]
     started = next(event for event in store.events() if event.type == "STEP_STARTED")
     assert started.payload["effective_timeout_seconds"] == 75
@@ -194,13 +196,12 @@ def test_engine_caps_step_context_to_global_remaining_budget(tmp_path):
 def test_engine_fails_closed_when_global_budget_is_exhausted(tmp_path):
     policy = ContestPolicy.default(started_at=1_000)
     store = SQLiteStateStore(tmp_path, clock=lambda: policy.content_freeze_at)
-    store.initialize(
-        project_id="demo",
-        project_type="modeling",
+    initialize_stage_project(
+        store,
+        last_completed_step=14,
         contest_policy=policy.to_dict(),
     )
-    registry = StepRegistry()
-    registry.register(
+    registry = stage_registry_with(
         StepDefinition(
             id=15,
             name="polish",
@@ -221,13 +222,12 @@ def test_engine_rejects_step_that_finishes_after_content_freeze(tmp_path):
     policy = ContestPolicy.default(started_at=1_000)
     clock_state = {"now": policy.content_freeze_at - 10}
     store = SQLiteStateStore(tmp_path, clock=lambda: clock_state["now"])
-    store.initialize(
-        project_id="demo",
-        project_type="modeling",
+    initialize_stage_project(
+        store,
+        last_completed_step=14,
         contest_policy=policy.to_dict(),
     )
-    registry = StepRegistry()
-    registry.register(
+    registry = stage_registry_with(
         StepDefinition(
             id=15,
             name="polish",
@@ -345,14 +345,12 @@ def test_delivery_freeze_blocks_automatic_reopen_without_human_override(tmp_path
     store = SQLiteStateStore(
         tmp_path, clock=lambda: policy.delivery_freeze_at + 1
     )
-    store.initialize(
-        project_id="demo",
-        project_type="modeling",
+    initialize_stage_project(
+        store,
         last_completed_step=15,
         contest_policy=policy.to_dict(),
     )
-    registry = StepRegistry()
-    registry.register(
+    registry = stage_registry_with(
         StepDefinition(
             id=16,
             name="delivery",

@@ -19,8 +19,13 @@ from factory_core.domain import (
     WorkflowStatus,
 )
 from factory_core.engine import FactoryEngine
-from factory_core.registry import StepDefinition, StepRegistry
+from factory_core.registry import StepDefinition
 from factory_core.storage import SQLiteStateStore
+from tests._stage_engine import (
+    active_step_cursor,
+    initialize_stage_project,
+    stage_registry_with,
+)
 
 
 @dataclass
@@ -42,8 +47,9 @@ class FakeValidator:
 
 
 def registry_for(handler, validator, *, max_attempts=3):
-    registry = StepRegistry()
-    registry.register(
+    """The Stage catalog with Step 1 under test; every other Step succeeds."""
+
+    return stage_registry_with(
         StepDefinition(
             id=1,
             name="first",
@@ -53,30 +59,31 @@ def registry_for(handler, validator, *, max_attempts=3):
             validator=validator,
         )
     )
-    return registry
 
 
 def test_engine_retries_through_registry_without_step_number_branches(tmp_path):
     handler = FakeHandler([ExecutionResult.failed("TRANSIENT"), ExecutionResult.succeeded()])
     validator = FakeValidator([ValidationResult.invalid("missing"), ValidationResult.valid()])
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
     engine = FactoryEngine(tmp_path, store=store, registry=registry_for(handler, validator), sleeper=lambda _: None)
 
     state = engine.run()
 
     assert state.status is WorkflowStatus.COMPLETED
-    assert state.last_completed_step == 1
+    assert state.last_completed_step == 16
     assert handler.calls == [1, 2]
-    assert [event.type for event in store.events()] == [
+    types = [event.type for event in store.events()]
+    assert types[:7] == [
         "PROJECT_CREATED",
         "RUN_STARTED",
+        "STAGE_SUBTASK_SELECTED",
         "STEP_STARTED",
         "RETRY_SCHEDULED",
         "STEP_STARTED",
         "STEP_SUCCEEDED",
-        "PROJECT_COMPLETED",
     ]
+    assert types[-1] == "PROJECT_COMPLETED"
 
 
 def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_path):
@@ -107,7 +114,7 @@ def test_engine_failure_events_preserve_execution_and_validation_metadata(tmp_pa
         ]
     )
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
     engine = FactoryEngine(
         tmp_path,
         store=store,
@@ -142,7 +149,7 @@ def test_judge_infrastructure_classes_share_one_retry_budget(tmp_path):
     handler = FakeHandler([ExecutionResult.failed(name, returncode=2) for name in classes])
     validator = FakeValidator([ValidationResult.invalid("no usable verdict") for _ in classes])
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
     engine = FactoryEngine(
         tmp_path, store=store, registry=registry_for(handler, validator, max_attempts=2),
         sleeper=lambda _: None,
@@ -169,7 +176,7 @@ def test_a_single_attempt_step_retries_a_routing_failure_but_not_an_incomplete_p
     handler = FakeHandler([ExecutionResult.failed(error_class, returncode=2), ExecutionResult.succeeded()])
     validator = FakeValidator([ValidationResult.invalid("no routed verdict"), ValidationResult.valid()])
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
     engine = FactoryEngine(
         tmp_path, store=store, registry=registry_for(handler, validator, max_attempts=1),
         sleeper=lambda _: None,
@@ -191,7 +198,7 @@ def test_engine_classifies_exit_zero_with_missing_artifact(tmp_path):
         [ValidationResult.invalid("artifact missing", "model.md")]
     )
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
     engine = FactoryEngine(
         tmp_path,
         store=store,
@@ -213,7 +220,7 @@ def test_engine_persists_pending_action_and_stops_dispatch(tmp_path):
         [ValidationResult.awaiting(PendingAction(type="step3_selection", gate="step3"))]
     )
     store = SQLiteStateStore(tmp_path)
-    initial = store.initialize(project_id="demo", project_type="modeling")
+    initial = initialize_stage_project(store)
     engine = FactoryEngine(tmp_path, store=store, registry=registry_for(handler, validator))
 
     awaiting = engine.run()
@@ -234,7 +241,7 @@ def test_engine_rejects_resolution_for_a_different_pending_gate(tmp_path):
         [ValidationResult.awaiting(PendingAction(type="step3_selection", gate="step3"))]
     )
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
     engine = FactoryEngine(tmp_path, store=store, registry=registry_for(handler, validator))
     awaiting = engine.run()
 
@@ -250,11 +257,11 @@ def test_recovery_promotes_valid_artifacts_after_interrupted_step(tmp_path):
     handler = FakeHandler([])
     validator = FakeValidator([ValidationResult.valid()])
     store = SQLiteStateStore(tmp_path)
-    state = store.initialize(project_id="demo", project_type="modeling")
+    state = initialize_stage_project(store)
     store.transition(
         expected_revision=state.revision,
         event_type="STEP_STARTED",
-        changes={"status": WorkflowStatus.RUNNING, "active_step": 1, "attempt": 1},
+        changes={"status": WorkflowStatus.RUNNING, **active_step_cursor(1), "attempt": 1},
     )
     engine = FactoryEngine(tmp_path, store=store, registry=registry_for(handler, validator))
 
@@ -262,31 +269,10 @@ def test_recovery_promotes_valid_artifacts_after_interrupted_step(tmp_path):
 
     assert recovered.status is WorkflowStatus.READY
     assert recovered.last_completed_step == 1
-    assert recovered.active_step is None
+    # The Stage cursor moves on to the next subtask.
+    assert recovered.active_step == 2
     assert store.events()[-1].type == "RECOVERY_DECIDED"
-    assert store.events()[-1].payload["decision"] == "promote_valid_artifacts"
-
-
-def test_recovery_preserves_validator_fast_forward_target(tmp_path):
-    handler = FakeHandler([])
-    validator = FakeValidator(
-        [ValidationResult.valid(metadata={"completed_through_step": 3})]
-    )
-    store = SQLiteStateStore(tmp_path)
-    state = store.initialize(project_id="demo", project_type="modeling")
-    store.transition(
-        expected_revision=state.revision,
-        event_type="STEP_STARTED",
-        changes={"status": WorkflowStatus.RUNNING, "active_step": 1, "attempt": 1},
-    )
-    engine = FactoryEngine(
-        tmp_path, store=store, registry=registry_for(handler, validator)
-    )
-
-    recovered = engine.recover()
-
-    assert recovered.last_completed_step == 3
-    assert store.events()[-1].payload["decision"] == "promote_valid_artifacts"
+    assert store.events()[-1].payload["decision"] == "promote_valid_stage_subtask"
 
 
 def test_recovery_preserves_validator_reopen_target(tmp_path):
@@ -295,13 +281,11 @@ def test_recovery_preserves_validator_reopen_target(tmp_path):
         [ValidationResult.invalid("reopen", metadata={"resume_after_step": 0})]
     )
     store = SQLiteStateStore(tmp_path)
-    state = store.initialize(
-        project_id="demo", project_type="modeling", last_completed_step=0
-    )
+    state = initialize_stage_project(store, last_completed_step=0)
     store.transition(
         expected_revision=state.revision,
         event_type="STEP_STARTED",
-        changes={"status": WorkflowStatus.RUNNING, "active_step": 1, "attempt": 1},
+        changes={"status": WorkflowStatus.RUNNING, **active_step_cursor(1), "attempt": 1},
     )
     engine = FactoryEngine(
         tmp_path, store=store, registry=registry_for(handler, validator)
@@ -318,7 +302,7 @@ def test_engine_rejects_second_live_runner(tmp_path):
     handler = FakeHandler([])
     validator = FakeValidator([])
     store = SQLiteStateStore(tmp_path)
-    state = store.initialize(project_id="demo", project_type="modeling")
+    state = initialize_stage_project(store)
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         store.transition(
@@ -326,7 +310,7 @@ def test_engine_rejects_second_live_runner(tmp_path):
             event_type="STEP_STARTED",
             changes={
                 "status": WorkflowStatus.RUNNING,
-                "active_step": 1,
+                **active_step_cursor(1),
                 "attempt": 1,
                 "runner_pid": sleeper.pid,
             },
@@ -346,7 +330,7 @@ def test_resume_rejects_active_runner_state(tmp_path):
     handler = FakeHandler([])
     validator = FakeValidator([])
     store = SQLiteStateStore(tmp_path)
-    state = store.initialize(project_id="demo", project_type="modeling")
+    state = initialize_stage_project(store)
     running = store.transition(
         expected_revision=state.revision,
         event_type="RUN_STARTED",
@@ -367,7 +351,7 @@ def test_archive_recovery_finishes_from_archiving_state(tmp_path):
     project = root / "ongoing" / "demo"
     project.mkdir(parents=True)
     store = SQLiteStateStore(project)
-    state = store.initialize(project_id="demo", project_type="modeling")
+    state = initialize_stage_project(store)
     state = store.transition(
         expected_revision=state.revision,
         event_type="PROJECT_COMPLETED",
@@ -388,30 +372,13 @@ def test_archive_recovery_finishes_from_archiving_state(tmp_path):
     assert not project.exists()
 
 
-def test_step_result_can_fast_forward_without_scheduler_branch(tmp_path):
-    handler = FakeHandler([ExecutionResult.succeeded(completed_through_step=3)])
-    validator = FakeValidator([ValidationResult.valid()])
-    store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
-    engine = FactoryEngine(
-        tmp_path, store=store, registry=registry_for(handler, validator)
-    )
-
-    state = engine.run()
-
-    assert state.status is WorkflowStatus.COMPLETED
-    assert state.last_completed_step == 3
-
-
 def test_reopen_result_is_committed_before_artifact_validation(tmp_path):
     handler = FakeHandler(
         [ExecutionResult.succeeded(resume_after_step=0), ExecutionResult.succeeded()]
     )
     validator = FakeValidator([ValidationResult.valid()])
     store = SQLiteStateStore(tmp_path)
-    store.initialize(
-        project_id="demo", project_type="modeling", last_completed_step=0
-    )
+    initialize_stage_project(store, last_completed_step=0)
     engine = FactoryEngine(
         tmp_path, store=store, registry=registry_for(handler, validator)
     )
@@ -438,7 +405,7 @@ def test_projection_failure_does_not_rollback_authoritative_transition(tmp_path)
     handler = FakeHandler([ExecutionResult.succeeded()])
     validator = FakeValidator([ValidationResult.valid()])
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
 
     def broken_projection(_project, _state):
         raise OSError("read-only projection")
@@ -488,8 +455,7 @@ def test_engine_dispatches_native_step_lifecycle_without_legacy_handler(tmp_path
             return RecoveryDecision(RecoveryDisposition.RETRY)
 
     native = NativeStep()
-    registry = StepRegistry()
-    registry.register(
+    registry = stage_registry_with(
         StepDefinition(
             id=1,
             name="native",
@@ -499,9 +465,7 @@ def test_engine_dispatches_native_step_lifecycle_without_legacy_handler(tmp_path
         )
     )
     store = SQLiteStateStore(tmp_path)
-    store.initialize(
-        project_id="demo", project_type="modeling", runtime_generation="native_v2"
-    )
+    initialize_stage_project(store)
 
     state = FactoryEngine(tmp_path, store=store, registry=registry).run()
 
@@ -550,7 +514,7 @@ class LeaseReplacementStep:
         self.store.transition(
             expected_revision=launched.revision,
             event_type="WORKER_B_STEP_STARTED",
-            changes={"active_step": 1, "attempt": 1},
+            changes={**active_step_cursor(1), "attempt": 1},
         )
         return ExecutionResult.succeeded()
 
@@ -563,11 +527,8 @@ class LeaseReplacementStep:
 
 def test_old_worker_cannot_commit_after_pause_resume_replaces_lease(tmp_path):
     store = SQLiteStateStore(tmp_path)
-    store.initialize(
-        project_id="demo", project_type="modeling", last_completed_step=0
-    )
-    registry = StepRegistry()
-    registry.register(
+    initialize_stage_project(store, last_completed_step=0)
+    registry = stage_registry_with(
         StepDefinition(
             id=1,
             name="lease-race",
@@ -619,22 +580,19 @@ def test_run_does_not_overwrite_recovery_stop_states(
     tmp_path, decision, expected_status
 ):
     store = SQLiteStateStore(tmp_path)
-    state = store.initialize(
-        project_id="demo", project_type="modeling", last_completed_step=0
-    )
+    state = initialize_stage_project(store, last_completed_step=0)
     store.transition(
         expected_revision=state.revision,
         event_type="STEP_STARTED",
         changes={
             "status": WorkflowStatus.RUNNING,
-            "active_step": 1,
+            **active_step_cursor(1),
             "attempt": 1,
             "runner_pid": os.getpid(),
             "runner_lease_id": "launch-lease",
         },
     )
-    registry = StepRegistry()
-    registry.register(
+    registry = stage_registry_with(
         StepDefinition(1, "recover", 30, 1, step=RecoveryOnlyStep(decision))
     )
 
@@ -651,11 +609,8 @@ def test_run_does_not_overwrite_recovery_stop_states(
 def test_recovery_reopen_consumes_the_same_budget_as_normal_reopen(tmp_path):
     decision = RecoveryDecision(RecoveryDisposition.REOPEN, resume_after_step=0)
     store = SQLiteStateStore(tmp_path)
-    state = store.initialize(
-        project_id="demo", project_type="modeling", last_completed_step=0
-    )
-    registry = StepRegistry()
-    registry.register(
+    state = initialize_stage_project(store, last_completed_step=0)
+    registry = stage_registry_with(
         StepDefinition(
             1,
             "recover-reopen",
@@ -670,7 +625,7 @@ def test_recovery_reopen_consumes_the_same_budget_as_normal_reopen(tmp_path):
     store.transition(
         expected_revision=state.revision,
         event_type="FIRST_CRASH",
-        changes={"status": WorkflowStatus.INTERRUPTED, "active_step": 1, "attempt": 1},
+        changes={"status": WorkflowStatus.INTERRUPTED, **active_step_cursor(1), "attempt": 1},
     )
     first = engine.recover()
     assert first.status is WorkflowStatus.READY
@@ -679,7 +634,7 @@ def test_recovery_reopen_consumes_the_same_budget_as_normal_reopen(tmp_path):
     store.transition(
         expected_revision=first.revision,
         event_type="SECOND_CRASH",
-        changes={"status": WorkflowStatus.INTERRUPTED, "active_step": 1, "attempt": 1},
+        changes={"status": WorkflowStatus.INTERRUPTED, **active_step_cursor(1), "attempt": 1},
     )
     second = engine.recover()
 
@@ -704,8 +659,7 @@ def test_parallel_prepare_shortage_uses_standard_retry_budget(tmp_path):
         dispatcher=None,
         validator=validator,
     )
-    registry = StepRegistry()
-    registry.register(
+    registry = stage_registry_with(
         StepDefinition(
             id=2,
             name="parallel",
@@ -716,9 +670,7 @@ def test_parallel_prepare_shortage_uses_standard_retry_budget(tmp_path):
         )
     )
     store = SQLiteStateStore(tmp_path)
-    store.initialize(
-        project_id="demo", project_type="modeling", last_completed_step=1
-    )
+    initialize_stage_project(store, last_completed_step=1)
 
     state = FactoryEngine(
         tmp_path, store=store, registry=registry, sleeper=lambda _delay: None
@@ -746,7 +698,7 @@ def _engine_with(tmp_path, results, *, max_attempts):
         [ValidationResult.valid() if result.returncode == 0 else ValidationResult.invalid("audit") for result in results]
     )
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
     engine = FactoryEngine(
         tmp_path, store=store, registry=registry_for(handler, validator, max_attempts=max_attempts),
         sleeper=lambda _: None,
