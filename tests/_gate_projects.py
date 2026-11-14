@@ -1,11 +1,10 @@
-"""Shared locator for the real-project G2/G3/S5 gate layers.
+"""Shared locator for the real-project G3 gate layers.
 
 The gate tests assert properties of *real production history* (projects A, B and
 R).  That history only exists on the machine that ran those projects, so the
 gate has always had two layers:
 
-* a **hermetic** layer (``tests/test_gate_hermetic.py`` plus the ``tmp_path``
-  tests in ``tests/test_solver_reconcile.py``) that proves the general
+* a **hermetic** layer (``tests/test_gate_hermetic.py``) that proves the general
   invariants and runs everywhere, including CI;
 * a **real-history regression** layer (this module's callers) that re-asserts the
   answers recorded when the gate was built, and can only run where the trees are.

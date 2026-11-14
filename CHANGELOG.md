@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-14 — 删除从未接入的求解对账模块、旧单评委提示词和 6 月一次性报告
+
+- **`factory_core/solver_reconcile.py`**（535 行）：只读的求解任务"有效状态"诊断，回答进程是否结束、回执是否完整、工作流是否还需要这个任务三个问题，为验收 A/B 的残留 `running` 任务而写。引擎、CLI、Web 从未调用它，模块自己写着持久化是"后续的单独步骤"，10 月 11 日以来没有改动。连同 `tests/test_solver_reconcile.py` 和只测它的 G2 gate（`tests/test_gate_g2_solver.py`）一起删除；`test_gate_hermetic.py`、`test_gate_reads_only_copies.py`、`_gate_projects.py` 中相关的断言和说明同步去掉。
+- **`evaluation/llm_judge_prompt.txt`**：6 月的外部单评委提示词，输出按 CUMCM 细则打分的 Markdown 评分卡。已由 `prompts/judges/` 的三角色提示词取代，这类评分卡一律是 `LEGACY_UNVERIFIED`，没有代码读取它。
+- **6 月一次性报告**（14 份，约 3,500 行）：`docs/verification/` 下的 P0/P1 修复与验证报告、消融完成摘要，`evaluation/` 下的 A/B 差距诊断、失败模式案例、no_methodlib 与消融深挖、实验状态和硬指标基线。按 `DOCUMENTATION_INDEX.md` 的维护规则从工作树移除，索引里记了 `git show 84d5da5:<路径>`；README 与索引中的链接已去掉。
+- **本机运行数据**（不在仓库里）：删除了 `ongoing/cumcm_2020_a_codex_luna`。它是本机唯一的 step_v2 项目库，8 月 3 日在 Step 15 之后失败。`tests/test_gate_g3_version_compat.py` 写死了它的路径，此前每次全量测试固定有 2 个失败来自它，现在这两个用例因找不到数据库而跳过。
+
 ## 2026-11-14 — 求解输入漂移改为记录不拦截，无主文件默认纳入，删除人工登记出口
 
 交付收集原有三条"失败即停"规则：求解器声明的输入在求解后被改过或丢失（漂移）、求解输入没有归属也没有路由、跟踪的作者文件没有归属。它们的出口——输入版本登记（`solver_input_versions`）、排除回执、提交路由（`submission_routes`）和环境变量 `FACTORY_TECHNICAL_FLOW_AUTHORIZATION`——都没有 CLI 或 Web 入口，验收 A 只能靠项目里的手写脚本直接调用这些函数才完成交付。核对后发现 v2 的输入依赖返工只覆盖 `models/`、`scripts/`、`data/`、`results/`，求解脚本读过的文档（验收 A 中是 `symbol_table.md`、`assumption_ledger.md`、`quality_contract.json`）被后续 Step 正常修改时不会重跑，漂移必然留到交付。

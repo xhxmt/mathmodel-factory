@@ -6,9 +6,9 @@ which promotes a generation-9 database to 10 and commits.  So a test that passes
 real project directory to Factory code is a test that can rewrite it.
 
 That was the state of the real-history layer until this guard: ``test_gate_g3_replay``
-built ``SQLiteStateStore(_requires(name))``, and ``test_gate_g2_solver`` and
-``test_solver_reconcile`` fed ``_requires(name)`` to ``evaluate_solver_jobs``,
-which opens a store.  It happened not to bite, because the three projects that
+built ``SQLiteStateStore(_requires(name))``, and the solver-reconciliation gate
+(since removed) fed ``_requires(name)`` to ``evaluate_solver_jobs``, which opened
+a store.  It happened not to bite, because the three projects that
 layer points at are all generation 10, so ``_upgrade_schema`` returns early.  The
 safety was incidental - it depended on *which* projects ``A``, ``B`` and ``R``
 happen to be - and ``PF_GATE_PROJECTS_ROOT`` makes that worse, since it lets the
@@ -46,8 +46,6 @@ REAL_PATH_ACCESSORS = (
 #: Calls that open a store, or reach one, and therefore migrate on read.
 STORE_BACKED = (
     "SQLiteStateStore",
-    "evaluate_solver_jobs",
-    "completion_blockers",
     "dirty_flags",
     "status_snapshot",
 )
@@ -96,7 +94,8 @@ def test_the_real_history_layer_actually_uses_copies():
         for path, text in _test_sources()
         if "_gate_projects.snapshot(" in text
     ]
-    assert len(users) >= 4, f"expected the real-history tests to use copies, got {users}"
+    # g3_replay and the hermetic gate; the G2 solver gate was removed with solver_reconcile.
+    assert len(users) >= 2, f"expected the real-history tests to use copies, got {users}"
 
     from tests import _gate_projects
 

@@ -322,5 +322,4 @@ python3 experiments/compare_ablations.py --baseline <基线项目> --variant <�
 
 详见：
 - **综合报告**: `evaluation/ablation_study_report.md` — 完整的实验设计、结果分析和洞察
-- **实验状态**: `evaluation/EXPERIMENTS_STATUS.md` — 当前进度和后续任务路线图
 - **实验指南**: `experiments/README.md` — 消融开关的实现细节和使用文档

@@ -19,9 +19,8 @@ Covered here:
   * the X-01 lift (``final_decision`` -> ``subcode``) works
   * reading the stream is pure - revision, event count, payload bytes and mtime
 
-The solver-relevance half of the gate is covered hermetically by the
-``tmp_path`` tests in ``tests/test_solver_reconcile.py``, which exercise every
-``WorkflowRelevance`` value without any real project.
+The solver-relevance half of the gate (G2, ``factory_core/solver_reconcile.py``)
+was removed on 2026-11-14: it was never wired into the runtime.
 """
 from __future__ import annotations
 
@@ -30,7 +29,6 @@ from pathlib import Path
 
 import pytest
 
-from factory_core.solver_reconcile import BLOCKING_RELEVANCE, PROVEN_RELEVANCE
 from factory_core.storage import SQLiteStateStore, read_only_uri
 from factory_core.workflow_events import (
     ENVELOPE_KEY,
@@ -250,9 +248,6 @@ def test_the_gate_has_non_vacuous_coverage(hermetic_project, tmp_path):
         event.payload[ENVELOPE_KEY].get("state_hash_after") is not None
         for event in enveloped
     ), "no state hashes, so replay verification would be a no-op"
-
-    # the solver half of the gate is hermetic too, and must stay that way
-    assert BLOCKING_RELEVANCE & PROVEN_RELEVANCE == frozenset()
 
     for name in _gate_projects.available():
         # a copy: events() calls _upgrade_schema, which migrates a v9 database
