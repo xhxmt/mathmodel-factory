@@ -13,11 +13,12 @@
 | 环境变量 | 关闭的机制 | 实现位置 |
 |---|---|---|
 | `ABLATE_NO_CONSULTATION` | Step 1 的 web 文献检索 | `_apply_ablations()` 删掉 `step1_research_viability.txt` 的 web 子句 |
-| `ABLATE_NO_JUDGE` | Step 13 Gate-2 评委 + reopen | `factory_core/steps/specialized.py` 写 `VERDICT: PRECHECK_PASS`（Step 13）/ `VERDICT: PASS` stub；`factory_core/audit/service.py` 让最终审计跳过评委 |
+| `ABLATE_NO_JUDGE` | Gate-2 评委 + reopen | 两个 catalog：`factory_core/audit/service.py` 让最终审计跳过评委。v1 另有 Step 13 预审：`factory_core/steps/specialized.py` 写 `VERDICT: PRECHECK_PASS` stub。v2 的 Step 13 直接调用最终审计，不经过这个 stub |
 | `ABLATE_NO_INNOVATION_PROTECT` | PROTECTED 不可降级规则 | `_apply_ablations()` 删掉各 Step 提示词里的 PROTECTED 强制行 |
 
-事后核对条件：`ABLATE_NO_JUDGE` 会在 `judge_evaluation.md` 写下 `Ablation: automated judge disabled.`，
-最终审计记录的 `decision` 为 `ABLATE_NO_JUDGE`；两个提示词类开关不留日志标记，只能从项目名的
+事后核对条件：`ABLATE_NO_JUDGE` 在两个 catalog 下都会写 `judge_outputs/final_submission.ablation.json`，
+最终审计记录的 `decision` 为 `ABLATE_NO_JUDGE`（v1 的 Step 13 预审还会在 `judge_evaluation.md`
+写下 `Ablation: automated judge disabled.`）；两个提示词类开关不留日志标记，只能从项目名的
 `_<tag>_rep<k>` 后缀区分。开关经环境变量传给 `run_paper.sh`，环境原样保留。
 
 ## 用法
