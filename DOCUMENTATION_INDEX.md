@@ -82,9 +82,9 @@
 ## 历史归档
 
 - [docs/archive/](docs/archive/)：仍用于解释合并或审计决定的历史记录；过期的整理、优化和完成报告通过 Git 历史查询。
-- [docs/archive/selector/](docs/archive/selector/README.md)：已归档的 selector 放权计划与合同（脚本于 2026-11-14 删除，从未在真实数据上运行）。
 - [docs/archive/RERUN0706_REPAIR_PLAN.md](docs/archive/RERUN0706_REPAIR_PLAN.md)：2025A rerun 事故链修复计划；建模清单与 2025A 纠错指南据其 §L5/§E 禁止用答案标定 benchmark。
 - 2026-11-11 整理时按上面的维护规则从工作树移除了已完成的一次性记录：`docs/superpowers/`（6–7 月设计与实施计划）、`docs/changelogs/`、`docs/analysis_requests/`、6 月的优化报告与 2025A blind 修复计划、方法库优化总结、GCP 服务集成设计快照，以及运行时简化项目的计划、评审回复与阶段 JSON（`docs/architecture/runtime_simplification_*`、`docs/architecture/RUNTIME_SIMPLIFICATION_*`）。需要时用 `git show e6463f5:<路径>` 查看。
+- 2026-11-14 删除 selector 放权路线（R0a → R3，脚本 2026-08-08 实现后从未在真实数据上运行）时，一并移除了它的计划与合同：`evaluation/SELECTOR_ROLLOUT_PLAN.md`、`SELECTOR_RELIABILITY.md`、`SELECTOR_AUTHORIZATION.md`、`SHADOW_PORTFOLIO.md`、`CAPABILITY_HARNESS.md`，以及对应的 6 个脚本和测试。需要时用 `git show b80570a:<路径>` 查看；要恢复这条路线，须按计划里的状态矩阵重新核对评审身份和 packet 合同。
 - `docs/sessions/`：历史对话与计划原文的本地归档目录，默认被 Git 忽略，不同步到远端。
 
 ## 文档维护规则
@@ -96,4 +96,4 @@
 - 历史会话文本放入 `docs/sessions/`，不要继续堆放在仓库根目录。
 - 不提交日志、密钥、本地环境、生成论文、构建产物或下载的外部资料；根目录 `work/` 为本地临时工作目录，`.pytest_cache/` 为可再生测试缓存，均由 `.gitignore` 管理。
 
-**最后更新：2026-11-11**
+**最后更新：2026-11-14**

@@ -5,7 +5,7 @@
 R0a → R3 selector 路线的六个脚本在 2026-08-08 实现并通过本地测试，此后三个月没有在真实数据上运行过，也没有产出任何报告；运行路径和 `evaluation/run_evaluation.sh` 都不读取它们的输出。
 
 - **删除**：`scripts/capability_harness.py`、`hard_gate_calibration.py`、`selector_calibration.py`、`shadow_portfolio.py`、`selector_cutover_authorization.py`、`shadow_cutover.py`，以及对应的 6 个测试文件，约 5,000 行代码。
-- **归档**：`evaluation/` 下的 `CAPABILITY_HARNESS.md`、`SELECTOR_ROLLOUT_PLAN.md`、`SELECTOR_RELIABILITY.md`、`SELECTOR_AUTHORIZATION.md`、`SHADOW_PORTFOLIO.md` 移到 `docs/archive/selector/`，附恢复说明。
+- **一并删除它们的计划与合同**：`evaluation/` 下的 `CAPABILITY_HARNESS.md`、`SELECTOR_ROLLOUT_PLAN.md`、`SELECTOR_RELIABILITY.md`、`SELECTOR_AUTHORIZATION.md`、`SHADOW_PORTFOLIO.md`。按 `DOCUMENTATION_INDEX.md` 的维护规则，过期计划通过 Git 历史查询（`git show b80570a:<路径>`），不放进 `docs/archive/`。
 - **保留**：`judge_reliability.py`（`run_evaluation.sh` 调用）；`calibration_judge.py`、`evaluate_calibration.py`、`proxy_calibration.py`（生成 `run_evaluation.sh` 读取的 `proxy_calibration_report.json`），以及 `evaluation/` 下的全部校准数据、报告和提示词。
 - **没动**：`factory_core/dirty_rebase.py`。核对后发现它不是死代码：每次 dirty-clear transition 都内嵌一次 rebase，把现有 dirty 标记改绑到当前分类器身份；没有它，递增 `CLASSIFIER_CONTRACT_VERSION` 后清除会报 `dirty clear classifier does not match the dirty cause`。本机已有项目也带着 `final_evidence_recovery` 识别的更正记录。
 
