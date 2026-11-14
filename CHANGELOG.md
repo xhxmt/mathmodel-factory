@@ -5,6 +5,21 @@
 - **`/api/projects/{base}/logs`**：候选日志由 `step_*.log` + `runner.log` 扩为 `step_*.log`、`native_*.log`、`worker_*.log`、`runner.log`。Native 运行时，最终审计、评审、编译和交付只写 `native_*` 日志（`adapters/infrastructure/commands.py`），引擎 worker 崩溃时的 traceback 只在 `worker_*.log`（`FactoryService`）里；此前实时日志面板在这些阶段一直停留在最后一份模型日志上。选择规则不变：最新修改时间优先、非空文件优先。worker 正常退出时只往日志里打一行状态 JSON，这种 worker 日志不参与候选，只有含其他输出（如 traceback）的才会显示。`runner.log` 只有已退役的 shell runner 会写，为历史项目保留。原先重复的 `step_*_{claude,codex,agy}_*.log` 模式已由 `step_*.log` 覆盖，删去。
 - **前端**：删除诊断动作 `open_failed_artifact` 的映射和标签。后端从不发出这个动作，它指向的 `logs/runner.log` 在 Native 项目里也不存在。
 
+## 2026-11-14 — 删除引擎的 Step 调度执行分支
+
+- **引擎只执行 Stage 调度项目**：`FactoryEngine.run()` / `recover()` 遇到 `step_v2` 项目时以 `STAGE_SCHEDULER_REQUIRED` 拒绝，不写任何事件（`FactoryService` 早已在入口处做同样的拒绝）。删除 `_advance_loop` 里按 `registry.next_after` 选下一步的路径、`stage_mode` 参数，以及十余处"没有 Stage 任务时走 Step 版转移"的回退分支（失败、期限、预算耗尽、重开、成功提交、恢复的提升/重开/失败）；`StepRegistry.next_after` 一并删除。
+- **`run(allowed_source_steps=...)`**：bounded_run 留下的运行范围参数（越界时提交 `RUN_BOUNDARY_REACHED`），#68 之后只剩测试调用，连同其测试删除。
+- **默认代际**：`SQLiteStateStore.initialize` 的 `scheduler_generation` 默认值改为 `stage_v1`；`step_v2` 只能显式创建（迁移测试用）。
+- **保留**：读取历史 `step_v2` 状态、诊断，以及 `factory migrate scheduler-activate` 迁移命令。
+- **文档**：已执行完毕的退出评估 `docs/architecture/STEP_SCHEDULER_RETIREMENT.md` 按 `DOCUMENTATION_INDEX.md` 的维护规则移除（索引里记了 `git show` 路径）。
+- **测试**：40 个以 `step_v2` 驱动引擎的测试改走 Stage 路径（新增 `tests/_stage_engine.py`）；删除两个只对 Step 调度成立的快进测试（Stage 调度本就拒绝 `completed_through_step` 快进）；新增 `step_v2` 项目被 `run()` / `recover()` 拒绝的回归测试。
+
+## 2026-11-14 — 删除 bounded_run 受限推进合同与 Step 13 技术续跑路线
+
+- **`factory_core/bounded_run.py` 与 `factory advance`**：为验收 A 的手写 `work/*.py` 驱动脚本写的替代入口，按调用方给的 revision/游标做比对、核验受保护文件哈希和已提交检查点，不符就判 `PERMANENT_PROTECTED_MANIFEST_VIOLATED` / `_CHECKPOINT_VIOLATED`。防的是操作员自己，生产从不调用。删除引擎里的 `run_bounded`、`run(contract=...)`、提交前保护核验和 `ScopedRegistry` 换挂，`FactoryService.advance_bounded`，CLI `advance` 子命令；连同 `test_bounded_run.py`、G1/G2/G4 闸门测试（`_g1_canary.py`、`test_gate_g1_entry_equivalence.py`、`test_gate_g2_failure_semantics.py`、`test_gate_g4_driver_migration.py`）、`scripts/check_no_hand_written_drivers.py` 及其测试与 fixture 树、CI 的 driver guard 步骤。
+- **Step 13 技术续跑**：`factory_core/repair_operations.py`（`authorize-gate2` / `continue-gate2`）是 `technical_continuation.py` 的运维 CLI 入口，`persistent_launcher.py` 只为它做后台守护；三者没有正常生产调用方，只通过引擎的 `_stop_at_gate2` 挂钩和这个 CLI 相连（技术续跑只能由该 CLI 授权，入口删除后挂钩永远不会生效）。删除它们、引擎里的 `_stop_at_gate2` 挂钩和相关测试；`STEPS.md`、`RERUN_REPAIR_AND_TECHNICAL_CONTINUATION.md`、`NORMAL_RUN_AUDIT_CONTRACT.md` 去掉对应段落。失败的 Step 仍通过 `factory action retry-step` 重试。
+- **保留**：问题台账受保护条目的 `PERMANENT_PROTECTED_ITEM_DELETED`（来自 `dirty.py` 的 `@protected:`，不属于 bounded_run）；`prompts/step14_abstract.txt` 中提到 `GATE2_CONTINUATION_AUTHORIZED` 的句子（agent 合同，陈述不再可达但无害，未改动）。
+
 ## 2026-11-14 — 删除从未接入的求解对账模块、旧单评委提示词和 6 月一次性报告
 
 - **`factory_core/solver_reconcile.py`**（535 行）：只读的求解任务"有效状态"诊断，回答进程是否结束、回执是否完整、工作流是否还需要这个任务三个问题，为验收 A/B 的残留 `running` 任务而写。引擎、CLI、Web 从未调用它，模块自己写着持久化是"后续的单独步骤"，10 月 11 日以来没有改动。连同 `tests/test_solver_reconcile.py` 和只测它的 G2 gate（`tests/test_gate_g2_solver.py`）一起删除；`test_gate_hermetic.py`、`test_gate_reads_only_copies.py`、`_gate_projects.py` 中相关的断言和说明同步去掉。

@@ -82,7 +82,9 @@ declared-output hashes; it does not prove optimality.
 The only active workflow is `engine` / `native_v2` / `stage_v1`, backed by
 `.factory/state.db`. Ten persistent Stages schedule the existing Step 0–16
 validation contracts. Existing `step_v2` Native projects require explicit
-`factory migrate scheduler-activate`; Legacy migration and rollback are retired.
+`factory migrate scheduler-activate`: the engine refuses to run or recover them
+(`STAGE_SCHEDULER_REQUIRED`) and has no Step-scheduler execution path; Legacy
+migration and rollback are retired.
 
 Each Stage project records its catalog in `stage_catalog_version`. New
 projects default to `factory-stage-catalog-v1`; `factory create --stage-catalog

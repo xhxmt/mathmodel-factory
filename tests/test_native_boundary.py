@@ -83,7 +83,7 @@ def test_old_native_scheduler_requires_explicit_activation_before_execution(tmp_
     project = tmp_path / 'ongoing/demo'
     project.mkdir(parents=True)
     store = SQLiteStateStore(project)
-    before = store.initialize(project_id='demo', project_type='modeling')
+    before = store.initialize(project_id='demo', project_type='modeling', scheduler_generation='step_v2')
     service = FactoryService(tmp_path)
     for action in (service.start, service.run):
         with pytest.raises(InvalidTransition, match='STAGE_SCHEDULER_REQUIRED'):

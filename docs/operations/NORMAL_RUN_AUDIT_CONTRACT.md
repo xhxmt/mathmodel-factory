@@ -7,13 +7,12 @@ reports describe their dated candidates, not the current implementation.
 
 ## Scope and gates
 
-Start a new project without creating or inheriting Step13 technical continuation
-grants. Use the normal scheduler, ordinary recovery and configured attempt limits.
+Use the normal scheduler, ordinary recovery and configured attempt limits.
 Step13 math precheck does not authorize final delivery. Step16 still requires
 its native prerequisites, content freeze, final input evidence and delivery fence.
 The removed extra repair retry does not grant another attempt when inputs or code
-change. The separate manual technical-continuation implementation has not been
-repaired or accepted for this normal-run scope.
+change. The manual Step13 technical continuation was removed on 2026-11-14; a
+failed Step is retried with `factory action retry-step`.
 
 ## Evidence contracts
 
@@ -90,9 +89,7 @@ signals are sent and `RUNNER_EXIT_UNVERIFIED` with interrupted state is persiste
 Old records lacking the identity/lease binding require explicit reconciliation;
 they do not grant cancellation authority.
 
-The separate `persistent_launcher` helper persists STARTING before launch,
-records initialization exceptions and recognizes a missing monitor as INTERRUPTED
-with process-tree exit unverified. A missing or reused normal worker PID also
+A missing or reused normal worker PID
 projects interrupted execution; `recorded_workflow_state` retains the database
 state for diagnosis, without mutating workflow history on read. SIGKILL cannot guarantee that a dead monitor
 continues discovering or cleaning descendants. These bounded lifecycle checks do

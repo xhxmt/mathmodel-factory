@@ -19,19 +19,6 @@ from .current_dirty import (
     semantic_flags,
     solver_receipt_job_id,
 )
-from .bounded_run import (
-    BoundedRunContract,
-    BoundedRunError,
-    BoundedRunResult,
-    CheckpointVerification,
-    ProtectedCheckpointViolation,
-    ProtectedManifestViolation,
-    ScopedRegistry,
-    check_cursor,
-    snapshot_checkpoints,
-    verify_checkpoints,
-    verify_protected_manifest,
-)
 from .dirty_classification import classification_sources, source_for
 from .liveness import pid_is_live
 from .domain import (
@@ -59,7 +46,6 @@ from .stages import (
     STAGE_CATALOG_VERSION_V2,
     FINAL_JUDGE_SUBTASK,
     STAGE_SCHEDULER_GENERATION,
-    STEP_SCHEDULER_GENERATION,
     SUPPORTED_STAGE_CATALOG_VERSIONS,
     StageCatalog,
     catalog_for_version,
@@ -162,6 +148,20 @@ class ScheduledStageTask:
     definition: StepDefinition
 
 
+def _require_stage_scheduler(state: WorkflowState) -> None:
+    """The engine executes Stage-scheduler projects only.
+
+    A historical ``step_v2`` project is still readable and can be migrated
+    with ``factory migrate scheduler-activate``; it is not executed or recovered.
+    """
+
+    if state.scheduler_generation != STAGE_SCHEDULER_GENERATION:
+        raise InvalidTransition(
+            "STAGE_SCHEDULER_REQUIRED: explicitly run migrate scheduler-activate "
+            f"on this {state.scheduler_generation} project before running it"
+        )
+
+
 class FactoryEngine:
     def __init__(
         self,
@@ -185,197 +185,18 @@ class FactoryEngine:
         self._transitions = TransitionCoordinator(
             self.project_dir, self.store, self._projector
         )
-        #: The bounded-run contract this invocation is executing under, if any.
-        #: Held on the instance so the pre-commit protection check can see it,
-        #: and cleared in run()'s finally so it cannot leak between invocations.
-        self._bounded_contract: BoundedRunContract | None = None
-        #: Committed checkpoints the running contract asked to protect, frozen
-        #: at entry so the pre-commit check can compare against them.
-        self._protected_checkpoints: dict[int, tuple[str, ...]] = {}
-
-    def run_bounded(self, contract: BoundedRunContract) -> "BoundedRunResult":
-        """Execute one authorised, bounded advance and report it structurally.
-
-        This is the supported replacement for the hand-written ``work/*.py``
-        drivers: it verifies the protected manifest at entry, runs the existing
-        continuous runner under the contract, verifies the manifest again, and
-        returns a structured outcome instead of leaving the caller to journal its
-        own progress file and guess at the stop reason.
-
-        It adds no second runner - ``run`` is the same loop, invoked under a
-        contract.
-        """
-
-        from .bounded_run import (
-            BoundedRunResult,
-            boundary_fingerprint,
-            classify_stop_reason,
-            reconcile_contract_violation,
-        )
-
-        start_state = self.store.load()
-        if contract.protected_manifest or contract.protected_identity:
-            entry = verify_protected_manifest(
-                self.project_dir,
-                contract.protected_manifest,
-                contract.protected_identity,
-            )
-            if not entry.ok:
-                # Refuse before writing anything: the caller's own expectation is
-                # already violated, so advancing would build on a broken premise.
-                raise ProtectedManifestViolation(
-                    "protected manifest is already violated at entry: " + entry.describe()
-                )
-        else:
-            entry = verify_protected_manifest(self.project_dir, {}, {})
-
-        # The protected checkpoints are snapshotted here and compared again after
-        # the run.  A caller naming a source step that has no committed checkpoint
-        # is refused up front: there would be nothing to protect.
-        checkpoint_snapshot: dict[int, str] = {}
-        entry_checkpoints = CheckpointVerification(ok=True)
-        if contract.protected_checkpoints:
-            checkpoint_snapshot = snapshot_checkpoints(
-                self.store.stage_checkpoints(), contract.protected_checkpoints
-            )
-            # snapshot_checkpoints only reports what exists, so the request itself
-            # has to be checked: naming a source step with no committed checkpoint
-            # would otherwise protect nothing while looking like protection.
-            absent = sorted(
-                set(contract.protected_checkpoints) - set(checkpoint_snapshot)
-            )
-            if absent:
-                raise ProtectedCheckpointViolation(
-                    "protected checkpoint is absent at entry for source step(s): "
-                    + ", ".join(str(step) for step in absent)
-                )
-            entry_checkpoints = verify_checkpoints(
-                self.store.stage_checkpoints(), checkpoint_snapshot
-            )
-
-        start_revision = int(start_state.revision)
-        previous_status = str(
-            getattr(start_state.status, "value", start_state.status)
-        )
-        end_state = self.run(contract=contract)
-
-        succeeded = [
-            event
-            for event in self.store.events(since_revision=start_revision)
-            if event.type == "STEP_SUCCEEDED"
-        ]
-        completed = len(succeeded)
-        final = verify_protected_manifest(
-            self.project_dir, contract.protected_manifest, contract.protected_identity
-        )
-        final_checkpoints = (
-            verify_checkpoints(self.store.stage_checkpoints(), checkpoint_snapshot)
-            if checkpoint_snapshot
-            else CheckpointVerification(ok=True)
-        )
-        blocked_reason = ""
-        pending = getattr(end_state, "pending_action", None)
-        if pending is not None:
-            blocked_reason = str(
-                getattr(pending, "type", None)
-                or getattr(pending, "kind", None)
-                or "PENDING_ACTION"
-            )
-        stop_reason = classify_stop_reason(
-            end_state,
-            previous_status=previous_status,
-            completed=completed,
-            bounded=contract.max_subtasks,
-        )
-        if not final.ok:
-            stop_reason = "PROTECTED_MANIFEST_VIOLATED"
-        elif not final_checkpoints.ok:
-            # a distinct reason: this is a database row, not a protected file
-            stop_reason = "PROTECTED_CHECKPOINT_VIOLATED"
-        fingerprint = boundary_fingerprint(
-            end_state, blocked_reason=blocked_reason
-        )
-        made_progress = int(end_state.revision) > start_revision
-        violation = reconcile_contract_violation(
-            contract, end_state, start_revision=start_revision, completed=completed
-        )
-        return BoundedRunResult(
-            run_id=contract.run_id,
-            contract_sha256=contract.contract_sha256,
-            run_policy=contract.run_policy,
-            actor=contract.actor,
-            start_revision=start_revision,
-            end_revision=int(end_state.revision),
-            status=str(getattr(end_state.status, "value", end_state.status)),
-            stop_reason=stop_reason,
-            completed_subtasks=completed,
-            made_progress=made_progress,
-            boundary_fingerprint=fingerprint,
-            unchanged_boundary=(
-                contract.previous_boundary_fingerprint is not None
-                and contract.previous_boundary_fingerprint == fingerprint
-                and not made_progress
-            ),
-            entry_verification=entry,
-            final_verification=final,
-            entry_checkpoints=entry_checkpoints,
-            final_checkpoints=final_checkpoints,
-            blocked_reason=blocked_reason,
-            contract_violation=violation,
-        )
 
     def get_state(self) -> WorkflowState:
         return self.store.load()
 
     def run(
         self, *, max_steps: int | None = None,
-        allowed_source_steps: frozenset[int] | None = None,
-        contract: "BoundedRunContract | None" = None,
     ) -> WorkflowState:
-        """Advance the project.
+        """Advance the project."""
 
-        ``contract`` is optional and additive: when given, it pins the revision
-        and cursor this invocation was authorised against, records the
-        authorisation in ``RUN_STARTED``, and makes the protected manifest part of
-        the pre-commit check.  Callers that pass nothing keep the old behaviour.
-        """
-
-        if contract is not None:
-            if contract.allowed_source_steps is not None:
-                # The contract is the authorisation; the explicit kwarg is the
-                # lower-level form of the same thing and must not disagree.
-                if (
-                    allowed_source_steps is not None
-                    and frozenset(allowed_source_steps) != contract.allowed_source_steps
-                ):
-                    raise BoundedRunError(
-                        "allowed_source_steps disagrees with the bounded run contract"
-                    )
-                allowed_source_steps = contract.allowed_source_steps
-            if contract.max_subtasks is not None:
-                if max_steps is not None and max_steps != contract.max_subtasks:
-                    raise BoundedRunError(
-                        "max_steps disagrees with the bounded run contract"
-                    )
-                max_steps = contract.max_subtasks
         state = self.store.load()
-        if contract is not None:
-            # Compare-and-swap first: a stale authorisation must be refused before
-            # any event is written, not discovered afterwards.
-            if int(state.revision) != int(contract.expected_revision):
-                raise BoundedRunError(
-                    f"expected revision {contract.expected_revision}, found {state.revision}"
-                )
-            check_cursor(state, contract.expected_cursor)
-        if state.scheduler_generation not in {
-            STEP_SCHEDULER_GENERATION,
-            STAGE_SCHEDULER_GENERATION,
-        }:
-            raise InvalidTransition(
-                f"unsupported scheduler generation: {state.scheduler_generation}"
-            )
-        stage_mode = state.scheduler_generation == STAGE_SCHEDULER_GENERATION
-        if stage_mode and state.stage_catalog_version not in SUPPORTED_STAGE_CATALOG_VERSIONS:
+        _require_stage_scheduler(state)
+        if state.stage_catalog_version not in SUPPORTED_STAGE_CATALOG_VERSIONS:
             raise InvalidTransition(
                 "Stage scheduler project has an unsupported Stage catalog version"
             )
@@ -386,153 +207,91 @@ class FactoryEngine:
             raise RunnerBusy(
                 f"project {state.project_id} already has live runner {state.runner_pid}"
             )
-        # Arm the contract before anything below can write.  This has to happen
-        # here rather than just around the advance loop, because the recovery
-        # branch further down reaches _complete_stage_task through its COMPLETE
-        # disposition - the same commit path the advance loop uses - and all three
-        # of these attributes are read by that path:
-        #
-        #   _bounded_contract      the pre-commit manifest/identity check
-        #   _protected_checkpoints the pre-commit committed-checkpoint check
-        #   the scoped registry    the Step ceilings recovery's reopen decision reads
-        #
-        # Arming them only for the loop would let a recovered commit land and be
-        # reported afterwards, which is the opposite of a pre-commit check.
-        previous_registry = self.registry
-        previous_contract = self._bounded_contract
-        previous_checkpoints = self._protected_checkpoints
-        self._bounded_contract = contract
-        if contract is not None and contract.protected_checkpoints:
-            self._protected_checkpoints = snapshot_checkpoints(
-                self.store.stage_checkpoints(), contract.protected_checkpoints
+        if state.status in TERMINAL_STATUSES:
+            return state
+        if state.status in {
+            WorkflowStatus.AWAITING_SELECTION,
+            WorkflowStatus.AWAITING_CONSULTATION,
+            WorkflowStatus.PAUSED,
+            WorkflowStatus.FAILED,
+        }:
+            return state
+
+        if state.runner_pid is not None and not runner_is_live:
+            state = self._transition(
+                expected_revision=state.revision,
+                event_type="RUNNER_INTERRUPTED",
+                changes={
+                    "status": WorkflowStatus.INTERRUPTED,
+                    "runner_pid": None,
+                    "runner_lease_id": None,
+                    "heartbeat_at": None,
+                },
+                payload={"reason": "recorded runner is no longer live"},
             )
-        # A contract may tighten the Step ceilings the engine reads from a
-        # StepDefinition.  Swapping the registry is how that reaches every
-        # resolution path, including recovery's; the swap is skipped entirely when
-        # the contract carries no ceiling, so an unscoped run is unchanged.
-        if contract is not None and (
-            contract.max_attempts_per_step or contract.max_reopens_per_step
+        elif (
+            state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
+            and state.runner_pid is None
         ):
-            self.registry = ScopedRegistry(previous_registry, contract)
-        try:
-            if state.status in TERMINAL_STATUSES:
-                return state
+            state = self._transition(
+                expected_revision=state.revision,
+                event_type="RUNNER_INTERRUPTED",
+                changes={"status": WorkflowStatus.INTERRUPTED},
+                payload={"reason": "active run has no recorded runner"},
+            )
+        if state.active_step is not None and state.attempt > 0:
+            enforce_recovery_lease = state.runner_pid == os.getpid()
+            state = self.recover(
+                expected_runner_pid=state.runner_pid,
+                expected_runner_lease_id=state.runner_lease_id,
+                enforce_lease=enforce_recovery_lease,
+            )
             if state.status in {
                 WorkflowStatus.AWAITING_SELECTION,
                 WorkflowStatus.AWAITING_CONSULTATION,
-                WorkflowStatus.PAUSED,
                 WorkflowStatus.FAILED,
+                WorkflowStatus.PAUSED,
+                WorkflowStatus.KILLED,
+                WorkflowStatus.COMPLETED,
             }:
                 return state
-
-            # An already exhausted step schedule must not write RUN_STARTED before
-            # the production-state completion boundary is classified.  This path
-            # is also used by service.run() for a migrated Step-16 project.
-            if (
-                not stage_mode
-                and state.active_step is None
-                and state.runner_pid is None
-                and self.registry.next_after(state.last_completed_step) is None
-            ):
-                return self._commit_project_completed(state, stage_mode=False)
-
-            if state.runner_pid is not None and not runner_is_live:
-                state = self._transition(
-                    expected_revision=state.revision,
-                    event_type="RUNNER_INTERRUPTED",
-                    changes={
-                        "status": WorkflowStatus.INTERRUPTED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
-                    payload={"reason": "recorded runner is no longer live"},
-                )
-            elif (
-                state.status in {WorkflowStatus.RUNNING, WorkflowStatus.RETRYING}
-                and state.runner_pid is None
-            ):
-                state = self._transition(
-                    expected_revision=state.revision,
-                    event_type="RUNNER_INTERRUPTED",
-                    changes={"status": WorkflowStatus.INTERRUPTED},
-                    payload={"reason": "active run has no recorded runner"},
-                )
-            if state.active_step is not None and (not stage_mode or state.attempt > 0):
-                enforce_recovery_lease = state.runner_pid == os.getpid()
-                state = self.recover(
-                    expected_runner_pid=state.runner_pid,
-                    expected_runner_lease_id=state.runner_lease_id,
-                    enforce_lease=enforce_recovery_lease,
-                )
-                if state.status in {
-                    WorkflowStatus.AWAITING_SELECTION,
-                    WorkflowStatus.AWAITING_CONSULTATION,
-                    WorkflowStatus.FAILED,
-                    WorkflowStatus.PAUSED,
-                    WorkflowStatus.KILLED,
-                    WorkflowStatus.COMPLETED,
-                }:
-                    return state
-            lease = uuid.uuid4().hex
-            state = self._transition(
-                expected_revision=state.revision,
-                event_type="RUN_STARTED",
-                changes={
-                    "status": WorkflowStatus.RUNNING,
-                    "runner_pid": os.getpid(),
-                    "runner_lease_id": lease,
-                    "heartbeat_at": int(time.time()),
-                },
-                payload={
-                    "lease_id": lease,
-                    "worker_pid": os.getpid(),
-                    "worker_identity": _process_identity(os.getpid()),
-                    **(
-                        {"bounded_run": contract.event_payload()}
-                        if contract is not None
-                        else {}
-                    ),
-                },
-                expected_runner_pid=state.runner_pid,
-                expected_runner_lease_id=state.runner_lease_id,
-            )
-            return self._advance_loop(
-                state,
-                lease=lease,
-                stage_mode=stage_mode,
-                max_steps=max_steps,
-                allowed_source_steps=allowed_source_steps,
-            )
-
-        finally:
-            self.registry = previous_registry
-            self._bounded_contract = previous_contract
-            self._protected_checkpoints = previous_checkpoints
+        lease = uuid.uuid4().hex
+        state = self._transition(
+            expected_revision=state.revision,
+            event_type="RUN_STARTED",
+            changes={
+                "status": WorkflowStatus.RUNNING,
+                "runner_pid": os.getpid(),
+                "runner_lease_id": lease,
+                "heartbeat_at": int(time.time()),
+            },
+            payload={
+                "lease_id": lease,
+                "worker_pid": os.getpid(),
+                "worker_identity": _process_identity(os.getpid()),
+            },
+            expected_runner_pid=state.runner_pid,
+            expected_runner_lease_id=state.runner_lease_id,
+        )
+        return self._advance_loop(
+            state,
+            lease=lease,
+            max_steps=max_steps,
+        )
 
     def _advance_loop(
         self,
         state: WorkflowState,
         *,
         lease: str,
-        stage_mode: bool,
         max_steps: int | None,
-        allowed_source_steps: frozenset[int] | None,
     ) -> WorkflowState:
         completed_this_run = 0
         while True:
-            stage_task: ScheduledStageTask | None = None
-            if stage_mode:
-                state, stage_task = self._select_stage_task(state, lease)
-                definition = stage_task.definition if stage_task is not None else None
-            else:
-                definition = self.registry.next_after(state.last_completed_step)
-            if definition is None:
-                return self._commit_project_completed(
-                    state,
-                    stage_mode=stage_mode,
-                    runner_lease=lease,
-                )
+            state, stage_task = self._select_stage_task(state, lease)
+            if stage_task is None:
+                return self._commit_project_completed(state, runner_lease=lease)
+            definition = stage_task.definition
             if max_steps is not None and completed_this_run >= max_steps:
                 return self._owned_transition(
                     state,
@@ -546,23 +305,13 @@ class FactoryEngine:
                     },
                     payload={"reason": "max_steps"},
                 )
-            if allowed_source_steps is not None and definition.id not in allowed_source_steps:
-                return self._owned_transition(
-                    state, lease, event_type="RUN_BOUNDARY_REACHED",
-                    changes={"status": WorkflowStatus.PAUSED, "runner_pid": None,
-                             "runner_lease_id": None, "heartbeat_at": None},
-                    payload={"reason": "selected source step outside requested run scope",
-                             "selected_step": definition.id,
-                             "allowed_source_steps": sorted(allowed_source_steps)},
-                )
             attempt = state.attempt + 1 if state.active_step == definition.id else 1
             content_attempts_used = (
                 state.attempt - self._non_content_retries(definition.id)
                 if state.active_step == definition.id
                 else 0
             )
-            if stage_mode and content_attempts_used >= definition.max_attempts:
-                assert stage_task is not None
+            if content_attempts_used >= definition.max_attempts:
                 return self._fail_stage_task(
                     state,
                     lease,
@@ -578,28 +327,11 @@ class FactoryEngine:
             try:
                 timeout_seconds = self._contest_timeout(definition)
             except ContestDeadlineExceeded as exc:
-                if stage_task is not None:
-                    return self._fail_stage_task(
-                        state,
-                        lease,
-                        stage_task,
-                        event_type="CONTEST_DEADLINE_EXHAUSTED",
-                        payload={
-                            "error_class": "PERMANENT_CONTEST_DEADLINE",
-                            "reason": str(exc),
-                            "step": definition.id,
-                        },
-                    )
-                return self._owned_transition(
+                return self._fail_stage_task(
                     state,
                     lease,
+                    stage_task,
                     event_type="CONTEST_DEADLINE_EXHAUSTED",
-                    changes={
-                        "status": WorkflowStatus.FAILED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
                     payload={
                         "error_class": "PERMANENT_CONTEST_DEADLINE",
                         "reason": str(exc),
@@ -639,27 +371,11 @@ class FactoryEngine:
                     lease=lease,
                 )
             if not prepared.ready:
-                if stage_task is not None:
-                    return self._fail_stage_task(
-                        state,
-                        lease,
-                        stage_task,
-                        event_type="STEP_FAILED",
-                        payload={
-                            "error_class": "PERMANENT_INVALID_PREPARE_RESULT",
-                            "reason": prepared.reason,
-                        },
-                    )
-                return self._owned_transition(
+                return self._fail_stage_task(
                     state,
                     lease,
+                    stage_task,
                     event_type="STEP_FAILED",
-                    changes={
-                        "status": WorkflowStatus.FAILED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
                     payload={
                         "error_class": "PERMANENT_INVALID_PREPARE_RESULT",
                         "reason": prepared.reason,
@@ -692,8 +408,8 @@ class FactoryEngine:
                             "message": str(blocked.get("message") or "dispatch preflight failed"),
                             "evidence": [],
                         },
-                        "stage": stage_task.stage_id if stage_task is not None else None,
-                        "subtask": stage_task.subtask if stage_task is not None else None,
+                        "stage": stage_task.stage_id,
+                        "subtask": stage_task.subtask,
                         "source_step": definition.id,
                         "preflight": blocked,
                     },
@@ -712,16 +428,10 @@ class FactoryEngine:
                     "step_name": definition.name,
                     "configured_timeout_seconds": definition.timeout_seconds,
                     "effective_timeout_seconds": timeout_seconds,
-                    **(
-                        {
-                            "stage": stage_task.stage_id,
-                            "stage_name": stage_task.stage_name,
-                            "subtask": stage_task.subtask,
-                            "source_step": stage_task.source_step_id,
-                        }
-                        if stage_task is not None
-                        else {}
-                    ),
+                    "stage": stage_task.stage_id,
+                    "stage_name": stage_task.stage_name,
+                    "subtask": stage_task.subtask,
+                    "source_step": stage_task.source_step_id,
                 },
             )
             context = self._context(
@@ -770,17 +480,12 @@ class FactoryEngine:
                     payload=result.metadata,
                 )
             resume_after = result.metadata.get("resume_after_step")
-            if (continuation := self._stop_at_gate2(state, lease, result, outcome.validation)) is not None:
-                return continuation
             if resume_after is not None:
                 policy_payload = self.store.contest_policy()
                 if (
                     (
                         definition.id == 16
-                        or (
-                            stage_task is not None
-                            and stage_task.subtask == FINAL_JUDGE_SUBTASK
-                        )
+                        or stage_task.subtask == FINAL_JUDGE_SUBTASK
                     )
                     and policy_payload is not None
                     and self.store.now_epoch()
@@ -817,28 +522,11 @@ class FactoryEngine:
                         lease=lease,
                     )
                 if not self._reopen_allowed(definition):
-                    if stage_task is not None:
-                        return self._fail_stage_task(
-                            state,
-                            lease,
-                            stage_task,
-                            event_type="STEP_FAILED",
-                            payload={
-                                "error_class": "PERMANENT_REOPEN_BUDGET_EXHAUSTED",
-                                "source_step": definition.id,
-                                "resume_after_step": resume_after,
-                            },
-                        )
-                    return self._owned_transition(
+                    return self._fail_stage_task(
                         state,
                         lease,
+                        stage_task,
                         event_type="STEP_FAILED",
-                        changes={
-                            "status": WorkflowStatus.FAILED,
-                            "runner_pid": None,
-                            "runner_lease_id": None,
-                            "heartbeat_at": None,
-                        },
                         payload={
                             "error_class": "PERMANENT_REOPEN_BUDGET_EXHAUSTED",
                             "source_step": definition.id,
@@ -861,23 +549,19 @@ class FactoryEngine:
                 reopen_changes = {
                     "status": WorkflowStatus.RUNNING,
                     "last_completed_step": cursor,
+                    "last_completed_stage": self._catalog(state).completed_stage_for_step(cursor),
                     "active_step": None,
+                    "active_stage": None,
+                    "active_subtask": None,
+                    "source_step_id": None,
                     "attempt": 0,
                 }
-                reopen_kwargs = {}
-                if stage_task is not None:
-                    reopen_changes.update(
-                        last_completed_stage=self._catalog(state).completed_stage_for_step(cursor),
-                        active_stage=None,
-                        active_subtask=None,
-                        source_step_id=None,
-                    )
-                    reopen_kwargs = {
-                        "invalidate_checkpoints_after_step": resume_after,
-                        "subtask_baseline": None,
-                    }
-                    if figure_rework is not None:
-                        reopen_kwargs["invalidate_stage_subtasks"] = figure_rework["subtasks"]
+                reopen_kwargs = {
+                    "invalidate_checkpoints_after_step": resume_after,
+                    "subtask_baseline": None,
+                }
+                if figure_rework is not None:
+                    reopen_kwargs["invalidate_stage_subtasks"] = figure_rework["subtasks"]
                 state = self._owned_transition(
                     state,
                     lease,
@@ -885,14 +569,8 @@ class FactoryEngine:
                     changes=reopen_changes,
                     payload={
                         "source_step": definition.id,
-                        **(
-                            {
-                                "stage": stage_task.stage_id,
-                                "subtask": stage_task.subtask,
-                            }
-                            if stage_task is not None
-                            else {}
-                        ),
+                        "stage": stage_task.stage_id,
+                        "subtask": stage_task.subtask,
                         **result.metadata,
                         **(
                             {
@@ -948,63 +626,29 @@ class FactoryEngine:
                     raise InvalidTransition(
                         f"step {definition.id} cannot complete through earlier step {completed_step}"
                     )
-                if stage_task is not None:
-                    if (
-                        stage_task.checkpoint_step_id is not None
-                        and completed_step != stage_task.checkpoint_step_id
-                    ):
-                        raise InvalidTransition(
-                            "Stage scheduler subtasks cannot fast-forward the Step cursor"
-                        )
-                    state = self._complete_stage_task(
-                        state,
-                        lease,
-                        stage_task,
-                        validation=validation,
-                        result=result,
+                if (
+                    stage_task.checkpoint_step_id is not None
+                    and completed_step != stage_task.checkpoint_step_id
+                ):
+                    raise InvalidTransition(
+                        "Stage scheduler subtasks cannot fast-forward the Step cursor"
                     )
-                    if self.store.events()[-1].type == "STEP_SUCCEEDED":
-                        completed_this_run += 1
-                    if state.status in {
-                        WorkflowStatus.FAILED,
-                        WorkflowStatus.PAUSED,
-                        WorkflowStatus.AWAITING_SELECTION,
-                        WorkflowStatus.AWAITING_CONSULTATION,
-                    }:
-                        return state
-                    continue
-                # The Step-scheduler path commits Step success directly, without
-                # going through _complete_stage_task, so it has to enforce the
-                # contract's protection itself.  run_bounded() accepts a Step
-                # project as readily as a Stage one; a check on only the Stage
-                # path would let a contract on a Step project be a no-op.
-                violation = self._contract_protection_violation()
-                if violation is not None:
-                    return self._owned_transition(
-                        state,
-                        lease,
-                        event_type="STEP_FAILED",
-                        changes={
-                            "status": WorkflowStatus.FAILED,
-                            "runner_pid": None,
-                            "runner_lease_id": None,
-                            "heartbeat_at": None,
-                        },
-                        payload={**violation, "source_step": completed_step},
-                    )
-                state = self._owned_transition(
+                state = self._complete_stage_task(
                     state,
                     lease,
-                    event_type="STEP_SUCCEEDED",
-                    changes={
-                        "status": WorkflowStatus.RUNNING,
-                        "last_completed_step": completed_step,
-                        "active_step": None,
-                        "attempt": 0,
-                    },
-                    payload={"evidence": validation.evidence, **result.metadata},
+                    stage_task,
+                    validation=validation,
+                    result=result,
                 )
-                completed_this_run += 1
+                if self.store.events()[-1].type == "STEP_SUCCEEDED":
+                    completed_this_run += 1
+                if state.status in {
+                    WorkflowStatus.FAILED,
+                    WorkflowStatus.PAUSED,
+                    WorkflowStatus.AWAITING_SELECTION,
+                    WorkflowStatus.AWAITING_CONSULTATION,
+                }:
+                    return state
                 continue
             failure_metadata = {**validation.metadata, **result.metadata}
             missing_artifacts = self._missing_evidence(validation.evidence)
@@ -1050,24 +694,11 @@ class FactoryEngine:
                     "reason": failure_reason,
                     "returncode": result.returncode,
                 }
-                if stage_task is not None:
-                    return self._fail_stage_task(
-                        state,
-                        lease,
-                        stage_task,
-                        event_type="STEP_FAILED",
-                        payload=terminal_payload,
-                    )
-                return self._owned_transition(
+                return self._fail_stage_task(
                     state,
                     lease,
+                    stage_task,
                     event_type="STEP_FAILED",
-                    changes={
-                        "status": WorkflowStatus.FAILED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
                     payload=terminal_payload,
                 )
             retry_delay = self._retry_delay(attempt)
@@ -1089,24 +720,11 @@ class FactoryEngine:
                     "required_retry_delay_seconds": retry_delay,
                     "remaining_budget_seconds": retry_budget,
                 }
-                if stage_task is not None:
-                    return self._fail_stage_task(
-                        state,
-                        lease,
-                        stage_task,
-                        event_type="CONTEST_DEADLINE_EXHAUSTED",
-                        payload=deadline_payload,
-                    )
-                return self._owned_transition(
+                return self._fail_stage_task(
                     state,
                     lease,
+                    stage_task,
                     event_type="CONTEST_DEADLINE_EXHAUSTED",
-                    changes={
-                        "status": WorkflowStatus.FAILED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
                     payload=deadline_payload,
                 )
             state = self._owned_transition(
@@ -1500,7 +1118,7 @@ class FactoryEngine:
     def _final_judge_figure_rework(
         self,
         state: WorkflowState,
-        stage_task: ScheduledStageTask | None,
+        stage_task: ScheduledStageTask,
         resume_after: int,
         metadata: dict[str, Any],
     ) -> dict[str, Any] | None:
@@ -1514,7 +1132,6 @@ class FactoryEngine:
         steps = metadata.get("visual_recompute_steps")
         if (
             state.stage_catalog_version != STAGE_CATALOG_VERSION_V2
-            or stage_task is None
             or stage_task.subtask != FINAL_JUDGE_SUBTASK
             or metadata.get("final_decision") != "REOPEN_REVISION_TEXT"
             or not isinstance(steps, list)
@@ -1828,47 +1445,6 @@ class FactoryEngine:
             **transition_guards,
         )
 
-    def _contract_protection_violation(self) -> dict[str, Any] | None:
-        """The contract's pre-commit protection check, as a payload or ``None``.
-
-        Called immediately before a Step-success commit on **every** path.  There
-        are two: the Stage path commits through :meth:`_complete_stage_task`, and
-        the Step path commits directly in ``_advance_loop``.  Only the first used
-        to check, so a contract on a Step-scheduler project promised protection
-        that never ran.  ``run_bounded`` accepts both, so both have to enforce it.
-
-        Returns the violation's payload rather than raising, because each path
-        needs to add its own context (a Stage task adds its stage and subtask) and
-        commit the same terminal failure the rest of the engine uses.
-        """
-
-        contract = self._bounded_contract
-        if contract is None:
-            return None
-        if contract.protected_manifest or contract.protected_identity:
-            verification = verify_protected_manifest(
-                self.project_dir,
-                contract.protected_manifest,
-                contract.protected_identity,
-            )
-            if not verification.ok:
-                return {
-                    "error_class": "PERMANENT_PROTECTED_MANIFEST_VIOLATED",
-                    "protected_manifest": verification.to_dict(),
-                    "bounded_run": contract.event_payload(),
-                }
-        if self._protected_checkpoints:
-            checkpoints = verify_checkpoints(
-                self.store.stage_checkpoints(), self._protected_checkpoints
-            )
-            if not checkpoints.ok:
-                return {
-                    "error_class": "PERMANENT_PROTECTED_CHECKPOINT_VIOLATED",
-                    "protected_checkpoints": checkpoints.to_dict(),
-                    "bounded_run": contract.event_payload(),
-                }
-        return None
-
     def _complete_stage_task(
         self,
         state: WorkflowState,
@@ -1881,33 +1457,6 @@ class FactoryEngine:
         input_fingerprint, output_fingerprint, after, dirty_changes = (
             self._stage_manifest_delta(task)
         )
-
-        # S6: the contract's protected manifest and committed checkpoints are
-        # verified here, immediately before a successful checkpoint can commit, so
-        # a violation blocks the commit instead of being discovered by the caller
-        # afterwards.  The entry check answers a different question (was the state
-        # already as expected), so both are needed.
-        violation = self._contract_protection_violation()
-        if violation is not None:
-            return self._stage_transition(
-                state,
-                lease,
-                event_type="STEP_FAILED",
-                changes={
-                    "status": WorkflowStatus.FAILED,
-                    "runner_pid": None,
-                    "runner_lease_id": None,
-                    "heartbeat_at": None,
-                },
-                payload={
-                    **violation,
-                    "stage": task.stage_id,
-                    "subtask": task.subtask,
-                    "source_step": task.source_step_id,
-                },
-                dirty_changes=dirty_changes,
-                event_step=task.source_step_id,
-            )
 
         from .final_judge_projection import classify_delivery_report
 
@@ -2373,35 +1922,32 @@ class FactoryEngine:
         enforce_lease: bool = False,
     ) -> WorkflowState:
         state = self.store.load()
+        _require_stage_scheduler(state)
         if state.active_step is None:
             return state
-        stage_task: ScheduledStageTask | None = None
-        if state.scheduler_generation == STAGE_SCHEDULER_GENERATION:
-            if state.active_stage is None or state.active_subtask is None:
-                raise InvalidTransition(
-                    "Stage scheduler recovery requires an atomic Stage/subtask cursor"
-                )
-            stage, subtask = self._catalog(state).subtask_for_key(state.active_subtask)
-            if stage.id != state.active_stage or subtask.source_step_id != state.active_step:
-                raise InvalidTransition("Stage recovery cursor is internally inconsistent")
-            if subtask.kind != "step":
-                definition = self.registry.stage_subtask(subtask.key)
-            elif subtask.conditional and not semantic_flags(self.store.dirty_flags()):
-                definition = self.registry.stage_subtask(
-                    "conditional_math_preflight_skip"
-                )
-            else:
-                definition = self.registry.get(subtask.source_step_id)
-            stage_task = ScheduledStageTask(
-                stage.id,
-                stage.name,
-                subtask.key,
-                subtask.source_step_id,
-                subtask.checkpoint_step_id,
-                definition,
+        if state.active_stage is None or state.active_subtask is None:
+            raise InvalidTransition(
+                "Stage scheduler recovery requires an atomic Stage/subtask cursor"
+            )
+        stage, subtask = self._catalog(state).subtask_for_key(state.active_subtask)
+        if stage.id != state.active_stage or subtask.source_step_id != state.active_step:
+            raise InvalidTransition("Stage recovery cursor is internally inconsistent")
+        if subtask.kind != "step":
+            definition = self.registry.stage_subtask(subtask.key)
+        elif subtask.conditional and not semantic_flags(self.store.dirty_flags()):
+            definition = self.registry.stage_subtask(
+                "conditional_math_preflight_skip"
             )
         else:
-            definition = self.registry.get(state.active_step)
+            definition = self.registry.get(subtask.source_step_id)
+        stage_task = ScheduledStageTask(
+            stage.id,
+            stage.name,
+            subtask.key,
+            subtask.source_step_id,
+            subtask.checkpoint_step_id,
+            definition,
+        )
         try:
             timeout_seconds = self._contest_timeout(definition)
             context = self._context(
@@ -2418,46 +1964,24 @@ class FactoryEngine:
                 state,
                 definition,
                 exc,
+                lease=None,
                 stage_task=stage_task,
-                expected_runner_pid=expected_runner_pid,
-                expected_runner_lease_id=expected_runner_lease_id,
-                enforce_lease=enforce_lease,
             )
         decision_event_payload = {}
         if decision.disposition is RecoveryDisposition.REOPEN:
             if not self._reopen_allowed(definition):
-                if stage_task is not None:
-                    return self._fail_stage_task(
-                        state,
-                        None,
-                        stage_task,
-                        event_type="STEP_FAILED",
-                        payload={
-                            "error_class": "PERMANENT_REOPEN_BUDGET_EXHAUSTED",
-                            "source_step": definition.id,
-                        },
-                        expected_runner_pid=expected_runner_pid,
-                        expected_runner_lease_id=expected_runner_lease_id,
-                        enforce_lease=enforce_lease,
-                    )
-                return self._transition(
-                    expected_revision=state.revision,
+                return self._fail_stage_task(
+                    state,
+                    None,
+                    stage_task,
                     event_type="STEP_FAILED",
-                    changes={
-                        "status": WorkflowStatus.FAILED,
-                        "runner_pid": None,
-                        "runner_lease_id": None,
-                        "heartbeat_at": None,
-                    },
                     payload={
                         "error_class": "PERMANENT_REOPEN_BUDGET_EXHAUSTED",
                         "source_step": definition.id,
                     },
-                    **self._lease_expectations(
-                        expected_runner_pid,
-                        expected_runner_lease_id,
-                        enforce_lease,
-                    ),
+                    expected_runner_pid=expected_runner_pid,
+                    expected_runner_lease_id=expected_runner_lease_id,
+                    enforce_lease=enforce_lease,
                 )
             resume_after = self._validated_resume_target(
                 decision.resume_after_step, definition.id, self._catalog(state)
@@ -2465,19 +1989,16 @@ class FactoryEngine:
             changes = {
                 "status": WorkflowStatus.READY,
                 "last_completed_step": resume_after,
+                "last_completed_stage": self._catalog(state).completed_stage_for_step(resume_after),
                 "active_step": None,
+                "active_stage": None,
+                "active_subtask": None,
+                "source_step_id": None,
                 "attempt": 0,
                 "runner_pid": None,
                 "runner_lease_id": None,
                 "heartbeat_at": None,
             }
-            if stage_task is not None:
-                changes.update(
-                    last_completed_stage=self._catalog(state).completed_stage_for_step(resume_after),
-                    active_stage=None,
-                    active_subtask=None,
-                    source_step_id=None,
-                )
             decision_name = "resume_from_reopen"
         elif decision.disposition is RecoveryDisposition.AWAIT:
             if decision.pending_action is None:
@@ -2520,53 +2041,42 @@ class FactoryEngine:
                 raise InvalidTransition(
                     f"step {definition.id} cannot recover through earlier step {completed_step}"
                 )
-            if stage_task is not None:
-                validation = ValidationResult.valid(
-                    *decision.evidence,
-                    metadata=decision.metadata,
+            validation = ValidationResult.valid(
+                *decision.evidence,
+                metadata=decision.metadata,
+            )
+            result = ExecutionResult.succeeded(
+                **{**decision.metadata, "recovered": True}
+            )
+            recovered = self._complete_stage_task(
+                state,
+                state.runner_lease_id if enforce_lease else None,
+                stage_task,
+                validation=validation,
+                result=result,
+            )
+            if recovered.status is WorkflowStatus.RUNNING:
+                return self._transition(
+                    expected_revision=recovered.revision,
+                    event_type="RECOVERY_DECIDED",
+                    changes={
+                        "status": WorkflowStatus.READY,
+                        "runner_pid": None,
+                        "runner_lease_id": None,
+                        "heartbeat_at": None,
+                    },
+                    payload={
+                        "decision": "promote_valid_stage_subtask",
+                        "source": "recovery",
+                        "source_step": definition.id,
+                        "stage": stage_task.stage_id,
+                        "subtask": stage_task.subtask,
+                        "reason": decision.reason,
+                        "evidence": decision.evidence,
+                        **decision.metadata,
+                    },
                 )
-                result = ExecutionResult.succeeded(
-                    **{**decision.metadata, "recovered": True}
-                )
-                recovered = self._complete_stage_task(
-                    state,
-                    state.runner_lease_id if enforce_lease else None,
-                    stage_task,
-                    validation=validation,
-                    result=result,
-                )
-                if recovered.status is WorkflowStatus.RUNNING:
-                    return self._transition(
-                        expected_revision=recovered.revision,
-                        event_type="RECOVERY_DECIDED",
-                        changes={
-                            "status": WorkflowStatus.READY,
-                            "runner_pid": None,
-                            "runner_lease_id": None,
-                            "heartbeat_at": None,
-                        },
-                        payload={
-                            "decision": "promote_valid_stage_subtask",
-                            "source": "recovery",
-                            "source_step": definition.id,
-                            "stage": stage_task.stage_id,
-                            "subtask": stage_task.subtask,
-                            "reason": decision.reason,
-                            "evidence": decision.evidence,
-                            **decision.metadata,
-                        },
-                    )
-                return recovered
-            changes = {
-                "status": WorkflowStatus.READY,
-                "last_completed_step": completed_step,
-                "active_step": None,
-                "attempt": 0,
-                "runner_pid": None,
-                "runner_lease_id": None,
-                "heartbeat_at": None,
-            }
-            decision_name = "promote_valid_artifacts"
+            return recovered
         elif decision.disposition is RecoveryDisposition.RETRY:
             changes = {
                 "status": WorkflowStatus.RETRYING,
@@ -2576,38 +2086,30 @@ class FactoryEngine:
             }
             decision_name = "retry_incomplete_step"
         else:
-            if stage_task is not None:
-                return self._fail_stage_task(
-                    state,
-                    None,
-                    stage_task,
-                    event_type="RECOVERY_DECIDED",
-                    payload={
-                        "decision": "fail_recovery",
-                        "source": "recovery",
-                        "source_step": definition.id,
-                        "reason": decision.reason,
-                        "evidence": decision.evidence,
-                        **decision.metadata,
-                    },
-                    expected_runner_pid=expected_runner_pid,
-                    expected_runner_lease_id=expected_runner_lease_id,
-                    enforce_lease=enforce_lease,
-                )
-            changes = {
-                "status": WorkflowStatus.FAILED,
-                "runner_pid": None,
-                "runner_lease_id": None,
-                "heartbeat_at": None,
-            }
-            decision_name = "fail_recovery"
+            return self._fail_stage_task(
+                state,
+                None,
+                stage_task,
+                event_type="RECOVERY_DECIDED",
+                payload={
+                    "decision": "fail_recovery",
+                    "source": "recovery",
+                    "source_step": definition.id,
+                    "reason": decision.reason,
+                    "evidence": decision.evidence,
+                    **decision.metadata,
+                },
+                expected_runner_pid=expected_runner_pid,
+                expected_runner_lease_id=expected_runner_lease_id,
+                enforce_lease=enforce_lease,
+            )
         event_type = (
             "STEP_REOPENED"
             if decision.disposition is RecoveryDisposition.REOPEN
             else "RECOVERY_DECIDED"
         )
         stage_recovery_kwargs = {}
-        if stage_task is not None and decision.disposition is RecoveryDisposition.REOPEN:
+        if decision.disposition is RecoveryDisposition.REOPEN:
             stage_recovery_kwargs = {
                 "invalidate_checkpoints_after_step": changes["last_completed_step"],
                 "subtask_baseline": None,
@@ -2899,10 +2401,6 @@ class FactoryEngine:
             payload={"reason": {"code": "RESUMED", "subcode": subcode, "actor": actor}},
         )
 
-    def _stop_at_gate2(self, state, lease, result, validation):
-        from .technical_continuation import stop_at_gate2
-        return stop_at_gate2(self, state, lease, result, validation)
-
     def kill(self, *, expected_revision: int) -> WorkflowState:
         return self._control_transition(expected_revision, "KILLED", WorkflowStatus.KILLED)
 
@@ -3092,8 +2590,7 @@ class FactoryEngine:
         self,
         state: WorkflowState,
         *,
-        stage_mode: bool,
-        runner_lease: str | None = None,
+        runner_lease: str,
     ) -> WorkflowState:
         from .native_boundary import delivery_side_effect_commit_lease
 
@@ -3107,21 +2604,12 @@ class FactoryEngine:
                 "active_stage": None,
                 "active_subtask": None,
                 "source_step_id": None,
-                "last_completed_stage": (
-                    10 if stage_mode else state.last_completed_stage
-                ),
+                "last_completed_stage": 10,
                 "attempt": 0,
                 "runner_pid": None,
                 "runner_lease_id": None,
                 "heartbeat_at": None,
             }
-            if runner_lease is None:
-                return self._transition(
-                    expected_revision=state.revision,
-                    event_type="PROJECT_COMPLETED",
-                    changes=changes,
-                    subtask_baseline=None,
-                )
             return self._owned_transition(
                 state,
                 runner_lease,
@@ -3230,49 +2718,19 @@ class FactoryEngine:
         definition: StepDefinition,
         exc: ContestDeadlineExceeded,
         *,
-        lease: str | None = None,
-        stage_task: ScheduledStageTask | None = None,
-        expected_runner_pid: int | None = None,
-        expected_runner_lease_id: str | None = None,
-        enforce_lease: bool = False,
+        lease: str | None,
+        stage_task: ScheduledStageTask,
     ) -> WorkflowState:
-        changes = {
-            "status": WorkflowStatus.FAILED,
-            "runner_pid": None,
-            "runner_lease_id": None,
-            "heartbeat_at": None,
-        }
-        payload = {
-            "error_class": "PERMANENT_CONTEST_DEADLINE",
-            "reason": str(exc),
-            "step": definition.id,
-        }
-        if stage_task is not None:
-            return self._fail_stage_task(
-                state,
-                lease,
-                stage_task,
-                event_type="CONTEST_DEADLINE_EXHAUSTED",
-                payload=payload,
-            )
-        if lease is not None:
-            return self._owned_transition(
-                state,
-                lease,
-                event_type="CONTEST_DEADLINE_EXHAUSTED",
-                changes=changes,
-                payload=payload,
-            )
-        return self._transition(
-            expected_revision=state.revision,
+        return self._fail_stage_task(
+            state,
+            lease,
+            stage_task,
             event_type="CONTEST_DEADLINE_EXHAUSTED",
-            changes=changes,
-            payload=payload,
-            **self._lease_expectations(
-                expected_runner_pid,
-                expected_runner_lease_id,
-                enforce_lease,
-            ),
+            payload={
+                "error_class": "PERMANENT_CONTEST_DEADLINE",
+                "reason": str(exc),
+                "step": definition.id,
+            },
         )
 
     def _contest_timeout(

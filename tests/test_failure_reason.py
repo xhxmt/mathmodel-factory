@@ -6,9 +6,10 @@ from pathlib import Path
 
 from factory_core.domain import ExecutionResult, ValidationResult, WorkflowStatus
 from factory_core.engine import INFRASTRUCTURE_RETRY_BUDGET, FactoryEngine
-from factory_core.registry import StepDefinition, StepRegistry
+from factory_core.registry import StepDefinition
 from factory_core.storage import SQLiteStateStore
 from scripts.step8_5_gate import collect_step8_5_state, not_ready_reason
+from tests._stage_engine import initialize_stage_project, stage_registry_with
 
 
 class _Step:
@@ -24,11 +25,10 @@ class _Step:
 
 def _fail_events(tmp_path: Path, result: ExecutionResult, reason: str):
     step = _Step(result, reason)
-    registry = StepRegistry()
-    registry.register(StepDefinition(id=1, name="first", timeout_seconds=30, max_attempts=1,
-                                     handler=step, validator=step))
+    registry = stage_registry_with(StepDefinition(id=1, name="first", timeout_seconds=30,
+                                                  max_attempts=1, handler=step, validator=step))
     store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="demo", project_type="modeling")
+    initialize_stage_project(store)
     state = FactoryEngine(tmp_path, store=store, registry=registry, sleeper=lambda _: None).run()
     assert state.status is WorkflowStatus.FAILED
     return store.events()

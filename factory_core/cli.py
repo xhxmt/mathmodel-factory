@@ -195,35 +195,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("project_dir")
     run.add_argument("--max-steps", type=int)
 
-    advance = sub.add_parser(
-        "advance",
-        help="Advance under an explicit bounded-run contract (replaces ad-hoc work/*.py drivers)",
-    )
-    advance.add_argument("project_dir")
-    advance.add_argument("--expected-revision", type=int, required=True)
-    # A cursor component left unset is not constrained, so --expected-stage alone
-    # is a usable expectation; the source step cannot be named from the CLI.
-    advance.add_argument("--expected-stage", type=int)
-    advance.add_argument("--expected-subtask")
-    advance.add_argument(
-        "--allowed-source-steps",
-        type=int,
-        nargs="*",
-        help=(
-            "restrict the advance to these source Steps; the option must carry at "
-            "least one value, because an empty allowlist permits nothing"
-        ),
-    )
-    advance.add_argument("--max-subtasks", type=int)
-    advance.add_argument("--protected-manifest", type=Path)
-    advance.add_argument("--actor", default="operator")
-    advance.add_argument(
-        "--run-policy",
-        choices=["advance_until_blocked", "bounded_subtasks"],
-        default="advance_until_blocked",
-    )
-    advance.add_argument("--previous-boundary-fingerprint")
-
     rebase = sub.add_parser(
         "rebase-classifier",
         help="Explicitly rebase active dirty obligations under revision CAS",
@@ -540,55 +511,6 @@ def main(argv: list[str] | None = None) -> int:
             with disk_backed_tmpdir(service.root):
                 state = service.run(project, max_steps=args.max_steps, archive=True)
             print(json.dumps(runtime_payload(state), ensure_ascii=False, sort_keys=True))
-            return 0
-        if args.command == "advance":
-            assert project is not None
-            from .bounded_run import BoundedRunContract
-
-            manifest = {}
-            if args.protected_manifest is not None:
-                manifest = json.loads(
-                    Path(args.protected_manifest).read_text(encoding="utf-8")
-                )
-                if not isinstance(manifest, dict):
-                    raise FactoryCoreError(
-                        "protected manifest must be a JSON object of path -> sha256"
-                    )
-            expected_cursor = None
-            if (
-                args.expected_stage is not None
-                or args.expected_subtask is not None
-            ):
-                expected_cursor = (
-                    args.expected_stage,
-                    args.expected_subtask,
-                    None,
-                )
-            allowed_source_steps = None
-            if args.allowed_source_steps is not None:
-                if not args.allowed_source_steps:
-                    # An empty allowlist is not "no restriction": it says nothing
-                    # is permitted.  Reading it as None would silently drop the
-                    # restriction the operator asked for.
-                    raise FactoryCoreError(
-                        "--allowed-source-steps was given with no values; an empty "
-                        "allowlist permits nothing, so refusing rather than "
-                        "treating it as no restriction"
-                    )
-                allowed_source_steps = frozenset(args.allowed_source_steps)
-            contract = BoundedRunContract(
-                expected_revision=int(args.expected_revision),
-                expected_cursor=expected_cursor,
-                allowed_source_steps=allowed_source_steps,
-                max_subtasks=args.max_subtasks,
-                protected_manifest=manifest,
-                run_policy=args.run_policy,
-                actor=args.actor,
-                previous_boundary_fingerprint=args.previous_boundary_fingerprint,
-            )
-            with disk_backed_tmpdir(service.root):
-                result = service.advance_bounded(project, contract)
-            print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
             return 0
         if args.command == "rebase-classifier":
             # Explicit maintenance action.  The classifier rebase appends an

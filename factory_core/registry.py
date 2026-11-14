@@ -115,12 +115,6 @@ class StepRegistry:
         except KeyError as exc:
             raise KeyError(f"step {step_id} is not registered") from exc
 
-    def next_after(self, completed_step: int) -> StepDefinition | None:
-        for step_id in sorted(self._steps):
-            if step_id > completed_step:
-                return self._steps[step_id]
-        return None
-
     def register_stage_subtask(self, key: str, definition: StepDefinition) -> None:
         normalized = str(key).strip()
         if not normalized:

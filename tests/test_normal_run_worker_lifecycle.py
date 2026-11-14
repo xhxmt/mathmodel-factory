@@ -1,7 +1,5 @@
 """Bounded normal-entry lifecycle checks; no model/provider/solver work."""
-import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
@@ -12,14 +10,13 @@ from factory_core.adapters.infrastructure.process import _process_identity
 from factory_core.domain import WorkflowStatus
 from factory_core.service import FactoryService, WorkerLauncher
 from factory_core.storage import SQLiteStateStore
-from factory_core import persistent_launcher
 
 
 def test_normal_service_rejects_unavailable_runtime_before_launch(tmp_path):
     project = tmp_path / 'ongoing/demo'
     project.mkdir(parents=True)
     store = SQLiteStateStore(project)
-    before = store.initialize(project_id='demo', project_type='modeling', runtime_generation='unavailable-runtime')
+    before = store.initialize(project_id='demo', project_type='modeling', runtime_generation='unavailable-runtime', scheduler_generation='step_v2')
     events = store.events()
     with pytest.raises(RuntimeError, match='NATIVE_WORKFLOW_REQUIRED'):
         FactoryService(tmp_path).start('demo')
@@ -77,41 +74,6 @@ def test_normal_cancel_verifies_leader_and_new_session_child(tmp_path):
         if process.poll() is None:
             FactoryService._terminate_runner(process.pid, identity)
         process.wait(timeout=3)
-
-
-def test_persistent_monitor_initialization_exception_is_durable(tmp_path, monkeypatch):
-    root = tmp_path / 'control'; root.mkdir()
-    (root / 'request.json').write_text('{ invalid json')
-    descriptor = os.open(root / 'lock', os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        subprocess.run([sys.executable, '-m', 'factory_core.persistent_launcher', 'monitor',
-            str(root), '--lock-fd', str(descriptor)], pass_fds=(descriptor,),
-            check=True, timeout=5, cwd=Path(__file__).resolve().parents[1])
-    finally:
-        os.close(descriptor)
-    value = persistent_launcher.status(root)
-    assert value['status'] == 'FAILED' and value['ready'] is False
-    assert value['error_class'] == 'JSONDecodeError'
-    assert value['process_tree_exited'] is True
-
-
-def test_persistent_pre_ready_process_exit_is_reported(tmp_path):
-    root = tmp_path / 'control'
-    result = persistent_launcher.start(root, tmp_path / 'missing-cwd',
-        [sys.executable, '-c', 'pass'], key='missing-cwd', ready_timeout=2)
-    assert result['status'] == 'EXITED'
-    assert result['ready'] is False and result['exit_code'] == 127
-    assert result['process_tree_exited'] is True
-
-
-def test_missing_monitor_is_interrupted_and_never_verified(tmp_path):
-    (tmp_path / 'status.json').write_text(json.dumps({'status': 'STARTING', 'ready': False,
-        'parent_pid': os.getpid(), 'parent_identity': _process_identity(os.getpid())}))
-    (tmp_path / 'monitor.json').write_text(json.dumps({'monitor_pid': 999999999,
-        'monitor_identity': 'missing'}))
-    value = persistent_launcher.status(tmp_path)
-    assert value['status'] == 'INTERRUPTED'
-    assert value['process_tree_exited'] is False
 
 
 def test_cancel_failure_persists_unverified_interruption(tmp_path, monkeypatch):
