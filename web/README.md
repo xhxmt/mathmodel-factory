@@ -41,7 +41,7 @@
 - Python 3、Node.js `^20.19.0` 或 `>=22.12.0`、npm、`gcloud` CLI。
 - 当前 GCP 项目中已配置 `scripts/load_secrets.sh` 使用的 Secret Manager 条目。
 - 当前账号有对应 Secret 的访问权限。
-- 已在仓库根目录运行 `uv sync --extra web --extra models --locked`，并在 `web/frontend/` 运行 `npm ci`。
+- 已在仓库根目录运行 `uv sync --extra web --locked`，并在 `web/frontend/` 运行 `npm ci`。
 
 生产敏感值以 GCP Secret Manager 为权威来源。不要把 `JWT_SECRET`、`ADMIN_PASSWORD` 或 API key 写入 `.env`、文档、测试输出或命令日志。
 

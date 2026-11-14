@@ -88,7 +88,7 @@ uv sync --extra tui     # 首次，安装 textual
 ```bash
 git clone <repo-url> mathmodel-factory
 cd mathmodel-factory
-uv sync --extra web --extra models --locked
+uv sync --extra web --locked
 (cd web/frontend && npm ci)
 chmod +x launch_agents.sh run_paper.sh compile_paper.sh solver_submit.sh
 ./launch_agents.sh status
@@ -311,7 +311,7 @@ python3 experiments/compare_ablations.py \
 ./experiments/ablation_no_judge.sh --problem B --reps 3
 
 # 运行现有的三个消融（每个只生成并评估自己的变体，加 --baseline 生成对照组）
-./experiments/test_ablations.sh  # 先验证开关生效性（秒级）
+./experiments/ablation_no_judge.sh --problem B --reps 1 --dry-run  # 先只打印命令，不创建也不运行
 ./experiments/ablation_no_judge.sh --problem B --reps 1 --baseline
 ./experiments/ablation_no_innovation_protect.sh --problem B --reps 1
 ./experiments/ablation_no_consultation.sh --problem B --reps 1

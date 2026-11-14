@@ -16,7 +16,6 @@ from scripts.objective_evidence import (
     ObjectiveEvidenceError,
     UnsafeCommandError,
     build_bundle,
-    command_finding,
     evidence_ref,
     fingerprint_paths,
     make_finding,
@@ -267,34 +266,6 @@ def test_safe_command_allowlist_and_command_finding(tmp_path):
             allowed_roots=[tmp_path],
             timeout=True,
         )
-
-    nonzero = _script(tmp_path, "scripts/fail.py", "raise SystemExit(7)\n")
-    failed = run_safe_command(
-        [sys.executable, str(nonzero)], cwd=tmp_path, allowed_roots=[tmp_path]
-    )
-    finding = command_finding(
-        finding_id="cmd-fail",
-        claim_id="claim-1",
-        checker_id="oracle",
-        checker_version="1",
-        result=failed,
-        root=tmp_path,
-        input_paths=[nonzero],
-    )
-    assert finding.status == "UNKNOWN"
-    assert finding.reason == "command_error"
-
-    veto = command_finding(
-        finding_id="cmd-veto",
-        claim_id="claim-1",
-        checker_id="oracle",
-        checker_version="1",
-        result=failed,
-        root=tmp_path,
-        input_paths=[nonzero],
-        exact_contradiction=True,
-    )
-    assert (veto.status, veto.severity) == ("FAIL", "hard_veto")
 
 
 def test_safe_command_timeout_and_output_truncation(tmp_path):

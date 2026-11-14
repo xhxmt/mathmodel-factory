@@ -145,21 +145,6 @@ def classify_input(artifact: str, *, baseline: str, v1_owner_stage: int) -> Inpu
     return InputDependency(path, "document", None)
 
 
-def recompute_start(
-    dependencies: list[InputDependency], *, completed_steps: set[int]
-) -> int | None:
-    """The earliest completed computation Step that consumed a changed input."""
-
-    consumers = sorted(
-        {
-            item.consumer_step
-            for item in dependencies
-            if item.consumer_step is not None and item.consumer_step in completed_steps
-        }
-    )
-    return consumers[0] if consumers else None
-
-
 def recompute_steps(start: int) -> tuple[int, ...]:
     """The computation Steps re-run when ``start`` consumed a changed input."""
 

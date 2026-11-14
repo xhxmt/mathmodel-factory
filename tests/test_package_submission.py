@@ -49,7 +49,7 @@ def test_bundle_excludes_archived_paper_and_gate_evidence(tmp_path):
     (archive / f"{base}_paper.pdf").write_bytes(b"stale pdf")
     (archive / "judge_evaluation.md").write_text("VERDICT: REVISE\n", encoding="utf-8")
 
-    selected = {arcname for _path, arcname in module.iter_bundle_files(tmp_path, base)}
+    selected = {item["archive_path"] for item in module.submission_bundle_manifest(tmp_path.resolve(), base)["members"]}
 
     assert f"{base}_paper.pdf" in selected
     assert "models/solve.py" in selected
@@ -74,7 +74,7 @@ def test_bundle_includes_declared_top_level_attachment(tmp_path):
     )
     (tmp_path / "result.csv").write_text("value\n1\n", encoding="utf-8")
 
-    selected = {name for _path, name in module.iter_bundle_files(tmp_path, base)}
+    selected = {item["archive_path"] for item in module.submission_bundle_manifest(tmp_path.resolve(), base)["members"]}
 
     assert "result.csv" in selected
 

@@ -7,7 +7,6 @@ import pytest
 from factory_core.input_dependency_policy import (
     apply_to_record,
     classify_input,
-    recompute_start,
     recompute_steps,
 )
 
@@ -69,7 +68,15 @@ def _start(*changes, completed=ALL_COMPUTATION):
         classify_input(artifact, baseline="abc123", v1_owner_stage=owner)
         for artifact, owner in changes
     ]
-    return recompute_start(dependencies, completed_steps=completed)
+    # The earliest completed computation Step that consumed a changed input.
+    consumers = sorted(
+        {
+            item.consumer_step
+            for item in dependencies
+            if item.consumer_step is not None and item.consumer_step in completed
+        }
+    )
+    return consumers[0] if consumers else None
 
 
 def test_a_document_edit_in_revision_recomputes_nothing():

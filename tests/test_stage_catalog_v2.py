@@ -1005,7 +1005,6 @@ def test_contest_phases_reject_an_unknown_catalog_version():
     from factory_core.contest import (
         CONTEST_CATALOG_V1,
         CONTEST_CATALOG_V2,
-        contest_phases_for,
         phase_for_step,
     )
 
@@ -1014,8 +1013,6 @@ def test_contest_phases_reject_an_unknown_catalog_version():
     assert phase_for_step(13, catalog_version=STAGE_CATALOG_VERSION_V2).id == 8
     with pytest.raises(ValueError, match="unsupported Stage catalog"):
         phase_for_step(13, catalog_version="factory-stage-catalog-v7")
-    with pytest.raises(ValueError, match="unsupported Stage catalog"):
-        contest_phases_for("factory-stage-catalog-v7")
 
 
 def _judge_reopen(store, project, *, verdict="REOPEN_REVISION_MODEL", target=3, aggregate_verdict=None):

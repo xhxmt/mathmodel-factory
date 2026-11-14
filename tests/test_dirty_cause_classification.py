@@ -39,7 +39,6 @@ from factory_core.dirty_classification import (
     LEGACY_UNRECORDED,
     classification_contract_sha256,
     classification_sources,
-    recorded_source,
     source_for,
 )
 from factory_core.domain import SCHEMA_VERSION
@@ -64,6 +63,16 @@ BEGIN
     SELECT RAISE(ABORT, 'workflow events are append-only');
 END;
 """
+
+
+def recorded_source(connection, cause_id: str) -> str:
+    """A cause's recorded provenance; no row reads as ``legacy_unrecorded``."""
+    row = connection.execute(
+        "SELECT classification_source FROM dirty_cause_classification WHERE cause_id=?",
+        (str(cause_id),),
+    ).fetchone()
+    return LEGACY_UNRECORDED if row is None else str(row[0])
+
 
 
 def _db(project: Path) -> Path:

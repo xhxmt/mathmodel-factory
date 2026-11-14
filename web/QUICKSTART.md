@@ -9,7 +9,7 @@
 ```bash
 gcloud auth login
 gcloud config set project <GCP_PROJECT_ID>
-uv sync --extra web --extra models --locked
+uv sync --extra web --locked
 (cd web/frontend && npm ci)
 ```
 

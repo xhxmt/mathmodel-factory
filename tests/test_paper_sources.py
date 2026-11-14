@@ -1,7 +1,6 @@
 from factory_core.paper_sources import (
     LatexDependencyError,
     discover_paper_dependencies,
-    discover_paper_sources,
     expand_latex_document,
     primary_paper_source,
     require_safe_latex_dependencies,
@@ -45,7 +44,7 @@ def test_nested_paper_is_shared_by_active_structural_checkers(tmp_path):
     )
     (project / "symbol_table.md").write_text("| $x$ | value |\n", encoding="utf-8")
 
-    assert discover_paper_sources(project, "demo") == (paper,)
+    assert resolve_latex_dependency_graph(project, "demo").sources == (paper,)
     assert primary_paper_source(project, "demo") == paper
     assert collect_number_metrics(project, "demo") is not None
     assert collect_symbol_metrics(project, "demo") is not None
@@ -61,7 +60,7 @@ def test_root_paper_keeps_exclusive_primary_precedence_when_both_layouts_exist(t
     root_paper.write_text("root\n", encoding="utf-8")
     nested_paper.write_text("nested\n", encoding="utf-8")
 
-    assert discover_paper_sources(project, "demo") == (root_paper,)
+    assert resolve_latex_dependency_graph(project, "demo").sources == (root_paper,)
     assert primary_paper_source(project, "demo") == root_paper
 
 

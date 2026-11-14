@@ -234,14 +234,6 @@ def _authored_source(artifact: str) -> dict[tuple[str, str], str]:
     }
 
 
-def _policy_flag(policy) -> str:
-    """Compatibility shim: the flag a policy-only entry routes to, or MATH_DIRTY
-    when it routes nothing.  Kept so historical callers of the derivation keep a
-    stable name; the authoritative value is ``policy.route_flag``."""
-
-    return str(policy.route_flag or "MATH_DIRTY")
-
-
 def source_for(
     sources: dict[tuple[str, str], str], flag: str, cause_artifact: str
 ) -> str:
@@ -274,20 +266,3 @@ def record_classification(
             str(contract_sha256),
         ),
     )
-
-
-def recorded_source(connection, cause_id: str) -> str:
-    """Read a cause's provenance.  Absent metadata is ``legacy_unrecorded``.
-
-    Deliberately does **not** fall back to re-deriving from the current
-    classifier: a historical cause's path is a fact about the past, not a
-    function of today's code.
-    """
-
-    row = connection.execute(
-        "SELECT classification_source FROM dirty_cause_classification WHERE cause_id=?",
-        (str(cause_id),),
-    ).fetchone()
-    if row is None:
-        return LEGACY_UNRECORDED
-    return str(row[0])

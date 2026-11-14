@@ -82,13 +82,11 @@ python3 experiments/compare_ablations.py --baseline ... --variant ... --json
 
 ## 测试（不跑完整流水线）
 
-`test_ablations.sh` 验证三个开关确实改变行为，秒级完成，不调用任何 agent：
-语法检查、render_prompt 删除（ON 删掉 / OFF 保留双向断言）、
-no-judge stub 契约、compare 脚本冒烟。
+- `ABLATE_NO_JUDGE` 由 pytest 覆盖（`tests/test_audit_service.py`、`tests/test_workflow_state.py`、`tests/test_atomic_release.py`）。
+- `ABLATE_NO_CONSULTATION` 和 `ABLATE_NO_INNOVATION_PROTECT` 目前没有自动测试；它们在 `factory_core/steps/prompting.py` 里改写提示词。
+- 正式运行前，可以给任一 launcher 加 `--dry-run`，只打印将要执行的命令。
 
-```bash
-./experiments/test_ablations.sh
-```
+原来的 `test_ablations.sh` 是从已删除的 Legacy Adapter（`factory_core/adapters/legacy_runner.sh`）里抽取函数来测的，已于 2026-11-14 删除。
 
 ## 文件
 
@@ -99,4 +97,3 @@ no-judge stub 契约、compare 脚本冒烟。
 | `ablation_no_judge.sh` | 设 `ABLATE_NO_JUDGE=1` |
 | `ablation_no_innovation_protect.sh` | 设 `ABLATE_NO_INNOVATION_PROTECT=1` |
 | `compare_ablations.py` | 基线 vs 变体的分数差表（复用 `scripts/parse_judge_score.py`） |
-| `test_ablations.sh` | 开关生效性测试 |

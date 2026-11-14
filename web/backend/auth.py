@@ -43,19 +43,6 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by unit tests withou
 security = HTTPBearer()
 
 
-def user_db(settings: Settings) -> dict[str, dict[str, Any]]:
-    return {
-        "admin": {
-            "password_hash": bcrypt.hashpw(
-                settings.admin_password.encode("utf-8"),
-                bcrypt.gensalt(),
-            ),
-            "username": "admin",
-            "role": "admin",
-        }
-    }
-
-
 def verify_password(password: str, password_hash: str | bytes) -> bool:
     encoded_hash = password_hash.encode("utf-8") if isinstance(password_hash, str) else password_hash
     try:

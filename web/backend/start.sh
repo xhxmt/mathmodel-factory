@@ -15,7 +15,7 @@ fi
 
 PYTHON_BIN="$SCRIPT_DIR/../../.venv/bin/python"
 if [[ ! -x "$PYTHON_BIN" ]]; then
-    echo "ERROR: locked environment missing. Run: uv sync --extra web --extra models --locked" >&2
+    echo "ERROR: locked environment missing. Run: uv sync --extra web --locked" >&2
     exit 1
 fi
 

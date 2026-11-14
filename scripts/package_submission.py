@@ -15,7 +15,6 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from factory_core.submission_bundle import (
-    declared_delivery_files,
     submission_bundle_manifest,
     verify_zip_against_manifest,
 )
@@ -26,17 +25,6 @@ from factory_core.native_boundary import (
 
 
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
-
-
-def iter_bundle_files(project: Path, base: str) -> list[tuple[Path, str]]:
-    """Compatibility view backed by the authoritative bundle manifest."""
-
-    project = project.resolve()
-    manifest = submission_bundle_manifest(project, base)
-    return [
-        (project / item["source_path"], item["archive_path"])
-        for item in manifest["members"]
-    ]
 
 
 def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:

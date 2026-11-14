@@ -33,7 +33,7 @@ pass "Directory structure OK"
 # 2. Check backend
 echo ""
 echo "2. Checking backend..."
-[[ -x "$SCRIPT_DIR/../.venv/bin/python" ]] || fail "Locked root environment missing (run: uv sync --extra web --extra models --locked)"
+[[ -x "$SCRIPT_DIR/../.venv/bin/python" ]] || fail "Locked root environment missing (run: uv sync --extra web --locked)"
 
 # Test import
 cd "$SCRIPT_DIR/.."

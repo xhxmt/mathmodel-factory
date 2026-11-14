@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -30,10 +29,6 @@ def _engine_owned(project: Path) -> bool:
 def _service(project: Path, factory_root: str | Path | None = None) -> FactoryService:
     root = Path(factory_root).resolve() if factory_root else ROOT
     return FactoryService(root)
-
-
-def _is_pid_live(pid: int | None) -> bool:
-    return FactoryService._pid_is_live(pid) if pid is not None else False
 
 
 def _terminate_runner(pid: int | None, expected_identity: str | None = None) -> None:

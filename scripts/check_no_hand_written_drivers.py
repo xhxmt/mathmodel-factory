@@ -186,11 +186,6 @@ def rewrites_driver_source(text: str) -> list[str]:
     return files
 
 
-def is_backup(relative: str) -> bool:
-    name = Path(relative).name
-    return any(marker in name for marker in BACKUP_MARKERS)
-
-
 def blanked(text: str, spans: list[tuple[int, int]]) -> str:
     """``text`` with the ignored spans replaced by spaces, offsets preserved.
 

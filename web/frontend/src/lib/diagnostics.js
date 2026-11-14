@@ -33,10 +33,6 @@ export function reopenBudgetLines(budget) {
   return lines
 }
 
-export function badgeText(project) {
-  return project.diagnostic_badge || ''
-}
-
 export function actionLabel(actionId) {
   return DIAGNOSTIC_ACTION_LABEL[actionId] || actionId
 }
