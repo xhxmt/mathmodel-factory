@@ -6,6 +6,7 @@
 - **`run(allowed_source_steps=...)`**：bounded_run 留下的运行范围参数（越界时提交 `RUN_BOUNDARY_REACHED`），#68 之后只剩测试调用，连同其测试删除。
 - **默认代际**：`SQLiteStateStore.initialize` 的 `scheduler_generation` 默认值改为 `stage_v1`；`step_v2` 只能显式创建（迁移测试用）。
 - **保留**：读取历史 `step_v2` 状态、诊断，以及 `factory migrate scheduler-activate` 迁移命令。
+- **文档**：已执行完毕的退出评估 `docs/architecture/STEP_SCHEDULER_RETIREMENT.md` 按 `DOCUMENTATION_INDEX.md` 的维护规则移除（索引里记了 `git show` 路径）。
 - **测试**：40 个以 `step_v2` 驱动引擎的测试改走 Stage 路径（新增 `tests/_stage_engine.py`）；删除两个只对 Step 调度成立的快进测试（Stage 调度本就拒绝 `completed_through_step` 快进）；新增 `step_v2` 项目被 `run()` / `recover()` 拒绝的回归测试。
 
 ## 2026-11-14 — 删除 bounded_run 受限推进合同与 Step 13 技术续跑路线

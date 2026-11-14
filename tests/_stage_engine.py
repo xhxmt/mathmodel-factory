@@ -16,7 +16,7 @@ from factory_core.domain import (
 )
 from factory_core.registry import StepDefinition, StepRegistry
 from factory_core.stages import STAGE_SCHEDULER_GENERATION, stage_for_step
-from factory_core.steps.catalog import STEP_CONTRACTS, contract_for
+from factory_core.steps.catalog import STEP_CONTRACTS
 
 
 class _Succeeds:
@@ -78,7 +78,8 @@ def _write_reviewer_entry_artifacts(project) -> None:
 def initialize_stage_project(store, *, last_completed_step: int = 0, **kwargs):
     """A Stage project whose next subtask is Step ``last_completed_step + 1``.
 
-    A project seeded past Step 8 also gets the reviewer-entry artifacts its
+    A project seeded past Step 8 (so past the reviewer-entry gate, which runs
+    right after Step 8) also gets the reviewer-entry artifacts its
     seeded gate checkpoint is fingerprinted on; otherwise the scheduler would
     invalidate that checkpoint and rewind to Step 8 before the Step under test.
     """
@@ -90,7 +91,7 @@ def initialize_stage_project(store, *, last_completed_step: int = 0, **kwargs):
         last_completed_step=last_completed_step,
         **kwargs,
     )
-    if last_completed_step < 8:
+    if last_completed_step <= 8:
         return state
     from scripts.step8_5_gate import collect_step8_5_state
 
@@ -144,11 +145,21 @@ def initialize_stage_project(store, *, last_completed_step: int = 0, **kwargs):
 
 
 def active_step_cursor(step_id: int) -> dict:
-    """The atomic Stage cursor fields for an attempt of ``step_id``."""
+    """The atomic Stage cursor fields for an attempt of ``step_id``.
 
+    The subtask key comes from the Stage catalog, not the Step contract name:
+    they differ for some Steps (Step 13 runs as ``conditional_math_preflight``).
+    """
+
+    stage = stage_for_step(step_id)
+    subtask = next(
+        item
+        for item in stage.subtasks
+        if item.kind == "step" and item.source_step_id == step_id
+    )
     return {
         "active_step": step_id,
-        "active_stage": stage_for_step(step_id).id,
-        "active_subtask": contract_for(step_id).name,
+        "active_stage": stage.id,
+        "active_subtask": subtask.key,
         "source_step_id": step_id,
     }

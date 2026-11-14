@@ -1922,9 +1922,9 @@ class FactoryEngine:
         enforce_lease: bool = False,
     ) -> WorkflowState:
         state = self.store.load()
+        _require_stage_scheduler(state)
         if state.active_step is None:
             return state
-        _require_stage_scheduler(state)
         if state.active_stage is None or state.active_subtask is None:
             raise InvalidTransition(
                 "Stage scheduler recovery requires an atomic Stage/subtask cursor"
@@ -2590,7 +2590,7 @@ class FactoryEngine:
         self,
         state: WorkflowState,
         *,
-        runner_lease: str | None = None,
+        runner_lease: str,
     ) -> WorkflowState:
         from .native_boundary import delivery_side_effect_commit_lease
 
@@ -2610,13 +2610,6 @@ class FactoryEngine:
                 "runner_lease_id": None,
                 "heartbeat_at": None,
             }
-            if runner_lease is None:
-                return self._transition(
-                    expected_revision=state.revision,
-                    event_type="PROJECT_COMPLETED",
-                    changes=changes,
-                    subtask_baseline=None,
-                )
             return self._owned_transition(
                 state,
                 runner_lease,
