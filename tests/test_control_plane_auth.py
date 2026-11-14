@@ -11,7 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from web.backend.auth import WsTicketStore, create_access_token, decode_token, get_current_user
-from web.backend.auth import verify_password
+from web.backend.auth_store import verify_password
 from web.backend.auth_store import AuthStore
 from web.backend.config import Settings, validate_settings
 from web.backend.schemas import LoginRequest, RegisterRequest, UserDecisionRequest, UserInfo
@@ -66,7 +66,7 @@ def test_ws_ticket_is_single_use():
     assert second is None
 
 
-def test_verify_password_accepts_a_bcrypt_hash_of_the_password():
+def test_auth_store_verify_password_accepts_a_bcrypt_hash_of_the_password():
     import bcrypt
 
     password = "correct horse battery staple 42"

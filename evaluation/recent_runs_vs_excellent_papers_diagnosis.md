@@ -140,7 +140,7 @@
 
 ### P1: 把优秀范文对齐固化到 Step 4 prompt
 
-把 `evaluation/answer_keys/MODELING_CORRECTIONS_GUIDE_2025A.md` 中的三条硬约束写入 Step 4:
+把方法论版纠错清单 `docs/guides/MODELING_CHECKLIST.md` 中的硬约束写入 Step 4（含本题答案的 `evaluation/answer_keys/MODELING_CORRECTIONS_GUIDE_2025A.md` 只用于赛后离线评估，不得进入运行时）:
 
 - 遮蔽判据: 默认整体遮蔽，采样密度 100-300 点或给出误差证明。
 - 问题 4: 结果若偏离优秀范文基准超过 20%，必须解释差异来自题意口径、数据还是算法。

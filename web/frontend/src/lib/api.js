@@ -50,6 +50,9 @@ api.interceptors.response.use(
 export default api
 
 // ---- auth ----
+let authMeOverride = null
+export function __setAuthMeForTest(fn) { authMeOverride = fn }
+
 export async function authLogin(username, password) {
   const { data } = await api.post('/api/auth/login', { username, password })
   return Object.assign({}, data, normalizeAuthUser(data))
@@ -59,6 +62,7 @@ export async function authRegister(payload) {
   return normalizeAuthUser(data)
 }
 export async function authMe() {
+  if (authMeOverride) return normalizeAuthUser(await authMeOverride())
   const { data } = await api.get('/api/auth/me')
   return normalizeAuthUser(data)
 }
