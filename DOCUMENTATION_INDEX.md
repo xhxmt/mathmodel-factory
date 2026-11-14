@@ -60,7 +60,6 @@
 - [evaluation/human_rubric.md](evaluation/human_rubric.md)：人工评审量表。
 - [evaluation/baseline_scores.md](evaluation/baseline_scores.md)：基准评分记录。
 - [evaluation/calibration_report.md](evaluation/calibration_report.md)：评委校准报告。
-- [evaluation/EXPERIMENTS_STATUS.md](evaluation/EXPERIMENTS_STATUS.md)：实验状态与后续任务。
 - [experiments/README.md](experiments/README.md)：消融实验运行说明。
 - [docs/verification/2026-08-19-run4/final_validation_20260819.md](docs/verification/2026-08-19-run4/final_validation_20260819.md)：Run4 下游技术流程验证的历史快照与终态入口。
 - [docs/verification/](docs/verification/)：历史验证报告。
@@ -85,6 +84,7 @@
 - [docs/archive/RERUN0706_REPAIR_PLAN.md](docs/archive/RERUN0706_REPAIR_PLAN.md)：2025A rerun 事故链修复计划；建模清单与 2025A 纠错指南据其 §L5/§E 禁止用答案标定 benchmark。
 - 2026-11-11 整理时按上面的维护规则从工作树移除了已完成的一次性记录：`docs/superpowers/`（6–7 月设计与实施计划）、`docs/changelogs/`、`docs/analysis_requests/`、6 月的优化报告与 2025A blind 修复计划、方法库优化总结、GCP 服务集成设计快照，以及运行时简化项目的计划、评审回复与阶段 JSON（`docs/architecture/runtime_simplification_*`、`docs/architecture/RUNTIME_SIMPLIFICATION_*`）。需要时用 `git show e6463f5:<路径>` 查看。
 - 2026-11-14 删除 selector 放权路线（R0a → R3，脚本 2026-08-08 实现后从未在真实数据上运行）时，一并移除了它的计划与合同：`evaluation/SELECTOR_ROLLOUT_PLAN.md`、`SELECTOR_RELIABILITY.md`、`SELECTOR_AUTHORIZATION.md`、`SHADOW_PORTFOLIO.md`、`CAPABILITY_HARNESS.md`，以及对应的 6 个脚本和测试。需要时用 `git show b80570a:<路径>` 查看；要恢复这条路线，须按计划里的状态矩阵重新核对评审身份和 packet 合同。
+- 2026-11-14 按同一规则移除了 6 月 Legacy 流水线时期的一次性报告：`docs/verification/` 下的 P0/P1 修复与验证报告（`P0_*`、`P1_*`、`P0_P1_FIX_REPORT.md`、`ABLATION_COMPLETION_SUMMARY.md`），`evaluation/` 下的 6 月分析（`EXPERIMENTS_STATUS.md`、`P1_A_vs_B_gap_diagnosis.md`、`failure_mode_case_study.md`、`no_methodlib_deep_dive.md`、`ablation_deep_dive_analysis.md`、`hard_metrics_baseline.md`），以及旧的单评委 Markdown 评分提示词 `evaluation/llm_judge_prompt.txt`（已由 `prompts/judges/` 三角色提示词取代）。需要时用 `git show 84d5da5:<路径>` 查看。
 - `docs/sessions/`：历史对话与计划原文的本地归档目录，默认被 Git 忽略，不同步到远端。
 
 ## 文档维护规则
