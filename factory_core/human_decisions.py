@@ -248,11 +248,6 @@ def _decision_fingerprints_with_metadata(
             )
         )
     elif gate == "content_freeze":
-        from .submission_routes import declared_submission_routes
-
-        routes = declared_submission_routes(project)
-        subject_paths.update(routes.files)
-        subject_paths.update(routes.evidence)
         dependency_graph = require_safe_latex_dependencies(project)
         subject_paths.update(dependency_graph.files)
         subject_metadata.append(
@@ -275,38 +270,24 @@ def _decision_fingerprints_with_metadata(
             "problem/deliverables.json",
         ):
             subject_paths.update(_contained_files(project, value))
-        from .solver_input_coverage import (
-            SolverInputDriftError,
-            solver_declared_input_coverage,
-        )
+        from .solver_input_coverage import solver_declared_input_coverage
 
-        try:
-            solver_coverage = solver_declared_input_coverage(project)
-        except SolverInputDriftError as exc:
-            drift = exc.to_dict()
-            fingerprint_metadata["solver_input_drift"] = drift
+        solver_coverage = solver_declared_input_coverage(project)
+        subject_paths.update(solver_coverage.included_paths)
+        subject_paths.update(solver_coverage.evidence_paths)
+        if solver_coverage.drifts:
+            # The approval binds the exact drift it was shown; a later change
+            # to any drifted input or its receipts changes the subject.
+            drifts = list(solver_coverage.drifts)
+            fingerprint_metadata["solver_input_drifts"] = drifts
             subject_metadata.append(
                 {
                     "path": "<solver-input-drift>",
                     "exists": True,
-                    "sha256": drift["fingerprint"],
-                    "identity": drift,
+                    "sha256": canonical_hash([item["fingerprint"] for item in drifts]),
+                    "identity": drifts,
                 }
             )
-            # A missing solver input is a valid drift report, but it has no
-            # filesystem path to fingerprint.  Keep the structured drift
-            # metadata and only add an existing path when one is available.
-            if exc.current_path is not None:
-                subject_paths.add(exc.current_path)
-            for receipt in exc.receipts:
-                subject_paths.update(_contained_files(project, str(receipt["path"])))
-        else:
-            subject_paths.update(solver_coverage.included_paths)
-            subject_paths.update(solver_coverage.evidence_paths)
-            if solver_coverage.authorized_drifts:
-                fingerprint_metadata["authorized_solver_input_drifts"] = list(
-                    solver_coverage.authorized_drifts
-                )
     elif gate == "delivery_freeze_override":
         for value in (
             "judge_outputs/final_submission_fingerprint.json",

@@ -201,8 +201,16 @@ rejects active attempts, unresolved dirty/projection state, pending Finalization
 snapshots, unfinished human decisions, and any current manifest drift from
 `stage_cursor_input`. Dirty state is keyed by `(flag, owner_stage)` so one
 domain cannot overwrite another Stage's active cause. Final/submission
-collection fails closed when a tracked authored file has neither registry
-ownership nor an explicit active-LaTeX or declared-deliverable route. Step 2
+collection includes a tracked authored file that no registry rule owns as an
+`unowned` bundle member rather than refusing it, and includes every
+solver-declared input. A solver-declared input whose bytes changed after the
+solve (or that vanished) is recorded, not blocking: `solver_input_coverage`
+returns it in `drifts` (`factory-solver-input-drift-v1`), the content-freeze
+subject, the final input manifest (`factory-final-input-manifest-v5`) and the
+execution packet's `manifest.json` (`solver_input_drifts`) carry it, and the
+execution auditor decides whether the adopted results still hold. There are
+no hand-registered input versions, exclusion receipts, submission routes or
+technical drift authorizations. Step 2
 stream auxiliary files at the root (`m<N>_*`) are described by the last-resort
 `artifact_policy.FALLBACK_POLICY` (exploratory, non-blocking, no Stage owner),
 and the Step 2 validator fails on any tracked file without an owner or policy so
