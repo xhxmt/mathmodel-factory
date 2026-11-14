@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-14 — 删除引擎的 Step 调度执行分支
+
+- **引擎只执行 Stage 调度项目**：`FactoryEngine.run()` / `recover()` 遇到 `step_v2` 项目时以 `STAGE_SCHEDULER_REQUIRED` 拒绝，不写任何事件（`FactoryService` 早已在入口处做同样的拒绝）。删除 `_advance_loop` 里按 `registry.next_after` 选下一步的路径、`stage_mode` 参数，以及十余处"没有 Stage 任务时走 Step 版转移"的回退分支（失败、期限、预算耗尽、重开、成功提交、恢复的提升/重开/失败）；`StepRegistry.next_after` 一并删除。
+- **默认代际**：`SQLiteStateStore.initialize` 的 `scheduler_generation` 默认值改为 `stage_v1`；`step_v2` 只能显式创建（迁移测试用）。
+- **保留**：读取历史 `step_v2` 状态、诊断，以及 `factory migrate scheduler-activate` 迁移命令。
+- **测试**：40 个以 `step_v2` 驱动引擎的测试改走 Stage 路径（新增 `tests/_stage_engine.py`）；删除两个只对 Step 调度成立的快进测试（Stage 调度本就拒绝 `completed_through_step` 快进）；新增 `step_v2` 项目被 `run()` / `recover()` 拒绝的回归测试。
+
 ## 2026-11-14 — 删除 bounded_run 受限推进合同与 Step 13 技术续跑路线
 
 - **`factory_core/bounded_run.py` 与 `factory advance`**：为验收 A 的手写 `work/*.py` 驱动脚本写的替代入口，按调用方给的 revision/游标做比对、核验受保护文件哈希和已提交检查点，不符就判 `PERMANENT_PROTECTED_MANIFEST_VIOLATED` / `_CHECKPOINT_VIOLATED`。防的是操作员自己，生产从不调用。删除引擎里的 `run_bounded`、`run(contract=...)`、提交前保护核验和 `ScopedRegistry` 换挂，`FactoryService.advance_bounded`，CLI `advance` 子命令；连同 `test_bounded_run.py`、G1/G2/G4 闸门测试（`_g1_canary.py`、`test_gate_g1_entry_equivalence.py`、`test_gate_g2_failure_semantics.py`、`test_gate_g4_driver_migration.py`）、`scripts/check_no_hand_written_drivers.py` 及其测试与 fixture 树、CI 的 driver guard 步骤。

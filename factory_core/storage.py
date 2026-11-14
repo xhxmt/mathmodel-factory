@@ -1407,7 +1407,7 @@ class SQLiteStateStore:
         imported: bool = False,
         import_payload: dict[str, Any] | None = None,
         runtime_generation: str = "native_v2",
-        scheduler_generation: str = STEP_SCHEDULER_GENERATION,
+        scheduler_generation: str = STAGE_SCHEDULER_GENERATION,
         stage_catalog_version: str | None = None,
         contest_policy: dict[str, Any] | None = None,
     ) -> WorkflowState:

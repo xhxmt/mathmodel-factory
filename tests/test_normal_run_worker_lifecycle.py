@@ -16,7 +16,7 @@ def test_normal_service_rejects_unavailable_runtime_before_launch(tmp_path):
     project = tmp_path / 'ongoing/demo'
     project.mkdir(parents=True)
     store = SQLiteStateStore(project)
-    before = store.initialize(project_id='demo', project_type='modeling', runtime_generation='unavailable-runtime')
+    before = store.initialize(project_id='demo', project_type='modeling', runtime_generation='unavailable-runtime', scheduler_generation='step_v2')
     events = store.events()
     with pytest.raises(RuntimeError, match='NATIVE_WORKFLOW_REQUIRED'):
         FactoryService(tmp_path).start('demo')

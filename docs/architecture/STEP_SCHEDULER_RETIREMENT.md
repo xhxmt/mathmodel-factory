@@ -1,5 +1,13 @@
 # Step 调度代际退出评估（调用者与迁移清单）
 
+> **状态（2026-11-14）：已完成。** 第 6 节的清单已全部执行：
+> - `repair_operations.py` 已随技术续跑一起删除；
+> - `storage.initialize` 的默认代际改为 `stage_v1`；
+> - `FactoryEngine.run()` / `recover()` 遇到 `step_v2` 项目时直接以 `STAGE_SCHEDULER_REQUIRED` 拒绝，引擎里的 Step 执行分支已删除；
+> - 原先以 Step 代际驱动引擎的测试改走 Stage 路径（`tests/_stage_engine.py`）。
+>
+> 读取历史 `step_v2` 状态、诊断，以及 `migrate scheduler-activate` 迁移命令都保留。下文是当时的评估原文。
+
 **范围：** `main@996ae4ec`，静态调用链审阅。本文只回答一个问题：`FactoryEngine` 里
 仍同时处理 Native Step 与 Stage 两条调度路径，现在能不能删掉 Step 分支？
 

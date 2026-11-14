@@ -813,3 +813,28 @@ def test_step_0_has_three_attempts():
     from factory_core.steps.catalog import contract_for
 
     assert contract_for(0).max_attempts == 3
+
+
+def test_engine_refuses_to_run_or_recover_a_step_scheduler_project(tmp_path):
+    from factory_core.stages import STEP_SCHEDULER_GENERATION
+
+    store = SQLiteStateStore(tmp_path)
+    state = store.initialize(
+        project_id="demo",
+        project_type="modeling",
+        scheduler_generation=STEP_SCHEDULER_GENERATION,
+    )
+    store.transition(
+        expected_revision=state.revision,
+        event_type="STEP_STARTED",
+        changes={"status": WorkflowStatus.INTERRUPTED, "active_step": 1, "attempt": 1},
+    )
+    engine = FactoryEngine(tmp_path, store=store, registry=stage_registry_with())
+    revision = store.load().revision
+
+    with pytest.raises(InvalidTransition, match="STAGE_SCHEDULER_REQUIRED"):
+        engine.run()
+    with pytest.raises(InvalidTransition, match="STAGE_SCHEDULER_REQUIRED"):
+        engine.recover()
+
+    assert store.load().revision == revision
