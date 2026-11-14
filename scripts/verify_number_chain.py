@@ -113,18 +113,6 @@ def extract_key_results(project_dir):
     return key_results
 
 
-def extract_tex_numbers_detailed(tex_path):
-    """提取论文中的数字，带段落上下文和section标记。
-
-    返回: list of {'number': str, 'value': float, 'section': str, 'context': str}
-    """
-    text = _read_file(tex_path)
-    if not text:
-        return []
-
-    return _extract_tex_numbers_detailed_text(text)
-
-
 def _blank_preserving_newlines(match):
     return "\n" * match.group(0).count("\n")
 

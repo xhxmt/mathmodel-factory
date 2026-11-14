@@ -118,4 +118,4 @@
 2. `prompts/step8_visualization.txt`：生成图时必须按优秀论文可视化基准筛选图表，并在 `visualization_log.md` 中记录叙事角色和依据来源。
 3. `prompts/step9_paper_draft.txt`：起稿时按叙事角色摆放图表，避免把局限图放成主图。
 4. `prompts/step11_constructive_review.txt`：审稿时新增图表质量评估。
-5. `prompts/step13_gate2_judge.txt`：评委模拟时新增优秀论文可视化基准检查。
+5. `prompts/step13_gate2_judge.txt`：评委模拟时新增优秀论文可视化基准检查。（该文件已删除，Judge 现由 `prompts/judges/` 下的三角色提示词承担。）

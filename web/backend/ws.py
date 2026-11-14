@@ -35,14 +35,6 @@ def _payload_username(payload: dict) -> str:
     return str(payload.get("sub", "") or "")
 
 
-def _payload_user(payload: dict) -> UserInfo:
-    return UserInfo(
-        username=payload.get("sub", ""),
-        role=payload.get("role", "user"),
-        status=payload.get("status", "active"),
-    )
-
-
 # Sentinel: the account could not be checked (auth store unavailable).  Distinct
 # from ``None``, which means the account is gone.
 _UNVERIFIED = object()

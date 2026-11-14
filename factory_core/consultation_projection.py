@@ -276,31 +276,6 @@ def read_staged_consultation_answer(
     return payload
 
 
-def write_pending_consultation_answer(
-    *,
-    project_dir: str | Path,
-    gate: str,
-    step: int,
-    title: str,
-    answer: str,
-    timestamp: str,
-    request_id: str | None = None,
-) -> Path:
-    """Compatibility API that now stages under immutable request identity."""
-
-    if not request_id:
-        raise ValueError("consultation answer staging requires request_id")
-    return stage_consultation_answer(
-        project_dir=project_dir,
-        request_id=request_id,
-        gate=gate,
-        step=step,
-        title=title,
-        answer=answer,
-        timestamp=timestamp,
-    )
-
-
 def _request_metadata(request: Mapping[str, Any]) -> Mapping[str, Any]:
     metadata = request.get("metadata")
     if isinstance(metadata, Mapping):

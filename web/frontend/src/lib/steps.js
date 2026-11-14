@@ -31,8 +31,6 @@ export const EDITORIAL_GATE_STEP = {
   icon: 'eye',
 }
 
-export const TOTAL_STEPS = 16
-
 // status of a step given the "last completed step" index from the backend.
 export function stepStatus(index, currentStep) {
   if (currentStep == null) return 'pending'

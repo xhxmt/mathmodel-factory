@@ -93,7 +93,7 @@
 2. `factory_core/engine.py` 第 1044–1069 行（`reviewer_current` 与 "reviewer-entry fingerprint changed"）：改成只在 Step 9 入口校验。
 3. 在版本化扩展层 `factory_core/current_dirty.py` / `artifact_policy.py` 加策略条目（与 `8e8f872` 对 `scripts/submit_*.sh` 的做法相同），不改冻结的 `dirty.py`。
 4. Step 16 的最终审计复用 Step 13 的判定：按快照指纹命中审计缓存，未命中才重跑。（原计划"Gate 2 位置不变"已被决策 2 取代：Gate 2 放在 Step 13 之前，执行顺序为 12 → 14 → 15 → Gate 2 → 13 → 16，见阶段 2 执行记录。）
-5. 更新 `STEPS.md`、`prompts/step14_abstract.txt`、`step15_polish.txt`、Judge 的 prompt，以及前端的步骤展示与 `tests/step-display.test.mjs`。
+5. 更新 `STEPS.md`、`prompts/step14_abstract.txt`、`step15_polish.txt`、Judge 的 prompt，以及前端的步骤展示与 `web/frontend/tests/step-display.test.mjs`。
 
 **退出条件**：回放中 F-C、F-D 两类回退和纯文档引起的回退归零；前端测试与核心测试全绿；CHANGELOG 记录合同变更。
 

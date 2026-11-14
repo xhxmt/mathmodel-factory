@@ -39,7 +39,7 @@ def test_deploy_script_runs_preflight_for_secret_manager_contract():
     assert "preflight" in deploy.split("# 主流程", maxsplit=1)[1]
 
     runbook = (REPO_ROOT / "web/docs/deployment/DEPLOYMENT.md").read_text(encoding="utf-8")
-    assert "uv sync --extra web --extra models --locked" in runbook
+    assert "uv sync --extra web --locked" in runbook
 
 
 def test_deploy_health_check_waits_for_backend_and_fails_on_timeout():
@@ -189,7 +189,8 @@ def test_reproducible_build_inputs_are_present_and_exported_from_uv_lock():
     assert all(path.is_file() and path.stat().st_size > 0 for path in expected)
     web_export = expected[2].read_text(encoding="utf-8")
     assert "--extra web" in web_export.splitlines()[1]
-    assert "--extra models" in web_export.splitlines()[1]
-    assert "google-antigravity==0.1.0" in web_export
+    # agy runs as a CLI now; the Python SDK extra was removed.
+    assert "--extra models" not in web_export.splitlines()[1]
+    assert "google-antigravity" not in web_export
     # The Cloud Run solver and its hash-locked image export were removed.
     assert not (REPO_ROOT / "cloud").exists()

@@ -33,7 +33,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 
 SCHEMA_VERSION = "objective-evidence-v1"
@@ -1016,62 +1016,6 @@ def run_safe_command(
         )
     except OSError as exc:
         return CommandResult(argv=values, returncode=127, stdout="", stderr=str(exc))
-
-
-def command_finding(
-    *,
-    finding_id: str,
-    claim_id: str,
-    checker_id: str,
-    checker_version: str,
-    result: CommandResult,
-    root: str | Path,
-    input_paths: Iterable[str | Path],
-    oracle_trusted: bool = True,
-    exact_contradiction: bool = False,
-    observed: Any = None,
-    expected: Any = None,
-    message: str = "",
-) -> Finding:
-    """Convert a command result to a conservative finding.
-
-    A non-zero command is *not* automatically a mathematical contradiction;
-    without an explicit parser assertion it becomes ``UNKNOWN``.  Callers that
-    independently parsed an exact violated invariant may pass
-    ``exact_contradiction=True`` and receive a hard-veto-eligible finding.
-    """
-
-    if result.ok:
-        return make_finding(
-            finding_id=finding_id,
-            claim_id=claim_id,
-            checker_id=checker_id,
-            checker_version=checker_version,
-            status="PASS",
-            severity="info",
-            trust_level="factory_oracle" if oracle_trusted else "infrastructure",
-            root=root,
-            input_paths=input_paths,
-            observed=observed if observed is not None else result.stdout,
-            expected=expected,
-            message=message or "oracle command passed",
-        )
-    return make_finding(
-        finding_id=finding_id,
-        claim_id=claim_id,
-        checker_id=checker_id,
-        checker_version=checker_version,
-        status="FAIL" if exact_contradiction else "UNKNOWN",
-        severity="hard_veto" if exact_contradiction else "soft_alert",
-        trust_level="factory_oracle" if oracle_trusted else "infrastructure",
-        root=root,
-        input_paths=input_paths,
-        observed=observed if observed is not None else {"returncode": result.returncode, "stderr": result.stderr},
-        expected=expected,
-        exact_contradiction=exact_contradiction,
-        reason=None if exact_contradiction else "command_error",
-        message=message or "oracle command did not complete successfully",
-    )
 
 
 def snapshot_bundle(root: str | Path, paths: Iterable[str | Path] | None = None) -> EvidenceBundle:

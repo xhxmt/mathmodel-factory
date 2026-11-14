@@ -11,6 +11,7 @@ import pytest
 from conftest import REPO_ROOT
 from project_diagnostics import write_status
 from factory_core.domain import RevisionConflict, WorkflowStatus
+from factory_core.service import FactoryService
 from factory_core.storage import SQLiteStateStore
 from factory_core.adapters.infrastructure.process import _process_identity
 
@@ -37,10 +38,10 @@ def test_pid_liveness_and_process_group_termination():
     )
     identity = _process_identity(process.pid)
     try:
-        assert mod._is_pid_live(process.pid) is True
+        assert FactoryService._pid_is_live(process.pid) is True
         mod._terminate_runner(process.pid, identity)
         process.wait(timeout=5)
-        assert mod._is_pid_live(process.pid) is False
+        assert FactoryService._pid_is_live(process.pid) is False
     finally:
         if process.poll() is None:
             process.kill()

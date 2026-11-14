@@ -110,10 +110,6 @@ def _is_v2(catalog_version: str | None) -> bool:
     raise ValueError(f"unsupported Stage catalog version: {catalog_version}")
 
 
-def contest_phases_for(catalog_version: str | None = None) -> tuple[ContestPhase, ...]:
-    return CONTEST_PHASES_V2 if _is_v2(catalog_version) else CONTEST_PHASES
-
-
 def phase_for_step(step_id: int, *, catalog_version: str | None = None) -> ContestPhase:
     phases = _PHASE_BY_STEP_V2 if _is_v2(catalog_version) else _PHASE_BY_STEP
     try:

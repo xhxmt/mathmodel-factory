@@ -160,8 +160,9 @@ achieved unique-writer guarantee. At the current baseline, compatibility
 decision recording, request supersede, prompt-attempt input binding, projection
 failure bookkeeping, bootstrap/migration, and archive relocation still include
 direct `SQLiteStateStore` writes. Do not add another bypass or claim exclusivity;
-use the characterized inventory and future gate specification in
-`docs/architecture/application_writer_allowlist_v1.json`.
+the characterized inventory and future gate specification
+(`application_writer_allowlist_v1.json`) were relocated to `~/paper_new` and are
+recorded in `docs/architecture/EXPERIMENTAL_CODE_SPLIT.json`.
 
 Artifacts defined by `STEPS.md` remain validation evidence. Recovery calls the
 registered Step validator: valid artifacts promote the interrupted Step;

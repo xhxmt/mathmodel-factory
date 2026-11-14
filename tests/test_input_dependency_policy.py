@@ -7,7 +7,6 @@ import pytest
 from factory_core.input_dependency_policy import (
     apply_to_record,
     classify_input,
-    recompute_start,
     recompute_steps,
 )
 
@@ -65,11 +64,16 @@ def test_a_new_file_was_never_consumed():
 
 
 def _start(*changes, completed=ALL_COMPUTATION):
-    dependencies = [
-        classify_input(artifact, baseline="abc123", v1_owner_stage=owner)
+    """Where the engine restarts: the earliest ``input_consumer_step`` that
+    ``apply_to_record`` records on the change records (engine.py takes the min)."""
+    records = [
+        {"owner_stage": owner, "cause_artifact": artifact, "baseline_fingerprint": "abc123"}
         for artifact, owner in changes
     ]
-    return recompute_start(dependencies, completed_steps=completed)
+    for record in records:
+        apply_to_record(record, initiator_stage=8, completed_steps=completed, stage_of_step=lambda step: step)
+    consumers = [record["input_consumer_step"] for record in records if "input_consumer_step" in record]
+    return min(consumers) if consumers else None
 
 
 def test_a_document_edit_in_revision_recomputes_nothing():

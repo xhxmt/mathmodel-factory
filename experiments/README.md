@@ -1,24 +1,25 @@
 # `experiments/` — 消融实验（Ablation Study）
 
-本目录维护 Legacy Adapter 的消融实验，具体开关和运行方式见下文。逐个关闭流水线的三个"加料"机制（原有的第四个 `no_method_lib` 已退役，见下文），在同一道题上
+本目录维护消融实验，具体开关和运行方式见下文。逐个关闭流水线的三个"加料"机制（原有的第四个 `no_method_lib` 已退役，见下文），在同一道题上
 重跑，用外部评分器（`evaluation/`）测量分数差——把"我们觉得这个组件有用"变成
 **数据支撑的证据**，供研究论文使用。
 
 ## 三个消融开关
 
-每个开关是 Legacy Adapter 读取的环境变量，默认 OFF（未设或非真值）。真值为
-`1` / `true` / `yes` / `on`。prompt 类消融在 **render 时**生效（`render_prompt()`），
+每个开关是 Native 引擎读取的环境变量，默认 OFF（未设或非真值）。真值为
+`1` / `true` / `yes` / `on`。prompt 类消融在 **render 时**生效（`factory_core/steps/prompting.py` 的 `_apply_ablations()`），
 **不改 prompt 源文件**（它们是 agent 契约，见 `CLAUDE.md`）。
 
 | 环境变量 | 关闭的机制 | 实现位置 |
 |---|---|---|
-| `ABLATE_NO_CONSULTATION` | Step 1 的 web 文献检索 | `render_prompt()` 删掉 `step1_research_viability.txt:133` 的 web 子句 |
-| `ABLATE_NO_JUDGE` | Step 13 Gate-2 评委 + reopen | Legacy Adapter 的 `run_step_13()` 写 `VERDICT: PASS` stub，跳过真实评委 |
-| `ABLATE_NO_INNOVATION_PROTECT` | PROTECTED 不可降级规则 | `render_prompt()` 删掉 Steps 4/6/7/10/11/12/13/14 的 PROTECTED 强制行 |
+| `ABLATE_NO_CONSULTATION` | Step 1 的 web 文献检索 | `_apply_ablations()` 删掉 `step1_research_viability.txt` 的 web 子句 |
+| `ABLATE_NO_JUDGE` | Gate-2 评委 + reopen | 两个 catalog：`factory_core/audit/service.py` 让最终审计跳过评委。v1 另有 Step 13 预审：`factory_core/steps/specialized.py` 写 `VERDICT: PRECHECK_PASS` stub。v2 的 Step 13 直接调用最终审计，不经过这个 stub |
+| `ABLATE_NO_INNOVATION_PROTECT` | PROTECTED 不可降级规则 | `_apply_ablations()` 删掉各 Step 提示词里的 PROTECTED 强制行 |
 
-开关生效时，runner 启动日志会打印 `ABLATIONS ACTIVE: ...`（写入项目 `runner.log`），
-便于事后核对每个项目跑的是哪个条件。开关经 `export` 传入，能穿过根兼容启动器的
-snapshot re-exec（`env` 不带 `-i`，环境保留）。
+事后核对条件：`ABLATE_NO_JUDGE` 在两个 catalog 下都会写 `judge_outputs/final_submission.ablation.json`，
+最终审计记录的 `decision` 为 `ABLATE_NO_JUDGE`（v1 的 Step 13 预审还会在 `judge_evaluation.md`
+写下 `Ablation: automated judge disabled.`）；两个提示词类开关不留日志标记，只能从项目名的
+`_<tag>_rep<k>` 后缀区分。开关经环境变量传给 `run_paper.sh`，环境原样保留。
 
 ## 用法
 
@@ -82,13 +83,11 @@ python3 experiments/compare_ablations.py --baseline ... --variant ... --json
 
 ## 测试（不跑完整流水线）
 
-`test_ablations.sh` 验证三个开关确实改变行为，秒级完成，不调用任何 agent：
-语法检查、render_prompt 删除（ON 删掉 / OFF 保留双向断言）、
-no-judge stub 契约、compare 脚本冒烟。
+- `ABLATE_NO_JUDGE` 由 pytest 覆盖（`tests/test_audit_service.py`、`tests/test_workflow_state.py`、`tests/test_atomic_release.py`）。
+- `ABLATE_NO_CONSULTATION` 和 `ABLATE_NO_INNOVATION_PROTECT` 目前没有自动测试；它们在 `factory_core/steps/prompting.py` 里改写提示词。
+- 正式运行前，可以给任一 launcher 加 `--dry-run`，只打印将要执行的命令。
 
-```bash
-./experiments/test_ablations.sh
-```
+原来的 `test_ablations.sh` 是从已删除的 Legacy Adapter（`factory_core/adapters/legacy_runner.sh`）里抽取函数来测的，已于 2026-11-14 删除。
 
 ## 文件
 
@@ -99,4 +98,3 @@ no-judge stub 契约、compare 脚本冒烟。
 | `ablation_no_judge.sh` | 设 `ABLATE_NO_JUDGE=1` |
 | `ablation_no_innovation_protect.sh` | 设 `ABLATE_NO_INNOVATION_PROTECT=1` |
 | `compare_ablations.py` | 基线 vs 变体的分数差表（复用 `scripts/parse_judge_score.py`） |
-| `test_ablations.sh` | 开关生效性测试 |

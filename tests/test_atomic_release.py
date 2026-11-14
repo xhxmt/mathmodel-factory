@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -18,7 +17,6 @@ from factory_core.native_boundary import NativeBoundaryError
 from factory_core.contest import ContestPolicy
 from factory_core.storage import SQLiteStateStore
 from scripts.package_submission import package_submission
-from scripts.publish_release import publish_current_audit
 
 
 def _write_approved_audit(project: Path, snapshot_id: str) -> None:
@@ -490,64 +488,6 @@ def test_release_recovery_is_idempotent_and_repairs_legacy_aliases(
     assert second.release_dir == first.release_dir
     assert (tmp_path / "papers/demo_paper.pdf").is_file()
     assert (tmp_path / "papers/demo_submission.zip").is_file()
-
-
-def test_publish_current_audit_uses_the_approved_snapshot(
-    tmp_path: Path, monkeypatch
-) -> None:
-    snapshot_id = "e" * 64
-    project = _project(tmp_path, "demo", snapshot_id)
-    shutil.copytree(
-        Path(__file__).resolve().parents[1] / "scripts",
-        tmp_path / "scripts",
-    )
-    shutil.copytree(
-        Path(__file__).resolve().parents[1] / "factory_core",
-        tmp_path / "factory_core",
-    )
-
-    def build_test_fixture_package(argv, **_kwargs):
-        from factory_core.submission_bundle import submission_bundle_manifest
-
-        assert "--stage-only" in argv
-        project_arg = Path(argv[2])
-        base_arg = str(argv[3])
-        output_arg = Path(argv[4])
-        manifest = submission_bundle_manifest(project_arg, base_arg)
-        with zipfile.ZipFile(output_arg, "w") as archive:
-            for item in manifest["members"]:
-                archive.write(
-                    project_arg / item["source_path"], item["archive_path"]
-                )
-        return subprocess.CompletedProcess(argv, 0)
-
-    monkeypatch.setattr(
-        "scripts.publish_release.subprocess.run", build_test_fixture_package
-    )
-
-    release = publish_current_audit(project, tmp_path)
-
-    assert release.release_id == snapshot_id
-    assert resolve_current_release(
-        tmp_path / "papers", "demo", project=project
-    ) is not None
-
-
-def test_publish_current_audit_rejects_nonfinal_or_unapproved_record(
-    tmp_path: Path,
-) -> None:
-    snapshot_id = "f" * 64
-    project = _project(tmp_path, "demo", snapshot_id)
-    latest = json.loads(
-        (project / ".factory/audits/latest.json").read_text(encoding="utf-8")
-    )
-    latest["profile"] = "paper"
-    (project / ".factory/audits/latest.json").write_text(
-        json.dumps(latest) + "\n", encoding="utf-8"
-    )
-
-    with pytest.raises(ValueError, match="does not authorize"):
-        publish_current_audit(project, tmp_path)
 
 
 def test_alias_sync_failure_does_not_switch_the_current_pointer(

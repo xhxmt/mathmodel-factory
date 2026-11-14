@@ -25,7 +25,7 @@ paper-factory-api.service
 - 必需 secret（MinerU、Gemini、DeepSeek、JWT、管理员密码）已存在；只验证元数据/访问状态，不打印值或片段。
 - `web/.env` 只含非敏感运行配置，例如 `GCP_PROJECT_ID`、`CORS_ORIGINS` 和首次升级时用于初始化访客展示集合的 `SHOWCASE_PROJECTS`。初始化后展示权限由管理员页面和 `web/auth.db` 持久化；敏感键会使部署预检失败。
 - 前端构建由服务用户执行，避免 root-owned `dist/` 阻塞下一次构建。
-- 根 `.venv` 已由 `uv sync --extra web --extra models --locked` 准备；部署时不会安装 Python 依赖。
+- 根 `.venv` 已由 `uv sync --extra web --locked` 准备；部署时不会安装 Python 依赖。
 - `pyproject.toml`、`uv.lock`、Web 的 requirements lock export 和前端 `package-lock.json` 完整且已审查。
 
 ## 标准部署
@@ -35,7 +35,7 @@ paper-factory-api.service
 ```bash
 cd /home/tfisher/paper_factory
 sudo -u tfisher -H /home/tfisher/google-cloud-sdk/bin/gcloud auth list
-sudo -u tfisher -H /home/tfisher/.local/bin/uv sync --extra web --extra models --locked
+sudo -u tfisher -H /home/tfisher/.local/bin/uv sync --extra web --locked
 sudo install -m 0644 deploy/systemd/paper-factory-api.service \
   /etc/systemd/system/paper-factory-api.service
 sudo systemctl daemon-reload

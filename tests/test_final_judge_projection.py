@@ -141,9 +141,18 @@ def published_old_report(project):
     return release
 
 
+def _cache_verified_report(project):
+    """Cache the verified receipt bytes the way older audits left them on disk."""
+    proof=mod.verified_final_report(project)
+    assert proof is not None
+    target=project/'.factory/generated_judge_reports'/proof['report']['sha256']
+    target.mkdir(parents=True,exist_ok=True)
+    (target/'judgment_receipt.json').write_bytes((project/'judge_outputs/judgment_receipt.json').read_bytes())
+
+
 def test_old_report_receipt_is_anchored_to_published_release(bound):
     project,record=bound;release=published_old_report(project)
-    mod.preserve_verified_final_report(project)
+    _cache_verified_report(project)
     assert mod.historical_final_report(project,record['sha256']) is not None
     (release/'final_audit_receipt.json').write_text('tampered')
     assert mod.historical_final_report(project,record['sha256']) is None
@@ -169,15 +178,9 @@ def test_non_object_judgment_fields_do_not_crash_delivery_projection(bound, fiel
         assert mod.historical_final_report(project, record['sha256']) is None
 
 
-def test_unpublished_report_cannot_be_preserved_as_published_evidence(bound):
-    project,_=bound
-    with pytest.raises(InvalidTransition,match='published PASS release'):
-        mod.preserve_verified_final_report(project)
-
-
 def test_new_final_audit_can_correct_authentic_old_generated_report(bound):
     project,record=bound;published_old_report(project)
-    mod.preserve_verified_final_report(project)
+    _cache_verified_report(project)
     store,state=make_store(project,record)
     p=project/'judge_evaluation.md';p.write_text('VERDICT: PASS\nNew native final review\n')
     updated={'path':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}

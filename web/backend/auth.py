@@ -4,7 +4,6 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import bcrypt
 import jwt
 
 from .auth_store import AuthStore
@@ -41,27 +40,6 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by unit tests withou
     status = _Status()
 
 security = HTTPBearer()
-
-
-def user_db(settings: Settings) -> dict[str, dict[str, Any]]:
-    return {
-        "admin": {
-            "password_hash": bcrypt.hashpw(
-                settings.admin_password.encode("utf-8"),
-                bcrypt.gensalt(),
-            ),
-            "username": "admin",
-            "role": "admin",
-        }
-    }
-
-
-def verify_password(password: str, password_hash: str | bytes) -> bool:
-    encoded_hash = password_hash.encode("utf-8") if isinstance(password_hash, str) else password_hash
-    try:
-        return bcrypt.checkpw(password.encode("utf-8"), encoded_hash)
-    except (TypeError, ValueError):
-        return False
 
 
 def create_access_token(settings: Settings, username: str, role: str, user_status: str = "active") -> str:

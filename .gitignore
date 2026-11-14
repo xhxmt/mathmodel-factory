@@ -23,7 +23,7 @@
 /reference_papers/
 
 # Root locked Python environment. Recreate with:
-#   uv sync --extra web --extra models --locked
+#   uv sync --extra web --locked
 /.venv/
 
 # Benchmark problems — fetched via scripts/fetch_benchmark.sh, not committed

@@ -62,62 +62,6 @@ def compute_checksum(value: Any) -> str:
     return hashlib.md5(normalized.encode()).hexdigest()[:8]
 
 
-def extract_tex_numbers(tex_path: str | Path) -> List[Dict[str, Any]]:
-    """Extract prose numbers from a paper, matching the legacy helper behavior."""
-    with open(tex_path, "r", encoding="utf-8", errors="replace") as f:
-        text = f.read()
-
-    doc_start = text.find(r"\begin{document}")
-    if doc_start >= 0:
-        text = text[doc_start:]
-
-    text = re.sub(
-        r'\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}',
-        '',
-        text,
-        flags=re.DOTALL,
-    )
-    text = re.sub(
-        r'\\(?:label|ref|input|includegraphics|cite[tp]?|citealp|hypersetup|bibliographystyle|bibliography)\{[^}]*\}',
-        '',
-        text,
-    )
-    text = re.sub(r'\\(?:begin|end)\{[^}]*\}', '', text)
-    text = re.sub(r'\\begin\{tabular\}.*?\\end\{tabular\}', '', text, flags=re.DOTALL)
-
-    results: List[Dict[str, Any]] = []
-    for line in text.splitlines():
-        if line.strip().startswith('%'):
-            continue
-        if re.match(r'^\s*\\(setcounter|renewcommand|newcommand|def\\)', line):
-            continue
-
-        for match in re.finditer(r'-?\d[\d,]*\.?\d*%?', line):
-            num_str = match.group()
-            if re.match(r'^(19|20)\d{2}$', num_str):
-                continue
-            clean = num_str.replace(',', '').rstrip('%')
-            try:
-                value = float(clean)
-            except ValueError:
-                continue
-            if value == 0:
-                continue
-            if value == int(value) and 1 <= value <= 20 and '.' not in num_str:
-                continue
-
-            start = max(0, match.start() - 40)
-            end = min(len(line), match.end() + 40)
-            context = line[start:end].strip()
-            results.append({
-                "number": num_str,
-                "value": value,
-                "is_pct": num_str.endswith('%'),
-                "context": context,
-            })
-    return results
-
-
 def extract_tex_numbers_from_project(
     project_dir: str | Path, base_name: str
 ) -> List[Dict[str, Any]]:
@@ -547,23 +491,6 @@ def verified_derived_tex_outputs(project_dir: Path) -> set[str]:
         return trusted
     except (OSError, ValueError, TypeError, AttributeError, DerivedArtifactError):
         return set()
-
-
-def extract_numbers_from_tex(
-    tex_file: Path, *, assume_document: bool = False
-) -> List[Tuple[int, str, float]]:
-    """
-    Extract numerical values from LaTeX file.
-
-    Returns:
-        [(line_number, context, value), ...]
-    """
-    with open(tex_file) as handle:
-        lines = [
-            (line_num, "", line)
-            for line_num, line in enumerate(handle, start=1)
-        ]
-    return _extract_numbers_from_lines(lines, assume_document=assume_document)
 
 
 def _extract_numbers_from_lines(

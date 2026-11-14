@@ -108,14 +108,3 @@ def evaluate_payload_path(path: str) -> PayloadPolicyFinding | None:
         raise PayloadPolicyEvaluationError(
             f"payload path policy failed closed for {path!r}"
         ) from error
-
-
-def require_payload_path_allowed(path: str) -> None:
-    """Reject a path before callers perform any payload filesystem I/O."""
-
-    finding = evaluate_payload_path(path)
-    if finding is not None:
-        raise PayloadPolicyEvaluationError(
-            "payload path rejected before file I/O: "
-            f"{path!r} ({finding.rule})"
-        )

@@ -39,7 +39,6 @@ from factory_core.dirty_classification import (
     LEGACY_UNRECORDED,
     classification_contract_sha256,
     classification_sources,
-    recorded_source,
     source_for,
 )
 from factory_core.domain import SCHEMA_VERSION
@@ -64,6 +63,19 @@ BEGIN
     SELECT RAISE(ABORT, 'workflow events are append-only');
 END;
 """
+
+
+def _stored_source(connection, cause_id: str) -> str | None:
+    """The provenance row production wrote for a cause; ``None`` when it wrote none.
+
+    Nothing in production reads this back, so the tests assert the stored row.
+    """
+    row = connection.execute(
+        "SELECT classification_source FROM dirty_cause_classification WHERE cause_id=?",
+        (str(cause_id),),
+    ).fetchone()
+    return None if row is None else str(row[0])
+
 
 
 def _db(project: Path) -> Path:
@@ -275,7 +287,7 @@ def test_v9_project_upgrades_and_replay_stays_valid(tmp_path):
 
 
 # --------------------------------------------------------------------------- 7
-def test_cause_without_provenance_reads_legacy_unrecorded(tmp_path):
+def test_cause_without_provenance_stores_no_provenance_row(tmp_path):
     project, store = _initialize(tmp_path)
     state = store.load()
     store.transition(
@@ -300,7 +312,7 @@ def test_cause_without_provenance_reads_legacy_unrecorded(tmp_path):
         cause_id = connection.execute(
             "SELECT cause_id FROM dirty_causes ORDER BY rowid DESC LIMIT 1"
         ).fetchone()[0]
-        assert recorded_source(connection, cause_id) == LEGACY_UNRECORDED
+        assert _stored_source(connection, cause_id) is None
         assert (
             connection.execute(
                 f"SELECT COUNT(*) FROM {_SIDE_TABLE} WHERE cause_id=?", (cause_id,)
@@ -311,11 +323,11 @@ def test_cause_without_provenance_reads_legacy_unrecorded(tmp_path):
         connection.close()
 
 
-def test_legacy_unrecorded_is_not_re_derived_from_the_current_classifier(tmp_path):
-    """A known-dirty path must still read legacy_unrecorded when no row exists.
+def test_unrecorded_cause_gets_no_provenance_row_from_the_current_classifier(tmp_path):
+    """A known-dirty path recorded without a source must get no provenance row.
 
-    'results/canonical_results.json' has a frozen owner today; if the read path
-    consulted the current classifier it would answer 'frozen_rule' instead.
+    'results/canonical_results.json' has a frozen owner today; if the write path
+    filled the source in from the current classifier the row would say 'frozen_rule'.
     """
 
     project, store = _initialize(tmp_path)
@@ -340,12 +352,12 @@ def test_legacy_unrecorded_is_not_re_derived_from_the_current_classifier(tmp_pat
         cause_id = connection.execute(
             "SELECT cause_id FROM dirty_causes ORDER BY rowid DESC LIMIT 1"
         ).fetchone()[0]
-        assert recorded_source(connection, cause_id) == LEGACY_UNRECORDED
+        assert _stored_source(connection, cause_id) is None
     finally:
         connection.close()
 
-    # and the derivation itself would have said frozen_rule -- proving the read
-    # path deliberately does not consult it
+    # and the derivation itself would have said frozen_rule -- proving the write
+    # path deliberately does not fill it in
     derived = classification_sources({}, {"results/canonical_results.json": "new"})
     assert derived[("RESULT_DIRTY", "results/canonical_results.json")] == "frozen_rule"
 
@@ -731,8 +743,8 @@ def test_bespoke_recovery_is_a_recordable_distinct_source(tmp_path):
             "cause_artifact, baseline_fingerprint, current_fingerprint, "
             "classifier_contract_sha256) VALUES ('x','RESULT_DIRTY',4,1,'a','b','c','d')"
         )
-        # no provenance row -> the pre-existing reading
-        assert recorded_source(connection, "x") == LEGACY_UNRECORDED
+        # no provenance row until one is recorded
+        assert _stored_source(connection, "x") is None
         record_classification(
             connection,
             cause_id="x",
@@ -740,7 +752,7 @@ def test_bespoke_recovery_is_a_recordable_distinct_source(tmp_path):
             contract_sha256="e" * 64,
         )
         # and the recovery path's own value is distinguishable from that reading
-        assert recorded_source(connection, "x") == "bespoke_recovery"
+        assert _stored_source(connection, "x") == "bespoke_recovery"
         connection.commit()
     finally:
         connection.close()

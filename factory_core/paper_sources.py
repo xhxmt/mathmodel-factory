@@ -821,14 +821,6 @@ def verify_latex_recorder_inputs(
     return payload
 
 
-def discover_paper_sources(
-    project_dir: str | Path, base_name: str | None = None
-) -> tuple[Path, ...]:
-    """Return every active LaTeX source reachable from supported paper roots."""
-
-    return resolve_latex_dependency_graph(project_dir, base_name).sources
-
-
 def discover_paper_dependencies(
     project_dir: str | Path, base_name: str | None = None
 ) -> tuple[Path, ...]:

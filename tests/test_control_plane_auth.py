@@ -11,7 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from web.backend.auth import WsTicketStore, create_access_token, decode_token, get_current_user
-from web.backend.auth import user_db, verify_password
+from web.backend.auth_store import verify_password
 from web.backend.auth_store import AuthStore
 from web.backend.config import Settings, validate_settings
 from web.backend.schemas import LoginRequest, RegisterRequest, UserDecisionRequest, UserInfo
@@ -66,15 +66,14 @@ def test_ws_ticket_is_single_use():
     assert second is None
 
 
-def test_user_db_hash_verifies_configured_password():
-    settings = Settings(
-        jwt_secret="0123456789abcdef0123456789abcdef",
-        admin_password="correct horse battery staple 42",
-    )
+def test_auth_store_verify_password_accepts_a_bcrypt_hash_of_the_password():
+    import bcrypt
 
-    user = user_db(settings)["admin"]
+    password = "correct horse battery staple 42"
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
 
-    assert verify_password("correct horse battery staple 42", user["password_hash"]) is True
+    assert verify_password(password, password_hash) is True
+    assert verify_password("wrong password", password_hash) is False
 
 
 class DummyWebSocket:
