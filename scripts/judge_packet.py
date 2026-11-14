@@ -903,6 +903,7 @@ def _manifest(
     registry: dict[str, object],
     objective_evidence: Path | None = None,
     submission_bundle: dict[str, object] | None = None,
+    solver_input_drifts: list[dict[str, object]] | None = None,
 ) -> dict:
     context_limit, _ = _supplement(project, role)
     status_counts = {
@@ -936,6 +937,11 @@ def _manifest(
         manifest["objective_evidence"] = objective_record
     if submission_bundle is not None:
         manifest["submission_bundle"] = submission_bundle
+    if solver_input_drifts:
+        # Informational, never a completeness requirement: solver-declared
+        # inputs whose bytes changed (or vanished) after the solve.  The
+        # execution auditor decides whether the adopted results still hold.
+        manifest["solver_input_drifts"] = solver_input_drifts
     canonical = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     manifest["packet_fingerprint"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return manifest
@@ -974,6 +980,18 @@ def packet_payloads(
     for requirement in solver_requirements:
         attested = [item["path"] for item in requirement.get("attested_outputs", [])]
         for relative in [*requirement["paths"], *attested]:
+            if relative not in known and (project / relative).is_file():
+                selected["execution"].append(project / relative)
+                known.add(relative)
+    from factory_core.solver_input_coverage import solver_declared_input_coverage
+    try:
+        solver_input_drifts = list(solver_declared_input_coverage(project).drifts)
+    except ValueError:
+        # Broken receipt state is reported by the solver_chain requirements
+        # above; the drift note is informational and must not crash the packet.
+        solver_input_drifts = []
+    for drift in solver_input_drifts:
+        for relative in [str(drift["path"]), *(str(item["path"]) for item in drift["receipts"])]:
             if relative not in known and (project / relative).is_file():
                 selected["execution"].append(project / relative)
                 known.add(relative)
@@ -1033,6 +1051,7 @@ def packet_payloads(
                 registry,
                 objective_evidence=objective_evidence,
                 submission_bundle=bundle_identity,
+                solver_input_drifts=solver_input_drifts if role == "execution" else None,
             ),
         }
     return result

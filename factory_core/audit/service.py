@@ -106,7 +106,6 @@ class FinalAuditService:
         runner: CommandRunner,
         fingerprinter: Fingerprinter | None = None,
         override_provider: OverrideProvider | None = None,
-        technical_flow_validation: bool = False,
     ) -> None:
         self.factory_root = factory_root.resolve()
         self.judge = judge
@@ -116,14 +115,6 @@ class FinalAuditService:
         self.override_provider = override_provider or default_override_provider(
             self.factory_root
         )
-        self.technical_flow_validation = bool(technical_flow_validation)
-
-    def _technical_authorization(self, project: Path):
-        if not self.technical_flow_validation:
-            return None
-        from ..solver_input_coverage import technical_solver_drift_authorization
-
-        return technical_solver_drift_authorization(project)
 
     def run(
         self,
@@ -209,20 +200,6 @@ class FinalAuditService:
     ) -> AuditOutcome:
         project = context.project_dir.resolve()
         base = project.name
-        technical_authorization = self._technical_authorization(project)
-        if self.technical_flow_validation and technical_authorization is None:
-            return self._failure(
-                project,
-                decision="TECHNICAL_FLOW_AUTHORIZATION_INVALID",
-                status=AuditStatus.FAIL,
-                error_class="PERMANENT_TECHNICAL_FLOW_AUTHORIZATION",
-                returncode=2,
-            )
-        if technical_authorization is not None:
-            # A technical penetration run must execute the live judges.  It
-            # may not consume a cached PASS bound to an earlier snapshot.
-            reuse_pass = False
-
         from ..storage import SQLiteStateStore
 
         decision_store = SQLiteStateStore(project)
@@ -239,7 +216,7 @@ class FinalAuditService:
             )
         if freeze_required:
             content_freeze = approvals["content_freeze"]
-            if technical_authorization is None and not (
+            if not (
                 content_freeze is not None
                 and content_freeze.get("approved") is True
                 and (content_freeze.get("receipt_verification") or {}).get("valid")
@@ -254,7 +231,7 @@ class FinalAuditService:
                 )
 
         if self._has_stub(project) or (
-            self._unresolved_blocking(project) and not self.technical_flow_validation
+            self._unresolved_blocking(project)
         ):
             from .ledger import deferred_blocking_issues
 
@@ -732,66 +709,6 @@ class FinalAuditService:
                     judge_completed=True,
                 )
 
-        if self.technical_flow_validation:
-            technical_authorization = self._technical_authorization(project)
-            if technical_authorization is None:
-                return self._failure(
-                    project,
-                    snapshot=snapshot,
-                    decision="TECHNICAL_FLOW_AUTHORIZATION_INVALID",
-                    status=AuditStatus.INDETERMINATE,
-                    error_class="PERMANENT_TECHNICAL_FLOW_AUTHORIZATION",
-                    returncode=2,
-                    judge_completed=judge_completed,
-                )
-            status = (
-                AuditStatus.PASS
-                if decision == "PASS" and judge_completed
-                else AuditStatus.OVERRIDDEN
-            )
-            record = AuditRecord(
-                snapshot_id=snapshot.snapshot_id,
-                base=project.name,
-                profile=self.profile,
-                status=status,
-                decision=decision,
-                judge_completed=judge_completed,
-                delivery_allowed=False,
-                created_at=_utc_now(),
-                error_class="PERMANENT_TECHNICAL_FLOW_NO_DELIVERY",
-                returncode=2,
-                override=False,
-                evidence={
-                    "judge": judge_result.metadata,
-                    "technical_flow_validation": True,
-                    "technical_authorization": str(
-                        technical_authorization.path.relative_to(project)
-                    ),
-                    "technical_authorization_sha256": (
-                        technical_authorization.sha256
-                    ),
-                    "content_freeze_approved": False,
-                    "quality_pass_fabricated": False,
-                    "delivery_allowed": False,
-                },
-            )
-            record = self._persist(project, snapshot, record)
-            execution = ExecutionResult.failed(
-                "PERMANENT_TECHNICAL_FLOW_NO_DELIVERY",
-                returncode=2,
-                audit_status=record.status.value,
-                audit_snapshot=snapshot.snapshot_id,
-                audit_result=str(
-                    self._analysis_latest_path(project).relative_to(project)
-                ),
-                final_decision=decision,
-                judge_completed=judge_completed,
-                technical_flow_validation=True,
-                quality_pass_fabricated=False,
-                delivery_allowed=False,
-            )
-            return AuditOutcome(execution, record, snapshot)
-
         if analysis_only:
             status = AuditStatus.PASS
             record = AuditRecord(
@@ -983,7 +900,6 @@ class FinalAuditService:
                     "judge_executed": False,
                     "quality_pass_fabricated": False,
                     "snapshot_id": snapshot.snapshot_id,
-                    "technical_flow_validation": self.technical_flow_validation,
                     "delivery_allowed": False,
                     "terminal_reason": "PERMANENT_ABLATION_NO_DELIVERY",
                     "returncode": 2,
@@ -991,7 +907,6 @@ class FinalAuditService:
             )
         evidence: dict[str, object] = {
             "governance": "ABLATE_NO_JUDGE",
-            "technical_flow_validation": self.technical_flow_validation,
             "quality_pass_fabricated": False,
             "delivery_allowed": False,
             "analysis_only": analysis_only,
@@ -1028,7 +943,6 @@ class FinalAuditService:
                 final_decision=record.decision,
                 gate2_delivery_override=False,
                 ablation="ABLATE_NO_JUDGE",
-                technical_flow_validation=self.technical_flow_validation,
                 quality_pass_fabricated=False,
                 delivery_allowed=False,
             ),
@@ -1060,7 +974,7 @@ class FinalAuditService:
                 )
 
         acceptance_checks, acceptance = self._run_acceptance_checks(project)
-        if acceptance is not None and not self.technical_flow_validation:
+        if acceptance is not None:
             return self._failure(
                 project,
                 decision="CONTENT_NOT_READY",
