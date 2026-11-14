@@ -1,7 +1,7 @@
 import json
 
 from factory_core.current_dirty import capture_artifact_manifest, manifest_fingerprint, classifier_contract_sha256
-from factory_core.domain import SCHEMA_VERSION, WorkflowStatus
+from factory_core.domain import SCHEMA_VERSION
 from factory_core.final_evidence_recovery import classifier_equivalent_for_restored_checkpoints
 from factory_core.storage import SQLiteStateStore
 from factory_core.workflow_events import canonical_hash
@@ -52,16 +52,3 @@ def test_restored_checkpoints_stay_equivalent_while_business_files_are_unchanged
     (tmp_path / "sample_paper.tex").write_text("drift")
     assert not classifier_equivalent_for_restored_checkpoints(
         store, checkpoints, classifier_contract_sha256())
-
-
-def test_requested_run_scope_stops_before_execution(tmp_path):
-    from test_stage_scheduler import stage_registry
-    from factory_core.engine import FactoryEngine
-    from factory_core.stages import STAGE_SCHEDULER_GENERATION
-    registry, lifecycles = stage_registry()
-    store = SQLiteStateStore(tmp_path)
-    store.initialize(project_id="bounded", project_type="modeling", scheduler_generation=STAGE_SCHEDULER_GENERATION)
-    state = FactoryEngine(tmp_path, store=store, registry=registry).run(allowed_source_steps=frozenset({16}))
-    assert state.status is WorkflowStatus.PAUSED
-    assert not any(event.type == "STEP_STARTED" for event in store.events())
-    assert store.events()[-1].type == "RUN_BOUNDARY_REACHED"

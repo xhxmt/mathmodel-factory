@@ -191,7 +191,6 @@ class FactoryEngine:
 
     def run(
         self, *, max_steps: int | None = None,
-        allowed_source_steps: frozenset[int] | None = None,
     ) -> WorkflowState:
         """Advance the project."""
 
@@ -278,7 +277,6 @@ class FactoryEngine:
             state,
             lease=lease,
             max_steps=max_steps,
-            allowed_source_steps=allowed_source_steps,
         )
 
     def _advance_loop(
@@ -287,7 +285,6 @@ class FactoryEngine:
         *,
         lease: str,
         max_steps: int | None,
-        allowed_source_steps: frozenset[int] | None,
     ) -> WorkflowState:
         completed_this_run = 0
         while True:
@@ -307,15 +304,6 @@ class FactoryEngine:
                         "heartbeat_at": None,
                     },
                     payload={"reason": "max_steps"},
-                )
-            if allowed_source_steps is not None and definition.id not in allowed_source_steps:
-                return self._owned_transition(
-                    state, lease, event_type="RUN_BOUNDARY_REACHED",
-                    changes={"status": WorkflowStatus.PAUSED, "runner_pid": None,
-                             "runner_lease_id": None, "heartbeat_at": None},
-                    payload={"reason": "selected source step outside requested run scope",
-                             "selected_step": definition.id,
-                             "allowed_source_steps": sorted(allowed_source_steps)},
                 )
             attempt = state.attempt + 1 if state.active_step == definition.id else 1
             content_attempts_used = (
