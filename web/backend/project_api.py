@@ -782,6 +782,27 @@ def _log_is_non_empty(path: Path) -> bool:
         return False
 
 
+def _worker_log_has_output(path: Path) -> bool:
+    """Whether a worker log holds more than the worker's exit status line.
+
+    A worker that exits normally prints one JSON state line to its stdout,
+    which is this file; that line would otherwise hide the real tail.  Any
+    other line (a traceback, a warning) is worth showing.
+    """
+
+    for line in read_tail_lines(path, 50):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            if isinstance(json.loads(text), dict):
+                continue
+        except ValueError:
+            pass
+        return True
+    return False
+
+
 def recent_logs_payload(project: Path, lines: int) -> dict[str, Any]:
     """Select the newest non-empty log and return its tail.
 
@@ -791,8 +812,9 @@ def recent_logs_payload(project: Path, lines: int) -> dict[str, Any]:
     run writes directly under ``logs/``: model output (``step_*``), the
     audit, Judge, compile and delivery commands (``native_*``,
     ``adapters/infrastructure/commands.py``) and the engine worker's own
-    stdout/stderr (``worker_*``, ``FactoryService``; usually empty unless the
-    worker crashed).  ``runner.log`` is still read for historical projects
+    stdout/stderr (``worker_*``, ``FactoryService``), but only when it holds
+    something besides the JSON state line a normal exit prints -- a traceback
+    after a crash, say.  ``runner.log`` is still read for historical projects
     from the retired shell runner.  The read is bounded to the requested tail.
     """
 
@@ -801,8 +823,13 @@ def recent_logs_payload(project: Path, lines: int) -> dict[str, Any]:
         return {"logs": []}
 
     candidates: list[Path] = []
-    for pattern in ("step_*.log", "native_*.log", "worker_*.log", "runner.log"):
+    for pattern in ("step_*.log", "native_*.log", "runner.log"):
         candidates.extend(path for path in logs_dir.glob(pattern) if path.is_file())
+    candidates.extend(
+        path
+        for path in logs_dir.glob("worker_*.log")
+        if path.is_file() and _worker_log_has_output(path)
+    )
 
     candidates = sorted(candidates, key=_log_mtime, reverse=True)
     candidates = [path for path in candidates if _log_is_non_empty(path)] or candidates

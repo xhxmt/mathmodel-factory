@@ -2,7 +2,7 @@
 
 ## 2026-11-14 — 实时日志跟上 Native 运行实际写出的日志
 
-- **`/api/projects/{base}/logs`**：候选日志由 `step_*.log` + `runner.log` 扩为 `step_*.log`、`native_*.log`、`worker_*.log`、`runner.log`。Native 运行时，最终审计、评审、编译和交付只写 `native_*` 日志（`adapters/infrastructure/commands.py`），引擎 worker 崩溃时的 traceback 只在 `worker_*.log`（`FactoryService`）里；此前实时日志面板在这些阶段一直停留在最后一份模型日志上。选择规则不变：最新修改时间优先、非空文件优先（正常结束的 worker 日志是空的，不会盖过其他日志）。`runner.log` 只有已退役的 shell runner 会写，为历史项目保留。原先重复的 `step_*_{claude,codex,agy}_*.log` 模式已由 `step_*.log` 覆盖，删去。
+- **`/api/projects/{base}/logs`**：候选日志由 `step_*.log` + `runner.log` 扩为 `step_*.log`、`native_*.log`、`worker_*.log`、`runner.log`。Native 运行时，最终审计、评审、编译和交付只写 `native_*` 日志（`adapters/infrastructure/commands.py`），引擎 worker 崩溃时的 traceback 只在 `worker_*.log`（`FactoryService`）里；此前实时日志面板在这些阶段一直停留在最后一份模型日志上。选择规则不变：最新修改时间优先、非空文件优先。worker 正常退出时只往日志里打一行状态 JSON，这种 worker 日志不参与候选，只有含其他输出（如 traceback）的才会显示。`runner.log` 只有已退役的 shell runner 会写，为历史项目保留。原先重复的 `step_*_{claude,codex,agy}_*.log` 模式已由 `step_*.log` 覆盖，删去。
 - **前端**：删除诊断动作 `open_failed_artifact` 的映射和标签。后端从不发出这个动作，它指向的 `logs/runner.log` 在 Native 项目里也不存在。
 
 ## 2026-11-14 — 删除从未接入的求解对账模块、旧单评委提示词和 6 月一次性报告

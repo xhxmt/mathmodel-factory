@@ -1215,7 +1215,7 @@ def test_recent_logs_shows_native_command_logs(tmp_path):
     assert "packet built" in response["logs"]
 
 
-def test_recent_logs_shows_a_crashed_worker_log_but_skips_empty_ones(tmp_path):
+def test_recent_logs_shows_a_crashed_worker_log_but_skips_empty_and_clean_exit_ones(tmp_path):
     mod = load_main_module(factory_root=tmp_path, auth_db_file=tmp_path / "web" / "auth.db")
     user = mod.UserInfo(username="admin", role="admin")
     logs_dir = tmp_path / "ongoing" / "demo" / "logs"
@@ -1223,12 +1223,16 @@ def test_recent_logs_shows_a_crashed_worker_log_but_skips_empty_ones(tmp_path):
     model = logs_dir / "step_5_codex_20260912_065035_1.log"
     crashed = logs_dir / "worker_20260912_070000.log"
     empty = logs_dir / "worker_20260912_080000.log"
+    exited = logs_dir / "worker_20260912_090000.log"
     model.write_text("model output\n", encoding="utf-8")
     crashed.write_text("Traceback (most recent call last):\n", encoding="utf-8")
     empty.write_text("", encoding="utf-8")
+    # A normal exit prints only the final state as one JSON line.
+    exited.write_text('{"revision": 42, "status": "completed"}\n', encoding="utf-8")
     os.utime(model, (1000, 1000))
     os.utime(crashed, (2000, 2000))
     os.utime(empty, (3000, 3000))
+    os.utime(exited, (4000, 4000))
 
     response = asyncio.run(mod.get_recent_logs("demo", lines=5, current_user=user))
 
