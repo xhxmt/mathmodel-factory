@@ -598,26 +598,24 @@ def test_final_input_manifest_excludes_final_audit_output(tmp_path):
     verify_final_input_snapshot(tmp_path, snapshot)
 
 
-def test_unregistered_authored_artifact_blocks_finalization(tmp_path):
+def test_unregistered_authored_artifact_is_included_in_finalization(tmp_path):
     paper = tmp_path / f"{tmp_path.name}_paper.tex"
     paper.write_text("\\begin{document}hello\\end{document}\n", encoding="utf-8")
     (tmp_path / "calibration.json").write_text('{"scale": 2}\n', encoding="utf-8")
 
-    with pytest.raises(ValueError, match="ownership coverage.*calibration.json"):
-        build_final_input_manifest(tmp_path)
+    snapshot = build_final_input_manifest(tmp_path)
+    assert "calibration.json" in {item["path"] for item in snapshot.manifest["files"]}
 
 
-def test_unregistered_inactive_paper_artifact_blocks_finalization(tmp_path):
+def test_unregistered_inactive_paper_artifact_is_included_in_finalization(tmp_path):
     paper = tmp_path / f"{tmp_path.name}_paper.tex"
     paper.write_text("\\begin{document}hello\\end{document}\n", encoding="utf-8")
     draft_data = tmp_path / "paper" / "calibration.json"
     draft_data.parent.mkdir()
     draft_data.write_text('{"scale": 2}\n', encoding="utf-8")
 
-    with pytest.raises(
-        ValueError, match="ownership coverage.*paper/calibration.json"
-    ):
-        build_final_input_manifest(tmp_path)
+    snapshot = build_final_input_manifest(tmp_path)
+    assert "paper/calibration.json" in {item["path"] for item in snapshot.manifest["files"]}
 
 
 def test_declared_unowned_attachment_is_covered_and_included(tmp_path):

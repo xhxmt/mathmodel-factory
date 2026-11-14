@@ -401,7 +401,7 @@ def _write_minimal_active_paper(project):
         "solver_input.py",
     ],
 )
-def test_solver_declared_unowned_input_blocks_submission_bundle(
+def test_solver_declared_unowned_input_is_included_in_submission_bundle(
     tmp_path, relative
 ):
     from factory_core.submission_bundle import submission_bundle_paths
@@ -412,10 +412,8 @@ def test_solver_declared_unowned_input_blocks_submission_bundle(
     input_path.write_bytes(b"solver-input-fixture")
     _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
 
-    with pytest.raises(
-        ValueError, match="solver-declared input lacks ownership.*" + input_path.name
-    ):
-        submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+    bundle_paths = submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+    assert input_path.resolve() in bundle_paths
 
 
 def test_solver_declared_intermediate_is_routed_without_including_scratch(tmp_path):
@@ -457,136 +455,29 @@ def test_solver_declared_owned_input_is_in_submission_and_final_identity(tmp_pat
     assert any(path.endswith("coverage-job.submitted.json") for path in final_paths)
 
 
-def test_solver_declared_input_exclusion_receipt_is_bound_to_final_identity(tmp_path):
+
+
+def test_solver_submission_receipt_input_drift_is_recorded_not_blocking(tmp_path):
     from factory_core.finalization import build_final_input_manifest
-    from factory_core.solver_input_coverage import (
-        build_solver_input_exclusion_receipt,
-        write_solver_input_exclusion_receipt,
-    )
-    from factory_core.submission_bundle import submission_bundle_paths
 
     _write_minimal_active_paper(tmp_path)
-    input_path = tmp_path / "replication" / "private_seed.npy"
+    input_path = tmp_path / "data" / "raw" / "config.yaml"
     input_path.parent.mkdir(parents=True)
-    input_path.write_bytes(b"NUMPYfixture")
-    submitted = _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
-    record = submitted["inputs"][0]
-    exclusion = build_solver_input_exclusion_receipt(
-        relative_path=record["path"],
-        input_sha256=record["sha256"],
-        reason="licensed input cannot be redistributed; receipt preserves exact identity",
-    )
-    exclusion_path = write_solver_input_exclusion_receipt(tmp_path, exclusion)
+    input_path.write_text("alpha: 1\n", encoding="utf-8")
+    _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
+    input_path.write_text("alpha: 2\n", encoding="utf-8")
 
-    bundle_paths = submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
-    assert input_path.resolve() not in bundle_paths
     snapshot = build_final_input_manifest(tmp_path)
-    final_paths = {item["path"] for item in snapshot.manifest["files"]}
-    assert exclusion_path.relative_to(tmp_path).as_posix() in final_paths
-    assert "replication/private_seed.npy" not in final_paths
+    assert "data/raw/config.yaml" in {item["path"] for item in snapshot.manifest["files"]}
+    [drift] = snapshot.manifest["solver_input_drifts"]
+    assert (drift["path"], drift["kind"]) == ("data/raw/config.yaml", "content")
+    assert drift["receipts"][0]["path"].endswith("coverage-job.submitted.json")
 
 
-def test_solver_submission_receipt_input_drift_blocks_finalization(tmp_path):
-    import pytest
-    from factory_core.finalization import build_final_input_manifest
-
-    _write_minimal_active_paper(tmp_path)
-    input_path = tmp_path / "data" / "raw" / "config.yaml"
-    input_path.parent.mkdir(parents=True)
-    input_path.write_text("alpha: 1\n", encoding="utf-8")
-    _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
-    input_path.write_text("alpha: 2\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="solver input content drift"):
-        build_final_input_manifest(tmp_path)
 
 
-def test_solver_input_drift_requires_exact_expiring_technical_authorization(
-    tmp_path, monkeypatch
-):
-    import time
-
-    from factory_core.solver_input_coverage import (
-        SolverInputDriftError,
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_ENV,
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_SCHEMA,
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_SHA_ENV,
-        solver_declared_input_coverage,
-    )
-    from factory_core.human_decisions import build_decision_request
-
-    input_path = tmp_path / "data" / "raw" / "config.yaml"
-    input_path.parent.mkdir(parents=True)
-    input_path.write_text("alpha: 1\n", encoding="utf-8")
-    _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
-    input_path.write_text("alpha: 2\n", encoding="utf-8")
-
-    with pytest.raises(SolverInputDriftError) as captured:
-        solver_declared_input_coverage(tmp_path)
-    drift = captured.value.to_dict()
-    _write_minimal_active_paper(tmp_path)
-    request = build_decision_request(
-        project_id=tmp_path.name,
-        requested_revision=2,
-        project_dir=tmp_path,
-        action={"type": "approval", "gate": "content_freeze"},
-        reason="review the drifted content snapshot",
-    )
-    assert request.metadata["solver_input_drift"] == drift
-    authorization = {
-        "schema_version": TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_SCHEMA,
-        "project_id": tmp_path.name,
-        "project_path": str(tmp_path.resolve()),
-        "scope": "run4_downstream_bug_validation",
-        "expires_at": int(time.time()) + 3_600,
-        "drifts": [drift],
-        "quality_pass_fabricated": False,
-        "content_freeze_approved": False,
-        "delivery_allowed": False,
-    }
-    authorization_path = (
-        tmp_path / ".factory/technical_flow/stale_solver_inputs.json"
-    )
-    authorization_path.parent.mkdir(parents=True)
-    encoded = (
-        json.dumps(authorization, ensure_ascii=False, indent=2, sort_keys=True)
-        + "\n"
-    ).encode("utf-8")
-    authorization_path.write_bytes(encoded)
-    monkeypatch.setenv(
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_ENV, str(authorization_path)
-    )
-    monkeypatch.setenv(
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_SHA_ENV,
-        hashlib.sha256(encoded).hexdigest(),
-    )
-
-    coverage = solver_declared_input_coverage(tmp_path)
-    assert input_path.resolve() in coverage.included_paths
-    assert coverage.authorized_drifts == (drift,)
-    assert authorization_path.resolve() in coverage.evidence_paths
-    assert any(
-        path.name == "coverage-job.submitted.json"
-        for path in coverage.evidence_paths
-    )
-
-    input_path.write_text("alpha: 3\n", encoding="utf-8")
-    with pytest.raises(SolverInputDriftError):
-        solver_declared_input_coverage(tmp_path)
-
-
-def test_missing_solver_input_requires_exact_technical_authorization(
-    tmp_path, monkeypatch
-):
-    import time
-
-    from factory_core.solver_input_coverage import (
-        SolverInputDriftError,
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_ENV,
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_SCHEMA,
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_SHA_ENV,
-        solver_declared_input_coverage,
-    )
+def test_missing_solver_input_is_recorded_with_its_receipts(tmp_path):
+    from factory_core.solver_input_coverage import solver_declared_input_coverage
 
     input_path = tmp_path / "data" / "intermediate" / "m2_spectra.npz"
     input_path.parent.mkdir(parents=True)
@@ -594,52 +485,13 @@ def test_missing_solver_input_requires_exact_technical_authorization(
     _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
     input_path.unlink()
 
-    with pytest.raises(SolverInputDriftError) as captured:
-        solver_declared_input_coverage(tmp_path)
-    drift = captured.value.to_dict()
+    coverage = solver_declared_input_coverage(tmp_path)
+    [drift] = coverage.drifts
     assert drift["kind"] == "missing"
     assert drift["current"] == {"exists": False}
-
-    authorization = {
-        "schema_version": TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_SCHEMA,
-        "project_id": tmp_path.name,
-        "project_path": str(tmp_path.resolve()),
-        "scope": "run4_downstream_bug_validation",
-        "expires_at": int(time.time()) + 3_600,
-        "drifts": [drift],
-        "quality_pass_fabricated": False,
-        "content_freeze_approved": False,
-        "delivery_allowed": False,
-    }
-    authorization_path = (
-        tmp_path / ".factory/technical_flow/stale_solver_inputs.json"
-    )
-    authorization_path.parent.mkdir(parents=True)
-    encoded = (
-        json.dumps(authorization, ensure_ascii=False, indent=2, sort_keys=True)
-        + "\n"
-    ).encode("utf-8")
-    authorization_path.write_bytes(encoded)
-    monkeypatch.setenv(
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_ENV, str(authorization_path)
-    )
-    monkeypatch.setenv(
-        TECHNICAL_SOLVER_DRIFT_AUTHORIZATION_SHA_ENV,
-        hashlib.sha256(encoded).hexdigest(),
-    )
-
-    coverage = solver_declared_input_coverage(tmp_path)
     assert input_path.resolve() not in coverage.included_paths
-    assert coverage.authorized_drifts == (drift,)
-    assert authorization_path.resolve() in coverage.evidence_paths
-    assert any(
-        path.name == "coverage-job.submitted.json"
-        for path in coverage.evidence_paths
-    )
-
-    input_path.write_bytes(b"different replacement")
-    with pytest.raises(SolverInputDriftError):
-        solver_declared_input_coverage(tmp_path)
+    receipt = tmp_path / drift["receipts"][0]["path"]
+    assert receipt.resolve() in coverage.evidence_paths
 
 
 def test_solver_submission_receipt_superseded_rerun_uses_latest_inputs(tmp_path):
@@ -672,8 +524,7 @@ def test_solver_submission_receipt_superseded_rerun_uses_latest_inputs(tmp_path)
     )
 
 
-def test_solver_submission_receipt_latest_rerun_drift_still_blocks(tmp_path):
-    import pytest
+def test_solver_submission_receipt_latest_rerun_drift_is_still_recorded(tmp_path):
     from factory_core.finalization import build_final_input_manifest
 
     _write_minimal_active_paper(tmp_path)
@@ -689,8 +540,8 @@ def test_solver_submission_receipt_latest_rerun_drift_still_blocks(tmp_path):
     )
     input_path.write_text("alpha: 3\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="solver input content drift"):
-        build_final_input_manifest(tmp_path)
+    drifts = build_final_input_manifest(tmp_path).manifest["solver_input_drifts"]
+    assert [item["path"] for item in drifts] == ["data/raw/config.yaml"]
 
 
 def _write_completed_job(
@@ -910,7 +761,7 @@ def test_solver_input_later_same_script_can_retire_obsolete_missing_output(tmp_p
     assert new_submitted.resolve() in evidence
 
 
-def test_solver_input_drift_after_completed_output_still_blocks(tmp_path):
+def test_solver_input_drift_after_completed_output_is_still_recorded(tmp_path):
     from factory_core.solver_input_coverage import solver_declared_input_coverage
 
     input_path = tmp_path / "data" / "intermediate" / "candidate.json"
@@ -939,8 +790,9 @@ def test_solver_input_drift_after_completed_output_still_blocks(tmp_path):
         finished_at=4,
     )
 
-    with pytest.raises(ValueError, match="solver input content drift"):
-        solver_declared_input_coverage(tmp_path)
+    coverage = solver_declared_input_coverage(tmp_path)
+    assert [item["path"] for item in coverage.drifts] == ["data/intermediate/candidate.json"]
+    assert input_path.resolve() in coverage.included_paths
 
 
 def test_solver_input_from_explicitly_failed_job_is_not_final_evidence(tmp_path):
@@ -977,50 +829,8 @@ def test_solver_input_from_explicitly_failed_job_is_not_final_evidence(tmp_path)
     assert submitted_path.resolve() not in coverage.evidence_paths
 
 
-def test_solver_input_exclusion_receipt_is_append_only(tmp_path):
-    from factory_core.solver_input_coverage import (
-        build_solver_input_exclusion_receipt,
-        write_solver_input_exclusion_receipt,
-    )
-
-    first = build_solver_input_exclusion_receipt(
-        relative_path="replication/private_seed.npy",
-        input_sha256="a" * 64,
-        reason="licensed input",
-    )
-    path = write_solver_input_exclusion_receipt(tmp_path, first)
-    assert write_solver_input_exclusion_receipt(tmp_path, first) == path
-
-    changed = build_solver_input_exclusion_receipt(
-        relative_path="replication/private_seed.npy",
-        input_sha256="a" * 64,
-        reason="different reason",
-    )
-    with pytest.raises(ValueError, match="immutable.*already differs"):
-        write_solver_input_exclusion_receipt(tmp_path, changed)
 
 
-def test_solver_input_exclusion_receipt_path_binds_input_hash(tmp_path):
-    from factory_core.solver_input_coverage import (
-        build_solver_input_exclusion_receipt,
-        write_solver_input_exclusion_receipt,
-    )
-
-    first = build_solver_input_exclusion_receipt(
-        relative_path="config/model.toml",
-        input_sha256="a" * 64,
-        reason="first version",
-    )
-    second = build_solver_input_exclusion_receipt(
-        relative_path="config/model.toml",
-        input_sha256="b" * 64,
-        reason="second version",
-    )
-    first_path = write_solver_input_exclusion_receipt(tmp_path, first)
-    second_path = write_solver_input_exclusion_receipt(tmp_path, second)
-
-    assert first_path != second_path
-    assert first_path.is_file() and second_path.is_file()
 
 
 @pytest.mark.parametrize(
@@ -1032,15 +842,8 @@ def test_solver_input_exclusion_receipt_path_binds_input_hash(tmp_path):
         "paper/appendix_sources/pro01/anything.npz",
     ],
 )
-def test_a_registered_but_unowned_unrouted_input_is_refused(tmp_path, relative):
-    """A policy entry that neither owns nor routes is not accountability.
-
-    The check refused a solver-declared input only when ``artifact_policy()``
-    returned ``None``, so *any* registered path passed - including the
-    EXPLICIT_ONLY entries that carry no ``ownership_rule`` and no ``route_stage``.
-    Such an entry describes the path without conferring anything, and its mere
-    presence admitted an input with nothing accountable for where it came from.
-    """
+def test_a_registered_but_unowned_unrouted_input_is_included(tmp_path, relative):
+    """Every solver-declared input is delivered, whatever the registry says of it."""
 
     from factory_core.artifact_policy import artifact_policy
     from factory_core.submission_bundle import submission_bundle_paths
@@ -1058,8 +861,8 @@ def test_a_registered_but_unowned_unrouted_input_is_refused(tmp_path, relative):
     input_path.write_bytes(b"solver-input-fixture")
     _write_solver_submission_receipt_for_coverage(tmp_path, input_path)
 
-    with pytest.raises(ValueError, match="lacks ownership or an explicit route"):
-        submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+    bundle_paths = submission_bundle_paths(tmp_path, tmp_path.name, require_pdf=False)
+    assert input_path.resolve() in bundle_paths
 
 
 def test_a_registered_and_routed_input_is_still_admitted(tmp_path):
@@ -1088,3 +891,21 @@ def test_a_registered_and_routed_input_is_still_admitted(tmp_path):
     assert any(str(path).endswith(relative) for path in selected), (
         "an accountable solver-declared input must still reach the bundle"
     )
+
+
+def test_an_unowned_tracked_file_is_delivered_as_an_unowned_member(tmp_path):
+    """No registry rule owns it and nothing routes it: it is included, not refused."""
+    from factory_core.artifact_policy import artifact_policy
+    from factory_core.submission_bundle import submission_bundle_manifest
+
+    _write_minimal_active_paper(tmp_path)
+    notes = tmp_path / "extra_analysis_notes.md"
+    notes.write_text("authored but unregistered\n", encoding="utf-8")
+    assert artifact_policy("extra_analysis_notes.md") is None, "precondition: unowned"
+
+    members = {
+        item["archive_path"]: item
+        for item in submission_bundle_manifest(tmp_path, tmp_path.name, require_pdf=False)["members"]
+    }
+    member = members["extra_analysis_notes.md"]
+    assert (member["owner_stage"], member["semantic_domain"]) == (None, "unowned")

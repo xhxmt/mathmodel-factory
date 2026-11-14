@@ -516,3 +516,31 @@ def test_noncritical_large_code_is_disclosed_without_blocking_execution_role(tmp
     )
     assert limitation["status"] == "truncated"
     assert limitation["critical"] is False
+
+
+def test_execution_manifest_lists_solver_input_drift_without_requiring_it(tmp_path):
+    """Drift is shown to the execution auditor and never becomes a completeness gate."""
+    from test_package_submission import _write_solver_submission_receipt_for_coverage
+
+    project = tmp_path / "demo"
+    project.mkdir()
+    _write(project, "demo_paper.tex", "paper body")
+    _write(project, "problem/problem_brief.md", "problem statement")
+    _write(project, "model.md", "mathematical model")
+    _write(project, "symbol_table.md", "x: decision variable\n")
+    _write(project, "solve_log.md", "solver command and output")
+    _write_solver_submission_receipt_for_coverage(project, project / "symbol_table.md")
+    _write(project, "symbol_table.md", "x: decision variable (reworded)\n")
+
+    manifests = build_packets(project, base_name="demo")
+
+    execution = manifests["execution"]
+    [drift] = execution["solver_input_drifts"]
+    assert (drift["path"], drift["kind"]) == ("symbol_table.md", "size")
+    [item] = [item for item in execution["files"] if item["path"] == "symbol_table.md"]
+    assert item["status"] == "included"
+    assert not any(
+        str(item["id"]).startswith("solver_input_drift")
+        for item in execution["completeness"]["requirements"]
+    )
+    assert "solver_input_drifts" not in manifests["paper"]

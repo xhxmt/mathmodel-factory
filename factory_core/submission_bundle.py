@@ -128,11 +128,6 @@ def submission_bundle_paths(
     resolved_base = base or project.name
     graph = require_safe_latex_dependencies(project, resolved_base)
     selected: set[Path] = set(graph.files)
-    from .submission_routes import declared_submission_routes
-
-    routes = declared_submission_routes(project)
-    selected.update(routes.files)
-    selected.update(routes.evidence)
 
     pdf_candidate = project / f"{resolved_base}_paper.pdf"
     if require_pdf:
@@ -155,37 +150,10 @@ def submission_bundle_paths(
     from .solver_input_coverage import solver_declared_input_coverage
 
     solver_coverage = solver_declared_input_coverage(project)
-    # Historical bytes and their reviewed version bindings accompany the current
-    # input; accepting an old Solver receipt must never discard its exact inputs.
-    for version_path in solver_coverage.versioned_paths:
-        selected.add(
-            _validate_regular_file(project, version_path, label="versioned solver input evidence")
-        )
-    active_latex = {path.relative_to(project).as_posix() for path in graph.files}
-    declared = declared_delivery_files(project)
+    # Every solver-declared input belongs to the submission, owned or not; a
+    # drifted one is included as it is now, and the drift is recorded for the
+    # Judge (solver_input_coverage), not refused here.
     for solver_input in solver_coverage.included_paths:
-        relative = solver_input.relative_to(project).as_posix()
-        # A registered policy is not by itself ownership or a route.  An
-        # EXPLICIT_ONLY entry that is neither a final input nor a submission member
-        # carries no ``ownership_rule`` and no ``route_stage``: it *describes* the
-        # path without conferring anything.  Treating its mere presence as
-        # sufficient admitted a solver-declared input that nothing owned and
-        # nothing routed, which is the case this check exists to refuse.
-        policy = artifact_policy(relative)
-        has_ownership = policy is not None and policy.ownership_rule is not None
-        has_route = policy is not None and (
-            policy.route_stage is not None or policy.route_flag is not None
-        )
-        if (
-            not (has_ownership or has_route)
-            and relative not in active_latex
-            and relative not in declared
-            and relative not in routes.roles
-        ):
-            raise ValueError(
-                "solver-declared input lacks ownership or an explicit route: "
-                + relative
-            )
         selected.add(
             _validate_regular_file(
                 project, solver_input, label="solver-declared submission input"
@@ -193,20 +161,23 @@ def submission_bundle_paths(
         )
     from .dirty import tracked_artifact_paths
 
+    # A tracked authored file that no registry rule owns is included as an
+    # ``unowned`` member rather than refused, so nothing authored is dropped
+    # silently and nothing needs a hand-registered route to be delivered.
     selected_relatives = {
         path.relative_to(project).as_posix() for path in selected
     }
-    unowned = sorted(
-        relative
-        for relative in tracked_artifact_paths(project)
-        if artifact_policy(relative) is None
-        and relative not in selected_relatives
-    )
-    if unowned:
-        raise ValueError(
-            "authored artifact ownership coverage failed: "
-            + ", ".join(unowned[:8])
-        )
+    for relative in tracked_artifact_paths(project):
+        if (
+            artifact_policy(relative) is None
+            and relative not in selected_relatives
+            and not _should_skip(project / relative, Path(relative))
+        ):
+            selected.add(
+                _validate_regular_file(
+                    project, project / relative, label="unowned authored file"
+                )
+            )
     return tuple(sorted(selected, key=lambda path: path.relative_to(project).as_posix()))
 
 
@@ -218,9 +189,6 @@ def submission_bundle_manifest(
 ) -> dict[str, Any]:
     project = Path(project_dir).resolve()
     resolved_base = base or project.name
-    from .submission_routes import declared_submission_routes
-
-    routes = declared_submission_routes(project)
     members = []
     for path in submission_bundle_paths(
         project, resolved_base, require_pdf=require_pdf
@@ -233,11 +201,9 @@ def submission_bundle_manifest(
                 "archive_path": relative,
                 "size": path.stat().st_size,
                 "sha256": _sha256(path),
-                "owner_stage": (
-                    ownership.owner_stage if ownership is not None else routes.roles.get(relative, {}).get("owner_stage")
-                ),
+                "owner_stage": ownership.owner_stage if ownership is not None else None,
                 "semantic_domain": (
-                    ownership.semantic_domain if ownership is not None else routes.roles.get(relative, {}).get("semantic_domain", "unowned")
+                    ownership.semantic_domain if ownership is not None else "unowned"
                 ),
             }
         )

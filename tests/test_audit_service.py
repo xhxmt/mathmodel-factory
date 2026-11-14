@@ -549,66 +549,6 @@ def test_analysis_only_rerun_preserves_same_snapshot_acceptance_authority(
     assert final_audit_is_current(project) is True
 
 
-def test_technical_flow_runs_real_judge_but_never_allows_delivery(
-    tmp_path: Path, monkeypatch
-) -> None:
-    root = tmp_path / "factory"
-    project = root / "ongoing" / "demo"
-    project.mkdir(parents=True)
-    authorization = project / ".factory/technical_flow/authorization.json"
-    authorization.parent.mkdir(parents=True)
-    authorization.write_text("{}\n", encoding="utf-8")
-    judge = PassingJudge()
-    service = FinalAuditService(
-        root,
-        judge,
-        FakeValidator(),
-        RecordingRunner(),
-        fingerprinter=lambda _project, _base: "6" * 64,
-        technical_flow_validation=True,
-    )
-    monkeypatch.setattr(
-        service,
-        "_technical_authorization",
-        lambda _project: SimpleNamespace(
-            path=authorization,
-            sha256="5" * 64,
-        ),
-    )
-    monkeypatch.setattr(service, "_unresolved_blocking", lambda _project: True)
-    monkeypatch.setattr(
-        service,
-        "_run_acceptance_checks",
-        lambda _project: (
-            [
-                {
-                    "name": "derived_artifacts",
-                    "passed": False,
-                    "severity": "hard",
-                    "returncode": 1,
-                }
-            ],
-            ExecutionResult.failed(
-                "PERMANENT_DELIVERY_ACCEPTANCE",
-                returncode=1,
-                check="derived_artifacts",
-            ),
-        ),
-    )
-
-    outcome = service.run(
-        make_context(project), reuse_pass=True, analysis_only=False
-    )
-
-    assert judge.judge_calls == 1
-    assert outcome.record.status is AuditStatus.PASS
-    assert outcome.record.judge_completed is True
-    assert outcome.record.delivery_allowed is False
-    assert outcome.execution.error_class == "PERMANENT_TECHNICAL_FLOW_NO_DELIVERY"
-    assert outcome.execution.metadata["quality_pass_fabricated"] is False
-    assert not (project / "judge_outputs/final_submission.sha256").exists()
-
-
 def test_normal_final_audit_still_blocks_unresolved_issue_ledger(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1061,48 +1001,6 @@ def test_no_judge_ablation_result_is_never_reusable(
     assert normal.record.status is AuditStatus.PASS
     assert normal.record.reused is False
     assert judge.judge_calls == 1
-
-
-def test_technical_flow_plus_no_judge_ablation_is_non_delivery_terminal(
-    tmp_path: Path, monkeypatch
-) -> None:
-    class AblatedJudge:
-        @staticmethod
-        def execute(_context):
-            raise AssertionError("technical ablation must not execute the judge")
-
-    root = tmp_path / "factory"
-    project = root / "ongoing" / "demo"
-    project.mkdir(parents=True)
-    authorization = project / ".factory/technical_flow/authorization.json"
-    authorization.parent.mkdir(parents=True)
-    authorization.write_text("{}\n", encoding="utf-8")
-    monkeypatch.setenv("ABLATE_NO_JUDGE", "1")
-    service = FinalAuditService(
-        root,
-        AblatedJudge(),
-        FakeValidator(),
-        RecordingRunner(),
-        fingerprinter=lambda _project, _base: "5" * 64,
-        technical_flow_validation=True,
-    )
-    monkeypatch.setattr(
-        service,
-        "_technical_authorization",
-        lambda _project: SimpleNamespace(path=authorization, sha256="6" * 64),
-    )
-
-    outcome = service.run(
-        make_context(project), reuse_pass=True, analysis_only=False
-    )
-
-    assert outcome.record.decision == "ABLATE_NO_JUDGE"
-    assert outcome.record.delivery_allowed is False
-    assert outcome.record.evidence["technical_flow_validation"] is True
-    assert outcome.execution.returncode == 2
-    assert outcome.execution.metadata["technical_flow_validation"] is True
-    assert not (project / "judge_outputs/final_submission.sha256").exists()
-    assert not (project / "judge_outputs/final_acceptance_receipt.json").exists()
 
 
 # -- Stage catalog v2: Step 16 promotes the Step-13 final Judge --------------

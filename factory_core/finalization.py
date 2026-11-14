@@ -15,7 +15,7 @@ from .artifact_policy import (
 from .current_artifact_ownership import ARTIFACT_OWNERSHIP_SCHEMA
 
 
-FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v4"
+FINAL_INPUT_MANIFEST_SCHEMA = "factory-final-input-manifest-v5"
 
 
 class FinalizationSnapshotChanged(RuntimeError):
@@ -82,6 +82,8 @@ def build_final_input_manifest(project_dir: str | Path) -> FinalInputSnapshot:
         }
         for path in _input_paths(project)
     ]
+    from .solver_input_coverage import solver_declared_input_coverage
+
     identity = {
         "schema_version": FINAL_INPUT_MANIFEST_SCHEMA,
         "artifact_ownership_schema": ARTIFACT_OWNERSHIP_SCHEMA,
@@ -89,6 +91,8 @@ def build_final_input_manifest(project_dir: str | Path) -> FinalInputSnapshot:
         "files": files,
         "planned_submission_bundle": planned_bundle,
         "approval_receipts": verified_approval_receipts(project),
+        # Recorded, not blocking: inputs whose bytes changed after the solve.
+        "solver_input_drifts": list(solver_declared_input_coverage(project).drifts),
     }
     fingerprint = _canonical_hash(identity)
     manifest = {**identity, "fingerprint": fingerprint}
@@ -148,6 +152,8 @@ def verify_final_input_snapshot(
         and not changed
     ):
         changed.append("<approval-receipts>")
+    from .solver_input_coverage import solver_declared_input_coverage
+
     identity = {
         "schema_version": FINAL_INPUT_MANIFEST_SCHEMA,
         "artifact_ownership_schema": ARTIFACT_OWNERSHIP_SCHEMA,
@@ -155,6 +161,7 @@ def verify_final_input_snapshot(
         "files": [current_records[path] for path in sorted(current_records)],
         "planned_submission_bundle": current_bundle,
         "approval_receipts": current_approvals,
+        "solver_input_drifts": list(solver_declared_input_coverage(project).drifts),
     }
     if _canonical_hash(identity) != snapshot.fingerprint and not changed:
         changed = ["<manifest-identity>"]
