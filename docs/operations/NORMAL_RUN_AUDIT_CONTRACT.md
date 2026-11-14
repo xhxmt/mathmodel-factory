@@ -90,9 +90,7 @@ signals are sent and `RUNNER_EXIT_UNVERIFIED` with interrupted state is persiste
 Old records lacking the identity/lease binding require explicit reconciliation;
 they do not grant cancellation authority.
 
-The separate `persistent_launcher` helper persists STARTING before launch,
-records initialization exceptions and recognizes a missing monitor as INTERRUPTED
-with process-tree exit unverified. A missing or reused normal worker PID also
+A missing or reused normal worker PID
 projects interrupted execution; `recorded_workflow_state` retains the database
 state for diagnosis, without mutating workflow history on read. SIGKILL cannot guarantee that a dead monitor
 continues discovering or cleaning descendants. These bounded lifecycle checks do
