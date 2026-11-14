@@ -537,7 +537,8 @@ def test_execution_manifest_lists_solver_input_drift_without_requiring_it(tmp_pa
     execution = manifests["execution"]
     [drift] = execution["solver_input_drifts"]
     assert (drift["path"], drift["kind"]) == ("symbol_table.md", "size")
-    assert "symbol_table.md" in {item["path"] for item in execution["files"]}
+    [item] = [item for item in execution["files"] if item["path"] == "symbol_table.md"]
+    assert item["status"] == "included"
     assert not any(
         str(item["id"]).startswith("solver_input_drift")
         for item in execution["completeness"]["requirements"]

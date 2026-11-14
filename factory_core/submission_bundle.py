@@ -168,7 +168,11 @@ def submission_bundle_paths(
         path.relative_to(project).as_posix() for path in selected
     }
     for relative in tracked_artifact_paths(project):
-        if artifact_policy(relative) is None and relative not in selected_relatives:
+        if (
+            artifact_policy(relative) is None
+            and relative not in selected_relatives
+            and not _should_skip(project / relative, Path(relative))
+        ):
             selected.add(
                 _validate_regular_file(
                     project, project / relative, label="unowned authored file"

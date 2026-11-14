@@ -5,10 +5,10 @@
 交付收集原有三条"失败即停"规则：求解器声明的输入在求解后被改过或丢失（漂移）、求解输入没有归属也没有路由、跟踪的作者文件没有归属。它们的出口——输入版本登记（`solver_input_versions`）、排除回执、提交路由（`submission_routes`）和环境变量 `FACTORY_TECHNICAL_FLOW_AUTHORIZATION`——都没有 CLI 或 Web 入口，验收 A 只能靠项目里的手写脚本直接调用这些函数才完成交付。核对后发现 v2 的输入依赖返工只覆盖 `models/`、`scripts/`、`data/`、`results/`，求解脚本读过的文档（验收 A 中是 `symbol_table.md`、`assumption_ledger.md`、`quality_contract.json`）被后续 Step 正常修改时不会重跑，漂移必然留到交付。
 
 - **漂移记录不拦截**：`solver_declared_input_coverage` 不再抛 `SolverInputDriftError`，而是在 `SolverInputCoverage.drifts` 里返回每个漂移（`factory-solver-input-drift-v1`，格式不变：路径、`content`/`size`/`missing`、当前大小与哈希、各求解回执的期望值），用当前文件纳入，回执作为证据。漂移明细写进内容冻结的审批主体（`solver_input_drifts`，批准绑定当时看到的漂移）、最终输入快照（`factory-final-input-manifest-v5`）和执行评审包的 `manifest.json`（`solver_input_drifts`，只作说明，不是完整性要求，漂移文件被截断也不会让角色变成 INDETERMINATE）。`prompts/judges/execution_auditor.txt` 新增一条规则：不影响计算的文档修订记入 limitations，改变求解依赖的代码、数据或参数则按"结果不可追溯到当前执行"处理，不得仅因存在漂移就判 FAIL。
-- **无主文件默认纳入**：求解器声明的输入无论有无归属一律纳入提交包；没有任何归属规则的跟踪作者文件以 `unowned` 成员纳入（`owner_stage` 为 null），不再报 `authored artifact ownership coverage failed`。
+- **无主文件默认纳入**：求解器声明的输入无论有无归属一律纳入提交包；没有任何归属规则、也没有策略的跟踪作者文件以 `unowned` 成员纳入（`owner_stage` 为 null，跳过 LaTeX 编译产物等临时文件），打包不再报 `authored artifact ownership coverage failed`；有显式非提交策略的路径（如 Step 2 的 `m<N>_*`）仍不进包。内容冻结的审批主体改为覆盖整个提交包，审批后再改这些文件会让批准失效。Step 2 校验不变，仍要求跟踪文件有归属或策略（`unowned_artifacts`）。
 - **删除**：`factory_core/solver_input_versions.py`、`factory_core/submission_routes.py` 及其测试；`solver_input_coverage` 中的排除回执与技术授权；`FinalAuditService` 的 `technical_flow_validation` 模式（两个生产构造函数都从未打开它，它只为 Run4 下游验证配合技术授权存在）及其测试。只测这些出口的测试删除；断言"拒绝/拦截"的测试改为断言纳入或记录，场景保留。
 - **失去的能力**：排除回执曾允许把不能再分发的输入（如授权数据）留在提交包外；现在求解器声明的输入一律进包。
-- **一次性影响**：`judge_packet.py`、`submission_bundle.py` 和执行评审提示词属于评审身份，已有的最终评审要在新代码下重跑一次才能用于覆盖交付；旧的 v4 最终输入快照会被识别为已变化并重建。验收 A 项目里已登记的输入版本和路由文件不再被读取，它的发布已经完成，不受影响。
+- **一次性影响**：`judge_packet.py`、`submission_bundle.py` 和执行评审提示词属于评审身份，已有的最终评审要在新代码下重跑一次才能用于覆盖交付；交付路径会按 v5 重新生成最终输入快照。验收 A 项目里已登记的输入版本和路由文件不再被读取，它的发布已经完成，不受影响。
 
 ## 2026-11-14 — 全仓扫描后删除无调用方的代码和依赖
 

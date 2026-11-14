@@ -271,7 +271,14 @@ def _decision_fingerprints_with_metadata(
         ):
             subject_paths.update(_contained_files(project, value))
         from .solver_input_coverage import solver_declared_input_coverage
+        from .submission_bundle import submission_bundle_paths
 
+        # Everything the submission would deliver, including unowned tracked
+        # files and solver inputs it now includes by default, so a later edit
+        # to any of them makes the approval stale.
+        subject_paths.update(
+            submission_bundle_paths(project, project.name, require_pdf=False)
+        )
         solver_coverage = solver_declared_input_coverage(project)
         subject_paths.update(solver_coverage.included_paths)
         subject_paths.update(solver_coverage.evidence_paths)

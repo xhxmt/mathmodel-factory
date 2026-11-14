@@ -479,8 +479,8 @@ authorization that produces `OVERRIDDEN`, may continue. An experimental workflow
 acceptance, release, submission, or delivery request is rejected,
 including requests with an exact workflow/run-generation coordinate.
 Stage 10 runs cleanup before building the canonical authored
-`factory-final-input-manifest-v4`, which binds the shared artifact-ownership
-schema. From `FINAL_SNAPSHOT_CREATED` until the atomic current-pointer switch,
+`factory-final-input-manifest-v5`, which binds the shared artifact-ownership
+schema and records solver input drift (`solver_input_drifts`). From `FINAL_SNAPSHOT_CREATED` until the atomic current-pointer switch,
 that manifest is rechecked at audit and publisher boundaries; any mutation
 records `FINALIZATION_ABORTED_SNAPSHOT_CHANGED`, reopens the owning Stage, and
 forbids reuse of the old audit/acceptance receipt.

@@ -201,10 +201,13 @@ rejects active attempts, unresolved dirty/projection state, pending Finalization
 snapshots, unfinished human decisions, and any current manifest drift from
 `stage_cursor_input`. Dirty state is keyed by `(flag, owner_stage)` so one
 domain cannot overwrite another Stage's active cause. Final/submission
-collection includes a tracked authored file that no registry rule owns as an
-`unowned` bundle member rather than refusing it, and includes every
+collection includes a tracked authored file that has no registry rule at all
+(no ownership and no policy; paths with an explicit non-submission policy such
+as the Step 2 `m<N>_*` fallback stay out) as an `unowned` bundle member rather
+than refusing it, skipping build artifacts, and includes every existing
 solver-declared input. A solver-declared input whose bytes changed after the
-solve (or that vanished) is recorded, not blocking: `solver_input_coverage`
+solve is included as it is now and recorded, and one that vanished is only
+recorded; neither blocks: `solver_input_coverage`
 returns it in `drifts` (`factory-solver-input-drift-v1`), the content-freeze
 subject, the final input manifest (`factory-final-input-manifest-v5`) and the
 execution packet's `manifest.json` (`solver_input_drifts`) carry it, and the
