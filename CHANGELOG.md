@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-14 — 实时日志跟上 Native 运行实际写出的日志
+
+- **`/api/projects/{base}/logs`**：候选日志由 `step_*.log` + `runner.log` 扩为 `step_*.log`、`native_*.log`、`worker_*.log`、`runner.log`。Native 运行时，最终审计、评审、编译和交付只写 `native_*` 日志（`adapters/infrastructure/commands.py`），引擎 worker 崩溃时的 traceback 只在 `worker_*.log`（`FactoryService`）里；此前实时日志面板在这些阶段一直停留在最后一份模型日志上。选择规则不变：最新修改时间优先、非空文件优先。worker 正常退出时只往日志里打一行状态 JSON，这种 worker 日志不参与候选，只有含其他输出（如 traceback）的才会显示。`runner.log` 只有已退役的 shell runner 会写，为历史项目保留。原先重复的 `step_*_{claude,codex,agy}_*.log` 模式已由 `step_*.log` 覆盖，删去。
+- **前端**：删除诊断动作 `open_failed_artifact` 的映射和标签。后端从不发出这个动作，它指向的 `logs/runner.log` 在 Native 项目里也不存在。
+
 ## 2026-11-14 — 删除引擎的 Step 调度执行分支
 
 - **引擎只执行 Stage 调度项目**：`FactoryEngine.run()` / `recover()` 遇到 `step_v2` 项目时以 `STAGE_SCHEDULER_REQUIRED` 拒绝，不写任何事件（`FactoryService` 早已在入口处做同样的拒绝）。删除 `_advance_loop` 里按 `registry.next_after` 选下一步的路径、`stage_mode` 参数，以及十余处"没有 Stage 任务时走 Step 版转移"的回退分支（失败、期限、预算耗尽、重开、成功提交、恢复的提升/重开/失败）；`StepRegistry.next_after` 一并删除。

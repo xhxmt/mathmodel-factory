@@ -782,14 +782,40 @@ def _log_is_non_empty(path: Path) -> bool:
         return False
 
 
+def _worker_log_has_output(path: Path) -> bool:
+    """Whether a worker log holds more than the worker's exit status line.
+
+    A worker that exits normally prints one JSON state line to its stdout,
+    which is this file; that line would otherwise hide the real tail.  Any
+    other line (a traceback, a warning) is worth showing.
+    """
+
+    for line in read_tail_lines(path, 50):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            if isinstance(json.loads(text), dict):
+                continue
+        except ValueError:
+            pass
+        return True
+    return False
+
+
 def recent_logs_payload(project: Path, lines: int) -> dict[str, Any]:
     """Select the newest non-empty log and return its tail.
 
     Blocking by design: the route hands this to the threadpool, so the directory
-    scan, the stat calls and the read stay off the event loop.  The selection
-    rule is unchanged from when this body lived inline in the route -- newest
-    mtime wins, non-empty files are preferred, and ``runner.log`` participates --
-    but the read is now bounded to the requested tail.
+    scan, the stat calls and the read stay off the event loop.  Newest mtime
+    wins and non-empty files are preferred.  The candidates are what a Native
+    run writes directly under ``logs/``: model output (``step_*``), the
+    audit, Judge, compile and delivery commands (``native_*``,
+    ``adapters/infrastructure/commands.py``) and the engine worker's own
+    stdout/stderr (``worker_*``, ``FactoryService``), but only when it holds
+    something besides the JSON state line a normal exit prints -- a traceback
+    after a crash, say.  ``runner.log`` is still read for historical projects
+    from the retired shell runner.  The read is bounded to the requested tail.
     """
 
     logs_dir = project / "logs"
@@ -797,16 +823,13 @@ def recent_logs_payload(project: Path, lines: int) -> dict[str, Any]:
         return {"logs": []}
 
     candidates: list[Path] = []
-    for pattern in (
-        "step_*.log",
-        "step_*_claude_*.log",
-        "step_*_codex_*.log",
-        "step_*_agy_*.log",
-    ):
-        candidates.extend(logs_dir.glob(pattern))
-    runner_log = logs_dir / "runner.log"
-    if runner_log.is_file():
-        candidates.append(runner_log)
+    for pattern in ("step_*.log", "native_*.log", "runner.log"):
+        candidates.extend(path for path in logs_dir.glob(pattern) if path.is_file())
+    candidates.extend(
+        path
+        for path in logs_dir.glob("worker_*.log")
+        if path.is_file() and _worker_log_has_output(path)
+    )
 
     candidates = sorted(candidates, key=_log_mtime, reverse=True)
     candidates = [path for path in candidates if _log_is_non_empty(path)] or candidates

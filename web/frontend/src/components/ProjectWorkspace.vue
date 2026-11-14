@@ -489,7 +489,6 @@ export default {
         open_human_review: { path: 'human_review.md', type: 'markdown', name: 'human_review.md' },
         open_selection_request: { path: `selection/${props.project.selection_gate || 'step3'}_request.md`, type: 'markdown', name: 'selection request' },
         open_selection_evidence: { path: `selection/${props.project.selection_gate || 'step3'}_options.json`, type: 'json', name: 'selection options' },
-        open_failed_artifact: { path: 'logs/runner.log', type: 'text', name: 'runner.log' },
       }
       const request = evidenceMap[actionId]
       if (request) requestFile(request)
