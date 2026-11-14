@@ -334,13 +334,6 @@ unresolved BLOCKING/MAJOR issues runs after Step 12.
 **Catalog v1 (the default).** The rest of this section is the v1 Step 13
 contract.
 
-For an explicitly requested technical evaluation after an unsuccessful Step13,
-the bounded operator route in `factory_core.repair_operations` records an
-authorization and the actual failure/reopen event, then executes Steps14–16
-with their own Stage/Step identities. It leaves Step13 unsuccessful and the
-workflow paused. Step16 in this route is analysis-only; no release/acceptance
-permission or production-completion event is issued. Normal gates are unchanged.
-
 Experimental forensic routes are preserved only in the separate `~/paper_new`
 workspace and are not part of this Native workflow.
 

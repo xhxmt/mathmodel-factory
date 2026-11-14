@@ -1,4 +1,4 @@
-# Bounded rerun repair and technical continuation
+# Bounded rerun repair
 
 This is the current operator contract for the 2026-09-06 rerun findings. It does
 not authorize Phase9-A, Run4, migration, deployment, delivery or Phase10-B.
@@ -12,62 +12,11 @@ the step; changing inputs or implementation does not grant an extra attempt.
 The former `repair-retry` command has been removed. Existing attempt/event
 history remains intact, and historical repair grants do not extend the budget.
 Normal retries within the configured limit and ordinary recovery remain in
-place. The explicit Step13 technical continuation below is a separate route.
-
-## Step13 unsuccessful, then evaluate Steps14–16
-
-This separate manual route is outside the accepted normal-run repair scope.
-New normal runs must not create or inherit these grants. Its previously reported
-success/recovery limitations remain unresolved; the commands below document the
-existing operator interface, not a claim that the route was repaired. See
-[NORMAL_RUN_AUDIT_CONTRACT.md](NORMAL_RUN_AUDIT_CONTRACT.md).
-
-Before the selected Step13 attempt, record the explicit local operator intent:
-
-```sh
-python -m factory_core.repair_operations authorize-gate2 PROJECT \
-  --expected-revision REVISION --reason 'evaluate downstream despite Step13 outcome'
-```
-
-On FAIL, REVISE, INDETERMINATE, infrastructure failure or a reopen outcome, the
-engine preserves the actual failure/reopen event and pauses before running an
-upstream step. Continue from the returned revision:
-
-```sh
-python -m factory_core.repair_operations continue-gate2 PROJECT \
-  --expected-revision PAUSED_REVISION
-```
-
-This consumes the event-bound grant exactly once. Step14/15 execute their
-prepare/execute/validate contracts with Stage9 identity. Step16 uses Stage10
-identity and the analysis-only audit service. Each technical outcome has its
-own event; failed checks stop the route. Step13 receives no success event and
-the production completion cursor is not advanced. The workflow ends paused,
-even if the final scientific verdict is PASS. Ordinary production resumption
-still requires the normal workflow and human gates.
-
-This local technical authorization is separate from administrator delivery
-overrides, Web access permissions and per-project human decisions. It never
-resolves a pending human gate or permits acceptance/release side effects.
-
-## Persistent local launcher
-
-Use a unique external control directory instead of a short-lived shell parent:
-
-```sh
-python -m factory_core.persistent_launcher start CONTROL_ROOT --cwd SOURCE_ROOT \
-  --key UNIQUE_REQUEST --timeout 3600 -- python -m factory_core.repair_operations \
-  continue-gate2 PROJECT --expected-revision PAUSED_REVISION
-python -m factory_core.persistent_launcher status CONTROL_ROOT
-python -m factory_core.persistent_launcher cancel CONTROL_ROOT
-```
-
-The detached Linux monitor owns a lifetime file lock, an immutable command
-request, readiness status and separate stdout/stderr logs. An exact repeated
-start returns the same run; a different request requires a new directory.
-Cancellation records verified process-tree exit, including adopted orphaned
-descendants. A timeout or interrupted status is not a scientific verdict.
-Do not reuse or delete an interrupted control directory to conceal its history.
+place. The manual Step13 technical continuation (`repair_operations
+authorize-gate2/continue-gate2`) and its `persistent_launcher` were removed on
+2026-11-14. A failed Step is retried with `factory action retry-step`, the
+explicit operator reset: it applies only to a FAILED Step at the cursor and
+starts that Step again at attempt 1.
 
 ## Judge evidence
 

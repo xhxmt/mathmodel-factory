@@ -756,18 +756,6 @@ def test_v2_classifier_identity_is_separate_and_v1_unchanged(tmp_path):
     assert FactoryEngine._classifier_sha(v2.load()) != classifier_contract_sha256()
 
 
-def test_v2_has_no_step13_technical_continuation(tmp_path):
-    from factory_core import technical_continuation
-
-    registry, _ = v2_registry()
-    store = v2_store(tmp_path, last_completed_step=12)
-    engine = FactoryEngine(tmp_path, store=store, registry=registry)
-    with pytest.raises(InvalidTransition, match="catalog v2"):
-        technical_continuation.authorize(
-            engine, expected_revision=store.load().revision, reason="test"
-        )
-
-
 # -- the v2 Step-13 lifecycle ----------------------------------------------
 
 def test_final_judge_step_runs_the_full_final_audit_as_analysis(tmp_path, monkeypatch):
