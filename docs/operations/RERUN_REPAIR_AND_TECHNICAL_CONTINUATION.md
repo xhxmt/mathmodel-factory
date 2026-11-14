@@ -14,7 +14,9 @@ history remains intact, and historical repair grants do not extend the budget.
 Normal retries within the configured limit and ordinary recovery remain in
 place. The manual Step13 technical continuation (`repair_operations
 authorize-gate2/continue-gate2`) and its `persistent_launcher` were removed on
-2026-11-14; a failed Step is retried with `factory action retry-step`.
+2026-11-14. A failed Step is retried with `factory action retry-step`, the
+explicit operator reset: it applies only to a FAILED Step at the cursor and
+starts that Step again at attempt 1.
 
 ## Judge evidence
 

@@ -7,13 +7,12 @@ reports describe their dated candidates, not the current implementation.
 
 ## Scope and gates
 
-Start a new project without creating or inheriting Step13 technical continuation
-grants. Use the normal scheduler, ordinary recovery and configured attempt limits.
+Use the normal scheduler, ordinary recovery and configured attempt limits.
 Step13 math precheck does not authorize final delivery. Step16 still requires
 its native prerequisites, content freeze, final input evidence and delivery fence.
 The removed extra repair retry does not grant another attempt when inputs or code
-change. The separate manual technical-continuation implementation has not been
-repaired or accepted for this normal-run scope.
+change. The manual Step13 technical continuation was removed on 2026-11-14; a
+failed Step is retried with `factory action retry-step`.
 
 ## Evidence contracts
 

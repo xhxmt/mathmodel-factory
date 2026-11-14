@@ -3,7 +3,7 @@
 ## 2026-11-14 — 删除 bounded_run 受限推进合同与 Step 13 技术续跑路线
 
 - **`factory_core/bounded_run.py` 与 `factory advance`**：为验收 A 的手写 `work/*.py` 驱动脚本写的替代入口，按调用方给的 revision/游标做比对、核验受保护文件哈希和已提交检查点，不符就判 `PERMANENT_PROTECTED_MANIFEST_VIOLATED` / `_CHECKPOINT_VIOLATED`。防的是操作员自己，生产从不调用。删除引擎里的 `run_bounded`、`run(contract=...)`、提交前保护核验和 `ScopedRegistry` 换挂，`FactoryService.advance_bounded`，CLI `advance` 子命令；连同 `test_bounded_run.py`、G1/G2/G4 闸门测试（`_g1_canary.py`、`test_gate_g1_entry_equivalence.py`、`test_gate_g2_failure_semantics.py`、`test_gate_g4_driver_migration.py`）、`scripts/check_no_hand_written_drivers.py` 及其测试与 fixture 树、CI 的 driver guard 步骤。
-- **Step 13 技术续跑**：`factory_core/repair_operations.py`（`authorize-gate2` / `continue-gate2`）是 `technical_continuation.py` 的唯一入口，`persistent_launcher.py` 只为它做后台守护；三者都只有文档引用。删除它们、引擎里的 `_stop_at_gate2` 挂钩和相关测试；`STEPS.md`、`RERUN_REPAIR_AND_TECHNICAL_CONTINUATION.md`、`NORMAL_RUN_AUDIT_CONTRACT.md` 去掉对应段落。失败的 Step 仍通过 `factory action retry-step` 重试。
+- **Step 13 技术续跑**：`factory_core/repair_operations.py`（`authorize-gate2` / `continue-gate2`）是 `technical_continuation.py` 的运维 CLI 入口，`persistent_launcher.py` 只为它做后台守护；三者没有正常生产调用方，只通过引擎的 `_stop_at_gate2` 挂钩和这个 CLI 相连（技术续跑只能由该 CLI 授权，入口删除后挂钩永远不会生效）。删除它们、引擎里的 `_stop_at_gate2` 挂钩和相关测试；`STEPS.md`、`RERUN_REPAIR_AND_TECHNICAL_CONTINUATION.md`、`NORMAL_RUN_AUDIT_CONTRACT.md` 去掉对应段落。失败的 Step 仍通过 `factory action retry-step` 重试。
 - **保留**：问题台账受保护条目的 `PERMANENT_PROTECTED_ITEM_DELETED`（来自 `dirty.py` 的 `@protected:`，不属于 bounded_run）；`prompts/step14_abstract.txt` 中提到 `GATE2_CONTINUATION_AUTHORIZED` 的句子（agent 合同，陈述不再可达但无害，未改动）。
 
 ## 2026-11-14 — 删除从未接入的求解对账模块、旧单评委提示词和 6 月一次性报告
