@@ -562,7 +562,7 @@ def current_engine_pause(
     Phase 3a (spent reopen budget) and 3d (dispatch preflight failure) pause
     with ``actor="engine"`` and one of ``subcodes``.  The event counts only
     while it is still the latest status change: a later event that changed the
-    status (a resume, or another transition such as ``RUN_BOUNDARY_REACHED``
+    status (a resume, or another transition such as an operator ``PAUSED``
     that pauses again) supersedes it, so a stale explanation is never shown
     for an unrelated pause.
     """

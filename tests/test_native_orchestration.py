@@ -16,6 +16,7 @@ from factory_core.domain import ExecutionResult, StepContext, ValidationResult, 
 from factory_core.engine import FactoryEngine
 from factory_core.governance.overrides import DeliveryOverride
 from factory_core.registry import ModelBackendRegistry
+from factory_core.stages import STAGE_SCHEDULER_GENERATION
 from factory_core.steps import STEP_CONTRACTS, build_native_registry, catalog_payload
 from factory_core.steps.prompting import PromptRenderer
 from factory_core.steps.prompt_step import PromptStep
@@ -1398,6 +1399,13 @@ def test_fake_backends_drive_native_steps_zero_through_sixteen(tmp_path):
     (project / "viable_streams.md").write_text(
         "## Stream m1: first\n## Stream m2: second\n", encoding="utf-8"
     )
+    # The Stage scheduler's Step 8.5 reviewer-entry gate checks real artifacts.
+    for name in ("reviewer_entry_map.md", "anchor_figure_plan.md"):
+        (project / name).write_text("# ready\n", encoding="utf-8")
+    (project / "entry_gate.md").write_text("# gate\n\nVERDICT: PASS\n", encoding="utf-8")
+    # The fake final audit rewrites judge_evaluation.md without a verifiable
+    # judgment receipt; identical bytes keep that from reading as a Stage 8 edit.
+    (project / "judge_evaluation.md").write_text("VERDICT: PASS\n", encoding="utf-8")
     backends = ModelBackendRegistry()
     backend = ArtifactWritingBackend()
     for name in ("codex", "claude", "openai"):
@@ -1412,11 +1420,16 @@ def test_fake_backends_drive_native_steps_zero_through_sixteen(tmp_path):
         release_publisher=ReleasePublisher(tmp_path / "papers"),
     )
     store = SQLiteStateStore(project)
-    store.initialize(project_id=project.name, project_type="modeling")
+    store.initialize(
+        project_id=project.name,
+        project_type="modeling",
+        scheduler_generation=STAGE_SCHEDULER_GENERATION,
+    )
 
     state = FactoryEngine(project, store=store, registry=registry, sleeper=lambda _: None).run()
 
     assert state.status is WorkflowStatus.COMPLETED
     assert state.last_completed_step == 16
-    assert [event.type for event in store.events()].count("STEP_SUCCEEDED") == 17
+    # Steps 0-16 plus the reviewer-entry gate and content-freeze guard subtasks.
+    assert [event.type for event in store.events()].count("STEP_SUCCEEDED") == 19
     assert not any("legacy_runner" in json.dumps(event.payload) for event in store.events())
